@@ -3359,8 +3359,12 @@ describe("mstar plan \u2014 execution transport", () => {
       fixture.root,
       activeIdentityEnv(),
     );
+    // Under the sparse contract the runtime caller identity is the first
+    // caller-owned requirement, so this identity-less numeric invocation
+    // refuses on the identity check — the numeric revision is the file
+    // route's transport and never reaches the engine's token check.
     expect(numeric.exitCode).toBe(2);
-    expect(String(jsonOf(numeric).message)).toContain("full execution token");
+    expect(String(jsonOf(numeric).message)).toContain("runtime session identity");
 
     const noOperation = runCli(
       ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "exec-v1:plan:store:1:key:1", "--file", progressPath],
@@ -3389,6 +3393,44 @@ describe("mstar plan \u2014 execution transport", () => {
     expect(jsonOf(noIdentity).code).toBe("command.invalid-input");
     expect(String(jsonOf(noIdentity).message)).toContain("runtime session identity");
 
+    expect(snapshotBytes(fixture)).toBe(before);
+  });
+
+  test("the numeric transport refusal precedes payload IO (exit 2)", () => {
+    const fixture = makeFixture();
+    const before = snapshotBytes(fixture);
+    // The same ordering pattern as the file route's --expect-issue case: both
+    // payload states must yield the SAME numeric-transport refusal, proving
+    // the ACTIVE-route admission runs before materialization and the payload
+    // bytes are never consumed on a refused transport.
+    const malformed = join(fixture.root, "malformed.json");
+    writeText(malformed, "{not json");
+    for (const [state, file] of [
+      ["malformed", malformed],
+      ["missing", join(fixture.root, "absent.json")],
+    ] as const) {
+      const numeric = runCli(
+        [
+          "plan",
+          "progress",
+          "--session-ref",
+          activeRefWire(),
+          "--expect",
+          "3",
+          "--operation",
+          "progress-numeric-no-io",
+          "--session-id",
+          "execution-ref-session",
+          "--file",
+          file,
+        ],
+        fixture.root,
+      );
+      expect(`${state} -> ${numeric.exitCode}`).toBe(`${state} -> 2`);
+      expect(jsonOf(numeric).code).toBe("command.invalid-input");
+      expect(String(jsonOf(numeric).message)).toContain("full execution token");
+      expect(String(jsonOf(numeric).message)).not.toContain("payload");
+    }
     expect(snapshotBytes(fixture)).toBe(before);
   });
 

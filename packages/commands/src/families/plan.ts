@@ -280,14 +280,29 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       const result = await readExecutionPlan(executionContextFor({ harnessDir: root }, identity), ref, input.plan);
       return ok(id, result);
     }
-    const operation = fileOperation(id, input);
     if (input.sessionRef !== undefined) {
-      if (context.sessionId === undefined || input.expect === undefined || typeof input.expect !== "string" || input.operation === undefined) {
-        return usage(id, "active operation requires runtime session identity, sessionRef, full execution token and operation id");
-      }
+      // The ACTIVE route states no transport prerequisites for the derivable
+      // half: the engine's own authority boundary resolves the sparse intent —
+      // it derives the plan token and plan address from the trusted caller's
+      // own binding, and an ambiguous target or foreign holder is refused
+      // there with grouped genuine facts. The runtime caller identity is NOT
+      // derivable: the session reference is a canonical transport projection
+      // (never an authenticated identity), so the caller's own session id must
+      // be supplied independently by the host adapter — a ref for a session
+      // this caller does not hold is never adopted as its identity. The
+      // operation id is the other caller-owned required field (the engine's
+      // own assertOperationId runs only after resolution). This admission
+      // precedes payload materialization: a refused transport never reads
+      // --file.
+      if (input.operation === undefined) return usage(id, "active operation requires an operation id");
+      if (context.sessionId === undefined) return usage(id, "active operation requires runtime session identity");
+      // A numeric revision is the file route's CAS transport; the active route
+      // takes only a full execution token, so the transports never mix.
+      if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
+      const operation = fileOperation(id, input);
+      const operationId = input.operation;
       const ref = decodeExecutionSessionRef(input.sessionRef);
       const planId = ref.planId ?? input.plan;
-      if (planId === undefined) return usage(id, "coordinator operation requires plan");
       const root = resolveProcessHarnessDir(context.cwd, input.harness);
       if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
       setArtifactStore(createFsStore(root));
@@ -299,14 +314,17 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         planId: ref.planId,
       };
       const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
-        operationId: input.operation,
+        operationId,
         session: ref,
-        expected: input.expect as ExecutionToken,
+        // An omitted token is the sparse intent the engine resolves; an
+        // explicit one is passed through untouched as a CAS constraint.
+        ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
         planId,
         operation: operation as never,
       });
       return ok(id, receipt);
     }
+    const operation = fileOperation(id, input);
     if (input.session === undefined) return usage(id, "operation requires session or active sessionRef");
     const sessionPath = absolutePath(input.session, "session");
     pinSessionStore(sessionPath);
