@@ -151,6 +151,7 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         return usage(id, "--execution is supported only for privileged issue mutations");
       }
       if (input.session !== undefined) return usage(id, "pre-activation and active transports are disjoint");
+      if (input.file !== undefined) return usage(id, "--execution and --file transports are disjoint");
       if (invocation.sessionId === undefined || input.workflow === undefined || (input.coordinator === true) === (input.plan !== undefined)) {
         return usage(id, "active issue mutation requires runtime session identity, workflow, and exactly one of coordinator or plan");
       }

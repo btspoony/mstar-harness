@@ -360,6 +360,26 @@ export class IssueError extends Error {
     this.code = code;
   }
 }
+export function assertIssueTriageVocabulary(patch: IssueTriage): void {
+  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
+    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
+  }
+  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
+    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
+  }
+}
+
+export function assertIssueLinkVocabulary(link: IssueLink): void {
+  if ("relation" in link) {
+    if (!Object.hasOwn(RELATIONS, link.relation)) {
+      throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
+    }
+  } else if (!Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
+    throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
+  }
+}
+
+
 
 const KINDS: Record<IssueKind, true> = {
   bug: true,
@@ -1600,14 +1620,10 @@ export function triageIssueOn(
   patch: IssueTriage,
   mutation: AuthorizedIssueMutation,
   composed?: ComposedTransactionRevision,
+  vocabularyValidated = false,
 ): IssueReceipt {
   requireNonblank("reason", patch.reason);
-  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
-    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
-  }
-  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
-    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
-  }
+  if (!vocabularyValidated) assertIssueTriageVocabulary(patch);
   const hash = requestHash("triageIssue", {
     issueId,
     patch,
@@ -1657,14 +1673,9 @@ export async function triageIssue(
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   requireNonblank("reason", patch.reason);
-  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
-    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
-  }
-  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
-    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
-  }
+  assertIssueTriageVocabulary(patch);
   authorizeMutation(context, mutation);
-  return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation));
+  return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true));
 }
 
 /**

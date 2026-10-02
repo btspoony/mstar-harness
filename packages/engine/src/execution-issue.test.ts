@@ -44,7 +44,7 @@ const mut = (operationId: string, expectedRevision = 1, actor = "project-manager
 test("close uses the live coordinator and writes one issue revision", async () => {
   const f = await fixture();
   const receipt = await closeIssueExecution(f.context, f.issue.issueId, "resolved", {
-    reason: "accepted", references: ["https://github.com/btspoony/mstar-harness/pull/361", "commit 75631e5c"], alignmentRef: "PM acceptance record",
+    reason: "accepted", references: ["https://github.com/btspoony/mstar-harness/pull/361", "commit 00000000deadbeef"], alignmentRef: "PM acceptance record",
   }, mut("close", 1));
   expect(receipt).toMatchObject({ revision: 2, created: false });
   expect((await getIssue(f.store, f.issue.issueId)).disposition).toBe("resolved");

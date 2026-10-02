@@ -713,6 +713,8 @@ export type {
 export {
   IssueError,
   appendOccurrence,
+  assertIssueLinkVocabulary,
+  assertIssueTriageVocabulary,
   captureIssue,
   closeIssue,
   getIssue,

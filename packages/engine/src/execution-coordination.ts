@@ -134,8 +134,10 @@ import {
 import {
   assertCaptureRequest,
   assertClosureAuthority,
+  assertIssueLinkVocabulary,
   assertIssueLinkedToPlanOn,
   assertIssueStoreActive,
+  assertIssueTriageVocabulary,
   assertTerminalDisposition,
   captureIssueOn,
   closeIssueOn,
@@ -3402,16 +3404,11 @@ export async function triageIssueExecution(
   if (typeof patch.reason !== "string" || patch.reason.trim() === "") {
     throw new IssueError("issue.scope-refused", "reason must be nonblank");
   }
-  if (patch.kind !== undefined && !["bug", "risk", "improvement", "request", "decision", "review-obligation"].includes(patch.kind)) {
-    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
-  }
-  if (patch.severity !== undefined && !["critical", "high", "medium", "low", "info"].includes(patch.severity)) {
-    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
-  }
+  assertIssueTriageVocabulary(patch);
   assertIssueActor(context, mutation);
   return withExecutionTransaction(context, (tx) => {
     requireLiveExecutionCallerSession(tx, context.caller);
-    return triageIssueOn(tx.db, issueId, patch, mutation);
+    return triageIssueOn(tx.db, issueId, patch, mutation, undefined, true);
   });
 }
 
@@ -3437,13 +3434,7 @@ export async function linkIssueExecution(
   link: IssueLink,
   mutation: AuthorizedIssueMutation,
 ): Promise<IssueReceipt> {
-  if ("relation" in link) {
-    if (!["related", "blocks", "duplicate-of", "superseded-by"].includes(link.relation)) {
-      throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
-    }
-  } else if (!["plan", "iteration", "pr", "report"].includes(link.kind)) {
-    throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
-  }
+  assertIssueLinkVocabulary(link);
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
     const target = link.target.trim();
     if (target === "") throw new IssueError("issue.scope-refused", "target must be nonblank");
