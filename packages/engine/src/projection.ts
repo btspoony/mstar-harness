@@ -739,13 +739,9 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
     : captureFileProjectionSources(context);
 }
 function safeExecutionAuthorityError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : "unknown read failure";
-  const payloadStart = raw.indexOf("{");
-  const text = (payloadStart < 0 ? raw : `${raw.slice(0, payloadStart).trimEnd()} [payload omitted]`)
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\b(token|secret|password|credential|authorization)\s*[:=]\s*[^,;\s]+/gi, "$1=[redacted]")
-    .slice(0, 240);
-  return `execution authority unreadable: ${text || "read failure"}`;
+  const name = error instanceof Error ? error.constructor.name : "UnknownError";
+  const safeName = /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(name) ? name : "UnknownError";
+  return `execution authority unreadable (${safeName})`;
 }
 
 async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
@@ -760,7 +756,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   let servedGraph: ExecutionState;
   try {
     if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR) {
-      throw new Error(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
+      throw new SyntaxError(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
     }
     servedGraph = (await readExecutionState(context)).data;
   } catch (error) {

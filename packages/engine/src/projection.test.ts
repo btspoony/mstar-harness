@@ -443,15 +443,17 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const initial = await refreshProjections(f.context);
     const lastGood = await projectedRows(f);
     process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "test graph reader failure";
+    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "Unexpected token 'password=hunter2' at position 22; source excerpt: Array[REDACTED]";
 
     const capture = await captureProjectionSources(f.context);
     expect(capture).toMatchObject({ blocked: true, sources: [], locations: [] });
     expect(capture.diagnostics).toEqual([{
       sourceKey: "root:harness:execution/registry",
       reason: "invalid",
-      message: "execution authority unreadable: test graph reader failure",
+      message: "execution authority unreadable (SyntaxError)",
     }]);
+    expect(capture.diagnostics[0]?.message).not.toContain("password=hunter2");
+    expect(capture.diagnostics[0]?.message).not.toContain("source excerpt");
     const stale = await refreshProjections(f.context);
     expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation, sources: [], changedKeys: [] });
     expect(stale.diagnostics).toEqual(capture.diagnostics);
@@ -580,7 +582,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect(stale.diagnostics).toEqual([expect.objectContaining({
       sourceKey: "root:harness:execution/registry",
       reason: "invalid",
-      message: expect.stringContaining(`execution_plans(${workflowId},${planId}).state_json`),
+      message: "execution authority unreadable (StoreError)",
     })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
@@ -604,7 +606,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect(stale.diagnostics).toEqual([expect.objectContaining({
       sourceKey: "root:harness:execution/registry",
       reason: "invalid",
-      message: expect.stringContaining(`execution_workflows(${workflowId}).state_json`),
+      message: "execution authority unreadable (StoreError)",
     })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
@@ -661,7 +663,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       expect(stale.diagnostics).toEqual([expect.objectContaining({
         sourceKey: "root:harness:execution/registry",
         reason: "invalid",
-        message: expect.stringContaining(`execution_${kind === "registry" ? "registry" : `${kind}s`}`),
+        message: "execution authority unreadable (StoreError)",
       })]);
       expect(await projectedRows(f)).toEqual(lastGood);
     }
