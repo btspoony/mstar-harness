@@ -11,6 +11,7 @@ import {
   readExecutionAuthority,
   readWorkflowSnapshot,
   resolveExecutionReadRoute,
+  resolveCurrentAuthority,
   resolveIntentRoot,
   resolveIntentTarget,
   resolveProcessHarnessDir,
@@ -57,6 +58,15 @@ function engineCode(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+function authorityRecoveryHint(code: string): string {
+  if (code === "store.busy") return "Wait for the competing store writer to finish, then retry `status validate`.";
+  if (code === "store.corrupt") return "Preserve the corrupt database and legacy sources; restore through a supported recovery process or provide the full refusal to the store recovery owner. An unreadable live store cannot be recovered by online restore-preview.";
+  if (code === "store.runtime-unsupported") return "Run with a supported Bun or Node runtime with native SQLite support, then retry `status validate`.";
+  if (code === "store.schema-unsupported") return "Use a harness build that supports this store schema, then retry `status validate`.";
+  if (code === "store.schema-drift") return "Use the harness build that owns the applied schema and retry `status validate`.";
+  if (code === "execution.not-active") return "Complete the supported `store safe-upgrade` workflow, then retry `status validate`.";
+  return "Restore the store file, schema, or runtime capability indicated by the cause, then retry `status validate`.";
+}
 
 /**
  * The typed details a refusal carries (`error.details`: the field facts and the
@@ -95,30 +105,78 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);
         try {
+          const defaultTarget = parsed.data.path === undefined;
           let target = parsed.data.path;
-          if (target === undefined) {
+          let legacyUpgradeEntry = "mstar store safe-upgrade";
+          let legacyUpgradeDetails: { entry: string; limitation?: string } = { entry: legacyUpgradeEntry };
+          if (defaultTarget) {
             const harnessDir = executionHarness(context);
             if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
-            if ((await resolveExecutionReadRoute({ harnessDir })) === "execution") {
-              const read = await readExecutionAuthority({ harnessDir });
-              return ok("status.validate", { authority: read.data, token: read.token, workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [] });
+            const hasIssueStore = existsSync(path.join(harnessDir, "store.db"));
+            const statusPath = path.join(harnessDir, "status.json");
+            const hasLegacyStatus = existsSync(statusPath);
+            legacyUpgradeEntry = hasIssueStore
+              ? "mstar store safe-upgrade"
+              : hasLegacyStatus
+                ? "mstar store init → mstar store safe-upgrade"
+                : "mstar harness scaffold";
+            legacyUpgradeDetails = { entry: legacyUpgradeEntry };
+            try {
+              const authority = await resolveCurrentAuthority({ harnessDir });
+              if (authority.route === "execution") {
+                const read = await readExecutionAuthority({ harnessDir });
+                return ok("status.validate", { authority: read.data, token: read.token, workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [], state: "active" });
+              }
+            } catch (error) {
+              const code = engineCode(error, "status.authority-unreadable");
+              const cause = messageOf(error);
+              const recovery = authorityRecoveryHint(code);
+              const originalDetails =
+                error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
+                  ? error.details
+                  : {};
+              return refused("status.validate", code, `${cause} Self-check recovery: ${recovery}`, {
+                ...originalDetails,
+                state: "unreadable",
+                selfCheck: { couldNotRead: cause, recovery },
+              });
             }
             target = path.join(harnessDir, "status.json");
           } else {
-            target = path.resolve(context.cwd, target);
+            target = path.resolve(context.cwd, target!);
             if (path.basename(target) === "status.json" && (await resolveExecutionReadRoute({ harnessDir: path.dirname(target) })) === "execution") {
               return refused("status.validate", "status.execution-authority-active", "The active execution authority must be validated through its authority reader");
             }
           }
-          if (!existsSync(target)) return refused("status.validate", "status.file-not-found", `status file not found: ${target}`);
+          if (!existsSync(target)) {
+            if (defaultTarget) {
+              return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, {
+                path: target,
+                state: "legacy",
+                upgrade: legacyUpgradeDetails,
+                selfCheck: {
+                  couldNotRead: "legacy status register is missing",
+                  recovery: legacyUpgradeEntry === "mstar harness scaffold"
+                    ? "No issue store or legacy status exists; run mstar harness scaffold to initialize this empty workspace."
+                    : legacyUpgradeEntry === "mstar store init → mstar store safe-upgrade"
+                      ? "A legacy status register exists without an issue store; first run mstar store init, then run mstar store safe-upgrade with its required inputs."
+                      : "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs.",
+                },
+              });
+            }
+            return refused("status.validate", "status.file-not-found", `status file not found: ${target}`);
+          }
           if (path.basename(target) === WORKFLOW_SNAPSHOT_FILE) {
             const read = readWorkflowSnapshot(path.dirname(target));
             return ok("status.validate", { path: target, diagnostics: read.diagnostics });
           }
           const gate = validateStatusV2(target);
+          const data = defaultTarget
+            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: legacyUpgradeDetails }
+            : { path: target, violations: gate.ok ? [] : gate.violations };
           return gate.ok
-            ? ok("status.validate", { path: target, violations: [] })
-            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { violations: gate.violations });
+            ? ok("status.validate", data)
+            : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { ...data });
         } catch (error) {
           return refused("status.validate", engineCode(error, "status.validation-failed"), messageOf(error));
         }

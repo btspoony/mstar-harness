@@ -42,7 +42,7 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 - On `Done`: ensure the plan's findings state is consistent — every confirmed finding captured as an issue linked to it, closures carrying their disposition and evidence (capture contract → `mstar-project-governance`「Issue capture」).
 - At plan commitment: register the workflow through the authorized producer (create-only snapshot + root `workflows[]` entry under one lock) and declare its delivery kind — `development`, or `verification/report-only` with its recorded completion policy:
   ```text
-  mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path>
+  mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file plans/<id>.md
     --delivery-kind <development|verification/report-only> [--project <id>]
     [--branch-source <branch> --branch-target <branch> | --completion-policy <text>]
     [--started-at <ts>] [--harness <dir>]                                   # pre-activation file route

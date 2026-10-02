@@ -4,13 +4,19 @@ This file carries the two coordination command families: scoped plan coordinatio
 
 What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belong to `mstar-artifacts`; phase semantics to `mstar-iteration`; checkout rules to `mstar-branch-worktree`. This file records only what command help cannot express — role boundaries, tokens, refusal codes, envelopes and sequence order.
 
-Normal route: choose the intended public verb from current help and invoke it with its required inputs; inspect the receipt before deciding what remains. Do not interpose a mandatory top-down `persist`/rebind/repair ladder merely to replay normal progress. A refusal names the missing non-derivable input or conflict: active plan writes take the session reference, the caller's independently acquired `--session-id`/`sessionId` and the caller-owned operation id — the execution token is supplied only as an explicit constraint, and on plan operations an omitted one is derived by the engine from the plan's own read (verified for plan operations); workflow-level active writes (recovery, registration, evidence) still state the scope's full execution token as `--expect`; pre-activation writes take the session envelope and row revision; a fresh plan-PM bind takes explicit operator `--session-id`, and a fresh active bind additionally states the full execution token and the operation id (the pre-activation bind is the token-free form). An explicitly held token is never guessed — it is forwarded unchanged as the CAS comparison value. `applied` and `replayed` are receipt outcomes; preserve components already applied only where the verb documents action-local partial semantics (for example, an integration-start retry no-op). Foreign ownership or stop authorization remains an operator decision; never forward credentials to a leaf.
+Normal route: choose the intended public verb from current help and invoke it with its required inputs; inspect the receipt before deciding what remains. Do not interpose a mandatory top-down `persist`/rebind/repair ladder merely to replay normal progress. A refusal names the missing non-derivable input or conflict: active plan writes take the session reference, the caller's independently acquired `--session-id`/`sessionId` and the caller-owned operation id — the execution token is supplied only as an explicit constraint, and on plan operations an omitted one is derived by the engine from the plan's own read (verified for plan operations); workflow-level active writes (recovery, registration, evidence) still state the scope's full execution token as `--expect`. `applied` and `replayed` are receipt outcomes; preserve components already applied only where the verb documents action-local partial semantics.
 
 Payload discovery: `mstar-harness schema PlanProgress` describes `plan progress` JSON and `mstar-harness schema HandoffEvidence` describes `plan handoff` JSON, including nested QC/QA fields. Build a complete JSON object from the schema before invoking `--file`; the CLI accepts an absolute JSON file, not a one-field-at-a-time trial. Actor identity and the intended operation/target remain operator inputs; a public action does not supply the caller's session reference, token or operation id. Historical `submit` is not a plan verb: bounded non-authoritative advice is `mstar-harness judgment review-advice` with its own help and review-pack input, not a lifecycle submission.
 
 ## Transports
 
-One control harness has one execution authority, and that authority's state decides which transport every coordination verb takes. The **active DB route** is the canonical one; the file forms survive only while that authority is not active.
+The execution route is selected by `execution_meta.authority_state`, not by `store_meta.authority_state`: `store_meta` governs issue/catalog authority, while `execution_meta` governs coordinated workflow operations. Use `mstar status validate` as the discriminating read. Its `state` is `active`, `legacy`, or `unreadable`: `active` is the supported operating route; `legacy` is unsupported and resolves `upgrade.entry` per observed files—an existing store uses `mstar store safe-upgrade`; legacy files without a store use `mstar store init` → `mstar store safe-upgrade`, which keeps the files authoritative until the upgrade confirmation and imports them during the authority switch; a truly empty workspace uses `mstar harness scaffold`. `unreadable` reports what could not be read and the recovery needed to make it readable.
+
+| State | Supported action |
+|---|---|
+| `active` | Use the active DB route below. |
+| `legacy` | Do not use file-form operation flags; follow this read's `upgrade.entry`. A storeless legacy workflow uses the init-then-safe-upgrade sequence; files remain authoritative until upgrade confirms and activates. |
+| `unreadable` | Follow the reported self-check recovery, then rerun `mstar status validate`. |
 
 | Transport | Write flags | Caller identity |
 |---|---|---|
@@ -19,6 +25,8 @@ One control harness has one execution authority, and that authority's state deci
 
 - The two flag sets are **disjoint**. A mixed invocation, a missing active address/operation input or a session path on the active route is a usage refusal (exit 2) decided before any IO. A numeric `--expect` is never coerced into an execution token: on the active plan route it reaches the engine's token check and refuses there as a genuine CAS fact; pre-activation, it is the row revision. An active flag another verb owns is an unknown option, never ignored input.
 - On a harness whose execution authority is **active**, the pre-activation forms are retired rather than reinterpreted: they refuse with `execution.consumer-not-ready`, whose message names the active form of the same verb. `mstar plan show --workflow <id> --plan <id>` stays the public authoritative read against that authority, and `mstar status validate` reports the root and per-workflow execution tokens the active writes consume as their CAS — on plan mutations a caller states `--expect` only when holding the token as an explicit constraint — otherwise the engine reads it itself; workflow-level active writes state the scope's full token, and an invented token is never valid.
+- `mstar status validate` reports the root and per-workflow tokens when state is active; `mstar plan show` reports the addressed plan token. Use the token matching the mutation scope.
+- Legacy file-form operation routes are retired; their flags are not a supported alternative to the active route.
 - The **reference is a lookup, not a bearer credential**: it names a stored session row, grants no authority by itself, and the engine compares the independently acquired caller inside its own transaction — so a copied reference under another identity refuses without writing.
 - Launching: `mstar session run --workflow <id> --role <coordinator|plan-pm> [--plan <id>] [--harness <absolute-path>] -- <argv>` mints **one** local identity for the child, overwrites the identity channel, deletes the legacy one, and propagates the child's exit code (or re-raises the signal that killed it). Repeated CLI invocations inside that child share the identity; a **new** launcher is a new identity and cannot claim the old one — a stopped owner needs the explicit recovery verb (→ § Recovery), never a copied id.
 
@@ -41,8 +49,8 @@ mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reaso
 ```
 
 - The prior holder is **named** — or `--unowned` when the workflow records none; the two are mutually exclusive and neither is guessed. The stop attestation must name that holder stopped/reloaded, the workflow's **exact** execution token is the CAS, and the operation id is the replay key.
-- Success reports the new public session id, the operation id, the replay flag and the fresh token only. No envelope path, envelope body or credential is ever projected out of this verb.
-- The pre-activation Prepare recovery (`mstar workflow recover-coordinator`, § Prepare coordinator recovery) is a **different, narrower** writer: file/JSON, Prepare-only, the top-level binding plus one audit record. Neither runs on the other authority, and neither accepts a caller-supplied credential for the **replacement** session.
+- Recovery is active DB only. Pre-activation Prepare recovery is retired; do not use file/JSON snapshot forms.
+- `authorizationRef` is an audit reference, not an authorization source: it MUST identify a real external authorization event (explicit user/operator instruction or confirmation). An agent MUST NOT synthesize it from its own task or assignment.
 
 ## Verb → role boundary
 
@@ -50,8 +58,7 @@ mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reaso
 |---|---|
 | plan session | `mstar plan show`, `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close`, `mstar plan handoff` |
 | coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow evidence` |
-| coordinator session, **pre-activation only** | `mstar workflow show-prepare`, `mstar workflow amend-prepare` (§ Prepare amendment), `mstar workflow recover-coordinator` (§ Prepare coordinator recovery) |
-| either (bootstrap / read / claim) | `mstar plan bind` |
+| either (active bootstrap / read / claim) | `mstar plan bind` |
 
 A plan session mutates only its own row and the issues that row's plan captures or closes; the retired register bucket is never a write target. It never prepares itself: registration of the reviewed Assignment is the coordinator's act, and it is what releases the row's dependencies.
 
@@ -59,13 +66,14 @@ A plan session mutates only its own row and the issues that row's plan captures 
 
 | Token | Where it comes from | Meaning |
 |---|---|---|
-| execution token (**active CAS**) | a read of the addressed scope: `mstar status validate` prints the root and per-workflow tokens, and a plan/workflow read returns that scope's own token | the full `exec-v1:<kind>:<store-id>:<epoch>:<key64>:<revision>` token of exactly the scope being written; a revision integer is a pre-activation input and is never coerced into one |
+| Root execution token | `mstar status validate` → `.token` | `root` token; used only for new workflow registration |
+| Workflow execution token | `mstar status validate` → matching `.workflows[]` entry, or an authoritative workflow read | `workflow` token; used only for that workflow |
+| Plan execution token | `mstar plan show` → addressed plan | `plan` token; used only for that plan |
 | operation id (**active replay key**) | the caller | caller-supplied id of this one operation: an exact retry replays the recorded receipt, a changed request against the same id refuses |
-| session reference (active address) | the bind verb's result, encoded as `exec-session-v1:<base64url>` | a stored session row — a lookup that authorizes nothing without the independently acquired caller |
-| row revision (**pre-activation**) | the show verb's machine output | `coordination.revision`; `0` while the row is not yet coordinated. Never the document schema version and never a date |
-| issue revision | the scoped capture's report, or the read verb | the DB mutation's CAS value for one issue; `plan issue-close` takes it as `--expect-issue`, and it stays an integer on every transport |
-| handoff id | the same read | the row's *live* handoff; only the handoff verb mints one, and the read reports it once it exists |
-| byte version | the versioned read face, or the amendment's read verb | `sha256:<64 lowercase hex>` over the exact bytes read — a document version, not a row revision |
+| session reference (active address) | the active bind or recovery result: `exec-session-v1:` + base64url of canonical JSON `{storeId, epoch, workflowId, role, sessionId, planId}` | stored session-row address; not a bearer credential |
+| issue revision | the scoped capture's report, or the read verb | the DB mutation's CAS value for one issue; `plan issue-close` takes it as `--expect-issue` |
+| handoff id | the same read | the row's live handoff; only the handoff verb mints one |
+| byte version | retired file-route comparison value; not an execution token or a supported mutation credential |
 
 Every token is **consumed** by the call that uses it. Read again after every successful mutation; a token carried across a write refuses rather than applying a stale edit.
 
@@ -73,7 +81,7 @@ Every token is **consumed** by the call that uses it. Read again after every suc
 
 Machine output is a single object on stdout, with no color and no banner. In human mode stdout stays empty and the summary goes to stderr, so stdout can be piped without filtering.
 
-Success carries the operation, the workflow and plan it applied to, the scope's fresh token and — on the active route — the store id, epoch, operation id and replay flag. It also carries the fresh revision and the session file and id where those belong to the pre-activation transport, the role, and — where they apply — the handoff id, state and outcome. The read verb additionally returns the snapshot byte version, the scope and the row; a read-only resume carries no operation receipt fields at all.
+Success carries operation/workflow/plan scope, the fresh token, store id, epoch, operation id, replay flag, role and applicable handoff/state/outcome. Read verbs return their applicable scope and row; active resume carries no mutation receipt.
 
 Failure carries `ok: false`, the operation, a stable `code`, a message, and whichever of workflow id, plan id, holder, path, expected and actual the refusal can name. The refusal object is the contract; the message is for humans. A usage-class failure of the active transport is reported in the same shape, and no diagnostic echoes a legacy envelope body or the identity-channel payload.
 
@@ -83,17 +91,11 @@ Refusal commit-state is action-local: read the receipt instead of assuming. On t
 
 | Code | When |
 |---|---|
-| `execution.consumer-not-ready` | a **pre-activation** form on a harness whose execution authority is ACTIVE: nothing was written, and the message names the active form of the same verb |
-| usage (exit 2) | a missing or mixed active address/operation set (`--session-ref` / `--operation`), a missing independently acquired identity (`--session-id`/`sessionId` on the CLI/MCP transports), a pre-activation route without a nonnegative row revision, or an active route that also states `--session` / `--resume` |
-| `coordination.identity-mismatch` (active) | the acquired caller does not address the workflow / role / plan the reference names — a **copied or stale reference** refuses here without writing |
-| `coordination.session-role` | the envelope is not the role that verb requires (a plan session cannot prepare, accept or complete) |
-| `coordination.session-mismatch` | the envelope names a different document than the one resolved |
+The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvidence`); the coordinator accepts it and follows the registered delivery kind in the table above. On the iteration route, start a pinned integration attempt, perform and verify the recorded Git merge, accept integration and complete. On standalone development, complete after accept; on report-only, record fulfilment of its registered policy before complete without inventing a Git step. At each point consult current verb help and supply the required address for the active or pre-activation route — plan operations may omit `--expect` under the verified resolver (an explicitly held token stays a constraint), while workflow-level writes retain their documented expectation contract — and inspect the `applied` or `replayed` receipt. Do not turn those explicit inputs into a ceremonial top-down preflight ladder.
 | `coordination.scope-mismatch` | the request reaches outside the session's scope |
 | `coordination.workflow-not-found` | no workflow for that id under the resolved root |
 | `coordination.not-prepared` | the workflow has no coordinator binding yet |
-| `coordination.identity-missing` / `coordination.identity-mismatch` | a coordinator bootstrap without an explicitly acquired id (or a non-id value), or an id that does not address the workflow / role / plan scope |
-| `coordination.identity-recovery.*` | the JSON Prepare coordinator recovery refused: `not-prepare`, `invalid-request`, `execution-started` (a row already owns execution), `foreign-owner`, `stale`, `unauthorized`, `operation-conflict` |
-| `execution.direct-write-refused` | an **active execution authority**: the JSON recovery and the file route never run against it — the existing DB recovery verb owns that repair |
+| `coordination.identity-missing` / `coordination.identity-mismatch` | a coordinator bootstrap lacks an explicitly acquired identity, or the identity does not address the requested workflow / role / plan scope |
 | `coordination.duplicate-holder` | a second fresh claim of an already-held row, or of an already-bound coordinator |
 | `coordination.handoff-pin` | the handoff flag names something other than the row's live handoff |
 | `coordination.invalid-transition` | the proposed document fails validation for the requested transition |
@@ -150,7 +152,9 @@ The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvi
 
 The failure object at any step names the code; the row is unchanged, so the retry starts from a fresh read of the same row rather than from the step that failed.
 
-## Prepare amendment (pre-activation Prepare route)
+## Retired file-route operations
+
+Pre-activation file-route forms (prepare amendments, coordinator recovery, session envelopes, byte-version tokens) are not supported operating procedures in this release: when `mstar status validate` reports `state: legacy`, use only `mstar store safe-upgrade` (or the init-then-safe-upgrade sequence); do not invoke pre-activation file forms. The sections below are the pre-activation contract for workspaces that are not yet on the active authority.
 
 The amendment family is the only lawful way to register an approved scope expansion on a workflow that already exists. It is not a scheduler and not a general document replacement. It belongs to the **pre-activation** side of the contract together with the JSON coordinator recovery below: `workflow show-prepare` and `workflow amend-prepare` are file-route forms whose byte tokens are document versions, not execution tokens, and an ACTIVE execution authority refuses them (`execution.direct-write-refused`, naming DB recovery where that is the repair).
 
@@ -200,12 +204,10 @@ mstar workflow recover-coordinator --prior-session <recorded-coordinator-session
 
 ## Standalone plan registration and delivery evidence
 
-- Registration is create-only: it writes the workflow snapshot and the root register entry under one lock, recording the owned plan row, the project, the declared delivery kind and the branch anchors. The delivery kind is **declared, never inferred**, and each kind requires its own evidence declaration at registration. Re-running after a crash between the two writes recovers: existing snapshot bytes are kept and only the root entry is written. On the active route it is a **root-token creation** — `--expect <the store's root execution token>` + `--operation <id>` under an independently acquired identity, and it takes no `--session-ref` at all (no session row exists before the workflow does).
-- Delivery evidence is recorded stage by stage: a payload is merged into the snapshot's delivery block under the snapshot lock. The PR identity is recorded once and pinned to the registered branch anchors; a conflicting anchor is refused rather than overwritten. Declaring the kind of an older kind-less snapshot is a one-time act and refuses a terminal snapshot, and it exists only on the pre-activation route (the DB creation route declares its kind at registration, so there is no active operation for a declaration and it is never disguised as one).
-- **Completion ordering per kind.** The declared kind decides which stage order applies, and the recording seam is the same one: a `development` workflow records the compound disposition, the PR identity and the verified-merge record **after** every row is `Done` (the tail runs post-Done); a `verification/report-only` workflow records the fulfilment of its registered `completion_policy` — `{completion: {policy, evidence}}`, the policy naming the registered one — **before** the row is `Done`, because the completion step and the close both consult it. An absent, empty or nonmatching fulfilment refuses the completion with no write, and no merge, integration branch or integration checkout is ever synthesized for this kind.
-- Recording evidence is authorized like the close, and the two transports stay disjoint: the active form takes `--session-ref <wire> --expect <the workflow's full execution token> --operation <id>` under an independently acquired coordinator identity, while the pre-activation form takes the bound coordinator envelope (`--session`) and refuses on an ACTIVE harness. A verb with neither refuses without changing bytes.
-- A registered `branch.source` cannot be amended by ordinary evidence: the evidence verb merges only the delivery block, and the one-time kind declaration refuses a value that conflicts with an already-registered anchor. The single exception is the legacy repair verb, which replaces **only** `branch.source` on a pre-fix snapshot whose registered source wrongly equals its target, derived from the sealed accepted handoff — it records no Done, no delivery success and no remote merge, and it is not a general anchor editor.
-- The close consults this evidence *before* writing the terminal state, so a gate and the close can never disagree. Close order, refusal conditions and the root unregister: `references/status-and-registers.md`.
+- Registration is create-only: it writes the workflow snapshot and root register under one lock, recording the owned plan row, project, delivery kind and branch anchors. The delivery kind is declared, never inferred. Supply `--plan-file` as `plans/<id>.md` (harness-relative) or the canonical absolute path — both are accepted; the repository-relative `.mstar/plans/<id>.md` form is refused. The active creation call uses the root token from `mstar status validate` plus an operation id under an independently acquired identity; it takes no session reference because no session row exists before the workflow.
+- Delivery evidence uses the active DB route and workflow-scope token. Legacy file-route forms are unsupported; on `state: legacy`, use only `mstar store safe-upgrade`.
+- **Completion ordering per kind.** Development records compound disposition, PR identity and verified merge after every row is `Done`; report-only records fulfilment of its registered completion policy before `Done`. No merge or integration branch is synthesized for report-only.
+- A registered `branch.source` is not amended by ordinary evidence; the legacy repair verb is not a general anchor editor. The close consults evidence before writing terminal state. See `references/status-and-registers.md` for close order and refusal conditions.
 
 ## Iteration workflow registration
 
@@ -216,5 +218,5 @@ An iteration does not go through `mstar workflow register`. It registers through
 | Code | When |
 |---|---|
 | `0` | the operation succeeded, including an idempotent no-op, a replayed operation id and a read-only resume |
-| `1` | engine refusal — every code above, returned with a stable code; the refusal's commit state is action-local, stated by that verb's result (on the coordinated plan route a refused operation writes no row, no receipt and no counter change) |
-| `2` | usage: missing or mixed address forms, missing or mixed active address/operation inputs, unknown flag, an active route carrying a pre-activation flag, a token that is neither the absent literal nor a version token, a relative path where an absolute one is required, an unreadable or unparseable payload file |
+| `1` | engine refusal — every code above, returned with a stable code and no change to authoritative bytes; the refusal's commit state is action-local (on the coordinated plan route a refused operation writes no row, receipt or counter change) |
+| `2` | usage: missing or mixed address forms, missing or mixed active address/operation inputs, unknown flag, an unsupported retired file-form argument, an active route carrying a pre-activation flag, a token that is neither the absent literal nor a version token or is of the wrong kind, a relative path where an absolute one is required, or an unreadable or unparseable payload file |

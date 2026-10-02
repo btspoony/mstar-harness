@@ -7,7 +7,7 @@ import {
   commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
-  resolveExecutionReadRoute, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
+  resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
@@ -51,10 +51,10 @@ async function assertLegacyRoute(harnessDir: string, operation: string): Promise
   if (await resolveExecutionReadRoute({ harnessDir }) === "execution") {
     throw new StoreError(
       "execution.consumer-not-ready",
-      `${operation}: the execution authority of ${harnessDir} is ACTIVE, so this pre-activation form is retired. ` +
-        "Nothing was written; read the current token and use the active DB form under an independently acquired identity.",
+      `state: active. Upgrade outcome: not required; ${operation}: the pre-activation form is retired. ` +
+        `Nothing was written; use the active DB form with the current execution token under an independently acquired identity.`,
     );
-  }
+}
 }
 function schema() {
   return z.object({
@@ -131,7 +131,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("workflow.register", "active registration requires main session identity, expect and operation");
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow!, role: "coordinator", planId: null };
           const { catalogRevision } = await readCatalogRevisions({ harnessDir });
-          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath: input.planFile! }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
+          const canonicalPlanAbs = path.isAbsolute(input.planFile!) ? path.resolve(input.planFile!) : path.join(harnessDir, input.planFile!);
+          const plansRelative = path.relative(resolvePlanDir(harnessDir), canonicalPlanAbs);
+          const relativePath = plansRelative === ".." || plansRelative.startsWith(`..${path.sep}`) || path.isAbsolute(plansRelative) ? input.planFile! : plansRelative;
+          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
         }
         await assertLegacyRoute(harnessDir, "workflow register");
         return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { probeStoreUpgradeState } from "@mstar-harness/engine";
+import { probeStoreUpgradeState, readExecutionAuthority } from "@mstar-harness/engine";
 import { getStoreCommandDefinitions } from "../src/index.js";
 import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -183,6 +183,47 @@ test("store safe-upgrade archives a damaged store and still migrates valid legac
   // not merely replaced the database.
   const state = await probeStoreUpgradeState({ harnessDir });
   expect(state.executionAuthorityState).toBe("active");
+});
+test("store init preserves a files-only legacy workflow until safe-upgrade imports it", async () => {
+  const harnessDir = join(root, "files-only-init", ".mstar");
+  const workflowId = "files-only-workflow";
+  const planId = `${workflowId}-plan`;
+  const workflowDir = join(harnessDir, "workflows", workflowId);
+  mkdirSync(workflowDir, { recursive: true });
+  const sources = [
+    [join(harnessDir, "status.json"), Buffer.from(JSON.stringify({
+      version: 2,
+      updated_at: "2026-09-30",
+      workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-30", dir: `workflows/${workflowId}` }],
+    }))],
+    [join(workflowDir, "snapshot.json"), Buffer.from(JSON.stringify({
+      schema_version: 1,
+      id: workflowId,
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-30",
+      updated_at: "2026-09-30",
+      delivery_kind: "development",
+      project: "_default",
+      branch: { source: "feature/files-only", target: "main" },
+      plans: [{ id: planId, title: "Files-only plan", file: "plan.md", status: "Todo", metadata: {} }],
+    }))],
+    [join(workflowDir, "plan.md"), Buffer.from(`# ${planId}\n\nLegacy plan bytes stay untouched until activation.\n`)],
+  ] as const;
+  for (const [file, bytes] of sources) writeFileSync(file, bytes);
+
+  const init = getStoreCommandDefinitions().find(({ id }) => id === "store.init");
+  if (init === undefined) throw new Error("missing store.init definition");
+  const initResult = await init.execute(init.input.parse({ harness: harnessDir }), invocationContext(root, ""));
+  expect(initResult.status).toBe("ok");
+  for (const [file, bytes] of sources) expect(readFileSync(file)).toEqual(bytes);
+
+  const upgradeResult = await runUpgrade(harnessDir, root, "preserve for later review");
+  expect(upgradeResult.status).toBe("ok");
+  const authority = await readExecutionAuthority({ harnessDir });
+  if (!("workflows" in authority.data)) throw new Error("the upgraded authority did not expose its registered workflows");
+  const workflow = authority.data.workflows.find((entry) => entry.state.id === workflowId);
+  expect(workflow?.plans.map((entry) => entry.plan.id)).toEqual([planId]);
 });
 
 test("store safe-upgrade restores the original when staging refuses after confirmation", async () => {

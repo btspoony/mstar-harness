@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { captureIssue, openStore } from "@mstar-harness/engine";
@@ -77,10 +77,16 @@ describe("store and execution command surface", () => {
     ]);
   });
 
-  test("initializes, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
+  test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
     const root = fixture("store-lifecycle");
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
+    const linkedProject = join(root, "linked-project");
+    mkdirSync(linkedProject);
+    writeFileSync(join(linkedProject, "residuals.json"), "{}\n");
+    const projectsDir = join(harness, "projects");
+    mkdirSync(projectsDir);
+    symlinkSync(linkedProject, join(projectsDir, "linked"));
     const initialized = await invoke(definition("store.init"), { harness }, root);
     if (initialized.status !== "ok") throw new Error(JSON.stringify(initialized));
     expect(dataOf(initialized).authorityState).toBe("active");
@@ -99,6 +105,25 @@ describe("store and execution command surface", () => {
     expect(backup.status).toBe("ok");
     expect(existsSync(join(root, "recovery.db"))).toBe(true);
     expect(typeof dataOf(backup).storeId).toBe("string");
+  });
+  test("store init refuses catalog migration inputs", async () => {
+    for (const [label, legacyPath, contents] of [
+      ["project residuals", join("projects", "alpha", "residuals.json"), "{}\n"],
+      ["iterations catalog index", join("iterations", "README.md"), "# Iterations\n"],
+    ] as const) {
+      const root = fixture(`store-init-${label.replaceAll(" ", "-")}`);
+      const harness = join(root, ".mstar");
+      const legacyFile = join(harness, legacyPath);
+      mkdirSync(dirname(legacyFile), { recursive: true });
+      writeFileSync(legacyFile, contents);
+
+      const result = await invoke(definition("store.init"), { harness }, root);
+      expect(result.status).toBe("refused");
+      expect(result.code).toBe("store.already-exists");
+      expect(result.message).toContain("staged catalog migration");
+      expect(result.message).toContain("not store init");
+      expect(existsSync(join(harness, "store.db"))).toBe(false);
+    }
   });
 
   test("a control-root-only manifest without --coverage is a usage refusal naming the flag", async () => {

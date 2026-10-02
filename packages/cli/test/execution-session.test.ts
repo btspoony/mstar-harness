@@ -24,11 +24,12 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   encodeExecutionSessionRef,
+  getCatalog,
   initializeExecutionAuthority,
   initializeStore,
   readExecutionAuthority,
@@ -195,8 +196,33 @@ async function activeFixture(label: string): Promise<Fixture> {
   return { root, harnessDir, context, planMarkdown, assignmentPath, worktreePath, sddDir, evidencePath };
 }
 
+/** A temp Git workspace with an initialized store and the file route still active. */
+async function legacyFixture(label: string): Promise<Fixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  const store = await initializeStore(context);
+  store.close();
+
+  const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
+  const sddDir = join(harnessDir, "sdd", PLAN_ID);
+  const worktreePath = join(root, "wt-exec-session");
+  const evidencePath = join(sddDir, "evidence.md");
+  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(evidencePath, "# evidence\n");
+  writeJson(join(harnessDir, "status.json"), { version: 2, updated_at: "2026-09-21", workflows: [] });
+  mkdirSync(worktreePath, { recursive: true });
+  const assignmentPath = join(sddDir, "assignment.md");
+  writeText(assignmentPath, assignmentText({ harnessDir, planMarkdown, worktreePath, sddDir }));
+  return { root, harnessDir, context, planMarkdown, assignmentPath, worktreePath, sddDir, evidencePath };
+}
+
 /** Register the workflow through the ACTIVE registration route (the real producer chain). */
-function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity, rootToken: string): void {
+function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity, rootToken: string, planFile = `plans/${PLAN_ID}.md`): void {
   const registered = runCli(
     [
       "workflow",
@@ -208,7 +234,7 @@ function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity,
       "--plan-title",
       "Execution session transport plan",
       "--plan-file",
-      `plans/${PLAN_ID}.md`,
+      planFile,
       "--delivery-kind",
       "development",
       "--branch-source",
@@ -720,7 +746,210 @@ describe("mstar status validate \u2014 tokens of the active register", () => {
     const tokens = await tokensOf(fixture);
     const data = dataOf(validated);
     expect(data.token).toBe(tokens.root);
+    expect(data.state).toBe("active");
     const rows = data.workflows as Array<{ token: string }>;
     expect(rows[0]?.token).toBe(tokens.workflow);
+  });
+});
+  
+describe("mstar status validate — disclosed authority state", () => {
+  test("reports active additively and legacy with the single upgrade entry", async () => {
+    const legacy = await legacyFixture("mstar-session-legacy-state");
+    const legacyResult = runCli(["status", "validate"], legacy);
+    expect(legacyResult.exitCode, legacyResult.stderr).toBe(0);
+    expect(dataOf(legacyResult)).toMatchObject({
+      path: join(legacy.harnessDir, "status.json"),
+      violations: [],
+      state: "legacy",
+      upgrade: { entry: "mstar store safe-upgrade" },
+    });
+    const legacyWithoutStore = await legacyFixture("mstar-session-legacy-without-store");
+    rmSync(join(legacyWithoutStore.harnessDir, "store.db"));
+    writeJson(join(legacyWithoutStore.harnessDir, "status.json"), {
+      version: 2,
+      updated_at: "2026-09-21",
+      workflows: [{ id: "wf-registered", type: "iteration", status: "running", started_at: "2026-09-21T00:00:00Z", dir: "workflows/wf-registered" }],
+    });
+    const legacyWithoutStoreResult = runCli(["status", "validate"], legacyWithoutStore);
+    expect(legacyWithoutStoreResult.exitCode).toBe(1);
+    expect(jsonOf(legacyWithoutStoreResult)).toMatchObject({
+      code: "status.workflow.snapshot-missing",
+      details: {
+        state: "legacy",
+        upgrade: { entry: "mstar store init → mstar store safe-upgrade" },
+      },
+    });
+    const missing = await legacyFixture("mstar-session-missing-status");
+    rmSync(join(missing.harnessDir, "status.json"));
+    const missingResult = runCli(["status", "validate"], missing);
+    expect(missingResult.exitCode).toBe(1);
+    expect(jsonOf(missingResult)).toMatchObject({
+      details: {
+        state: "legacy",
+        upgrade: { entry: "mstar store safe-upgrade" },
+        selfCheck: {
+          couldNotRead: "legacy status register is missing",
+          recovery: expect.stringContaining("legacy upgrade path exists"),
+        },
+      },
+    });
+    const empty = await legacyFixture("mstar-session-empty-harness");
+    rmSync(join(empty.harnessDir, "status.json"));
+    rmSync(join(empty.harnessDir, "store.db"));
+    const emptyResult = runCli(["status", "validate"], empty);
+    expect(emptyResult.exitCode).toBe(1);
+    expect(jsonOf(emptyResult)).toMatchObject({
+      code: "status.file-not-found",
+      details: {
+        state: "legacy",
+        upgrade: { entry: "mstar harness scaffold" },
+        selfCheck: { recovery: expect.stringContaining("run mstar harness scaffold") },
+      },
+    });
+    const scaffoldResult = runCli(["harness", "scaffold"], empty);
+    expect(scaffoldResult.exitCode).toBe(0);
+    expect(jsonOf(scaffoldResult).code).toBe("harness.scaffold.ok");
+
+    const active = await activeFixture("mstar-session-active-state");
+    const initial = await readExecutionAuthority(active.context);
+    registerThroughAuthority(active, coordinatorIdentity(), initial.token);
+    const activeResult = runCli(["status", "validate"], active);
+    expect(activeResult.exitCode).toBe(0);
+    const activeData = dataOf(activeResult);
+    expect(activeData.state).toBe("active");
+    expect(activeData.token).toBe((await tokensOf(active)).root);
+    expect((activeData.workflows as Array<{ token: string }>)[0]?.token).toBe((await tokensOf(active)).workflow);
+  });
+  test("refuses an unreadable authority store with its typed cause and actionable self-check", async () => {
+    const fixture = await legacyFixture("mstar-session-unreadable-state");
+    rmSync(join(fixture.harnessDir, "store.db"));
+    mkdirSync(join(fixture.harnessDir, "store.db"));
+    const result = runCli(["status", "validate"], fixture);
+    const envelope = jsonOf(result);
+    expect(result.exitCode).toBe(1);
+    expect(envelope.status).toBe("refused");
+    expect(envelope.code).toBe("store.corrupt");
+    expect(envelope.message).toContain("Self-check recovery:");
+    expect(envelope.message).toContain("not a readable regular store file");
+    expect(envelope.details).toMatchObject({
+      state: "unreadable",
+      selfCheck: {
+        couldNotRead: expect.stringContaining("not a readable regular store file"),
+        recovery: expect.stringContaining("Preserve the corrupt database and legacy sources"),
+      },
+    });
+  });
+});
+
+describe("workflow.register — catalog plan paths", () => {
+  test.each([
+    ["harness-relative", false],
+    ["canonical-absolute", true],
+  ])("%s registration stores the plans-root-relative document and prepares successfully", async (label, canonicalAbsolute) => {
+    const fixture = await activeFixture(`mstar-register-plan-path-${label}`);
+    const planFile = canonicalAbsolute ? fixture.planMarkdown : `plans/${PLAN_ID}.md`;
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+
+    registerThroughAuthority(fixture, identity, initial.token, planFile);
+
+    const entity = (await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity;
+    expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
+    const storedPlanFile = join(fixture.harnessDir, "plans", entity.relativePath);
+    expect(storedPlanFile).toBe(fixture.planMarkdown);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+
+    const tokens = await tokensOf(fixture);
+    const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
+    const prepared = runCli(
+      [
+        "plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
+        "--assignment", fixture.assignmentPath, "--expect", tokens.plan,
+        "--operation", "prepare-registered-path", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode).toBe(0);
+    expect(jsonOf(prepared).command).toBe("plan.prepare");
+  });
+  test("canonical absolute registration uses the configured plans root", async () => {
+    const fixture = await activeFixture("mstar-register-configured-plans-root");
+    writeText(join(fixture.harnessDir, ".mstarc"), "[config]\nplan_dir=custom-plans\n");
+    fixture.planMarkdown = join(fixture.harnessDir, "custom-plans", `${PLAN_ID}.md`);
+    writeText(fixture.planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeText(fixture.assignmentPath, assignmentText({
+      harnessDir: fixture.harnessDir,
+      planMarkdown: fixture.planMarkdown,
+      worktreePath: fixture.worktreePath,
+      sddDir: fixture.sddDir,
+    }));
+
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token, fixture.planMarkdown);
+
+    const entity = (await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity;
+    expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
+    const storedPlanFile = join(fixture.harnessDir, "custom-plans", entity.relativePath);
+    expect(storedPlanFile).toBe(fixture.planMarkdown);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+
+    const tokens = await tokensOf(fixture);
+    const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
+    const prepared = runCli(
+      [
+        "plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
+        "--assignment", fixture.assignmentPath, "--expect", tokens.plan,
+        "--operation", "prepare-configured-path", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode).toBe(0);
+    expect(jsonOf(prepared).command).toBe("plan.prepare");
+  });
+});
+
+describe("workflow.register — state-aware transport refusals", () => {
+  test("legacy DB-route attempt gives the sole upgrade entry; active legacy-form attempt says upgrade is unnecessary", async () => {
+    const legacy = await legacyFixture("mstar-session-legacy-refusal");
+    const active = await activeFixture("mstar-session-active-refusal");
+    const activeAuthority = await readExecutionAuthority(active.context);
+
+    const legacyDb = join(legacy.harnessDir, "store.db");
+    const legacyBefore = readFileSync(legacyDb);
+    const legacyResult = runCli([
+      "workflow", "register", "--workflow", "legacy-refusal",
+      "--plan-id", PLAN_ID, "--plan-title", "Execution session transport plan",
+      "--plan-file", `plans/${PLAN_ID}.md`, "--delivery-kind", "development",
+      "--branch-source", "feature/refusal", "--branch-target", "main",
+      "--expect", activeAuthority.token, "--operation", "legacy-refusal",
+      "--harness", legacy.harnessDir,
+    ], legacy, coordinatorIdentity());
+    expect(legacyResult.exitCode).toBe(1);
+    const legacyResponse = jsonOf(legacyResult);
+    expect(legacyResponse.code).toBe("execution.not-active");
+    expect(legacyResponse.message).toContain("state: legacy");
+    expect(legacyResponse.message).toContain("mstar store safe-upgrade");
+    expect(legacyResponse.message).not.toContain(activeAuthority.token);
+    expect(readFileSync(legacyDb).equals(legacyBefore)).toBe(true);
+
+    const activeDb = join(active.harnessDir, "store.db");
+    const activeBefore = readFileSync(activeDb);
+    const activeResult = runCli([
+      "workflow", "register", "--workflow", "active-refusal",
+      "--plan-id", PLAN_ID, "--plan-title", "Execution session transport plan",
+      "--plan-file", `plans/${PLAN_ID}.md`, "--delivery-kind", "development",
+      "--branch-source", "feature/refusal", "--branch-target", "main",
+      "--harness", active.harnessDir,
+    ], active, coordinatorIdentity());
+    expect(activeResult.exitCode).toBe(1);
+    const activeResponse = jsonOf(activeResult);
+    expect(activeResponse.code).toBe("execution.consumer-not-ready");
+    expect(activeResponse.message).toContain("state: active");
+    expect(activeResponse.message).toContain("Upgrade outcome: not required");
+    expect(activeResponse.message).toContain("active DB form");
+    expect(readFileSync(activeDb).equals(activeBefore)).toBe(true);
   });
 });

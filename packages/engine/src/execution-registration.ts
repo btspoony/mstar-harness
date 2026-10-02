@@ -201,8 +201,8 @@ export async function commitExecutionRegistration(
     if (tx.execution.authorityState !== "active") {
       throw new ExecutionError(
         "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; the DB registration route requires an active authority. ` +
-          `A legacy or staged store registers through the file journal until activation.`,
+        `state: ${tx.execution.authorityState}; registration requires the active execution authority. ` +
+          `Upgrade required: mstar store safe-upgrade.`,
       );
     }
     // §4.1 semantic replay first: the retry of the same reviewed intent must not
