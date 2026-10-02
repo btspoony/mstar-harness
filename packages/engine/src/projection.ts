@@ -270,11 +270,22 @@ function churnAfterRead(spec: { relativePath: string; absolutePath: string }): v
 function readSource(spec: SourceSpec | ProjectionSourceLocation, db?: StoreDb): SourceRead {
   if (spec.source === "database") {
     if (db === undefined) {
-      return { state: "inaccessible", sha256: null, content: null, diagnostic: `inaccessible: execution row read refused at ${spec.relativePath}` };
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: "capture arm pending (Task 2)" };
     }
     try {
       if (spec.table === "execution_registry") {
-        const entries = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id asc").all();
+        const entries = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id asc").all() as
+          Array<{ workflow_id: string; entry_json: unknown }>;
+        for (const entry of entries) {
+          if (typeof entry.entry_json !== "string") {
+            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+          }
+          try {
+            JSON.parse(entry.entry_json);
+          } catch {
+            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+          }
+        }
         const content = JSON.stringify(entries);
         return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
       }

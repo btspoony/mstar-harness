@@ -35,6 +35,7 @@ import {
   PROJECTION_FORMAT_VERSION,
   publishProjectionCapture,
   refreshProjections,
+  type ProjectionCapture,
 } from "./projection.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
@@ -362,6 +363,62 @@ function issueInput(occurrenceKey: string) {
 }
 
 describe("projection publication and last-good handling", () => {
+  test("malformed execution registry entry JSON is classified as invalid", async () => {
+    const f = await fixture("registry-invalid-");
+    const handle = await openStore(f.context, "write");
+    try {
+      handle.db
+        .prepare(
+          "insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, ?, ?, ?, ?)",
+        )
+        .run("wf-registry", 1, "{}", STARTED_AT, STARTED_AT);
+      handle.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run("wf-registry", "{ malformed");
+    } finally {
+      handle.close();
+    }
+    const capture: ProjectionCapture = {
+      formatVersion: PROJECTION_FORMAT_VERSION,
+      catalogRevision: 0,
+      sources: [
+        {
+          sourceKey: "root:harness:execution/registry",
+          kind: "root",
+          rootKind: "harness",
+          relativePath: "execution/registry",
+          sha256: null,
+          state: "invalid",
+          diagnostic: "invalid: malformed JSON at execution/registry",
+          declared: true,
+        },
+      ],
+      rows: { workflows: [], plans: [], leases: [], compasses: [] },
+      diagnostics: [
+        {
+          sourceKey: "root:harness:execution/registry",
+          reason: "invalid",
+          message: "invalid: malformed JSON at execution/registry",
+        },
+      ],
+      sourceSetHash: "0".repeat(64),
+      blocked: true,
+      locations: [
+        {
+          source: "database",
+          sourceKey: "root:harness:execution/registry",
+          relativePath: "execution/registry",
+          sha256: null,
+          state: "invalid",
+          table: "execution_registry",
+          keys: {},
+        },
+      ],
+    };
+
+    const report = await publishProjectionCapture(f.context, capture);
+    expect(report.freshness).toBe("unavailable");
+    expect(report.sources).toMatchObject([{ sourceKey: "root:harness:execution/registry", state: "invalid" }]);
+  });
+
   test("the first refresh publishes generation 1 with the projected rows, and an unchanged refresh publishes nothing", async () => {
     const f = await fixture("publish-");
     await seedStandard(f);
