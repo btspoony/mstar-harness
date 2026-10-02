@@ -35,8 +35,6 @@ import {
   replaceCoordinatedArtifact,
   setCompleteStandaloneMutateGapForTest,
 } from "../src/coordination.js";
-import { artifactVersion } from "../src/coordination-write.js";
-import { claimLease } from "../src/lease.js";
 import { closeWorkflow, recordWorkflowDelivery } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID,
@@ -44,7 +42,7 @@ import {
   git, writeText, writeJson, readJson, makeFixture, sleep, errorCodeOf,
   ensureCoordinator, preparePlan, bindPlan, headOf,
   gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, handoffFields, leaseHolder,
-  handoffEvidenceOf, recordField, digestOf, sha256OfFile, handoffCall, coordinatorCall,
+  handoffEvidenceOf, recordField, handoffCall, coordinatorCall,
   acceptedFixture, acceptedStandaloneFixture, wrongSourceAcceptedFixture,
   storeBacked, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
 } from "./support/coordination-fixtures.js";
@@ -103,23 +101,22 @@ describe("handoff-transitions", () => {
     expect(handoff.review_head).toBe(fixture.planSha);
     expect(handoff.worktree_path).toBe(fixture.worktreePath);
 
-    // Evidence is sealed by content, not by reference: the digest is the file's.
+    // Evidence references retain their paths; their recorded digests are provenance only.
     const qc = recordField(handoff, "qc");
     expect(qc.decision).toBe("Approve");
     const reports = qc.reports;
     if (!Array.isArray(reports)) throw new Error("qc.reports is not an array");
     expect(reports).toHaveLength(2);
-    expect(reports.map(digestOf)).toEqual([
-      sha256OfFile(join(fixture.sddDir, "review", "qc1.md")),
-      sha256OfFile(join(fixture.sddDir, "review", "qc2.md")),
+    expect(reports.map((report) => recordField(report, "path"))).toEqual([
+      join(fixture.sddDir, "review", "qc1.md"),
+      join(fixture.sddDir, "review", "qc2.md"),
     ]);
     const consolidated = recordField(qc, "consolidated");
     expect(consolidated.path).toBe(join(fixture.sddDir, "review", "qc.md"));
-    expect(digestOf(consolidated)).toBe(sha256OfFile(join(fixture.sddDir, "review", "qc.md")));
     const qa = recordField(handoff, "qa");
     expect(qa.gate).toBe("mandatory");
     expect(qa.decision).toBe("pass");
-    expect(digestOf(recordField(qa, "report"))).toBe(sha256OfFile(join(fixture.sddDir, "qa.md")));
+    expect(recordField(qa, "report").path).toBe(join(fixture.sddDir, "qa.md"));
 
     // The plan session is done until the row comes back; the coordinator can act.
     const planView = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
@@ -402,15 +399,16 @@ describe("git-reconciliation", () => {
       "coordination.integration-unresolved",
     );
 
-    // Evidence sealed at handoff is re-verified after the merge: a rewritten
-    // report invalidates the attempt instead of being accepted.
-    const stale = await acceptedFixture();
-    await coordinatorCall(stale, PLAN_ID, { kind: "integration-start" });
-    mergeFeature(stale);
-    writeText(join(stale.sddDir, "review", "qc1.md"), "# rewritten after handoff\n");
-    expect(await errorCodeOf(() => coordinatorCall(stale, PLAN_ID, { kind: "integration-accept" }))).toBe(
-      "coordination.evidence-stale",
-    );
+    // Evidence paths and field values remain valid after handoff even when a
+    // report's bytes change; the recorded Git result is still verified.
+    const retained = await acceptedFixture();
+    await coordinatorCall(retained, PLAN_ID, { kind: "integration-start" });
+    const resultSha = mergeFeature(retained);
+    writeText(join(retained.sddDir, "review", "qc1.md"), "# rewritten after handoff\n");
+    const accepted = await coordinatorCall(retained, PLAN_ID, { kind: "integration-accept" });
+    expect(accepted.outcome).toBe("completed");
+    expect(planRowOf(retained, PLAN_ID).status).toBe("Done");
+    expect(recordField(handoffFields(planRowOf(retained, PLAN_ID)), "integration").result_sha).toBe(resultSha);
   }, 30000);
 
   test("a force-moved integration HEAD voids an already-integrated proof (T1-E-008)", async () => {
@@ -925,7 +923,7 @@ describe("seam-regressions", () => {
           harnessRoot,
           ref: { kind: "residuals", key: PROJECT_ID } as never,
           payload: { entries: { [PLAN_ID]: [] } },
-          expectedVersion: "absent",
+          
         }),
       ),
     ).toBe("coordination.store");
@@ -961,17 +959,11 @@ describe("seam-regressions", () => {
     const fixture = makeFixture();
     const harnessRoot = realpathSync(fixture.harness);
     const statusPath = join(harnessRoot, "status.json");
-    const before = readFileSync(statusPath);
-
-    // Fresh entry objects for the very same workflow the root already names:
-    // the guard judges the document set, not the caller's instances.
-    const replaced = await replaceCoordinatedArtifact({
+    await replaceCoordinatedArtifact({
       harnessRoot,
       ref: { kind: "status", key: "root" } as const,
       payload: readJson(statusPath),
-      expectedVersion: artifactVersion(before),
     });
-    expect(replaced.version).toBe(artifactVersion(readFileSync(statusPath)));
     expect(readJson(statusPath).workflows).toEqual([expect.objectContaining({ id: WORKFLOW_ID })]);
   });
 

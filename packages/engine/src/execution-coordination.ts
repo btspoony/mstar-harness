@@ -39,29 +39,23 @@ import {
   assertIntegrationCheckout,
   assertPreparedFresh,
   assertRecordedResult,
-  assertSealedInputsUnchanged,
   assertStandaloneSourceGitProof,
   assertViolationFree,
   assignmentIntentOf,
   catalogPinFactsOn,
-  captureGitProofWitness,
   gitObjectExists,
   gitRead,
   integrationProof,
   parseAssignmentFile,
   planAreaRoots,
   proofRepository,
-  revalidateGitProofWitness,
   selectCatalogPinOn,
   type AssignmentHeaders,
-  type GitProofWitness,
 } from "./coordination.js";
 import {
   IMPLEMENTED_OPERATIONS,
   assertAcceptedReviewDecision,
-  assertEvidenceDigests,
   assertExecutionHolder,
-  assertHandoffEvidenceUnchanged,
   assertNoHandoffTransition,
   assertNoIntegrationContamination,
   assertOperationRole,
@@ -520,13 +514,11 @@ function planRowOf(view: ExecutionPlanView): PlanRow {
 /**
  * §D/§E the row admission every plan-owned write shares, read from the
  * store-held witness — the DB route's equivalent of the file route's
- * `assertRowBinding` plus the freshness check its locked read performs:
+ * `assertRowBinding` plus its current semantic Assignment check:
  *
- * 1. the prepared Assignment is re-authenticated (an Assignment edited after
- *    `prepare` invalidates the row until the coordinator re-prepares);
+ * 1. named prepared Assignment fields remain current;
  * 2. the addressed row's own lease must be HELD by this session — identity is
- *    not ownership, and the store keeps released lease rows as tombstones
- *    (§3.1), so the equivalent of the file route's lease object is a held one;
+ *    not ownership, and the store keeps released lease rows as tombstones;
  * 3. a handoff owns the plan's transition until the coordinator returns or
  *    completes it.
  */
@@ -597,100 +589,6 @@ function planOperationRequestHash(
  * which neither a later plan operation nor anything else on that authority
  * supersedes): their plan-owned projection is empty by construction.
  */
-const PLAN_EFFECT_FIELDS: Readonly<Record<CoordinationOperation["kind"], SemanticSelection>> = {
-  prepare: ["coordination.prepared", "plan.metadata.worktree_path", "plan.metadata.working_branch"],
-  progress: ["coordination.progress", "plan.status", "plan.metadata.track_branches"],
-  "residual-add": [],
-  "residual-close": [],
-  handoff: ["coordination.handoff", "plan.status"],
-  accept: ["coordination.handoff", "plan.status"],
-  return: ["coordination.handoff", "plan.status"],
-  "integration-start": ["coordination.handoff", "plan.status"],
-  "integration-accept": ["coordination.handoff", "plan.status"],
-  complete: ["coordination.handoff", "plan.status"],
-  reconcile: ["coordination.handoff", "plan.status"],
-};
-
-/**
- * §4.2 (A12/A13) whether the effect one recorded plan receipt committed is STILL
- * held: the recorded view and the state this transaction reads, compared on the
- * kind's own effect projection. The canonical serialization is the same one the
- * fingerprint uses, so "the same effect" is one comparison everywhere.
- */
-function planEffectHeld(recorded: unknown, current: ExecutionPlanView, kind: CoordinationOperation["kind"]): boolean {
-  const fields = PLAN_EFFECT_FIELDS[kind];
-  return (
-    serializeExecutionValue(selectSemanticFields(recorded, fields)) ===
-    serializeExecutionValue(selectSemanticFields(current, fields))
-  );
-}
-
-/**
- * §4.1/§4.2 (A13) the refusal of a plan receipt whose effect a later accepted
- * operation superseded: the recorded receipt is historical evidence and is never
- * served as current state, and the typed cause names both facts with the one
- * choice that remains — accept what the row holds now, or express the desired
- * effect as a NEW operation under a new operation id. Same report shape as the
- * workflow frame's superseded-effect refusal, addressed to the plan row.
- */
-function supersededPlanEffectCause(input: {
-  witness: ExecutionPlanWitness;
-  operationId: string;
-  kind: CoordinationOperation["kind"];
-  recorded: unknown;
-}): ExecutionError {
-  const code = "execution.effect-superseded";
-  const fields = PLAN_EFFECT_FIELDS[input.kind];
-  const field = fields[0] ?? "coordination";
-  const current = JSON.stringify(selectSemanticFields(input.witness.view, fields)) ?? "absent";
-  const recorded = JSON.stringify(selectSemanticFields(input.recorded, fields)) ?? "absent";
-  const problem: RecoveryProblem = {
-    component: "plan-row",
-    path: field,
-    code,
-    sourcesTried: [
-      `execution_operations(epoch, ${JSON.stringify(input.operationId)}) \u2014 the recorded receipt`,
-      `execution_plans(${input.witness.workflowId}, ${input.witness.planId}) as this transaction reads it`,
-    ],
-    currentFacts: [
-      `operation id ${JSON.stringify(input.operationId)} committed the ${input.kind} effect ${recorded} on plan ` +
-        `${input.witness.planId}`,
-      `the row holds ${current} now, so a later accepted operation superseded that effect`,
-    ],
-    needed:
-      `accept the current state of plan ${input.witness.planId}, or express the desired ${input.kind} effect again as a ` +
-      `new operation with a NEW operation id`,
-    withheldEffect: "the recorded receipt: it is historical evidence and is never restored as current state",
-    availableWork: [
-      `read plan ${input.witness.planId} and its current token`,
-      `express the desired effect under a new operation id`,
-      "independent operations on other plans and workflows continue",
-    ],
-  };
-  return new ExecutionError(
-    code,
-    `operation id ${JSON.stringify(input.operationId)} committed the ${input.kind} effect ${recorded} on plan ` +
-      `${input.witness.planId} of workflow ${input.witness.workflowId}, but the row holds ${current} now \u2014 a later ` +
-      `accepted operation superseded that effect, and a superseded receipt is never restored. Nothing was written.`,
-    {
-      component: problem.component,
-      path: problem.path,
-      workflow_id: input.witness.workflowId,
-      plan_id: input.witness.planId,
-      operation_id: input.operationId,
-      current_value: current,
-      recorded_value: recorded,
-      sources_tried: problem.sourcesTried,
-      current_facts: problem.currentFacts,
-      needed: problem.needed,
-      available_work: problem.availableWork,
-      recovery: unresolvedRecovery({
-        target: { workflowId: input.witness.workflowId, planId: input.witness.planId },
-        unresolved: [problem],
-      }),
-    },
-  );
-}
 
 /**
  * §4.1 the sidecar of one plan-frame result: what this call did with the intent,
@@ -830,15 +728,6 @@ function withExecutionPlanOperation<T>(
   resolved: ResolvedPlanOperation<CoordinationOperation>,
   requestHash: string,
   run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<T>,
-  /**
-   * §4.2 (R6/A09/A12) the operation's own read-only admission of "the row
-   * already holds the effect this intent asks for". When it answers a read on a
-   * fresh token, the call answers from current state — the plan row, its
-   * revision, seal, pin and lease do not move — while the operation receipt is
-   * still recorded, so an exact retry of THIS accepted action replays instead
-   * of being re-evaluated.
-   */
-  admitSatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<T> | null,
 ): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
@@ -884,26 +773,13 @@ function withExecutionPlanOperation<T>(
       planId: witness.planId,
     });
     if (replay !== null) {
-      // §4.2 (R6/A13) the recorded receipt comes back with the provenance of the
-      // commit it records — but only while the effect it recorded is still the
-      // row's effect: nothing re-reads or re-writes the row it already applied, a
-      // superseded effect is disclosed instead of restored, and the caller's
-      // token revision is not re-evaluated (the commit itself advanced the row,
-      // so an exact retry always presents a superseded token).
-      if (!planEffectHeld(replay.data, witness.view, request.operation.kind)) {
-        throw supersededPlanEffectCause({
-          witness,
-          operationId: request.operationId,
-          kind: request.operation.kind,
-          recorded: replay.data,
-        });
-      }
+      // A committed operation id is replayed from its recorded receipt; replay
+      // conflicts are decided by requestHash when the replay is read.
       const { operationRecovery, ...recorded } = replay;
       return {
         ...recorded,
         recovery: {
           ...replayRecovery(witness, request.operation.kind),
-          ...(operationRecovery?.details === undefined ? {} : { details: operationRecovery.details }),
         },
       };
     }
@@ -913,35 +789,6 @@ function withExecutionPlanOperation<T>(
     // of overwritten.
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
     const at = new Date().toISOString();
-    // §4.2 (R6/A09/A12) the admitted already-held effect: the answer comes from
-    // current state with no plan write — no revision, seal, pin or lease
-    // movement — while the operation receipt is still recorded, so an exact
-    // retry of THIS accepted action replays (`replayed: true`) instead of being
-    // re-evaluated as fresh.
-    const satisfied = admitSatisfied?.(witness, tx) ?? null;
-    if (satisfied !== null) {
-      const recovery = planRecovery({
-        witness,
-        kind: request.operation.kind,
-        outcome: "already-satisfied",
-        commitState: "none",
-        resolvedFrom: [{ path: "coordination.prepared", source: "stored plan row" }],
-      });
-      writePlanOperationReceipt(tx, {
-        operationId: request.operationId,
-        requestHash,
-        workflowId: witness.workflowId,
-        planId: witness.planId,
-        receipt: { ...satisfied, operationRecovery: recovery },
-        now: at,
-      });
-      return {
-        ...satisfied,
-        operationId: request.operationId,
-        replayed: false,
-        recovery,
-      };
-    }
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
     // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
     // joins the shared advance instead of bumping the counter again, so the body
@@ -975,11 +822,11 @@ function withExecutionPlanOperation<T>(
 }
 
 /* ------------------------------------------------------------------------ *
- * §3 `prepare` — the reviewed Assignment's seal and the frozen catalog input
+ * §3 `prepare` — the reviewed Assignment's semantic scope and recorded provenance
  * ------------------------------------------------------------------------ */
 
-/** The documents one `prepare` seals, read and hashed before the transaction. */
-type PrepareSeal = {
+/** Parsed prepare inputs and record-only document digests. */
+type PreparedInputs = {
   assignment: AssignmentHeaders;
   assignmentSha256: string;
   planSha256: string;
@@ -998,14 +845,10 @@ function controlHarnessRoot(context: ExecutionContext): string {
 }
 
 /**
- * §D/§4.1 the sealed input of one `prepare`, read BEFORE SQLite ownership: the
- * reviewed Assignment and the plan document it pins. The Assignment must
- * describe THIS store's harness, workflow and plan — a foreign Assignment is
- * never sealed onto a row — and both documents are hashed here so the
- * transaction can re-read the very bytes it is about to record (§4.1: a changed
- * witness refuses with no DB mutation).
+ * Read and validate current prepare inputs before the database transaction.
+ * Named fields establish scope; digests are recorded as provenance only.
  */
-function readPrepareSeal(context: ExecutionContext, call: ExecutionPlanRequest<PrepareOperation>): PrepareSeal {
+function readPrepareInputs(context: ExecutionContext, call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
   const assignment = parseAssignmentFile(call.operation.assignmentPath);
   const harnessRoot = controlHarnessRoot(context);
   if (assignment.controlHarnessRoot !== harnessRoot) {
@@ -1058,17 +901,10 @@ function readPrepareSeal(context: ExecutionContext, call: ExecutionPlanRequest<P
 }
 
 /**
- * §3 `prepare` on the DB authority: the coordinator seals the reviewed
- * Assignment against the addressed plan and selects the plan's frozen catalog
- * input, in ONE transaction whose CAS is the plan's own token.
- *
- * Fresh byte-identical input from the coordinator or authenticated row claimant
- * is already-satisfied: only its action receipt is written. An eligible
- * coordinator may reseal changed reviewed input on an unbound, unleased Todo
- * row without a handoff, recording the replaced seal's identity.
- * Protected mutation, foreign scope/pin, stopped workflow and fresh-action CAS
- * refusals remain unchanged. Exact retries replay persisted provenance without
- * advancing the domain or reconstructing old seal identity from current state.
+ * `prepare` validates named Assignment scope, preserves semantic field
+ * constraints, and records the selected catalog input in one transaction.
+ * Only same-operation-id request-hash conflicts govern replay; document digests
+ * remain provenance and do not make repeated or revised inputs stale.
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
@@ -1080,61 +916,20 @@ export async function prepareExecutionPlan(
   if (!isNonEmptyString(operation.assignmentPath) || !isAbsolute(operation.assignmentPath)) {
     throw invalidPlanInput("prepare requires an absolute assignmentPath");
   }
-  const seal = readPrepareSeal(context, resolved.call);
+  const inputs = readPrepareInputs(context, resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const { planId, workflowId } = resolved.read;
-  // §4.2 (R6/A09/A12) an unchanged ordinary reissue: a byte-identical
-  // Assignment is the effect the row's seal already holds, answered for the
-  // workflow coordinator or the row's own bound claimant — identity first,
-  // never as a bypass of the seat refusals. The sealed documents are
-  // re-verified against their current bytes inside the transaction (the same
-  // witness check the mutation path runs before committing), so a file edited
-  // between the pre-transaction read and here is never served as satisfied.
-  const admitSatisfied = (witness: ExecutionPlanWitness, tx: ExecutionTransaction): ExecutionRead<ExecutionPlanView> | null => {
-    const prepared = witness.view.coordination?.prepared;
-    if (prepared === undefined) return null;
-    // §D Assignment PATH identity — the same rule the file route enforces while
-    // resolving its scope (`scopeFromAssignment`): a prepared row is addressed
-    // through the Assignment path its seal names. A different path is never the
-    // held effect, even when the bytes match, and the eligible coordinator may
-    // not reseal across it either: that would silently replace the stored
-    // assignment_path. This runs before every result below — satisfied or
-    // reseal — so both active-route answers share the file route's refusal.
-    if (canonicalTarget(prepared.assignment_path) !== seal.assignment.assignmentPath) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} is prepared from ${prepared.assignment_path}, not from ${seal.assignment.assignmentPath}`,
-        { expected: prepared.assignment_path, actual: seal.assignment.assignmentPath },
-      );
-    }
-    const claimant = witness.view.session !== null && witness.view.session.sessionId === context.caller.sessionId;
-    if (context.caller.role !== "coordinator" && !claimant) return null;
-    if (prepared.assignment_sha256 !== seal.assignmentSha256) return null;
-    assertSealedInputsUnchanged({
-      assignmentPath: seal.assignment.assignmentPath,
-      assignmentSha256: seal.assignmentSha256,
-      planPath: seal.assignment.planPath,
-      planSha256: seal.planSha256,
-      planId,
-    });
-    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
-  };
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const previous = witness.view.coordination?.prepared;
     const state = witness.view.plan as Record<string, unknown>;
     const plan = state as PlanRow;
-    // §D the reviewed-amendment seat, computed from the SAME facts the file
-    // route's precheck uses: the workflow coordinator, on a Todo row that is
-    // not bound to a plan session, not leased and not handed off, may replace
-    // a changed seal through the ordinary mutate path (full validation below).
-    // Every protected row leaves it false and keeps the already-prepared
-    // refusal it has always answered.
-    const coordinatorReseal =
-      context.caller.role === "coordinator" &&
-      witness.view.session === null &&
-      witness.view.executionLease === null &&
-      witness.view.coordination?.handoff === undefined &&
-      state.status === "Todo";
+    const previous = witness.view.coordination?.prepared;
+    if (previous !== undefined && canonicalTarget(previous.assignment_path) !== inputs.assignment.assignmentPath) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `plan ${planId} is prepared from ${previous.assignment_path}, not from ${inputs.assignment.assignmentPath}`,
+        { expected: previous.assignment_path, actual: inputs.assignment.assignmentPath },
+      );
+    }
     assertPrepareAdmission({
       planId: witness.planId,
       // A transport whose lease lives outside the row hands the rule the lease
@@ -1143,33 +938,26 @@ export async function prepareExecutionPlan(
       coordination: witness.view.coordination ?? undefined,
       sessionBound: witness.view.session !== null,
       leaseHeld: witness.view.executionLease !== null,
-      coordinatorReseal,
     });
 
     // §3 step 3 the registration admission the file route runs after its own
     // row admission: a root-visible workflow whose catalog registration is
     // still pending is never a valid workspace, because the row this operation
-    // is about to seal would be prepared from an uncommitted registration. Read
+    // is about to record would be prepared from an uncommitted registration. Read
     // on THIS transaction's handle — one connection, one transaction, the same
-    // "pending" verdict as `assertCatalogExecutionCommitted` — and BEFORE the
-    // frozen input and any pin or row write.
+    // "pending" verdict as `assertCatalogExecutionCommitted` — before any pin
+    // or row write.
     assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), witness.workflowId);
 
-    // §2.2/§1 the frozen input is sealed, and a pin that disagrees with the
-    // selection it is pinned to is a conflict: neither side is overwritten.
     const sealed = readExecutionSealedInput(tx, witness.workflowId, witness.planId);
-    if (sealed.pin !== null && (sealed.pin.store_id !== tx.storeId || sealed.pin.document_hash !== sealed.inputHash)) {
+    if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
       throw new ExecutionPinConflictError(
-        `plan ${witness.planId}'s sealed execution input (${sealed.inputHash.slice(0, 12)}\u2026) and its recorded catalog pin ` +
-          `(${sealed.pin.document_hash.slice(0, 12)}\u2026, store ${sealed.pin.store_id}) disagree \u2014 neither side is rewritten; ` +
-          `resolve the frozen input explicitly`,
-        { workflow_id: witness.workflowId, plan_id: witness.planId, pin: sealed.pin, input_hash: sealed.inputHash },
+        `plan ${witness.planId}'s recorded catalog store ${sealed.pin.store_id} does not match the active store ${tx.storeId}`,
+        { workflow_id: witness.workflowId, plan_id: witness.planId, pin: sealed.pin, store_id: tx.storeId },
       );
     }
-    // §7 the eligible authorized prepare re-selects the frozen catalog input:
-    // the catalog identity is read on THIS transaction's own handle, so the
-    // revision recorded is the one no concurrent catalog write can change
-    // before commit, and the document half stays the sealed selection's hash.
+    // The catalog's numeric revision and store/entity/path facts are current
+    // transaction facts. Input hashes below remain provenance only.
     const pin = selectCatalogPinOn(
       catalogPinFactsOn(tx.db, tx.storeId, witness.workflowId, witness.planId),
       sealed.inputHash,
@@ -1179,8 +967,8 @@ export async function prepareExecutionPlan(
     // claims its execution lease against: recorded when the row carries none,
     // and never silently rebound when it records a different scope.
     const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
-    const worktree = seal.assignment.worktreePath;
-    const branch = seal.assignment.workingBranch;
+    const worktree = inputs.assignment.worktreePath;
+    const branch = inputs.assignment.workingBranch;
     if (isNonEmptyString(metadata.worktree_path) && canonicalTarget(String(metadata.worktree_path)) !== worktree) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
@@ -1199,61 +987,31 @@ export async function prepareExecutionPlan(
     metadata.working_branch = branch;
 
     const prepared: PreparedCoordination = {
-      assignment_path: seal.assignment.assignmentPath,
-      assignment_sha256: seal.assignmentSha256,
-      plan_sha256: seal.planSha256,
-      qa_gate: seal.assignment.qaGate,
-      findings_cleanup: seal.assignment.findingsCleanup,
-      // §4.2 (A29) the same SEMANTIC projection the file route's `prepare`
-      // records, from the same mapping: every transition of this row then
-      // re-authenticates the reviewed Assignment by MEANING, so a reformatted
-      // document leaves the row fresh while a scope/approval change still
-      // invalidates it (`assertPreparedFresh`). The whole-document hash above
-      // stays the seal's byte witness; it is no longer the formatting gate.
-      assignment_intent: assignmentIntentOf(seal.assignment),
+      assignment_path: inputs.assignment.assignmentPath,
+      assignment_sha256: inputs.assignmentSha256,
+      plan_sha256: inputs.planSha256,
+      qa_gate: inputs.assignment.qaGate,
+      findings_cleanup: inputs.assignment.findingsCleanup,
+      // Named Assignment fields remain available for field-value scope and QA
+      // checks; the document digests above are provenance only.
+      assignment_intent: assignmentIntentOf(inputs.assignment),
       prepared_by: witness.session.sessionId,
       prepared_at: at,
     };
     assertViolationFree(validatePreparedCoordination(prepared), "prepared block");
-    // §7 the pin is written before the row, exactly as the sealed selection is:
-    // the row writer then commits the prepared block and the plan revision that
-    // is this operation's CAS.
+    // The catalog selection is written before the row, and both changes share
+    // the plan revision advanced by this operation.
     writeExecutionInputPin(tx, { workflowId, planId, pin });
     writeCoordinationBlock(tx, witness, {
       block: { ...storedCoordinationOf(witness.view), prepared },
       state: { ...state, metadata },
       what: `plan ${planId} coordination`,
     });
-    // §4.1 the sealed documents are re-read immediately before the commit: an
-    // edit between the pre-transaction read and here refuses rather than being
-    // recorded as if it were the reviewed input.
-    assertSealedInputsUnchanged({
-      assignmentPath: seal.assignment.assignmentPath,
-      assignmentSha256: seal.assignmentSha256,
-      planPath: seal.assignment.planPath,
-      planSha256: seal.planSha256,
-      planId,
-    });
     const committed = readExecutionPlanWitness(tx, resolved.read);
-    const recovery = previous === undefined ? undefined : {
-      ...planRecovery({
-        witness,
-        kind: "prepare",
-        outcome: "applied",
-        commitState: "committed",
-        resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
-      }),
-      details: {
-        previous_prepared_at: previous.prepared_at,
-        previous_prepared_by: previous.prepared_by,
-        previous_assignment_sha256: previous.assignment_sha256,
-      },
-    };
     return {
       data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch,
-      ...(recovery === undefined ? {} : { operationRecovery: recovery }),
     };
-  }, admitSatisfied);
+  });
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1953,16 +1711,11 @@ function assertHandoffQaGate(handoff: { qa: { gate: string } }, prepared: Prepar
 }
 
 /**
- * §3 `handoff` on the DB authority: the plan session that HOLDS the plan's
- * execution lease seals the reviewed evidence of its own plan, in one
- * transaction whose CAS is the plan's own token.
- *
- * The evidence paths, their digests and the Git proof are read BEFORE SQLite
- * ownership; the seal, the Assignment's QA gate, the findings gate, the plan's
- * session and lease and the plan revision commit inside it, and the evidence is
- * re-hashed immediately before the commit so an edit in that window refuses
- * (`coordination.evidence-stale`) instead of being sealed. The execution lease
- * stays with the plan session: handoff is not release.
+ * `handoff` records reviewed evidence paths, their digests as provenance,
+ * the Assignment's QA gate and the independently observed Git proof. Evidence
+ * paths and semantic QA constraints remain authoritative; later report byte
+ * changes do not invalidate the recorded handoff. The execution lease stays
+ * with the plan session: handoff is not release.
  */
 export async function handoffExecutionPlan(
   context: ExecutionContext,
@@ -1992,7 +1745,6 @@ export async function handoffExecutionPlan(
     assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, sealed, planId, "handoff");
     const entailed = entailedHandoffStatus(witness.view.plan as unknown as PlanRow, planId);
     // §4.1 the reviewed bytes are re-read immediately before the commit.
-    assertHandoffEvidenceUnchanged(evidence, "handoff");
     const previous = coordination?.handoff;
     const record: PlanHandoff = {
       id: randomUUID(),
@@ -2053,7 +1805,6 @@ export async function acceptExecutionPlan(
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["submitted"], planId, "accept");
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "accept", { still: true });
-    assertEvidenceDigests(handoff);
     transferPlanLease(tx, witness, {
       from: handoff.submitted_by,
       to: { sessionId: witness.session.sessionId, role: "coordinator" },
@@ -2152,7 +1903,6 @@ export async function integrationStartExecutionPlan(
   const before = await readExecutionPlan(context, request.session, planId);
   const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
   requireHandoffState(named, ["accepted", "integrating"], planId, "integration-start");
-  assertEvidenceDigests(named);
   assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "integration-start", planId);
   const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
   const checkout = assertIntegrationCheckout(anchors, planId);
@@ -2160,7 +1910,6 @@ export async function integrationStartExecutionPlan(
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["accepted", "integrating"], planId, "integration-start");
-    assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-start");
     assertMergeLeaseOwn(witness, tx, handoff, "integration-start");
     if (handoff.state === "integrating") {
@@ -2225,7 +1974,6 @@ export async function integrationAcceptExecutionPlan(
   const before = await readExecutionPlan(context, request.session, planId);
   const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
   requireHandoffState(named, ["integrating"], planId, "integration-accept");
-  assertEvidenceDigests(named);
   const attempt = requireIntegration(named, planId);
   const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
   const checkout = assertIntegrationCheckout(anchors, planId);
@@ -2248,7 +1996,6 @@ export async function integrationAcceptExecutionPlan(
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["integrating"], planId, "integration-accept");
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "integration-accept", { still: true });
-    assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-accept");
     assertMergeLeaseOwn(witness, tx, handoff, "integration-accept");
     const recorded = requireIntegration(handoff, planId);
@@ -2459,7 +2206,6 @@ function assertCompletedReplayInvariants(
     ),
     `plan ${planId} coordination`,
   );
-  assertEvidenceDigests(handoff);
   if (isStandaloneReportOnlyWorkflow(snapshot)) {
     // §R10 the ONE caller that does not require the recorded fulfilment here is
     // a CLOSE repairing that very projection: the report-only completion is
@@ -2717,9 +2463,8 @@ export function releaseStoppedMergeClaim(
  * ownership and re-verified inside it. `fulfilment` is the report-only
  * completion-policy fulfilment the close still has to RECORD (null when the
  * workflow already records it); `completesRow` is false for a row that already
- * records `Done` and only needed that recording; `gitWitness` is the sealed
- * proof the development/integration route re-reads at commit, and `resultSha`
- * is the already-proven merge result the route reuses instead of merging.
+ * records `Done` and only needed that recording, and `resultSha` is the
+ * already-proven merge result the route reuses instead of merging.
  */
 export type EntailedRowCompletion = {
   planId: string;
@@ -2727,7 +2472,6 @@ export type EntailedRowCompletion = {
   handoffId: string;
   completesRow: boolean;
   fulfilment: { policy: string; evidence: string } | null;
-  gitWitness: GitProofWitness | null;
   resultSha: string | null;
 };
 
@@ -2844,7 +2588,6 @@ export async function readEntailedRowCompletion(
   const prepared = requirePrepared(coordination, planId, "close");
   if (route === "report-only") {
     assertNoIntegrationContamination({ snapshot, planId, handoff, what: "close" });
-    assertEvidenceDigests(handoff);
     const fulfilment = entailedFulfilment(snapshot, planId, handoff);
     if (done) {
       // The row already records the completion; only the workflow's own
@@ -2852,7 +2595,7 @@ export async function readEntailedRowCompletion(
       // row, so the completed shape and the absence of ownership are asserted
       // rather than composed.
       assertCompletedReplayInvariants(row, snapshot, planId, handoff, { what: "close", fulfilment: "pending" });
-      return { planId, handoffId: handoff.id, completesRow: false, fulfilment, gitWitness: null, resultSha: null };
+      return { planId, handoffId: handoff.id, completesRow: false, fulfilment, resultSha: null };
     }
     requireHandoffState(handoff, ["accepted"], planId, "close");
     assertAcceptedReviewDecision(handoff, planId, "close");
@@ -2860,7 +2603,7 @@ export async function readEntailedRowCompletion(
     assertPreparedFresh(prepared.assignment_path, prepared);
     await assertFindingsClosed(context, planId, prepared, "close");
     assertExecutionHolder(planRowOf(row), context.caller.sessionId, planId, "close");
-    return { planId, handoffId: handoff.id, completesRow: true, fulfilment, gitWitness: null, resultSha: null };
+    return { planId, handoffId: handoff.id, completesRow: true, fulfilment, resultSha: null };
   }
   if (done) return null;
   if (route === "development") {
@@ -2878,7 +2621,6 @@ export async function readEntailedRowCompletion(
       handoffId: handoff.id,
       completesRow: true,
       fulfilment: null,
-      gitWitness: captureGitProofWitness(worktree),
       resultSha: null,
     };
   }
@@ -2898,7 +2640,6 @@ export async function readEntailedRowCompletion(
     handoffId: handoff.id,
     completesRow: true,
     fulfilment: null,
-    gitWitness: captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged"),
     resultSha,
   };
 }
@@ -2931,13 +2672,11 @@ export async function readEntailedCompletions(
 }
 
 /**
- * §R5/§R10 one row's composed completion, applied INSIDE the close's own
- * transaction from the proof its preflight derived: the row's reviewed status
- * (`InReview`, or the `InProgress` the handoff itself entails), the
- * coordinator's ownership of its lease, the re-proved evidence digests and the
- * re-read Git witness, then the completion delta — `Done`, the completed
- * handoff and the released ownership. Nothing here merges, closes a workflow or
- * advances a counter twice: the caller's frame owns those.
+ * The concrete plan-row completion adapter: one transition owns the
+ * coordinator's lease, the actual Git delivery facts, then the completion
+ * delta — `Done`, the completed handoff and the released ownership. Nothing
+ * here merges, closes a workflow or advances a counter twice: the caller's
+ * frame owns those.
  */
 export function applyEntailedCompletion(input: {
   tx: ExecutionTransaction;
@@ -2959,7 +2698,6 @@ export function applyEntailedCompletion(input: {
     // sealed evidence are re-asserted and NO row byte is rewritten (the
     // terminal identity the lifecycle records stays exactly as it was).
     requireHandoffState(handoff, ["completed"], planId, what);
-    assertEvidenceDigests(handoff);
     return;
   }
   const row = frame.view.plan as unknown as PlanRow;
@@ -2977,8 +2715,6 @@ export function applyEntailedCompletion(input: {
     assertMergeLeaseOwnForFrame(frame, tx, handoff, what);
   }
   assertExecutionHolder(planRowOf(frame.view), frame.releasedBy, planId, what);
-  assertEvidenceDigests(handoff);
-  if (input.proof.gitWitness !== null) revalidateGitProofWitness(input.proof.gitWitness);
   applyCompletionFrame({ tx, frame, handoff, at, resultSha: input.proof.resultSha, what });
 }
 
@@ -3079,7 +2815,6 @@ export async function completeExecutionPlan(
   // re-reads the header and refuses if either moved in the window.
   const pinned = { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
   let resultSha: string | null = null;
-  let gitWitness: GitProofWitness | undefined;
   if (reportOnly) {
     assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
     requireHandoffState(named, ["accepted"], planId, "complete");
@@ -3095,16 +2830,13 @@ export async function completeExecutionPlan(
     assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
     const worktree = planScopeOf(before.data, planId).worktreePath;
     assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
-    gitWitness = captureGitProofWitness(worktree);
   } else {
     requireHandoffState(named, ["merged"], planId, "complete");
     const attempt = requireIntegration(named, planId);
     const anchors = integrationAnchors(snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
     resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, named.source_sha, checkout.head);
-    gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
   }
-  assertEvidenceDigests(named);
   await assertFindingsClosed(context, planId, prepared, "complete");
   assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "complete");
   completeWitnessGapForTest?.();
@@ -3134,8 +2866,6 @@ export async function completeExecutionPlan(
       assertMergeLeaseOwn(witness, tx, handoff, "complete");
       assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     }
-    assertEvidenceDigests(handoff);
-    if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
     applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
     const settled = readExecutionPlanWitness(tx, resolved.read);
     return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
@@ -3258,7 +2988,6 @@ export async function reconcileExecutionPlan(
       { plan_id: planId, state: named.state },
     );
   }
-  assertEvidenceDigests(named);
   if (decision.outcome !== "already-completed") {
     await assertFindingsClosed(context, planId, prepared, "complete");
   }
@@ -3284,7 +3013,6 @@ export async function reconcileExecutionPlan(
       return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
     }
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "reconcile", { still: true });
-    assertEvidenceDigests(handoff);
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "reconcile");
     const lease = decideMergeLease(witness, tx, handoff, "reconcile");
     if (decision.outcome === "retry-ready") {

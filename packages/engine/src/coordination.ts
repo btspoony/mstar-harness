@@ -46,11 +46,9 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  readlinkSync,
   statSync,
   unlinkSync,
   writeFileSync,
-  type Stats,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, type GateResult } from "./core.js";
@@ -60,7 +58,6 @@ import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
-  isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
   readArtifactBytes,
@@ -79,7 +76,6 @@ import {
   type RowCoordination,
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
-  type CoordinationSelfAmendment,
   type SnapshotCoordination,
 } from "./coordination-write.js";
 import {
@@ -98,7 +94,6 @@ import {
   IMPLEMENTED_OPERATIONS,
   allowedOperations,
   assertAcceptedReviewDecision,
-  assertEvidenceDigests,
   assertExecutionHolder,
   assertNoHandoffTransition,
   assertNoIntegrationContamination,
@@ -340,16 +335,6 @@ export type CoordinationIssueReceipt = {
   created: boolean;
 };
 
-/**
- * The replaced seal's identity a coordinator reseal discloses under
- * `recovery.details` (the reviewed-amendment boundary): who sealed before, when,
- * and against which Assignment bytes.
- */
-export type ResealReceiptDetails = Readonly<{
-  previous_prepared_at: string;
-  previous_prepared_by: string;
-  previous_assignment_sha256: string;
-}>;
 
 /** Success shape of a coordination call. */
 export type CoordinationResult = {
@@ -366,16 +351,7 @@ export type CoordinationResult = {
    * caller can rely on. The same object shape a refusal carries under
    * `error.details.recovery`, so one contract covers both paths.
    */
-  recovery?: RecoveryDetails & {
-    /**
-     * The seal THIS call replaced (a coordinator reseal's receipt, the
-     * reviewed-amendment boundary): `previous_*` names the seal that stood
-     * before the reseal, so a reviewed recovery is distinguishable from a
-     * first prepare (no `details`) and from an unchanged reissue
-     * (`already-satisfied`, which writes nothing).
-     */
-    readonly details?: ResealReceiptDetails;
-  };
+  recovery?: RecoveryDetails;
   /**
    * The issues a scoped issue operation captured or closed, in call order
    * (G2a). The IDs are DB-allocated, so the caller learns them here instead of
@@ -508,8 +484,6 @@ export type CoordinatedReplacement = {
   harnessRoot: string;
   ref: ArtifactRef;
   payload: unknown;
-  /** Byte version the writer expects (`sha256:…`, or `absent` to create). */
-  expectedVersion: string;
   /** Required for snapshot replacement (the coordinator session envelope). */
   sessionPath?: string;
 };
@@ -1631,25 +1605,6 @@ type RowContext = {
   rowIndex: number;
   coordination: RowCoordination | undefined;
   revision: number;
-  /**
-   * Spec §D2 the drift this `bind` adopted: set by the in-lock freshness check
-   * for an orphan prepared row, and consumed by the mutation that records the
-   * refreshed pin and its audit entry in the SAME commit. `null` for every
-   * other mutation and for a pin that still matches.
-   *
-   * Both halves of the pair `prepare` sealed are measured: `old_sha256` /
-   * `new_sha256` are the Assignment pin before and after the refresh, and the
-   * plan-half pair carries the plan document's move when it moved with the
-   * Assignment — `null` on both when the plan half still matches, because an
-   * amendment records a move and the plan half never drifts alone. A plan
-   * document that is GONE is not a measured drift and refuses right there.
-   */
-  staleAdoption: {
-    old_sha256: string;
-    new_sha256: string;
-    plan_old_sha256: string | null;
-    plan_new_sha256: string | null;
-  } | null;
 };
 
 /**
@@ -1910,16 +1865,6 @@ async function withRowCommit(
   opts: {
     kind: string;
     expectedRevision: number | null;
-    /**
-     * `prepare` rewrites the pin itself and the D0 claim writes no pin at all,
-     * so neither may re-check one. `bind` passes `staleAdoption` instead and
-     * owns the whole decision: an orphan prepared row's drift — either half of
-     * the pair `prepare` sealed — is amended (spec §D2), and every other stale
-     * row still stops right here.
-     */
-    freshness?: boolean;
-    /** Spec §D2 the one mutation allowed to adopt a stale pin: `bind`. */
-    staleAdoption?: { sessionId: string };
     precheck: RowAdmission;
     /**
      * §4.1 the mutation reports every component it commits outside this row
@@ -1951,26 +1896,11 @@ async function withRowCommit(
       rowIndex: index,
       coordination,
       revision: coordination?.revision ?? 0,
-      staleAdoption: null,
     };
-    // Every row mutation re-authenticates the row's pin: the sealed Assignment
-    // is compared on its semantic projection, so an unrelated formatting change
-    // leaves the row fresh while a scope/approval change still invalidates it.
-    // `bind` is the one mutation that may instead AMEND a byte-level drift
-    // (spec §D2), and it says so here — the adoption runs inside the lock and
-    // re-decides on the row this call actually holds.
+    // Prepare and bind may mutate recorded provenance; other row mutations
+    // retain the Assignment's existing semantic field constraints.
     if (opts.freshness !== false && coordination?.prepared !== undefined) {
-      if (opts.staleAdoption !== undefined) {
-        context.staleAdoption = bindStaleAdoption(
-          scope,
-          coordination.prepared,
-          coordination,
-          opts.staleAdoption.sessionId,
-          context.snapshot,
-        );
-      } else {
-        assertPreparedFresh(scope.assignmentPath, coordination.prepared);
-      }
+      assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
     const warnings: readonly ResolutionWarning[] =
       opts.expectedRevision !== null && context.revision !== opts.expectedRevision
@@ -2055,67 +1985,46 @@ export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentInt
 }
 
 /**
- * Re-verify the prepared Assignment against the row's seal. The rule is shared
- * with the DB transport, which re-reads the Assignment its own seal records —
- * one staleness rule for both routes, not a second tolerance.
- *
- * §4.2 (A29) the comparison is the Assignment's SEMANTIC projection: the
- * document is re-parsed, so a reflowed header block, added prose, changed
- * emphasis or reordered non-header lines leaves the row fresh, while a scope or
- * approval change (`Worktree path`, `Working branch`, `QA gate`, …) still
- * invalidates the dependent proof and names the exact header(s) that moved. The
- * whole-document hash is NOT the gate for formatting: it stays the seal's byte
- * witness, and a seal that records no projection (the DB transport's own
- * receipt) keeps the byte comparison rather than losing the check.
+ * Compare the current named Assignment fields with the semantic projection
+ * recorded by prepare. Formatting and prose changes do not affect the result;
+ * scope, ownership, QA and cleanup values remain meaningful constraints.
+ * Recorded hashes are provenance only.
  */
-export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination, readBytes?: Buffer): void {
+export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
   if (!existsSync(assignmentPath)) {
     throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
       path: assignmentPath,
     });
   }
   const recorded = prepared.assignment_intent;
-  if (recorded === undefined) {
-    const actual = sha256Bytes(readFileSync(assignmentPath));
-    if (actual !== prepared.assignment_sha256) {
-      throw new CoordinationError(
-        "coordination.assignment-stale",
-        `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-        { path: assignmentPath, expected: prepared.assignment_sha256, actual },
-      );
-    }
-    return;
-  }
-  const current = currentAssignmentIntent(assignmentPath, recorded, readBytes);
+  const current = currentAssignmentIntent(assignmentPath, recorded);
   const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
   if (changed.length === 0) return;
   const facts = changed.map(
-    (field) => `${field}: sealed as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
+    (field) => `${field}: recorded as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
   );
   const problem: RecoveryProblem = {
-    component: "assignment-seal",
+    component: "assignment-intent",
     path: changed[0]!,
     code: "coordination.assignment-stale",
     sourcesTried: [
       `${assignmentPath} as it reads now`,
-      `the semantic projection sealed by \`prepare\` at ${prepared.prepared_at}`,
+      `the semantic Assignment projection recorded at ${prepared.prepared_at}`,
     ],
     currentFacts: facts,
     needed:
-      `decide whether the changed ${changed.join(", ")} is the reviewed intent for plan ${recorded.plan_id} and re-run \`prepare\` ` +
-      "against it \u2014 the row stays sealed against the Assignment it was prepared from until then",
+      `restore the reviewed ${changed.join(", ")} values for plan ${recorded.plan_id}; prepared intent is not resealed`,
     withheldEffect:
-      "the row's sealed state: neither the recorded seal, the plan document, the row's coordination block nor any revision is changed",
+      "the requested row transition is withheld; no prepared digest or semantic projection is rewritten",
     availableWork: [
-      `read plan ${recorded.plan_id} and the Assignment it was sealed against`,
-      `re-run \`prepare\` for plan ${recorded.plan_id} once the Assignment is the reviewed input again`,
+      `review the current Assignment values for plan ${recorded.plan_id}`,
       "independent operations on other rows, plans and workflows continue",
     ],
   };
   throw new CoordinationError(
     "coordination.assignment-stale",
     `Assignment ${assignmentPath} changed semantically after plan ${recorded.plan_id} was prepared ` +
-      `(${changed.join(", ")}) \u2014 the coordinator must re-run \`prepare\` against the reviewed input`,
+      `(${changed.join(", ")}) \u2014 restore the reviewed values; prepared intent cannot be resealed`,
     {
       path: assignmentPath,
       plan_id: recorded.plan_id,
@@ -2140,16 +2049,10 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
  * change of meaning, not a malformed caller input (the caller supplied no
  * document here \u2014 the row's own seal names the path).
  */
-function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentIntent, readBytes?: Buffer): AssignmentIntent {
+function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentIntent): AssignmentIntent {
   try {
-    // The read goes through the sealed-input door: the row's own seal names this
-    // path, so a document that is GONE refuses in the sealed vocabulary rather
-    // than as a caller-input error the mutation never had. A caller that ALREADY
-    // read the file inside this lock (the bind adoption) passes those bytes so
-    // hash, parse and semantic comparison measure ONE snapshot — a concurrent
-    // edit landing between two reads can never split the verdict.
     const abs = resolve(assignmentPath);
-    return assignmentIntentOf(parseAssignmentBytes(abs, readBytes ?? readSealedInput(abs, "Assignment")));
+    return assignmentIntentOf(parseAssignmentBytes(abs, readSealedInput(abs, "Assignment")));
   } catch (error) {
     if (error instanceof CoordinationError) {
       const problem: RecoveryProblem = {
@@ -2193,258 +2096,6 @@ function currentAssignmentIntent(assignmentPath: string, recorded: AssignmentInt
   }
 }
 
-/**
- * The measured staleness of one prepared Assignment: `null` while the pinned
- * bytes are still on disk. A missing file is NOT a measured drift — there are
- * no bytes to re-pin — so its terminal refusal is raised right here, and the
- * one amendment that ever adopts a drift can only ever see a changed digest.
- * The changed case carries the refusal it means, so every terminal site spells
- * `coordination.assignment-stale` the same way without a second message.
- */
-function stalePrepared(
-  assignmentPath: string,
-  prepared: PreparedCoordination,
-): { refusal: CoordinationError; old_sha256: string; new_sha256: string } | null {
-  const actual = sha256Bytes(readSealedInput(assignmentPath, "Assignment"));
-  if (actual === prepared.assignment_sha256) return null;
-  return { old_sha256: prepared.assignment_sha256, new_sha256: actual, refusal: staleRefusal(assignmentPath, prepared, actual) };
-}
-
-/**
- * The terminal `coordination.assignment-stale` refusal for one MEASURED digest.
- * Callers that already hold the bytes (the adopt check, which hashes and parses
- * one read) build the refusal from their own measurement instead of reading the
- * file a second time, so the message and the decision always describe the same
- * snapshot.
- */
-function staleRefusal(assignmentPath: string, prepared: PreparedCoordination, actual: string): CoordinationError {
-  return new CoordinationError(
-    "coordination.assignment-stale",
-    `Assignment ${assignmentPath} changed after preparation (${prepared.assignment_sha256} \u2192 ${actual}) \u2014 the coordinator must re-run \`prepare\``,
-    { path: assignmentPath, expected: prepared.assignment_sha256, actual },
-  );
-}
-
-/**
- * The `bind` path's own pin re-authentication (spec §D2, fixes #308): the same
- * measured drift as `assertPreparedFresh`, but the ONE row state that turns a
- * changed pin from a terminal refusal into an audited self-amendment — a
- * prepared row nobody ELSE holds — is adopted, and the drift is returned to the
- * amendment that records it. That state is: no handoff, and either no bound
- * plan session at all (a coordinator-prepared orphan) or the BINDER'S OWN
- * binding (the D0 claim row, held by the very session asking to bind it).
- * Every other row — held or handed off by somebody else — keeps the terminal
- * refusal, and the decision never authenticates: the file route's
- * `--session-id` is caller-asserted, so a foreign caller simply keeps its
- * refusal while a caller presenting the row's own recorded id is that binding
- * by the route's own rules. A pin whose Assignment is gone is never adopted
- * (nothing to pin).
- *
- * BOTH halves of the sealed pair are amended by the same adoption: the plan
- * document of a running iteration is revised as a matter of course, so a moved
- * plan half is re-pinned to the bytes this bind acts under and recorded in the
- * same audit entry, exactly like the Assignment half. A plan document that is
- * GONE is still never adopted — a missing input has no bytes to pin, and its
- * sealed-input refusal is raised here (PR #312).
- */
-function bindStaleAdoption(
-  scope: ResolvedPlanScope,
-  prepared: PreparedCoordination,
-  coordination: RowCoordination | undefined,
-  adopter: string,
-  snapshot: WorkflowSnapshot,
-): {
-  old_sha256: string;
-  new_sha256: string;
-  plan_old_sha256: string | null;
-  plan_new_sha256: string | null;
-} | null {
-  // (PR #309 reviews 2 and 3) ONE read, inside the lock, drives EVERY part of
-  // this decision: the drift the pin is refreshed to and the contract the
-  // refreshed pin must still describe. An earlier version parsed the headers
-  // before the lock (so an edit landing in between was judged by its old gates)
-  // and then compared a hand-picked subset (so a scope edit in the same window
-  // was adopted while the row kept the old scope). The rule now: the bytes being
-  // pinned must pass the SAME scope validation the resolver performs, declare
-  // the same gates, and leave the plan half of the sealed pair unchanged.
-  const read = readAssignmentInput(scope.assignmentPath);
-  if (read.sha256 === prepared.assignment_sha256) return null;
-  // §4.2 the SEMANTIC projection is the staleness gate for every row mutation
-  // (A29). Adoption amends a pin to bytes that describe the SAME intent — a
-  // byte-level drift the semantic projection does not see — so a document whose
-  // meaning moved still stops at the terminal refusal, names the header that
-  // moved and leaves a row nobody else holds alone. Without this the adoption
-  // would silently re-pin a scope or gate change instead of refusing it.
-  // The SAME read drives the semantic gate: the bytes the pin would be
-  // refreshed to are the bytes whose intent is compared against the seal, so a
-  // concurrent edit between the two reads can never split the verdict.
-  assertPreparedFresh(scope.assignmentPath, prepared, read.bytes);
-  const holder = coordination?.session;
-  const adoptable =
-    coordination?.prepared !== undefined &&
-    coordination.handoff === undefined &&
-    (holder === undefined || holder.session_id === adopter);
-  if (!adoptable) throw staleRefusal(scope.assignmentPath, prepared, read.sha256);
-
-  // The identity/scope half, through the resolver that owns those rules (harness
-  // root, workflow id, plan id, plan path, SDD dir) — never a hand-picked list,
-  // so a header the resolver checks can never be skipped here.
-  let addressed: ResolvedPlanScope;
-  try {
-    addressed = scopeFromAssignment(read.headers, scope.harnessRoot, {
-      requirePrepared: true,
-      chosenRoot: scope.harnessRoot,
-      preloaded: { snapshot },
-    });
-  } catch (error) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `Assignment ${scope.assignmentPath} no longer describes this plan's scope after preparation: ` +
-        `${error instanceof Error ? error.message : String(error)} \u2014 the coordinator must re-run \`prepare\` against the reviewed scope`,
-      { path: scope.assignmentPath, expected: prepared.assignment_sha256, actual: read.sha256 },
-    );
-  }
-  // Everything the resolved scope carries, compared field by field from the
-  // object itself: a field added to the scope later is covered automatically,
-  // and worktree path / working branch (which the resolver returns unvalidated
-  // and the lease then records) are covered here.
-  for (const [field, value] of Object.entries(scope)) {
-    const other = (addressed as unknown as Record<string, unknown>)[field];
-    if (other !== value) {
-      throw new CoordinationError(
-        "coordination.assignment-stale",
-        `Assignment ${scope.assignmentPath} changed the plan scope after preparation (${field} ${String(value)} \u2192 ` +
-          `${String(other)}) \u2014 an adopted pin must describe the scope this bind is acting under; the coordinator ` +
-          "re-runs `prepare` for a scope change",
-        { path: scope.assignmentPath, expected: String(value), actual: String(other) },
-      );
-    }
-  }
-  // The executed contract's parameters: a gate change re-seals a contract and
-  // belongs to the coordinator's `prepare`.
-  if (read.headers.qaGate !== prepared.qa_gate || read.headers.findingsCleanup !== prepared.findings_cleanup) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `Assignment ${scope.assignmentPath} changed its contract after preparation (qa_gate ${prepared.qa_gate} \u2192 ` +
-        `${read.headers.qaGate}, findings_cleanup ${prepared.findings_cleanup} \u2192 ${read.headers.findingsCleanup}) \u2014 ` +
-        "a gate change belongs to the coordinator's `prepare`; only a byte-level drift within the same gates and scope " +
-        "may be adopted",
-      { path: scope.assignmentPath, expected: prepared.qa_gate, actual: read.headers.qaGate },
-    );
-  }
-  // The plan half of the pair `prepare` sealed, on the same §D2 rule as the
-  // Assignment half: a plan document revised while the iteration runs is a
-  // measured drift, re-pinned to the bytes this bind acts under and recorded in
-  // the same audit entry. A plan document that is GONE is not a drift — there
-  // are no bytes to re-pin — so `readSealedInput` raises its sealed-input
-  // refusal here instead. (`prepared_by` / `prepared_at` stay exempt: they are
-  // provenance, never gates, and the DB route records its own receipts.)
-  //
-  // ONE read drives the whole decision: the digest this bind would pin and the
-  // declarations checked below come from the same snapshot, so a replacement
-  // landing mid-check cannot make the branch guards certify bytes the pin does
-  // not describe (the repo's read-sealed-inputs-once rule).
-  //
-  // Redirect guard on the moved bytes: when the plan DECLARES a `Working
-  // branch`, that declaration must still name the branch this bind acts under
-  // (the lease's `working_branch` comes from the Assignment scope, which the
-  // checks above re-validated), and a declared `Main worktree branch` must
-  // still match the actual main checkout — the SDD execution path reads that
-  // header in the LIVE plan file for its residency expectation, so prepare
-  // proves the equality against the caller's checkout and adoption re-proves
-  // it against the repo's main worktree; an unresolvable probe refuses,
-  // fail-closed. An ABSENT declaration adopts like any other body edit:
-  // prepare validates headers only for appended rows, existing-row seals
-  // legitimately carry header-less plans, and the header is not an input to
-  // any bind decision — the guards exist so an adopted seal can never
-  // contradict the declarations the plan itself carries.
-  const planBytes = readSealedInput(scope.planPath, "plan document");
-  const planNow = sha256Bytes(planBytes);
-  if (planNow !== prepared.plan_sha256) {
-    let planHeaders: Map<string, string>;
-    try {
-      planHeaders = planDeclaredHeadersFromContent(planBytes.toString("utf8"), scope.planPath);
-    } catch (error) {
-      throw new CoordinationError(
-        "coordination.assignment-stale",
-        `plan document ${scope.planPath} changed after preparation into a form that no longer parses (${error instanceof Error ? error.message : String(error)}) \u2014 the coordinator re-runs \`prepare\``,
-        { path: scope.planPath, expected: prepared.plan_sha256, actual: planNow },
-      );
-    }
-    const declaredWorking = planHeaders.get("working branch");
-    if (declaredWorking !== undefined && declaredWorking !== scope.workingBranch) {
-      throw new CoordinationError(
-        "coordination.assignment-stale",
-        `plan document ${scope.planPath} changed after preparation and now declares Working branch ${declaredWorking}, but this bind acts under ${scope.workingBranch} \u2014 an adopted pin never re-points a plan's branch declaration; the coordinator re-runs \`prepare\``,
-        { path: scope.planPath, expected: scope.workingBranch, actual: declaredWorking },
-      );
-    }
-    const declaredMain = planHeaders.get("main worktree branch");
-    if (declaredMain !== undefined) {
-      // The SDD execution path resolves the main-residency expectation from
-      // this header in the LIVE plan file (falling back to `branch.base`), so
-      // a declaration that disagrees with the actual main checkout would
-      // misdirect that expectation. Prepare proves the same equality against
-      // the caller's main checkout; adoption re-proves it against the repo's
-      // main worktree. An unresolvable probe refuses — fail-closed, never a
-      // skipped row. An ABSENT declaration adopts: prepare validated headers
-      // only for appended rows, and the fallback covers that shape.
-      const main = readMainWorktree(scope.harnessRoot);
-      if (main === null || main.branch === "" || main.branch !== declaredMain) {
-        throw new CoordinationError(
-          "coordination.assignment-stale",
-          `plan document ${scope.planPath} changed after preparation and declares Main worktree branch ${declaredMain}, but the main checkout ${
-            main === null ? "could not be probed" : `is on ${main.branch === "" ? "a detached HEAD" : main.branch}`
-          } \u2014 an adopted pin never re-points a plan's residency expectation; the coordinator re-runs \`prepare\``,
-          { path: scope.planPath, expected: declaredMain, actual: main?.branch ?? null },
-        );
-      }
-    }
-    return {
-      old_sha256: prepared.assignment_sha256,
-      new_sha256: read.sha256,
-      plan_old_sha256: prepared.plan_sha256,
-      plan_new_sha256: planNow,
-    };
-  }
-  return {
-    old_sha256: prepared.assignment_sha256,
-    new_sha256: read.sha256,
-    plan_old_sha256: null,
-    plan_new_sha256: null,
-  };
-}
-
-/**
- * §4.1 the commit-time recheck of the documents a `prepare` seals: the exact
- * bytes the pre-transaction read hashed, re-read immediately before the
- * mutation commits. An edit between the two reads refuses with no DB mutation
- * rather than sealing bytes the seal does not describe — SQLite cannot lock the
- * filesystem, so the witness is what closes that window.
- */
-export function assertSealedInputsUnchanged(seal: {
-  assignmentPath: string;
-  assignmentSha256: string;
-  planPath: string;
-  planSha256: string;
-  planId: string;
-}): void {
-  const recheck = (filePath: string, expected: string, what: string): void => {
-    if (!existsSync(filePath)) {
-      throw new CoordinationError("coordination.assignment-stale", `${what} is gone: ${filePath}`, { path: filePath });
-    }
-    const actual = sha256Bytes(readFileSync(filePath));
-    if (actual !== expected) {
-      throw new CoordinationError(
-        "coordination.assignment-stale",
-        `${what} ${filePath} changed while plan ${seal.planId} was being prepared (${expected} \u2192 ${actual}) \u2014 nothing was sealed; re-run \`prepare\` against the reviewed input`,
-        { path: filePath, expected, actual, plan_id: seal.planId },
-      );
-    }
-  };
-  recheck(seal.assignmentPath, seal.assignmentSha256, "Assignment");
-  recheck(seal.planPath, seal.planSha256, "plan document");
-}
 
 /** A coordinator session must match the snapshot's coordinator binding. */
 function assertCoordinatorBinding(session: CoordinationSession, sessionPath: string, snapshot: WorkflowSnapshot): void {
@@ -2915,21 +2566,6 @@ async function bindPlanSessionForPlan(
     }
     return claimPlanSession(scope, adopter);
   }
-  // No pre-lock re-validation of the prepared Assignment here. It used to run at
-  // this point, but the locked decision now derives the same scope from the very
-  // bytes it pins (`bindStaleAdoption`), so a second unlocked parse would only
-  // add a second read whose result no longer decides anything.
-  // Spec §D2: there is deliberately NO staleness verdict here. An unlocked read
-  // may not decide a refusal that a concurrent write can invalidate (the
-  // interleave test drives exactly that: a row orphaned between this read and
-  // the lock), and a caller that meant to refuse must not be able to swallow
-  // another operation's verdict by catching one. The freshness check inside
-  // `withRowCommit` measures the same drift on the row the lock actually holds
-  // and is the ONE authority — it adopts (nobody else holds the row) or throws
-  // the terminal `coordination.assignment-stale`. The checks below stay here
-  // because each of them is a fact this call's own scope pins, not a row state
-  // another writer owns.
-  bindPreInterleaveForTest?.();
   if (!existsSync(scope.worktreePath) || !statSync(scope.worktreePath).isDirectory()) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
@@ -2954,10 +2590,6 @@ async function bindPlanSessionForPlan(
   const result = await withRowCommit(scope, {
     kind: "bind",
     expectedRevision: null,
-    // Spec §D2: this mutation owns the whole pin decision, for this adopter —
-    // and only within the contract the addressed Assignment declares, which the
-    // locked section re-reads for itself (never the pre-lock parse below).
-    staleAdoption: { sessionId: adopter },
     precheck: async (context) => {
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared`, { plan_id: planId });
@@ -3022,76 +2654,17 @@ async function bindPlanSessionForPlan(
         session_label: "plan-pm",
       });
       if (!transition.ok) throw leaseFailure(transition.violations);
-      const adoption = context.staleAdoption;
-      const previous = context.coordination?.prepared;
       const nextCoordination: RowCoordination = {
         ...(context.coordination ?? { revision: 0 }),
         revision: context.revision + 1,
-        // Spec §D2 the adopted pin: the prepared block keeps its author and
-        // time, and only the digests it pinned move to the bytes this bind
-        // accepted — both halves of the sealed pair, so the row's pin and the
-        // audit entry describe the same move. The plan pin is rewritten only
-        // when that half moved (`plan_new_sha256` is non-null then).
-        ...(adoption !== null && previous !== undefined
-          ? {
-              prepared: {
-                ...previous,
-                assignment_sha256: adoption.new_sha256,
-                ...(adoption.plan_new_sha256 !== null ? { plan_sha256: adoption.plan_new_sha256 } : {}),
-              },
-            }
-          : {}),
         session: {
           session_id: session.session_id,
           session_file: canonicalTarget(created),
-          // §D2 `bound_at` is when the row acquired THIS binding: a fresh bind
-          // (and an orphan adoption, which is a fresh bind of an unheld row)
-          // stamps now, while a continuing bind preserves the claim's stamp —
-          // the binding has not changed hands, and the amendment is recorded in
-          // the audit entry, never by rewriting when the claim happened.
           bound_at: bound?.bound_at ?? nowIso(),
         },
       };
       assertViolationFree(validateRowCoordination(nextCoordination), `plan ${planId} coordination`);
       const commit: RowCommit = { row: { ...transition.row, coordination: nextCoordination }, coordination: nextCoordination };
-      if (adoption !== null && previous !== undefined) {
-        const planHalf =
-          adoption.plan_old_sha256 !== null && adoption.plan_new_sha256 !== null
-            ? { plan_old_sha256: adoption.plan_old_sha256, plan_new_sha256: adoption.plan_new_sha256 }
-            : {};
-        commit.topLevel = {
-          coordination: withSelfAmendment(context.snapshot.coordination, {
-            at: nowIso(),
-            session_id: session.session_id,
-            old_sha256: adoption.old_sha256,
-            new_sha256: adoption.new_sha256,
-            // The plan half rides in the same entry only when it moved with the
-            // Assignment: an amendment records a move, so a matching plan half
-            // is an absent pair, never a pair of equal digests.
-            ...planHalf,
-            // The file route's bind carries no caller-supplied operation id, so
-            // the record derives its own: sha256 over the adoption's canonical
-            // facts — both halves' moves included, so two adoptions that differ
-            // only in the plan half are two records, identical for an identical
-            // adoption.
-            operation_id: createHash("sha256")
-              .update(
-                stableJson({
-                  workflow_id: workflowId,
-                  plan_id: planId,
-                  session_id: session.session_id,
-                  old_sha256: adoption.old_sha256,
-                  new_sha256: adoption.new_sha256,
-                  plan_old_sha256: adoption.plan_old_sha256,
-                  plan_new_sha256: adoption.plan_new_sha256,
-                }),
-                "utf8",
-              )
-              .digest("hex"),
-            prepared_by_matches: previous.prepared_by === session.session_id,
-          }),
-        };
-      }
       return commit;
     },
   }).catch((error: unknown) => {
@@ -3142,42 +2715,6 @@ function isClaimant(session: CoordinationSession, bound: CoordinatorBinding | un
   return canonicalTarget(bound.session_file) === canonicalTarget(path);
 }
 
-let bindPreInterleaveForTest: (() => void) | undefined;
-
-/**
- * Test-only hook for the §D2 adoption race: it runs AFTER the bind's unlocked
- * fail-fast measurement and BEFORE the locked re-decision, so a test can orphan
- * a row in exactly that window and prove the lock — not the speculative read —
- * decides. Mirrors `setCompleteStandaloneMutateGapForTest`.
- */
-export function setBindPreInterleaveForTest(callback: (() => void) | undefined): void {
-  bindPreInterleaveForTest = callback;
-}
-
-/**
- * Snapshot-level audit append (spec §D2): the self-amendment history rides
- * beside `identity_recoveries` on the workflow's coordination block. A snapshot
- * without that block has no host for the record — and the claim bootstrap (D0)
- * can prepare a row on a workflow whose coordinator seat was never bound — so
- * the amendment refuses in the staleness vocabulary it belongs to, rather than
- * refreshing a pin with nothing written down. Creating the block here would
- * mean inventing a coordinator binding, which is the one thing this route never
- * does with a plan-pm identity.
- */
-function withSelfAmendment(
-  coordination: SnapshotCoordination | undefined,
-  entry: CoordinationSelfAmendment,
-): SnapshotCoordination {
-  if (coordination === undefined) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `workflow records no coordination block, so the stale-pin adoption by session ${entry.session_id} ` +
-        "has nowhere to be recorded \u2014 bind the coordinator seat of this workflow first, then re-run the bind",
-      { session_id: entry.session_id, expected: entry.old_sha256, actual: entry.new_sha256 },
-    );
-  }
-  return { ...coordination, self_amendments: [...(coordination.self_amendments ?? []), entry] };
-}
 
 /**
  * Spec §D0 the claim bootstrap (fixes #308): the locator-addressed bind on a
@@ -3419,7 +2956,7 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
  * § Catalog execution pin (state-projection contract §1)
  * ------------------------------------------------------------------------ */
 
-/** The stable refusal code of a frozen-input/pin discrepancy (contract §1). */
+/** Stable refusal code for malformed, foreign or missing catalog selections. */
 export const EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
 
 /**
@@ -3477,8 +3014,7 @@ export type ExecutionCatalogPinState = {
   /** Set when the frozen execution input and its recorded pin disagree. */
   conflict: string | null;
 };
-
-/** Raised by `assertExecutionCatalogPin` (contract §1). */
+/** Raised for field-value mismatches between a pin and its owning catalog. */
 export class ExecutionPinConflictError extends Error {
   readonly code = EXECUTION_PIN_CONFLICT_CODE;
   readonly details: Record<string, unknown>;
@@ -3489,6 +3025,7 @@ export class ExecutionPinConflictError extends Error {
     this.details = details;
   }
 }
+
 
 /** The row fields contract §1 freezes as the execution input pin. */
 const FROZEN_ROW_FIELDS: readonly string[] = ["id", "plan_id", "title", "file"];
@@ -3717,14 +3254,6 @@ export async function readExecutionCatalogPin(input: {
   if (recorded !== null) {
     state.source = "row";
     state.pin = recorded;
-    // The frozen row and its own pin disagree — a store-independent check, so
-    // an edited frozen input is caught even pre-activation.
-    if (executionInputHash(input.row, planId) !== recorded.document_hash) {
-      state.conflict =
-        `plan ${planId}'s frozen execution input changed after preparation (its pin records ${recorded.document_hash.slice(0, 12)}\u2026, ` +
-        "the row now hashes differently) \u2014 an explicit authorized prepare must rebind the input; neither side is overwritten";
-      return state;
-    }
     if (facts.store !== "active" || facts.storeId === null) return state;
     if (facts.revision === null) {
       state.conflict =
@@ -3870,7 +3399,7 @@ export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: re
       );
     }
     if (!existsSync(abs)) {
-      throw new CoordinationError("coordination.evidence-stale", `evidence path does not exist: ${path}`, { path: abs });
+      throw new CoordinationError("coordination.invalid-input", `evidence path does not exist: ${path}`, { path: abs });
     }
   }
 }
@@ -3891,10 +3420,6 @@ async function mutatePrepare(
   // for the row it is bound to: this prepare created that file, so it drops it
   // again if the prepare itself refuses.
   let prepareRestoredEnvelope = "";
-  // The replaced seal's identity when this call reseals a changed Assignment:
-  // the receipt the result discloses so a reviewed recovery is never silent.
-  // A container, because the precheck closure assigns it under the row lock.
-  const reseal: { previous: ResealReceiptDetails | null } = { previous: null };
   const result = await withRowCommit(scope, {
     kind: "prepare",
     expectedRevision: request.expectedRevision,
@@ -3947,40 +3472,6 @@ async function mutatePrepare(
           );
         }
       }
-      // §4.2 an unchanged ordinary reissue answers from the row it just read:
-      // a byte-identical Assignment means the seal already holds the requested
-      // effect, so the call is already-satisfied without a second write — no
-      // new seal, timestamp or revision. The check runs AFTER the identity half
-      // (a non-claimant session keeps its seat refusal — satisfaction never
-      // bypasses identity) and BEFORE the admission whose already-prepared
-      // refusal is for input that is NOT the held effect. A byte-changed
-      // Assignment keeps its distinct routes: the claimant's refusal, and the
-      // coordinator's disclosed reseal below. The digest is measured inside
-      // this lock, so hash and verdict measure one snapshot.
-      const prepared = context.coordination?.prepared;
-      if (prepared !== undefined && existsSync(scope.assignmentPath)) {
-        if (sha256Bytes(readFileSync(scope.assignmentPath)) === prepared.assignment_sha256) {
-          return { field: "coordination.prepared", source: "the row's prepared seal" };
-        }
-      }
-      // The reviewed-amendment seat: an eligible coordinator may replace a
-      // changed seal through the ordinary mutate path — full intent validation
-      // still runs — and the result discloses the seal it replaced. Every
-      // protected row (bound, leased, handed off, non-Todo) leaves this false
-      // and keeps the already-prepared refusal it has always answered.
-      const coordinatorReseal =
-        session.role === "coordinator" &&
-        bound === undefined &&
-        context.row.execution_lease === undefined &&
-        context.coordination?.handoff === undefined &&
-        rowStatusOf(context.row) === "Todo";
-      if (coordinatorReseal && prepared !== undefined) {
-        reseal.previous = {
-          previous_prepared_at: prepared.prepared_at,
-          previous_prepared_by: prepared.prepared_by,
-          previous_assignment_sha256: prepared.assignment_sha256,
-        };
-      }
       assertPrepareAdmission({
         planId: scope.planId,
         row: context.row,
@@ -3988,7 +3479,6 @@ async function mutatePrepare(
         sessionBound: bound !== undefined,
         leaseHeld: context.row.execution_lease !== undefined,
         rowClaimant: claimant,
-        coordinatorReseal,
       });
       // A root-visible workflow with a pending catalog registration is never a
       // valid workspace to prepare against (contract §3 step 3).
@@ -4033,8 +3523,6 @@ async function mutatePrepare(
     if (prepareRestoredEnvelope !== "") dropSessionEnvelope(prepareRestoredEnvelope);
     throw error;
   });
-  const recovery: RecoveryDetails & { readonly details?: ResealReceiptDetails } =
-    reseal.previous === null ? result.recovery : { ...result.recovery, details: reseal.previous };
   return {
     ok: true,
     operation: "prepare",
@@ -4137,13 +3625,32 @@ async function mutateProgress(
     expectedRevision: request.expectedRevision,
     precheck: (context) => {
       assertRowBinding(session, sessionPath, context.row, scope.planId);
-      // §4.2 (R6/A09/A12) the report is already recorded: current state is the
-      // success the caller asked for, so it is answered without a write even when
-      // the token (or a later transition) moved on.
-      const effect = progressEffect({ progress, row: context.row, coordination: context.coordination });
+      // Already-recorded field values are current success; compare the named
+      // progress fields directly rather than serializing the whole projection.
+      const recorded = context.coordination?.progress;
+      const rowBranches = context.row.metadata?.track_branches;
+      const sameEvidencePaths =
+        recorded !== undefined &&
+        recorded.evidence_paths.length === progress.evidence_paths.length &&
+        recorded.evidence_paths.every((path, index) => path === progress.evidence_paths[index]);
+      const sameTrackBranches =
+        recorded?.track_branches === undefined
+          ? progress.track_branches === undefined
+          : progress.track_branches !== undefined &&
+            recorded.track_branches.length === progress.track_branches.length &&
+            recorded.track_branches.every((branch, index) => branch === progress.track_branches![index]);
+      const sameRowBranches =
+        progress.track_branches === undefined ||
+        (Array.isArray(rowBranches) &&
+          rowBranches.length === progress.track_branches.length &&
+          rowBranches.every((branch, index) => branch === progress.track_branches![index]));
       if (
-        stableJson(selectSemanticFields(effect.current, effect.fields)) ===
-        stableJson(selectSemanticFields(effect.requested, effect.fields))
+        recorded?.status === progress.status &&
+        recorded.summary === progress.summary &&
+        sameEvidencePaths &&
+        sameTrackBranches &&
+        sameRowBranches &&
+        context.row.status === progress.status
       ) {
         return { field: "coordination.progress", source: "stored plan row" };
       }
@@ -4878,575 +4385,7 @@ function gitCheckout(path: string): GitCheckout | undefined {
   return { head, clean: dirty.length === 0, operation };
 }
 
-/** The one path of a repository that Git itself names, resolved against it. */
-function gitPathOf(repository: string, name: string): string {
-  const path = gitRead(repository, ["rev-parse", "--git-path", name]);
-  if (path === undefined || path.length === 0) {
-    throw gitProof(`cannot resolve ${name} of ${repository} to re-read it before the commit`, { repository, name });
-  }
-  return resolve(repository, path);
-}
 
-/**
- * §4.1 the ref state one Git proof was read from, pinned before SQLite
- * ownership so the commit window can re-read the same bytes.
- */
-export type GitRefWitness = {
-  repository: string;
-  entries: ReadonlyArray<{ path: string; sha256: string | null }>;
-};
-
-/**
- * §4.1 pin the ref state a Git proof was read from (spec §4.1: "record
- * identity/hash/version witnesses, revalidate relevant witnesses immediately
- * before commit"). `git rev-parse --git-path` — a read that spawns a process,
- * which is why this runs BEFORE SQLite ownership — names the exact files Git
- * resolves those refs through: the worktree's own `HEAD`, and the ref's loose
- * file. A ref Git keeps PACKED has no loose file, so the packed table is part
- * of the same witness. A `null` hash means "the path did not exist", which is
- * itself a pinned fact: a ref that appears, or one that disappears, is a change.
- */
-export function pinGitRefWitness(repository: string, refs: readonly string[]): GitRefWitness {
-  const paths = refs.map((ref) => ({ ref, path: gitPathOf(repository, ref) }));
-  const packed = paths.some((entry) => entry.ref.startsWith("refs/") && !existsSync(entry.path));
-  const all = [...paths.map((entry) => entry.path), ...(packed ? [gitPathOf(repository, "packed-refs")] : [])];
-  return {
-    repository,
-    entries: all.map((path) => ({ path, sha256: existsSync(path) ? sha256Bytes(readFileSync(path)) : null })),
-  };
-}
-
-/**
- * §4.1 revalidate a pinned Git ref witness immediately before the commit. This
- * is the commit-window half of the proof: a read that spawns a process cannot
- * run inside the write transaction, so the proof keeps the ref BYTES it was read
- * from and this re-reads exactly those. Every fact the proof derived from a ref
- * is then either content-addressed (commit ids, parents, ancestry — immutable
- * while the ref they hang off is unchanged) or re-read here, so a witness that
- * moved refuses with no DB mutation instead of committing a stale proof.
- * `refuse` is the proof's own refusal, so the race reports the code the same
- * observation reports when it is seen before the transaction.
- */
-export function revalidateGitRefWitness(
-  witness: GitRefWitness,
-  refuse: (message: string, details: Record<string, unknown>) => CoordinationError,
-): void {
-  for (const entry of witness.entries) {
-    const actual = existsSync(entry.path) ? sha256Bytes(readFileSync(entry.path)) : null;
-    if (actual !== entry.sha256) {
-      throw refuse(
-        `${witness.repository} ${entry.path} changed after the Git proof was read ` +
-          `(${entry.sha256 ?? "absent"} -> ${actual ?? "absent"}) \u2014 nothing commits on a stale witness`,
-        { path: entry.path, expected: entry.sha256, actual },
-      );
-    }
-  }
-}
-
-/* ------------------------------------------------------------------------ *
- * §7 the sealed Git proof of one completion candidate (R10)
- * ------------------------------------------------------------------------ */
-
-/**
- * §7 the refusal vocabulary of one sealed Git proof. The route that seals a
- * proof names the code it reports when the witnessed state moved, so the commit
- * window answers with the same code the preflight answers with for the same
- * observation: `coordination.git-proof` for a delivery source,
- * `coordination.integration-diverged` for an integration attempt.
- */
-export type GitProofRefusal = "coordination.git-proof" | "coordination.integration-diverged";
-
-const GIT_PROOF_REFUSALS: Readonly<
-  Record<GitProofRefusal, (message: string, details: Record<string, unknown>) => CoordinationError>
-> = {
-  "coordination.git-proof": gitProof,
-  "coordination.integration-diverged": integrationDiverged,
-};
-
-/** One path Git's own resolution named, exactly as the witness read it. */
-export type GitProofEntry = Readonly<{
-  path: string;
-  kind: "file" | "symlink" | "directory" | "other" | "absent";
-  /** The bytes of a regular file, or a symlink's target; `null` otherwise. */
-  sha256: string | null;
-}>;
-
-/** A canonical path Git resolved, with the inode identity that path held. */
-export type GitProofIdentity = GitProofEntry & Readonly<{ dev: number | null; ino: number | null }>;
-
-/** One tracked path's working-tree state: content, mode and symlink target. */
-export type GitProofTracked = Readonly<{
-  path: string;
-  kind: "file" | "symlink" | "directory" | "other" | "absent";
-  /** Observed permission bits; `0` when nothing is there. */
-  mode: number;
-  /** File bytes, or the link target; `null` when there is no content to hash. */
-  sha256: string | null;
-}>;
-
-/**
- * One directory entry: the name AND the kind of thing that name is. A name that
- * changes kind (an empty directory replaced by a file of the same name) is a
- * change the untracked inventory has to refuse, so a name alone is not enough.
- */
-export type GitProofDirEntry = Readonly<{
-  name: string;
-  kind: "file" | "symlink" | "directory" | "other";
-}>;
-
-/** One directory of the complete non-ignored tree, without the root `.git`. */
-export type GitProofDirectory = Readonly<{ path: string; entries: readonly GitProofDirEntry[] }>;
-
-/** The object store the proof's objects were read from. */
-export type GitProofObjects = Readonly<{
-  dir: string;
-  /** `objects/info/alternates`; a non-empty one refuses at capture. */
-  alternates: GitProofEntry;
-  /** Entries directly under `objects/` — the branching dirs, `info` and `pack`. */
-  dirs: readonly string[];
-  /** Loose object paths (`<xx>/<rest>`); a loose object's name is its content. */
-  loose: readonly string[];
-  /** Entries of `objects/pack`, with the size each entry had. */
-  packs: readonly Readonly<{ name: string; size: number }>[];
-}>;
-
-/**
- * §7 the sealed Git proof of one completion candidate: every fact the proof
- * rests on that a concurrent writer can move — the canonical checkout, git and
- * common-dir identity, `HEAD` and the refs it reads, the index and its shared
- * index, each tracked path's content/mode/symlink target, the complete
- * non-ignored directory closure (the root, every directory below it and each
- * entry's name and kind), the conflict sentinels, and the canonical object
- * store with the inventory of the objects the pinned objects live in.
- *
- * `captureGitProofWitness` reads it through Git and the filesystem BEFORE
- * SQLite ownership; `revalidateGitProofWitness` re-reads the same facts from the
- * filesystem with no child process and no await immediately before the commit,
- * so the proof either commits with the row or not at all. A refs-only witness
- * cannot prove an unchanged index, worktree or object store, which is what R10
- * reports.
- */
-export type GitProofWitness = Readonly<{
-  /** The canonical checkout Git reported for the witnessed worktree. */
-  repository: string;
-  /** The proof route's refusal vocabulary (see `GitProofRefusal`). */
-  refusal: GitProofRefusal;
-  identity: readonly GitProofIdentity[];
-  refs: readonly GitProofEntry[];
-  index: readonly GitProofEntry[];
-  sentinels: readonly GitProofEntry[];
-  tracked: readonly GitProofTracked[];
-  directories: readonly GitProofDirectory[];
-  /** Ignored entries; the cleanliness policy exempts them from the inventory. */
-  excluded: readonly string[];
-  objects: GitProofObjects;
-}>;
-
-/**
- * One read-only Git read whose bytes are significant (NUL-separated paths).
- * Unlike `gitRead` its output is a whole path list, so it may exceed the
- * 1 MiB `execFileSync` default on a large repository.
- */
-function gitReadRaw(cwd: string, args: readonly string[]): string {
-  try {
-    return execFileSync("git", ["-C", cwd, ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: GIT_READ_TIMEOUT_MS,
-      maxBuffer: GIT_READ_MAX_BUFFER,
-    });
-  } catch (error) {
-    if (typeof propertyOf(error, "status") === "number") {
-      throw gitProof(`cannot read ${cwd} (git ${args.join(" ")})`, { path: cwd, command: `git ${args.join(" ")}` });
-    }
-    throw gitUnavailable(cwd, args, error);
-  }
-}
-
-/** `lstat`, or `undefined` when the path cannot be read: both mean "not there". */
-function lstatOrUndefined(path: string): Stats | undefined {
-  try {
-    return lstatSync(path);
-  } catch {
-    return undefined;
-  }
-}
-
-/** A pinned path's kind and bytes. A symlink records the link target, never the
- * target's content: a name relinked to a same-looking file is still a change. */
-function gitProofEntry(path: string): GitProofEntry {
-  const stat = lstatOrUndefined(path);
-  if (stat === undefined) return { path, kind: "absent", sha256: null };
-  if (stat.isSymbolicLink()) return { path, kind: "symlink", sha256: sha256Bytes(readlinkSync(path)) };
-  if (stat.isFile()) return { path, kind: "file", sha256: sha256Bytes(readFileSync(path)) };
-  return { path, kind: stat.isDirectory() ? "directory" : "other", sha256: null };
-}
-
-/** The kind of one name in a directory listing, without following a symlink. */
-function gitProofKind(path: string): GitProofDirEntry["kind"] | "absent" {
-  const stat = lstatOrUndefined(path);
-  if (stat === undefined) return "absent";
-  if (stat.isSymbolicLink()) return "symlink";
-  if (stat.isFile()) return "file";
-  if (stat.isDirectory()) return "directory";
-  return "other";
-}
-
-/** One canonical path plus the inode it resolved to (a swap is a change). */
-function gitProofIdentity(path: string): GitProofIdentity {
-  const entry = gitProofEntry(path);
-  const stat = lstatOrUndefined(path);
-  return {
-    ...entry,
-    dev: stat === undefined ? null : Number(stat.dev),
-    ino: stat === undefined ? null : Number(stat.ino),
-  };
-}
-
-/** One tracked working-tree path: content, permission bits and symlink target. */
-function gitTrackedProof(root: string, path: string): GitProofTracked {
-  const abs = join(root, path);
-  const stat = lstatOrUndefined(abs);
-  if (stat === undefined) return { path, kind: "absent", mode: 0, sha256: null };
-  const mode = stat.mode & 0o7777;
-  if (stat.isSymbolicLink()) return { path, kind: "symlink", mode, sha256: sha256Bytes(readlinkSync(abs)) };
-  if (stat.isFile()) return { path, kind: "file", mode, sha256: sha256Bytes(readFileSync(abs)) };
-  return { path, kind: stat.isDirectory() ? "directory" : "other", mode, sha256: null };
-}
-
-/**
- * One directory's entries under the existing cleanliness policy: the root
- * `.git` is never an inventory entry, and an ignored entry is not "dirty", so
- * neither is recorded. Each entry keeps its NAME and its KIND, so a directory
- * replaced by a file of the same name is a change the revalidation refuses.
- */
-function gitProofDirEntries(root: string, rel: string, ignored: ReadonlySet<string>): readonly GitProofDirEntry[] {
-  const abs = rel === "" ? root : join(root, rel);
-  if (!existsSync(abs)) return [];
-  return readdirSync(abs)
-    .sort()
-    .filter((name) => !(rel === "" && name === ".git"))
-    .filter((name) => !ignored.has(rel === "" ? name : `${rel}/${name}`))
-    .map((name) => {
-      // A name that vanished between the listing and the stat is an `other`
-      // entry, never "absent": the difference still refuses.
-      const kind = gitProofKind(join(abs, name));
-      return { name, kind: kind === "absent" ? "other" : kind };
-    });
-}
-
-/**
- * §7 the complete non-ignored directory closure of one checkout: the root, every
- * directory below it, and each directory's entry names and kinds. A tracked
- * path's trail alone is not enough — Git's clean policy reports an untracked
- * path inside a pre-existing EMPTY directory too, and that directory is on no
- * tracked trail. Ignored entries are pruned here exactly as the policy prunes
- * them, so their contents are never part of the inventory (and a large ignored
- * tree is never walked). Symlinked directories are not descended into: Git
- * treats a symlink as a symlink, not as the tree behind it.
- */
-function gitProofDirectoryInventory(root: string, ignored: ReadonlySet<string>): readonly GitProofDirectory[] {
-  const inventory: GitProofDirectory[] = [];
-  const pending = [""];
-  while (pending.length > 0) {
-    const rel = pending.pop() as string;
-    const entries = gitProofDirEntries(root, rel, ignored);
-    inventory.push({ path: rel, entries });
-    for (const entry of entries) {
-      if (entry.kind === "directory") pending.push(rel === "" ? entry.name : `${rel}/${entry.name}`);
-    }
-  }
-  return inventory.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-}
-
-/** `objects/pack`, as the pack inventory the proof's objects were read from. */
-function gitProofPacks(objectsDir: string): ReadonlyArray<Readonly<{ name: string; size: number }>> {
-  const packDir = join(objectsDir, "pack");
-  if (!existsSync(packDir)) return [];
-  return readdirSync(packDir)
-    .sort()
-    .map((name) => ({ name, size: statSync(join(packDir, name)).size }));
-}
-
-/**
- * The loose objects of one store. A loose object's path IS its content hash, so
- * the inventory is the names alone; a branching dir that disappeared (a prune,
- * a repack) leaves the list shorter, which is the change the revalidation
- * refuses. Capture and revalidation share this read so both see one inventory.
- */
-function gitProofLoose(objectsDir: string, dirs: readonly string[]): readonly string[] {
-  return dirs
-    .filter((name) => /^[0-9a-f]{2}$/.test(name))
-    .flatMap((dir): string[] =>
-      existsSync(join(objectsDir, dir))
-        ? readdirSync(join(objectsDir, dir))
-            .sort()
-            .map((name) => `${dir}/${name}`)
-        : [],
-    );
-}
-
-function sameGitProofNames(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((name, index) => name === right[index]);
-}
-
-/**
- * §7 capture the sealed Git proof of one completion candidate. The checkout
- * must already be a clean worktree with no unfinished Git operation — the
- * existing clean policy, established here together with the path list the
- * witness covers — and unsupported topologies (a nested repository, an
- * alternate object store) refuse rather than produce a weaker proof.
- *
- * `refusal` is the vocabulary of the route that seals the proof; it defaults to
- * the delivery-source code.
- */
-export function captureGitProofWitness(cwd: string, refusal: GitProofRefusal = "coordination.git-proof"): GitProofWitness {
-  const refuse = GIT_PROOF_REFUSALS[refusal];
-  const repository = resolve(cwd);
-  const checkout = gitCheckout(repository);
-  if (checkout === undefined) {
-    throw refuse(`${repository} is not a readable Git worktree \u2014 a completion proof needs a real checkout`, {
-      repository,
-    });
-  }
-  if (checkout.operation !== undefined) {
-    throw refuse(`${repository} has an unfinished ${checkout.operation} \u2014 it is never a completion proof`, {
-      repository,
-      operation: checkout.operation,
-    });
-  }
-  if (!checkout.clean) {
-    throw refuse(`${repository} has uncommitted changes \u2014 the completion proof covers a clean worktree only`, {
-      repository,
-      head: checkout.head,
-    });
-  }
-  // `--path-format=absolute` is deliberately not used: it needs Git 2.31, and a
-  // completion must not refuse on an older Git. Every value Git prints is
-  // resolved against the checkout instead.
-  const resolvedPaths = gitRead(repository, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"]);
-  const [rawGitDir, rawCommonDir, rawToplevel] = (resolvedPaths ?? "").split("\n").map((line) => line.trim());
-  if (!isNonEmptyString(rawGitDir) || !isNonEmptyString(rawCommonDir) || !isNonEmptyString(rawToplevel)) {
-    throw gitProof(`cannot resolve the checkout, git dir and common dir of ${repository}`, { repository });
-  }
-  const gitDir = resolve(repository, rawGitDir);
-  const commonDir = resolve(repository, rawCommonDir);
-  const toplevel = resolve(repository, rawToplevel);
-
-  // The ref state the proof was read from: the worktree's `HEAD`, the ref that
-  // names, and the packed table a packed ref resolves through.
-  const refs = [gitProofEntry(gitPathOf(repository, "HEAD")), gitProofEntry(gitPathOf(repository, "packed-refs"))];
-  const symbolic = gitRead(repository, ["rev-parse", "--symbolic-full-name", "HEAD"]);
-  if (isNonEmptyString(symbolic) && symbolic.startsWith("refs/")) {
-    refs.splice(1, 0, gitProofEntry(gitPathOf(repository, symbolic)));
-  }
-
-  // The index and, when the checkout splits it, the shared index it depends on.
-  const index = [gitProofEntry(gitPathOf(repository, "index"))];
-  for (const name of readdirSync(gitDir).filter((entry) => entry.startsWith("sharedindex.")).sort()) {
-    index.push(gitProofEntry(join(gitDir, name)));
-  }
-
-  const sentinels = UNFINISHED_GIT_OPERATIONS.map(([marker]) => gitProofEntry(gitPathOf(repository, marker)));
-
-  const tracked: GitProofTracked[] = [];
-  for (const record of gitReadRaw(repository, ["ls-files", "-z", "--stage"]).split("\0")) {
-    if (record.length === 0) continue;
-    const tab = record.indexOf("\t");
-    if (tab < 0) throw gitProof(`cannot read the tracked path list of ${repository}`, { repository, record });
-    const path = record.slice(tab + 1);
-    const indexMode = record.slice(0, tab).split(" ")[0];
-    if (indexMode === "160000") {
-      throw gitProof(
-        `${repository} tracks ${path} as a nested repository \u2014 a submodule topology is never completion proof`,
-        { repository, path, index_mode: indexMode },
-      );
-    }
-    tracked.push(gitTrackedProof(toplevel, path));
-  }
-
-  // The ignored entries are the boundary of the existing cleanliness policy:
-  // an entry Git already ignores is not "dirty", so it is never an inventory
-  // entry, and an ignored entry that changes alone cannot refuse. The window
-  // re-read deliberately does not evaluate Git's exclusion rules (that would be
-  // a second gitignore engine inside the transaction), so an entry that appears
-  // in the window and was not ignored at capture is treated as untracked and
-  // refuses: the retry re-captures it under the current policy.
-  const excluded = [
-    ...new Set(
-      gitReadRaw(repository, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"])
-        .split("\0")
-        .filter((name) => name.length > 0)
-        .map((name) => name.replace(/\/+$/, "")),
-    ),
-  ].sort();
-  const ignored = new Set(excluded);
-  const inventory = gitProofDirectoryInventory(toplevel, ignored);
-
-  // §7 the object store must be the repository's own canonical one. An object
-  // root outside the common Git directory is an external store this proof
-  // cannot witness, and an alternates file that is not an empty regular file is
-  // an alternate topology it cannot enumerate: both refuse rather than produce
-  // a weaker proof.
-  const objectsPath = gitRead(repository, ["rev-parse", "--git-path", "objects"]);
-  if (!isNonEmptyString(objectsPath)) throw gitProof(`cannot resolve the object store of ${repository}`, { repository });
-  const objectsDir = resolve(repository, objectsPath);
-  const canonicalObjects = resolve(commonDir, "objects");
-  if (objectsDir !== canonicalObjects) {
-    throw gitProof(
-      `${repository} reads objects from ${objectsDir}, not the canonical store ${canonicalObjects} \u2014 an external object root is never completion proof`,
-      { repository, objects: objectsDir, canonical: canonicalObjects },
-    );
-  }
-  const objectsKind = gitProofKind(objectsDir);
-  if (objectsKind !== "directory") {
-    throw gitProof(`the object store ${objectsDir} of ${repository} is ${objectsKind}, not a directory`, {
-      repository,
-      objects: objectsDir,
-      kind: objectsKind,
-    });
-  }
-  const alternatesPath = join(objectsDir, "info", "alternates");
-  const alternatesKind = gitProofKind(alternatesPath);
-  if (alternatesKind !== "absent" && alternatesKind !== "file") {
-    throw gitProof(
-      `${repository} has a ${alternatesKind} at ${alternatesPath} \u2014 only a regular, empty alternates file is completion proof`,
-      { repository, alternates: alternatesPath, kind: alternatesKind },
-    );
-  }
-  const alternates = gitProofEntry(alternatesPath);
-  if (alternates.sha256 !== null && readFileSync(alternatesPath, "utf8").trim() !== "") {
-    throw gitProof(
-      `${repository} delegates to an alternate object store (${alternatesPath}) \u2014 an unenumerable alternate topology is never completion proof`,
-      { repository, alternates: alternatesPath },
-    );
-  }
-  const objectsDirs = readdirSync(objectsDir).sort();
-  const loose = gitProofLoose(objectsDir, objectsDirs);
-
-  return {
-    repository: toplevel,
-    refusal,
-    // A primary worktree resolves its checkout, git dir and common dir to the
-    // same path; each path is witnessed once. The object store is witnessed
-    // with them, so a replaced store inode is a change.
-    identity: [...new Set([toplevel, join(toplevel, ".git"), gitDir, commonDir, objectsDir])].map(gitProofIdentity),
-    refs,
-    index,
-    sentinels,
-    tracked,
-    directories: inventory,
-    excluded,
-    objects: { dir: objectsDir, alternates, dirs: objectsDirs, loose, packs: gitProofPacks(objectsDir) },
-  };
-}
-
-/**
- * §7 revalidate a sealed Git proof immediately before the commit, from the
- * filesystem alone: no child process, no await, no Git read inside the write
- * transaction. Every recorded fact is re-read and compared — inode identity,
- * refs, index and shared index, sentinels, each tracked path's
- * content/mode/symlink target, the complete non-ignored directory closure
- * (paths, entry names and entry kinds), and the object inventory — and the
- * first difference refuses with the proof route's own code and no DB mutation.
- */
-export function revalidateGitProofWitness(witness: GitProofWitness): void {
-  const refuse = GIT_PROOF_REFUSALS[witness.refusal];
-  const moved = (what: string, details: Record<string, unknown>): never => {
-    throw refuse(`${witness.repository} ${what} changed after the Git proof was read \u2014 nothing commits on a stale witness`, {
-      repository: witness.repository,
-      ...details,
-    });
-  };
-  const assertEntry = (entry: GitProofEntry): void => {
-    const now = gitProofEntry(entry.path);
-    if (now.kind !== entry.kind || now.sha256 !== entry.sha256) {
-      moved(entry.path, {
-        path: entry.path,
-        expected: entry.sha256 === null ? entry.kind : `${entry.kind}:${entry.sha256}`,
-        actual: now.sha256 === null ? now.kind : `${now.kind}:${now.sha256}`,
-      });
-    }
-  };
-
-  for (const entry of witness.identity) {
-    const stat = lstatOrUndefined(entry.path);
-    const dev = stat === undefined ? null : Number(stat.dev);
-    const ino = stat === undefined ? null : Number(stat.ino);
-    if (dev !== entry.dev || ino !== entry.ino) {
-      moved(entry.path, { path: entry.path, expected: `${entry.dev}:${entry.ino}`, actual: `${dev}:${ino}` });
-    }
-    assertEntry(entry);
-  }
-  for (const entry of witness.refs) assertEntry(entry);
-  for (const entry of witness.index) assertEntry(entry);
-  for (const entry of witness.sentinels) assertEntry(entry);
-
-  for (const entry of witness.tracked) {
-    const now = gitTrackedProof(witness.repository, entry.path);
-    if (now.kind !== entry.kind || now.mode !== entry.mode || now.sha256 !== entry.sha256) {
-      moved(`tracked path ${entry.path}`, {
-        path: entry.path,
-        expected: `${entry.kind}:${entry.mode.toString(8)}:${entry.sha256 ?? "-"}`,
-        actual: `${now.kind}:${now.mode.toString(8)}:${now.sha256 ?? "-"}`,
-      });
-    }
-  }
-
-  const ignored = new Set(witness.excluded);
-  const inventory = gitProofDirectoryInventory(witness.repository, ignored);
-  const inventoryPaths = inventory.map((directory) => directory.path);
-  const witnessedPaths = witness.directories.map((directory) => directory.path);
-  if (!sameGitProofNames(inventoryPaths, witnessedPaths)) {
-    moved("directory tree", { expected: witnessedPaths, actual: inventoryPaths });
-  }
-  for (let index = 0; index < witness.directories.length; index += 1) {
-    const before = witness.directories[index] as GitProofDirectory;
-    const now = (inventory[index] as GitProofDirectory).entries;
-    const changed =
-      now.length !== before.entries.length ||
-      now.some((entry, position) => {
-        const prior = before.entries[position] as GitProofDirEntry;
-        return entry.name !== prior.name || entry.kind !== prior.kind;
-      });
-    if (changed) {
-      moved(`directory ${before.path === "" ? "." : before.path}`, {
-        path: before.path,
-        expected: before.entries.map((entry) => `${entry.name}:${entry.kind}`),
-        actual: now.map((entry) => `${entry.name}:${entry.kind}`),
-      });
-    }
-  }
-
-  assertEntry(witness.objects.alternates);
-  const objectsDirs = existsSync(witness.objects.dir) ? readdirSync(witness.objects.dir).sort() : [];
-  if (!sameGitProofNames(objectsDirs, witness.objects.dirs)) {
-    moved("object store", {
-      path: witness.objects.dir,
-      expected: witness.objects.dirs,
-      actual: objectsDirs,
-    });
-  }
-  const loose = gitProofLoose(witness.objects.dir, objectsDirs);
-  if (!sameGitProofNames(loose, witness.objects.loose)) {
-    moved("loose object inventory", {
-      path: witness.objects.dir,
-      expected: witness.objects.loose,
-      actual: loose,
-    });
-  }
-  const packs = gitProofPacks(witness.objects.dir);
-  if (
-    packs.length !== witness.objects.packs.length ||
-    packs.some((pack, index) => pack.name !== witness.objects.packs[index]!.name || pack.size !== witness.objects.packs[index]!.size)
-  ) {
-    moved("object pack inventory", {
-      path: join(witness.objects.dir, "pack"),
-      expected: witness.objects.packs,
-      actual: packs,
-    });
-  }
-}
 
 /**
  * Feature-side proof (spec §D): the pinned commit is what the recorded plan
@@ -5712,7 +4651,6 @@ async function mutateAccept(
       requireHandoffState(handoff, ["submitted"], scope.planId, "accept");
       requireRowStatus(context.row, "InReview", scope.planId, "accept", { still: true });
       assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "accept", scope.planId);
-      assertEvidenceDigests(handoff);
     },
     mutate: (context) => {
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
@@ -6005,7 +4943,6 @@ async function mutateIntegrationStart(
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       requireHandoffState(handoff, ["accepted", "integrating"], scope.planId, "integration-start");
-      assertEvidenceDigests(handoff);
       assertFeatureCheckout(scope.worktreePath, handoff.source_sha, "integration-start", scope.planId);
       // The coordinator owns the row between accept and complete: integration
       // must never proceed on a row nobody holds (spec §D/§E — both leases stay
@@ -6090,7 +5027,6 @@ async function mutateIntegrationAccept(
       const handoff = requirePlanHandoff(context.coordination, scope.planId, request.handoffId);
       requireHandoffState(handoff, ["integrating"], scope.planId, "integration-accept");
       requireRowStatus(context.row, "InReview", scope.planId, "integration-accept", { still: true });
-      assertEvidenceDigests(handoff);
       assertExecutionHolder(context.row, session.session_id, scope.planId, "integration-accept");
       assertMergeLease(context.snapshot, session, scope.planId, handoff);
       const integration = requireIntegration(handoff, scope.planId);
@@ -6324,7 +5260,6 @@ async function assertStandaloneCompletionPrecheck(
     );
   }
   assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "complete" });
-  assertEvidenceDigests(handoff);
   assertAcceptedReviewDecision(handoff, scope.planId, "complete");
   if (handoff.qa.gate !== prepared.qa_gate) {
     throw new CoordinationError(
@@ -6387,7 +5322,6 @@ async function assertStandaloneReportOnlyCompletionPrecheck(
     });
   }
   assertNoIntegrationContamination({ snapshot: context.snapshot, planId: scope.planId, handoff, what: "complete" });
-  assertEvidenceDigests(handoff);
   assertAcceptedReviewDecision(handoff, scope.planId, "complete");
   if (handoff.qa.gate !== prepared.qa_gate) {
     throw new CoordinationError(
@@ -6596,7 +5530,6 @@ async function assertRepairDeliverySourcePrecheck(
       { plan_id: scope.planId },
     );
   }
-  assertEvidenceDigests(handoff);
   assertAcceptedReviewDecision(handoff, scope.planId, "repair-delivery-source");
   if (handoff.qa.gate !== prepared.qa_gate) {
     throw new CoordinationError(
@@ -6786,7 +5719,6 @@ async function assertIterationCompletionPrecheck(
       { plan_id: scope.planId },
     );
   }
-  assertEvidenceDigests(handoff);
   await assertFindingsClosed(scope, prepared, "complete");
   assertExecutionHolder(context.row, session.session_id, scope.planId, "complete");
   assertMergeLease(context.snapshot, session, scope.planId, handoff);
@@ -6974,7 +5906,6 @@ async function classifyReconcile(
     );
   }
   if (handoff.state === "integrating" || handoff.state === "merged") {
-    assertEvidenceDigests(handoff);
     const integration = requireIntegration(handoff, planId);
     const anchors = integrationAnchors(context.snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
@@ -7310,7 +6241,6 @@ async function closeRowDecision(
   }
   if (route === "standalone-report-only") {
     assertNoIntegrationContamination({ snapshot: context.snapshot, planId, handoff, what });
-    assertEvidenceDigests(handoff);
     const fulfilment = entailedFileFulfilment(context.snapshot, planId, handoff, what);
     if (done) {
       // §R10 the row already records its completion: only the workflow's own
@@ -7318,7 +6248,6 @@ async function closeRowDecision(
       // the completed shape, its sealed evidence and the absence of ownership
       // are asserted rather than composed.
       assertStandaloneCompletedReplay(context, scope, handoff, { what, fulfilment: "pending" });
-      assertEvidenceDigests(handoff);
       if (fulfilment === null) return { kind: "satisfied" };
       return { kind: "projection", fulfilment };
     }
@@ -7626,20 +6555,14 @@ function rowRevisionOf(row: PlanRow): number {
  * ------------------------------------------------------------------------ */
 
 /**
- * Replace a coordinated artifact with an exact-version precondition (spec §B,
- * §C4 line 156). Snapshot replacement goes through the canonical snapshot
- * writer (coordinator session, phase-only delta, locked CAS); the root status
- * and a project register are written with the same byte-version CAS under
- * root → snapshot → destination locks, refusing any document that carries
- * coordinated ownership. `review`/`json` are not coordinated artifacts, so
- * they refuse explicitly instead of silently no-opping.
+ * Replace a coordinated artifact. Snapshot replacement goes through the
+ * canonical snapshot writer (coordinator session and phase-only delta); root
+ * status is validated and written under root → snapshot → destination locks.
+ * `review`/`json` are not coordinated artifacts, so they refuse explicitly
+ * instead of silently no-opping.
  *
- * Canonical authority discrimination IS the entry boundary (spec §4.3):
- * `input.harnessRoot` is this entry's own anchor — the harness the replacement
- * targets — so the veto precedes the request shape, the ref, the CAS token,
- * the ownership checks and any lock. An anchor that is not an absolute path
- * names no control harness at all, so the request-shape validation below stays
- * that caller's refusal.
+ * Canonical authority discrimination is the entry boundary: the harness root
+ * veto precedes request-shape and ownership checks and any lock.
  */
 export async function replaceCoordinatedArtifact(input: CoordinatedReplacement): Promise<VersionedArtifact> {
   if (typeof input?.harnessRoot === "string" && isAbsolute(input.harnessRoot)) {
@@ -7647,7 +6570,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   assertExactKeys(
     input,
-    ["harnessRoot", "ref", "payload", "expectedVersion", "sessionPath"],
+    ["harnessRoot", "ref", "payload", "sessionPath"],
     "replacement",
   );
   if (!isNonEmptyString(input.harnessRoot) || !isAbsolute(input.harnessRoot)) {
@@ -7655,16 +6578,6 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   if (!isPlainObject(input.ref) || !isNonEmptyString(input.ref.kind) || !isNonEmptyString(input.ref.key)) {
     throw invalidInput("ref must be an ArtifactRef with kind and key");
-  }
-  if (!isNonEmptyString(input.expectedVersion)) {
-    throw new CoordinationError(
-      "coordination.expected-version-required",
-      "a coordinated replacement requires expectedVersion (sha256:\u2026 or \"absent\")",
-      {},
-    );
-  }
-  if (input.expectedVersion !== "absent" && !isArtifactVersion(input.expectedVersion)) {
-    throw invalidInput(`expectedVersion must be "absent" or sha256:<hex> \u2014 got ${input.expectedVersion}`, {});
   }
   const kind = input.ref.kind;
   if (kind === "status") {
@@ -7745,19 +6658,11 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   // execution input — and therefore never touches a `catalog_pin` either.
   const payload = input.payload as WorkflowSnapshot;
   await writeWorkflowSnapshot(payload, dirname(snapshotPath), {
-    expectedVersion: input.expectedVersion,
     sessionPath: canonicalTarget(input.sessionPath),
   });
   return readCoordinatedArtifact(harnessRoot, input.ref);
 }
 
-function artifactVersionConflict(path: string, expected: string, actual: string): CoordinationError {
-  return new CoordinationError(
-    "coordination.version-conflict",
-    `${path} is at version ${actual}, expected ${expected} \u2014 re-read it (\`persist get --versioned\`) and retry`,
-    { expected, actual, path },
-  );
-}
 
 function scopedWriterRequired(message: string, details: Record<string, unknown>): CoordinationError {
   return new CoordinationError("coordination.scoped-writer-required", message, details);
@@ -7892,8 +6797,6 @@ async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: str
   }
   await withStatusWriteLock(statusPath, async () => {
     const current = readArtifactBytes(statusPath);
-    const version = current === undefined ? "absent" : current.version;
-    if (version !== input.expectedVersion) throw artifactVersionConflict(statusPath, input.expectedVersion, version);
     const currentEntries = registeredWorkflowEntries(harnessRoot, current?.payload, statusPath);
     const proposedEntries = registeredWorkflowEntries(harnessRoot, input.payload, statusPath);
     const lockedEntries = lockableEntries(currentEntries, proposedEntries);
@@ -7993,14 +6896,8 @@ export type PrepareWorkflowPatch = Readonly<{
 /** What a coordinator observes about one workflow before amending it. */
 export type PrepareWorkflowView = Readonly<{
   workflowId: string;
-  /**
-   * `sha256:<64 hex>` of the snapshot bytes this read observed: the comparison
-   * basis the next amendment passes back. It is provenance, not a gate — a
-   * snapshot an unrelated writer moved in between is reported as
-   * `coordination.token-drifted` beside the amendment's own component verdicts.
-   */
+  /** Digests of the snapshot and compass observed by this read; provenance only. */
   snapshotVersion: string;
-  /** `sha256:<64 hex>` of the reviewed compass Markdown bytes (the same comparison basis). */
   compassVersion: string;
   /** Plan ids in row order — including this call's own appends on success. */
   planIds: readonly string[];
@@ -8042,7 +6939,6 @@ export type PrepareWorkflowResult = Omit<CoordinationResult, "view"> & { view: P
 
 /** Refusal reasons of the Prepare amendment (spec § Admission and mutation). */
 type PrepareAmendmentReason =
-  | "stale"
   | "invalid-patch"
   | "not-prepare"
   | "execution-started"
@@ -9367,20 +8263,6 @@ function refuseAmendment(
   });
 }
 
-/**
- * §4.2 the same append intent: the row this patch would add is the row the
- * workflow already holds (its id, its title, its canonical file and the
- * metadata derived for it). A stored row that differs is a different payload —
- * a local conflict, never a silently accepted replacement.
- */
-function sameAppendedRow(stored: PlanRow, intended: PlanRow): boolean {
-  return (
-    (rowPlanIds(stored)[0] ?? "") === (rowPlanIds(intended)[0] ?? "") &&
-    stored.title === intended.title &&
-    stored.file === intended.file &&
-    stableJson(stored.metadata ?? null) === stableJson(intended.metadata ?? null)
-  );
-}
 
 /**
  * The reviewed compass's `integration_worktree_path` declaration against the
@@ -9912,19 +8794,6 @@ function readPrepareAmendment(
       continue;
     }
     if (existing.length === 1) {
-      // §4.2/A09/A12 the SAME append intent is already current: the workflow
-      // holds exactly the row this patch would add, so the component is
-      // recognized as held — no second row, no second creation timestamp, no
-      // revision churn. A stored row that differs is a different payload and
-      // stays a local conflict.
-      if (sameAppendedRow(existing[0]!, row)) {
-        // `held` is deliberately NOT an `applied` entry: this call applied
-        // nothing for that component, so a replay can never double-count it —
-        // the receipt names it in `warnings` and spends no mutation on it.
-        held.push(component);
-        resolvedIds.push(rowId);
-        continue;
-      }
       unresolved.push(
         componentProblem({
           component,
@@ -10095,33 +8964,12 @@ function readPrepareAmendment(
   };
 }
 
-/** The raw-byte version token one amendment call must present. */
-function prepareVersionToken(value: unknown, field: string): string {
-  if (!isNonEmptyString(value)) {
-    throw invalidInput(`prepare amendment ${field} is required \u2014 read it from \`show-prepare\``, { field });
-  }
-  const bare = value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
-  if (!/^[0-9a-f]{64}$/.test(bare)) {
-    throw invalidInput(
-      `prepare amendment ${field} must be a raw-byte sha256 version ("sha256:<64 hex>" or "<64 hex>") \u2014 got ${JSON.stringify(value)}`,
-      { field },
-    );
-  }
-  return value;
-}
-
-/** Digest of a token that may carry the `sha256:` prefix (compare-only). */
-function prepareVersionDigest(token: string): string {
-  return token.startsWith("sha256:") ? token.slice("sha256:".length) : token;
-}
 
 /**
  * Read the workflow-level Prepare view of one coordinator-bound workflow
- * (spec § New API and CLI). Read-only: no snapshot lock, nothing written. The
- * two byte versions are the tokens `amendPrepareWorkflow` requires, and
- * `allowed`/`blockers` report the Prepare/no-execution admission exactly as the
- * mutation evaluates it — an inadmissible *lifecycle state* is readable, not an
- * error, so a caller can inspect a workflow before deciding to amend it.
+ * (spec § New API and CLI). Read-only: no snapshot lock, nothing written.
+ * Snapshot and compass digests are provenance only; amendment gates compare
+ * named fields and path/existence facts under the mutation lock.
  * Problems that make the documents or the caller's identity unusable — a
  * missing/foreign/mismatched envelope, an unregistered or unreadable snapshot,
  * an unreadable or borrowed compass — still refuse with their own code, because
@@ -10168,63 +9016,34 @@ export async function showPrepareWorkflow(
 }
 
 /**
- * Apply one approved Prepare structural amendment (spec § Admission and
- * mutation). The CAS read, the patch resolution, the compass recheck and the
- * single atomic write all run under the canonical snapshot write lock, and every
- * component is decided against the bytes read INSIDE it.
+ * Apply one approved Prepare structural amendment under the canonical snapshot
+ * write lock. Field-value and state constraints are checked against the current
+ * documents; digests are retained only as provenance in the returned view.
  *
- * §4.1/A06/A29 the caller's `expectedSnapshotVersion` / `expectedCompassVersion`
- * are an OBSERVED COMPARISON BASIS for a field-level patch, not a
- * whole-document gate: an unrelated sibling row edit or a compass prose change
- * that happened after the caller read them is reported as provenance drift
- * (`recovery.warnings`) and does NOT withhold an independent correction, while
- * a change to a component's own read set — the addressed row's pointer, the
- * plan document it reads, the reviewed compass's approval of the ids it
- * addresses, the addressed row's execution state — still refuses through that
- * component's own reader with its own typed problem. Raw whole-document
- * replacement keeps its byte CAS; that is `replaceCoordinatedArtifact`, a
- * different verb.
+ * The patch is partitioned into independent components: components without a
+ * semantic conflict land in this one locked write, while conflicting
+ * components are withheld with their own typed problem.
+ * A refusal that withholds the whole patch leaves protected state unchanged;
+ * partial component conflicts are reported without discarding independent
+ * valid changes from the same request.
  *
- * §4.1/E08 the patch is partitioned into independent components: the components
- * that carry no conflict land in this one locked write, while a conflicting
- * component is withheld with its own typed problem. A refusal therefore reports
- * every withheld component (`details.recovery.unresolved`) and does NOT claim
- * this call was mutation-free when an independent component of the same patch
- * landed (`details.recovery.commitState === "partial"`); a patch whose
- * components ALL already hold their effect is the current success (§4.2/A09/
- * A12) and writes nothing at all. Every refusal that withholds the WHOLE patch
- * (shape, admission) still leaves the protected snapshot, root register, other
- * workflows and the compass byte-identical.
+ * A lock that cannot be acquired refuses explicitly; Git-unavailable probes
+ * retain the existing `coordination.git-unavailable` refusal.
  *
- * A lock that cannot be acquired refuses explicitly (the shared
- * `withStatusWriteLock` Blocked error); Git-unavailable probes refuse through
- * the existing `coordination.git-unavailable`.
- *
- * Canonical authority discrimination IS the entry boundary (spec §4.3/§5): the
- * envelope anchor is the only thing resolved before the verdict, so the
- * amendment refuses before the request shape, the version tokens, the scope
- * resolution and the lock. Consequence, accepted: a call that is BOTH
- * malformed and active-forbidden now reports the authority refusal.
+ * The session envelope anchor is resolved before request processing so
+ * execution-authority restrictions remain the entry boundary.
  */
 export async function amendPrepareWorkflow(
   input: Readonly<{
     sessionPath: string;
     cwd?: string;
-    expectedSnapshotVersion: string;
-    expectedCompassVersion: string;
     patch: PrepareWorkflowPatch;
   }>,
 ): Promise<PrepareWorkflowResult> {
   const anchor = entryAnchor(input?.sessionPath);
   assertExecutionFileWriteAllowed({ harnessDir: anchor.harnessRoot });
-  assertExactKeys(
-    input as unknown as Record<string, unknown>,
-    ["sessionPath", "cwd", "expectedSnapshotVersion", "expectedCompassVersion", "patch"],
-    "prepare amendment input",
-  );
+  assertExactKeys(input as unknown as Record<string, unknown>, ["sessionPath", "cwd", "patch"], "prepare amendment input");
   const cwd = input.cwd ?? process.cwd();
-  const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
-  const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
   const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
     const { snapshot, version, phaseDerived } = readPrepareSnapshot(scope.snapshotPath);
@@ -10238,37 +9057,10 @@ export async function amendPrepareWorkflow(
     // every component.
     const main = readMainWorktree(cwd);
     if (main !== null) assertCoordinatorCheckoutResidency(main, cwd, snapshot);
-    // §4.1/A06/A10/A29 the caller's byte tokens are an OBSERVED COMPARISON BASIS,
-    // not a whole-document gate: this amendment is FIELD-LEVEL (the addressed
-    // row's pointer, the plan document it reads, the compass approval of the ids
-    // it addresses), and every component re-checks exactly those facts against
-    // the bytes read under this lock. Unrelated drift — a sibling row edit, a
-    // compass prose or ordering change — therefore lands the addressed
-    // correction and is reported as provenance below, while a change to the read
-    // set a component actually consumes still refuses through that component's
-    // own reader (pointer drift, duplicate row, compass mismatch), never
-    // silently. Raw whole-document replacement keeps its byte CAS: it is a
-    // different verb (`replaceCoordinatedArtifact`).
-    const drift: ResolutionWarning[] = [];
-    if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
-      drift.push({
-        code: "coordination.token-drifted",
-        path: scope.snapshotPath,
-        message:
-          `snapshot ${scope.snapshotPath} is at ${version} while this call expected ${expectedSnapshotVersion}: the caller's bytes are a ` +
-          "comparison basis, so this amendment is decided against the rows and documents it reads under the lock",
-      });
-    }
+    // Each component checks only its named field and path constraints against
+    // the state read under this lock. File replacement remains serialized by
+    // the same lock; document bytes are not a freshness token.
     const compass = readPrepareCompass(scope.harnessRoot, snapshot);
-    if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
-      drift.push({
-        code: "coordination.token-drifted",
-        path: compass.path,
-        message:
-          `compass ${compass.path} is at ${compass.version} while this call expected ${expectedCompassVersion}: the caller's bytes are a ` +
-          "comparison basis, so this amendment is decided against the compass it reads under the lock",
-      });
-    }
     const admission = prepareAdmission(scope.harnessRoot, scope.workflowId, snapshot);
     if (!admission.ok) throw prepareAmendmentRefusal(admission.reason, admission.message, admission.details);
     const plan = readPrepareAmendment(input.patch, {
@@ -10297,7 +9089,6 @@ export async function amendPrepareWorkflow(
       unresolved: plan.unresolved.map((entry) => entry.recovery),
       resolvedFrom: [{ path: "patch", source: "intent.request" }, ...proposal.resolvedFrom],
       warnings: [
-        ...drift,
         ...proposal.warnings,
         ...plan.held.map((component) => ({
           code: "coordination.prepare-amendment.held",
@@ -10351,16 +9142,8 @@ export async function amendPrepareWorkflow(
           : {}),
         ...(proposal.planParallelism !== undefined ? { execution_policy: executionPolicy } : {}),
       };
-      // The reviewed declaration must still be the bytes this call inspected when
-      // the amendment lands (spec § Admission and mutation step 7).
-      const rechecked = readPrepareCompass(scope.harnessRoot, snapshot);
-      if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
-        throw prepareAmendmentRefusal(
-          "stale",
-          `compass ${compass.path} changed while this amendment was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read \`workflow show-prepare\` and review again`,
-          { path: compass.path, expected: compass.version, actual: rechecked.version },
-        );
-      }
+      // The compass field values were read under the operation lock; their
+      // content bytes are provenance, not a second commit precondition.
       await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, next);
       // The returned CAS token is read from the bytes this call just wrote,
       // inside the critical section: a version read after the lock is released
@@ -10445,19 +9228,17 @@ export type PrepareCoordinatorRecoveryBlocker = Readonly<{ code: string; message
 
 /**
  * What a caller observes about one recorded coordinator binding before
- * replacing it (§3.3). Deliberately owner-neutral: the recorded public session
- * id, both byte versions and the Prepare verdict — never envelope bytes, a
- * credential path or any bearer material.
+ * replacing it (§3.3). Deliberately owner-neutral: public session id, recorded
+ * digests and the Prepare verdict — never envelope bytes or bearer material.
  */
 export type PrepareCoordinatorRecoveryView = Readonly<{
   workflowId: string;
   /** The session id the snapshot currently records as the workflow's coordinator. */
   priorSessionId: string;
-  /** `sha256:<64 hex>` of the snapshot bytes (the recovery CAS token). */
+  /** Digests observed for provenance; they do not admit or reject recovery. */
   snapshotVersion: string;
-  /** `sha256:<64 hex>` of the reviewed compass bytes (the recovery CAS token). */
   compassVersion: string;
-  /** `true` when a recovery is admitted for this workflow with fresh tokens. */
+  /** `true` when identity and semantic recovery preconditions permit a recovery. */
   allowed: boolean;
   /** One typed blocker per admission refusal; empty when allowed. */
   blockers: readonly PrepareCoordinatorRecoveryBlocker[];
@@ -10477,9 +9258,8 @@ export type PrepareCoordinatorRecoveryReceipt = Readonly<{
   requestHash: string;
   /** `true` when this call replayed an already-recorded operation and wrote nothing. */
   replay: boolean;
-  /** `sha256:<64 hex>` of the snapshot bytes AFTER this call (the receipt's own commit). */
+  /** Recorded digests for the committed snapshot and compass provenance. */
   snapshotVersion: string;
-  /** `sha256:<64 hex>` of the reviewed compass the recovery was authorized against. */
   compassVersion: string;
   recoveredAt: string;
 }>;
@@ -10497,7 +9277,6 @@ export type RecoverPrepareCoordinatorResult = Omit<CoordinationResult, "recovery
 /** Refusal reasons of the JSON Prepare recovery (§3.3 / §5). */
 type RecoveryReason =
   | "invalid-request"
-  | "stale"
   | "not-prepare"
   | "execution-started"
   | "foreign-owner"
@@ -10519,8 +9298,6 @@ const RECOVERY_INPUT_KEYS: readonly string[] = [
   "identity",
   "priorSessionPath",
   "priorSessionId",
-  "expectedSnapshotVersion",
-  "expectedCompassVersion",
   "operationId",
   "reason",
   "authorizationRef",
@@ -10528,10 +9305,8 @@ const RECOVERY_INPUT_KEYS: readonly string[] = [
 ];
 
 /**
- * The canonical request digest of one recovery (§3.3): the stable serializer
- * over the caller-STATED request, with both version tokens normalized to their
- * bare digest so the same reviewed request presented with or without the
- * `sha256:` prefix is the SAME operation.
+ * The canonical request digest of the recovery's semantic operation fields.
+ * Only this fingerprint is compared for a same-operation-id replay.
  *
  * Deliberately excluded: the prior holder's session id and envelope path. Both
  * are DERIVED — the host re-resolves them from the live binding, which its own
@@ -10543,8 +9318,6 @@ const RECOVERY_INPUT_KEYS: readonly string[] = [
 function recoveryRequestHash(request: {
   workflowId: string;
   sessionId: string;
-  expectedSnapshotVersion: string;
-  expectedCompassVersion: string;
   operationId: string;
   reason: string;
   authorizationRef: string;
@@ -10554,8 +9327,6 @@ function recoveryRequestHash(request: {
     stableJson({
       workflow_id: request.workflowId,
       session_id: request.sessionId,
-      expected_snapshot_version: prepareVersionDigest(request.expectedSnapshotVersion),
-      expected_compass_version: prepareVersionDigest(request.expectedCompassVersion),
       operation_id: request.operationId,
       reason: request.reason,
       authorization_ref: request.authorizationRef,
@@ -10589,81 +9360,66 @@ function assertPrepareRecoveryFileAuthority(harnessRoot: string): void {
 }
 
 /**
- * Create the recovery's role-scoped coordinator envelope through the existing
- * exclusive creation, reclaiming an already-present file ONLY when its bytes
- * are exactly the envelope this call would write. The envelope bytes are the
- * session JSON alone, so a byte-identical leftover proves the same TARGET
- * SESSION (same role, workflow, session id and canonical root) — not the same
- * operation: no operation id is in those bytes. It is therefore the signature
- * of a leftover from a retry (or a crashed earlier attempt) of a recovery
- * targeting this session, and it is reclaimed on that basis. An unrelated
- * role/session file is never overwritten (`invalid-request`), and the envelope
- * is the only file the recovery ever creates.
+ * Create the recovery's role-scoped coordinator envelope through exclusive
+ * creation. An existing file is reusable only when its validated identity
+ * fields match this exact role, workflow, session id and root.
  */
-function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean; bytes: string } {
+function createRecoveryEnvelope(session: CoordinationSession): { path: string; created: boolean } {
   const path = sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id);
-  const expected = `${JSON.stringify(session, null, 2)}\n`;
   try {
     const created = createSessionEnvelope(session);
-    return { path: canonicalTarget(created), created: true, bytes: expected };
+    return { path: canonicalTarget(created), created: true };
   } catch (error) {
     if (!(error instanceof CoordinationError) || error.code !== "coordination.session-mismatch") throw error;
-    // Exclusive creation refused because the file exists. The only lawful
-    // reuse is byte-identical content for this exact session; anything else is
-    // somebody else's file and refuses without a write.
-    let existing: string;
+    // The target already exists. A session envelope with the same declared
+    // identity is reusable; identity fields, not serialized bytes, are authority.
+    let existing: CoordinationSession;
     try {
-      existing = readFileSync(path, "utf8");
+      if (!lstatSync(path).isFile()) throw error;
+      existing = readSessionEnvelope(path);
     } catch {
       throw error;
     }
-    if (existing !== expected) {
-      // This refusal is a public diagnostic (CLI JSON, host tool result), so it
-      // names the already-public session the path would hold and never repeats
-      // the envelope path itself (§3.3 keeps it in coordinator-owned transport).
+    if (
+      existing.schema_version !== session.schema_version ||
+      existing.role !== session.role ||
+      existing.session_id !== session.session_id ||
+      existing.workflow_id !== session.workflow_id ||
+      existing.plan_id !== session.plan_id ||
+      existing.harness_root !== session.harness_root
+    ) {
       throw recoveryRefusal(
         "invalid-request",
-        `a coordinator envelope for session ${session.session_id} already exists with different content \u2014 a ` +
-          `recovery reclaims only the exact same-session envelope a crashed or retried attempt left behind, and never ` +
-          `overwrites an unrelated role or session file`,
+        `a coordinator envelope for session ${session.session_id} already exists with a different session identity`,
         { workflow_id: session.workflow_id, session_id: session.session_id },
       );
     }
-    return { path: canonicalTarget(path), created: false, bytes: expected };
+    return { path: canonicalTarget(path), created: false };
   }
 }
 
-let prepareRecoveryEnvelopeGapForTest: (() => void) | undefined;
 
 /**
- * Test-only hook observing the window between the recovery's exclusive envelope
- * creation and its final compass recheck (the commit CAS). Mirrors
- * `setCompleteStandaloneMutateGapForTest`: a concurrent compass edit inside that
- * window can only be injected deterministically from the inside.
+ * Reclaim only the role-scoped envelope created by this operation while its
+ * session identity still matches. A symlink, non-file or different session is
+ * left untouched.
  */
-export function setPrepareRecoveryEnvelopeGapForTest(callback: (() => void) | undefined): void {
-  prepareRecoveryEnvelopeGapForTest = callback;
-}
-
-/**
- * Reclaim the ONE envelope this operation created, and only while it still
- * holds the exact bytes this call wrote (`§3.3`). `created` is a historical
- * boolean: between the exclusive creation and this cleanup the path may have
- * been replaced by a completely unrelated role/session file, and unlinking it
- * would destroy somebody else's credential. The check is no-follow (`lstat`),
- * so a symlink planted at the path is left alone too, and a file whose bytes
- * changed since creation is never deleted — the caller's own failure is what
- * surfaces, with the replacement untouched.
- */
-function reclaimRecoveryEnvelope(path: string, bytes: string): void {
-  let current: string;
+function reclaimRecoveryEnvelope(path: string, expected: CoordinationSession): void {
+  let current: CoordinationSession;
   try {
     if (!lstatSync(path).isFile()) return;
-    current = readFileSync(path, "utf8");
+    current = readSessionEnvelope(path);
   } catch {
-    return; // gone or unreadable: nothing of this operation's left to reclaim
+    return; // gone, unreadable or not a regular file: nothing to reclaim
   }
-  if (current !== bytes) return;
+  if (
+    current.schema_version !== expected.schema_version ||
+    current.role !== expected.role ||
+    current.session_id !== expected.session_id ||
+    current.workflow_id !== expected.workflow_id ||
+    current.plan_id !== expected.plan_id ||
+    current.harness_root !== expected.harness_root
+  ) return;
   try {
     unlinkSync(path);
   } catch {
@@ -10745,8 +9501,6 @@ export async function recoverPrepareCoordinator(
     identity: ExecutionIdentity;
     priorSessionPath: string;
     priorSessionId: string;
-    expectedSnapshotVersion: string;
-    expectedCompassVersion: string;
     operationId: string;
     reason: string;
     authorizationRef: string;
@@ -10776,8 +9530,6 @@ export async function recoverPrepareCoordinator(
   const reason = recoveryText(input.reason, "reason");
   const authorizationRef = recoveryText(input.authorizationRef, "authorizationRef");
   const priorSessionId = recoveryText(input.priorSessionId, "priorSessionId");
-  const expectedSnapshotVersion = prepareVersionToken(input.expectedSnapshotVersion, "expectedSnapshotVersion");
-  const expectedCompassVersion = prepareVersionToken(input.expectedCompassVersion, "expectedCompassVersion");
   const stoppedSessionIds = recoveryStopList(input.stoppedSessionIds);
 
   // The new identity's session id names the envelope this recovery creates, so
@@ -10801,17 +9553,15 @@ export async function recoverPrepareCoordinator(
   const requestHash = recoveryRequestHash({
     workflowId,
     sessionId,
-    expectedSnapshotVersion,
-    expectedCompassVersion,
     operationId,
     reason,
     authorizationRef,
     stoppedSessionIds,
   });
   const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
-
   const committed = await withStatusWriteLock(snapshotPath, async () => {
     const { snapshot, version, phaseDerived } = readPrepareSnapshot(snapshotPath);
+
     const recorded = snapshot.coordination?.coordinator;
     if (recorded === undefined) {
       throw recoveryRefusal(
@@ -10821,12 +9571,8 @@ export async function recoverPrepareCoordinator(
       );
     }
     const audit: readonly CoordinationIdentityRecovery[] = snapshot.coordination?.identity_recoveries ?? [];
-    // Replay BEFORE the CAS comparison: an exact retry of an accepted recovery
-    // presents the tokens it was authorized against, which that recovery has
-    // already superseded. Same operation + same canonical request + a binding
-    // that is still this operation's own result → the recorded receipt, with no
-    // revision churn and nothing written. Anything else with this operation id
-    // (a changed request, or a binding that has since moved) refuses.
+    // Replay before all live semantic checks: exact operation-id retries serve
+    // their immutable receipt only when the request hash still matches.
     const replayedOperation = audit.find((entry) => entry.operation_id === operationId);
     if (replayedOperation !== undefined) {
       if (replayedOperation.request_hash !== requestHash) {
@@ -10883,23 +9629,7 @@ export async function recoverPrepareCoordinator(
         { prior_session_id: recorded.session_id },
       );
     }
-    if (prepareVersionDigest(version) !== prepareVersionDigest(expectedSnapshotVersion)) {
-      throw recoveryRefusal(
-        "stale",
-        `snapshot ${snapshotPath} is at ${version}, this call expected ${expectedSnapshotVersion} \u2014 re-read ` +
-          `\`workflow show-prepare\` (or the host \`show-recovery\`) and review again`,
-        { path: snapshotPath, expected: expectedSnapshotVersion, actual: version },
-      );
-    }
     const compass = readRecoveryCompass(harnessRoot, snapshot);
-    if (prepareVersionDigest(compass.version) !== prepareVersionDigest(expectedCompassVersion)) {
-      throw recoveryRefusal(
-        "stale",
-        `compass ${compass.path} is at ${compass.version}, this call expected ${expectedCompassVersion} \u2014 re-read the ` +
-          `recovery view and review again`,
-        { path: compass.path, expected: expectedCompassVersion, actual: compass.version },
-      );
-    }
     // The recorded binding must still be authenticated by the envelope the
     // caller pointed at: same canonical file, same session, same workflow, same
     // canonical root, coordinator seat. A caller-chosen credential path can
@@ -10955,7 +9685,6 @@ export async function recoverPrepareCoordinator(
       recovered_at: recoveredAt,
     };
     let envelope = "";
-    let envelopeBytes = "";
     let created = false;
     // The envelope is created INSIDE this locked section and the snapshot
     // commit is the atomic binding step. A failure between them is not a
@@ -10964,25 +9693,7 @@ export async function recoverPrepareCoordinator(
     try {
       const made = createRecoveryEnvelope(session);
       envelope = made.path;
-      envelopeBytes = made.bytes;
       created = made.created;
-      prepareRecoveryEnvelopeGapForTest?.();
-      // The reviewed compass must STILL be the bytes this call inspected when
-      // the recovery lands: the snapshot write lock does not lock the compass
-      // file, so a concurrent compass edit during the envelope creation above
-      // would otherwise be accepted under a stale review while the audit
-      // recorded a version that was no longer current. Same dual-CAS recheck
-      // the Prepare amendment performs immediately before its commit; a change
-      // reclaims only this operation's envelope and refuses without snapshot
-      // mutation.
-      const rechecked = readRecoveryCompass(harnessRoot, snapshot);
-      if (prepareVersionDigest(rechecked.version) !== prepareVersionDigest(compass.version)) {
-        throw recoveryRefusal(
-          "stale",
-          `compass ${compass.path} changed while this recovery was being applied (${compass.version} \u2192 ${rechecked.version}) \u2014 re-read the recovery view and review again`,
-          { path: compass.path, expected: compass.version, actual: rechecked.version },
-        );
-      }
       const next: WorkflowSnapshot = {
         ...snapshot,
         updated_at: nowIso(),
@@ -10996,7 +9707,7 @@ export async function recoverPrepareCoordinator(
       };
       await commitSnapshot(harnessRoot, workflowId, snapshotPath, next);
     } catch (error) {
-      if (created && envelope !== "" && envelopeBytes !== "") reclaimRecoveryEnvelope(envelope, envelopeBytes);
+      if (created && envelope !== "") reclaimRecoveryEnvelope(envelope, session);
       throw error;
     }
     const written = readArtifactBytes(snapshotPath);
