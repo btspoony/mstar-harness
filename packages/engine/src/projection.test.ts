@@ -367,6 +367,30 @@ function issueInput(occurrenceKey: string) {
     discoveredAt: STARTED_AT,
   };
 }
+async function activeWorkflowFixture(name: string, workflowId: string, planId: string): Promise<Fixture> {
+  const f = await fixture(name);
+  const initialized = await initializeExecutionAuthority(f.context);
+  await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op(`${name}-catalog`));
+  const caller: ExecutionCaller = { sessionId: `${name}-coordinator`, role: "coordinator", workflowId, planId: null };
+  await createExecutionWorkflow({ ...f.context, caller }, {
+    entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT,
+      updated_at: STARTED_AT, phase: "phase-2-execute", branch: { base: "main", source: "feature/active-test", target: "main" },
+      plans: [{ id: planId, title: "Plan", file: `${planId}.md`, status: "InProgress" }],
+      delivery_kind: "development",
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `${name}-create`,
+  });
+  const handle = await openStore(f.context, "write");
+  try {
+    handle.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+      .run(JSON.stringify({ revision: 1, progress: { status: "InProgress", summary: "consumer-visible progress", evidence_paths: [] } }), workflowId, planId);
+    handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+  } finally { handle.close(); }
+  return f;
+}
 
   test("ACTIVE execution rows publish through the dashboard projection", async () => {
     const f = await fixture("active-smoke-");
@@ -383,18 +407,32 @@ function issueInput(occurrenceKey: string) {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: {
         schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT,
-        updated_at: STARTED_AT, plans: [{ id: planId, title: "Active plan", file: `${planId}.md`, status: "Todo" }],
-        delivery_kind: "development", branch: { source: "feature/active", target: "main" },
+        updated_at: STARTED_AT, phase: "phase-2-execute",
+        plans: [{ id: planId, title: "Active plan", file: `${planId}.md`, status: "InProgress" }],
+        delivery_kind: "development", branch: { base: "main", source: "feature/active", integration: "integration/active", target: "main" },
       } as unknown as WorkflowSnapshot,
       expected: initialized.token,
       operationId: "active-create",
     });
+    const progressHandle = await openStore(f.context, "write");
+    try {
+      progressHandle.db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify({ revision: 1, progress: { status: "InProgress", summary: "active progress", evidence_paths: [] } }), workflowId, planId);
+      progressHandle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { progressHandle.close(); }
     const report = await refreshProjections(f.context);
     expect(report).toMatchObject({ freshness: "current", published: true, generation: 1 });
     expect(await projections(f)).toMatchObject({ workflows: [expect.objectContaining({ id: workflowId })], plans: [expect.objectContaining({ workflow_id: workflowId, plan_id: planId })] });
     const dashboard = await withStoreRead(f.context, queryDashboard("workflows"));
     expect(dashboard.projection).toMatchObject({ freshness: "current", generation: 1 });
-    expect(dashboard.data).toMatchObject({ items: [expect.objectContaining({ id: workflowId })] });
+    expect(dashboard.data).toMatchObject({
+      items: [expect.objectContaining({
+        id: workflowId,
+        phase: "phase-2-execute",
+        branch: { base: "main", source: "feature/active", integration: "integration/active", target: "main" },
+        plans: [expect.objectContaining({ planId, progress: "active progress", phase: "phase-2-execute" })],
+      })],
+    });
   });
   test("an execution workflow row absent from the registry is still projected inactive", async () => {
     const f = await fixture("active-unregistered-");
@@ -411,7 +449,45 @@ function issueInput(occurrenceKey: string) {
     expect((await projections(f)).workflows).toContainEqual(expect.objectContaining({ id: workflowId, active_registration: 0 }));
     expect(report.sources).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, state: "ok" }));
   });
-  test("a plan inserted after ACTIVE capture refuses publication without changing the generation", async () => {
+  test("malformed ACTIVE plan JSON retains last-good rows with a named source diagnostic", async () => {
+    const workflowId = "wf-corrupt-plan";
+    const planId = "plan-corrupt-plan";
+    const f = await activeWorkflowFixture("corrupt-plan-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const lastGood = await projectedRows(f);
+    const handle = await openStore(f.context, "write");
+    try {
+      handle.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run("{broken", workflowId, planId);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+    const stale = await refreshProjections(f.context);
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
+    expect(stale.diagnostics).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/plans/${workflowId}/${planId}`, reason: "invalid" }));
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
+
+  test("invalid ACTIVE workflow status retains last-good rows with a named source diagnostic", async () => {
+    const workflowId = "wf-invalid-status";
+    const planId = "plan-invalid-status";
+    const f = await activeWorkflowFixture("invalid-workflow-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const lastGood = await projectedRows(f);
+    const handle = await openStore(f.context, "write");
+    try {
+      const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.status = "not-a-workflow-status";
+      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+    const stale = await refreshProjections(f.context);
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
+    expect(stale.diagnostics).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, reason: "invalid" }));
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
+  test("ACTIVE movement regression: plan insertion and captured-row update", async () => {
+    // Subcase A: plan membership changes after capture.
+    await (async () => {
     const f = await fixture("active-plan-moved-");
     const initialized = await initializeExecutionAuthority(f.context);
     const workflowId = "wf-plan-moved";
@@ -428,7 +504,7 @@ function issueInput(occurrenceKey: string) {
     const handle = await openStore(f.context, "write");
     try {
       handle.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 99, ?, '{}')")
-        .run(workflowId, "plan-inserted", JSON.stringify({ id: "plan-inserted", status: "Todo" }));
+        .run(workflowId, "plan-inserted", JSON.stringify({ id: "plan-inserted", title: "Inserted plan", file: "plans/inserted.md", status: "Todo" }));
       handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     } finally { handle.close(); }
     await expect(publishProjectionCapture(f.context, captured)).rejects.toMatchObject({ code: "projection.source-stale" });
@@ -444,9 +520,10 @@ function issueInput(occurrenceKey: string) {
       expect.objectContaining({ plan_id: "plan-inserted" }),
       expect.objectContaining({ plan_id: "plan-retry-inserted" }),
     ]));
-  });
+    })();
 
-  test("an updated ACTIVE row after capture refuses publication without serving older JSON as current", async () => {
+    // Subcase B: captured workflow JSON changes after capture.
+    await (async () => {
     const f = await fixture("active-row-moved-");
     const initialized = await initializeExecutionAuthority(f.context);
     const workflowId = "wf-row-moved";
@@ -464,6 +541,7 @@ function issueInput(occurrenceKey: string) {
     try {
       const state = JSON.parse(String((handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json)) as Record<string, unknown>;
       state.status = "completed";
+      state.ended_at = STARTED_AT;
       handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
       handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     } finally { handle.close(); }
@@ -477,6 +555,7 @@ function issueInput(occurrenceKey: string) {
     const retried = await refreshProjections(f.context);
     expect(retried).toMatchObject({ freshness: "current", published: true, generation: initial.generation! + 2 });
     expect((await projections(f)).workflows[0]).toMatchObject({ id: workflowId, status: "completed", updated_at: `${STARTED_AT}-churn` });
+    })();
   });
 
 

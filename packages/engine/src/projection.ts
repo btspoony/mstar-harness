@@ -41,17 +41,18 @@ import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
-import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
-import { rowPlanId, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
+import { validateExecutionLease, validateIntegrationMergeLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
+import { rowPlanId, validatePlanRow, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
   LEGACY_WORKTREE_PATH_CODE,
   validateWorkflowSnapshot,
+  WORKFLOW_LIFECYCLE_STATUSES,
+  WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
   type WorkflowSnapshot,
 } from "./workflow.js";
-
 /** Projection payload/format version (contract §5). A bump invalidates every
  * published generation: the refresh discards the old rows and rebuilds. */
 export const PROJECTION_FORMAT_VERSION = 2;
@@ -746,6 +747,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     const locations: ProjectionSourceLocation[] = [];
     const diagnostics: SourceDiagnostic[] = [];
     const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
+    const recordInvalid = (sourceSpec: SourceSpec, content: string, message: string): void => {
+      const sha256 = createHash("sha256").update(content, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "invalid", diagnostic: message, declared: true });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: "ok", table: sourceSpec.table as ProjectionSourceTable, keys: sourceSpec.keys! });
+      diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
+    };
     const record = (spec: SourceSpec, content: string, shaText = content): void => {
       const sha256 = createHash("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: spec.sourceKey, kind: spec.kind, rootKind: spec.rootKind, relativePath: spec.relativePath, sha256, state: "ok", diagnostic: null, declared: spec.declared });
@@ -755,7 +762,17 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       source: "database", sourceKey: sourceKeyOf(kind, "harness", rel), kind, rootKind: "harness", relativePath: rel, declared: true, table, keys,
     });
     const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all() as Array<{ workflow_id: string; entry_json: string }>;
-    record(spec("execution_registry", "root", "execution/registry", {}), JSON.stringify(registry));
+    const registrySpec = spec("execution_registry", "root", "execution/registry", {});
+    const invalidRegistryEntry = registry.find((item) => {
+      try {
+        const entry: unknown = JSON.parse(item.entry_json);
+        return !isPlainObject(entry) || entry.id !== item.workflow_id;
+      } catch {
+        return true;
+      }
+    });
+    if (invalidRegistryEntry) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed or mismatched entry JSON");
+    else record(registrySpec, JSON.stringify(registry));
     const registryIds = new Set(registry.map((item) => item.workflow_id));
     const workflows = db.prepare("select workflow_id, state_json from execution_workflows order by workflow_id").all() as Array<{ workflow_id: string; state_json: string }>;
     const workflowIds = new Set(workflows.map((item) => item.workflow_id));
@@ -765,29 +782,96 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         diagnostics.push({ sourceKey, reason: "invalid", message: `invalid: registry membership has no workflow row (${item.workflow_id})` });
       }
     }
+    const workflowStateById = new Map<string, Record<string, unknown>>();
     for (const item of workflows) {
-      const state = JSON.parse(item.state_json) as Record<string, unknown>;
-      record(spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id }), item.state_json);
+      const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
+      let state: unknown;
+      try { state = JSON.parse(item.state_json); } catch {
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state is not valid JSON");
+        continue;
+      }
+      if (!isPlainObject(state) || !WORKFLOW_LIFECYCLE_TYPES.includes(state.type as never) || !WORKFLOW_LIFECYCLE_STATUSES.includes(state.status as never)) {
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state has an invalid object, type, or status");
+        continue;
+      }
+      workflowStateById.set(item.workflow_id, state);
+      const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+      const workflowErrors = workflowValidation.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
+      if (workflowErrors.length > 0) {
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation) => violation.code).join(", ")})`);
+        continue;
+      }
+      record(workflowSpec, item.state_json);
+      const branch = isPlainObject(state.branch) ? state.branch : {};
       rows.workflows.push({
         id: item.workflow_id, type: state.type as ProjectedWorkflow["type"], status: state.status as string,
-        phase: null, startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
-        branchBase: null, branchSource: null, branchIntegration: null, branchTarget: null, activeRegistration: registryIds.has(item.workflow_id),
+        phase: text(state.phase), startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
+        branchBase: text(branch.base), branchSource: text(branch.source), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
+        activeRegistration: registryIds.has(item.workflow_id),
       });
     }
+    const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
     const plans = db.prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans order by workflow_id, plan_id").all() as Array<{ workflow_id: string; plan_id: string; state_json: string; coordination_json: string }>;
     for (const row of plans) {
-      const state = JSON.parse(row.state_json) as Record<string, unknown>;
-      const coordination = JSON.parse(row.coordination_json) as Record<string, unknown>;
-      const pin = isPlainObject(state.metadata) && isPlainObject(state.metadata.catalog_pin) ? state.metadata.catalog_pin : {};
-      record(spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id }), `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
-      rows.plans.push({ workflowId: row.workflow_id, planId: row.plan_id, status: text(state.status), progress: null, phase: null, doneAt: text(state.done_at), catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null });
-      const lease = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id) as { lease_json: string } | undefined;
-      if (lease) {
-        const value = JSON.parse(lease.lease_json) as Record<string, unknown>;
-        record(spec("execution_leases", "workflow", `execution/leases/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id }), lease.lease_json);
-        rows.leases.push({ workflowId: row.workflow_id, planId: row.plan_id, kind: "execution", holder: text(value.holder), worktreePath: text(value.worktree_path), expiresAt: text(value.expires_at) });
+      const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
+      let state: unknown;
+      let coordination: unknown;
+      try {
+        state = JSON.parse(row.state_json);
+        coordination = JSON.parse(row.coordination_json);
+      } catch {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state or coordination is not valid JSON");
+        continue;
       }
-      void coordination;
+      const plan = isPlainObject(state) ? { ...state, coordination } : state;
+      const validation = validatePlanRow(plan);
+      if (!isPlainObject(coordination) || !validation.ok) {
+        const codes = validation.violations.map((item) => item.code);
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `invalid: plan state or coordination failed validation${codes.length ? ` (${codes.join(", ")})` : ""}`);
+        continue;
+      }
+      const planState = state as Record<string, unknown>;
+      const coordinationState = coordination as Record<string, unknown>;
+      const planId = rowPlanId(planState);
+      if (!planId) {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan row has no canonical id");
+        continue;
+      }
+      const workflowState = workflowStateById.get(row.workflow_id);
+      const leaseRow = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id) as { lease_json: string } | undefined;
+      let snapshotLease: unknown;
+      if (leaseRow) {
+        try { snapshotLease = JSON.parse(leaseRow.lease_json); } catch { /* reported on the lease source below */ }
+      }
+      const snapshotPlanBase = Object.keys(coordinationState).length === 0 ? planState : plan;
+      const snapshotPlan = snapshotLease === undefined ? snapshotPlanBase : { ...snapshotPlanBase, execution_lease: snapshotLease };
+      if (workflowState) {
+        const workflowGate = validateWorkflowSnapshot({ ...workflowState, plans: [snapshotPlan] });
+        const blockingCodes = workflowGate.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE).map((violation) => violation.code);
+        if (blockingCodes.length > 0) {
+          recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `invalid: plan does not validate in its workflow (${blockingCodes.join(", ")})`);
+          continue;
+        }
+      }
+      const pin = isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin : {};
+      record(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
+      const progress = isPlainObject(coordinationState.progress) ? coordinationState.progress : {};
+      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(planState.status), progress: text(progress.summary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(planState.done_at), catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null });
+    }
+    for (const lease of db.prepare("select workflow_id, plan_id, lease_json from execution_leases order by workflow_id, plan_id").all() as Array<{ workflow_id: string; plan_id: string; lease_json: string }>) {
+      const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
+      let value: unknown;
+      try { value = JSON.parse(lease.lease_json); } catch {
+        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON");
+        continue;
+      }
+      const validation = validateExecutionLease(value);
+      if (!isPlainObject(value) || !validation.ok) {
+        recordInvalid(leaseSpec, lease.lease_json, `invalid: execution lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
+        continue;
+      }
+      record(leaseSpec, lease.lease_json);
+      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(value.holder), worktreePath: text(value.worktree_path), expiresAt: text(value.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
       const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
@@ -805,9 +889,19 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       }
     }
     for (const row of db.prepare("select workflow_id, lease_json from execution_integration_leases order by workflow_id").all() as Array<{ workflow_id: string; lease_json: string }>) {
-      const lease = JSON.parse(row.lease_json) as Record<string, unknown>;
-      record(spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id }), row.lease_json);
-      rows.leases.push({ workflowId: row.workflow_id, planId: text(lease.plan_id) ?? "", kind: "integration-merge", holder: text(lease.holder), worktreePath: null, expiresAt: text(lease.expires_at) });
+      const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
+      let value: unknown;
+      try { value = JSON.parse(row.lease_json); } catch {
+        recordInvalid(leaseSpec, row.lease_json, "invalid: integration lease is not valid JSON");
+        continue;
+      }
+      const validation = validateIntegrationMergeLease(value);
+      if (!isPlainObject(value) || !validation.ok) {
+        recordInvalid(leaseSpec, row.lease_json, `invalid: integration lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
+        continue;
+      }
+      record(leaseSpec, row.lease_json);
+      rows.leases.push({ workflowId: row.workflow_id, planId: text(value.plan_id) ?? "", kind: "integration-merge", holder: text(value.holder), worktreePath: null, expiresAt: text(value.expires_at) });
     }
     sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     locations.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
@@ -1451,7 +1545,7 @@ async function applyDatabaseChurn(context: StoreContext): Promise<void> {
       handle.db.prepare(
         "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
           "values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')",
-      ).run(request.workflowId, request.planId, request.workflowId, JSON.stringify({ id: request.planId, status: "Todo" }));
+      ).run(request.workflowId, request.planId, request.workflowId, JSON.stringify({ id: request.planId, title: request.planId, file: `plans/${request.planId}.md`, status: "Todo" }));
     } else {
       const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(request.workflowId) as { state_json: string } | undefined;
       if (!current) throw new Error("projection DB churn workflow is missing");
