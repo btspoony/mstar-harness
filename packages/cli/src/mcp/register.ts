@@ -72,6 +72,7 @@ export function registerMcpCommands(
   definitions: readonly CommandDefinition[],
   resolveContext: ResolveContext,
   services: Array<{ close(): Promise<void> }> = [],
+  onToolsRegistered?: (names: readonly string[]) => void,
 ): void {
   const connectionEffects = createMcpEffects(services);
   const tools = definitions.map((definition) => ({ definition, name: mcpToolName(definition.id) }));
@@ -83,6 +84,7 @@ export function registerMcpCommands(
     }
     names.add(name);
   }
+  onToolsRegistered?.([...names]);
 
   for (const { definition, name } of tools) {
     server.registerTool(name, {
