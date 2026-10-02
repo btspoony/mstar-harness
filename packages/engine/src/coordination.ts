@@ -163,6 +163,7 @@ import {
 import {
   IssueError,
   assertCaptureRequest,
+  assertPlanIssueSession,
   captureIssue,
   closeIssue,
   linkIssue,
@@ -4257,10 +4258,8 @@ async function mutateResidualAdd(
     },
     mutate: async (rowContext, reportExternalCommit) => {
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
-      // Issue mutations run under the snapshot lock (lock order: workflow
-      // ownership locks → SQLite transaction). The envelope authorizes the
-      // project-manager seat (ENVELOPE_SEATS); the core verbs re-verify the
-      // engine-issued session envelope on every privileged mutation.
+      // Issue mutations run under the snapshot lock, then re-check the
+      // engine-issued session against the live workflow at the issue boundary.
       //
       // Entries are deliberately NOT pre-validated before this loop: the first
       // thing that must hold is that this session may mutate this row at all, so
@@ -4291,6 +4290,7 @@ async function mutateResidualAdd(
         // must converge to the same linked state. Both verbs are operation-id
         // idempotent, so a retry after a partial failure heals instead of
         // leaving an unlinked issue the plan can never close.
+        assertPlanIssueSession(context, sessionPath);
         const link = await linkIssue(
           context,
           capture.issueId,
@@ -4388,6 +4388,7 @@ async function mutateResidualClose(
     mutate: async (rowContext) => {
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
       await assertIssueLinkedToPlan(context, request.issueId, scope.planId);
+      assertPlanIssueSession(context, sessionPath);
       const receipt = await closeIssue(
         context,
         request.issueId,

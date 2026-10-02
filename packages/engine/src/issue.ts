@@ -1312,7 +1312,7 @@ function requireCaptureSeat(actor: string): void {
  * Bind the session envelope for milestone assignment. Unscoped issue writes
  * use `requireCaptureSeat` and do not call this function.
  */
-function authorizeMutation(context: StoreContext, mutation: MutationContext): CoordinationSession {
+function authorizeMutation(context: StoreContext, mutation: Pick<MutationContext, "actor" | "sessionFile">): CoordinationSession {
   const { session, sessionPath } = readScopedSession(mutation.sessionFile);
   assertEngineIssuedSession(context.harnessDir, sessionPath, session);
   const seat = ENVELOPE_SEATS[session.role];
@@ -1324,6 +1324,11 @@ function authorizeMutation(context: StoreContext, mutation: MutationContext): Co
     );
   }
   return session;
+}
+
+/** Re-check engine-issued session authority for plan-scoped issue coordination only. */
+export function assertPlanIssueSession(context: StoreContext, sessionFile: string): void {
+  authorizeMutation(context, { actor: "project-manager", sessionFile });
 }
 
 /**
