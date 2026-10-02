@@ -548,26 +548,27 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(state.phase).toBe("phase-4-pr-delivery");
   });
 
-  test("evidence read before the commit is revalidated: a compass edit refuses the phase", async () => {
-    const fixture = await workflowFixture("phase-stale");
-    const before = await workflowFootprint(fixture.context);
+  test("a compass edited between the gate read and the commit does not refuse the phase (record, not seal)", async () => {
+    const fixture = await workflowFixture("phase-edited");
+    // The phase is decided by the compass the preflight read, which the gate
+    // evaluation uses. An edit that lands in the read→commit window is not a
+    // refusal: the transition stands on the gate verdict it computed, and the
+    // compass file is a record that has moved on.
     setWorkflowWitnessGapForTest(() => {
       writeCompass(fixture.compassPath, { status: "locked", plans: [PLAN_ID], targetBranch: "main" });
     });
+    let receipt;
     try {
-      const refused = await refusalOf(() =>
-        workflowMutation(fixture, "op-phase-stale", {
-          kind: "phase",
-          phase: "phase-2-execute",
-          compassPath: fixture.compassPath,
-        }),
-      );
-      expect(refused.code).toBe("coordination.evidence-stale");
-      expect(refused.message).toContain("changed after the phase gate was read");
+      receipt = await workflowMutation(fixture, "op-phase-edited", {
+        kind: "phase",
+        phase: "phase-2-execute",
+        compassPath: fixture.compassPath,
+      });
     } finally {
       setWorkflowWitnessGapForTest(undefined);
     }
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    expect(receipt.replayed).toBe(false);
+    expect((receipt.data.workflows[0]!.state as unknown as Record<string, unknown>).phase).toBe("phase-2-execute");
   });
 
   test("an execution-policy change stores only the closed policy vocabulary", async () => {
@@ -659,30 +660,33 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(misaligned.code).toBe("coordination.integration-diverged");
   });
 
-  test("a checkout switched between the probe and the commit refuses as stale evidence", async () => {
-    const fixture = await workflowFixture("worktree-stale");
-    // A request for the path the header ALREADY records is a satisfied effect:
-    // it writes nothing, so no probe of it can go stale (A12). The call below is
-    // a CHANGE of the recorded path, which is what takes the probe this case is
-    // about - and the checkout it probes is switched in the probe→commit window.
+  test("a checkout switched between the probe and the commit does not refuse the integration-worktree transition", async () => {
+    const fixture = await workflowFixture("worktree-switched");
+    // A request for the path the header ALREADY records is the same stored
+    // value; this call is a CHANGE, and the checkout it probes is switched in
+    // the read→commit window. The recorded path is a fact about WHICH checkout
+    // this lifecycle registers, not a re-read of its ref bytes.
     withRaw(fixture.context, (db) => {
       db.prepare(
         "update execution_workflows set state_json = json_set(state_json, '$.integration_worktree_path', ?) where workflow_id = ?",
       ).run(join(fixture.repoRoot, "wt-recorded-earlier"), WORKFLOW_ID);
     });
-    const before = await workflowFootprint(fixture.context);
     setWorkflowWitnessGapForTest(() => {
       runGit(["checkout", "-q", "-b", "feature/switched-in-the-window"], fixture.integrationPath);
     });
+    let receipt;
     try {
-      const refused = await refusalOf(() =>
-        workflowMutation(fixture, "op-worktree-stale", { kind: "integration-worktree", path: fixture.integrationPath }),
-      );
-      expect(refused.code).toBe("coordination.evidence-stale");
+      receipt = await workflowMutation(fixture, "op-worktree-switched", {
+        kind: "integration-worktree",
+        path: fixture.integrationPath,
+      });
     } finally {
       setWorkflowWitnessGapForTest(undefined);
     }
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    expect(receipt.replayed).toBe(false);
+    expect((receipt.data.workflows[0]!.state as unknown as Record<string, unknown>).integration_worktree_path).toBe(
+      realpathSync(fixture.integrationPath),
+    );
   });
 
   test("delivery evidence follows the declared kind, records once and refuses a rewritten PR identity", async () => {
@@ -708,14 +712,30 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     });
     expect(identityAnchors(state)).toEqual(identityAnchors(before));
 
-    const rewritten = await refusalOf(() =>
-      workflowMutation(fixture, "op-delivery-rewrite", {
+    // §4d/§365 a re-recorded PR identity is a revisable mutation under a new
+    // operation id. The retained semantic constraint is the registered delivery
+    // branch anchors, so the re-record keeps head/target and moves only the
+    // identity fields the anchors do not govern.
+    const rewritten = await workflowMutation(fixture, "op-delivery-rewrite", {
+      kind: "delivery",
+      delivery: { pr: { repo: "o/other", head: SOURCE_BRANCH, target: "main" } },
+    });
+    expect(rewritten.replayed).toBe(false);
+    expect(rewritten.data.workflows[0]!.state.delivery).toMatchObject({
+      compound: { outcome: "created" },
+      pr: { repo: "o/other", head: SOURCE_BRANCH, target: "main" },
+      merge: { evidence: "PR #255 merged" },
+    });
+
+    // The branch anchors remain the authority: a head that contradicts the
+    // registered source is still refused by field value.
+    const contradictory = await refusalOf(() =>
+      workflowMutation(fixture, "op-delivery-contradict", {
         kind: "delivery",
         delivery: { pr: { repo: "o/r", head: "feature/somewhere-else", target: "main" } },
       }),
     );
-    expect(rewritten.code).toBe("coordination.invalid-transition");
-    expect(rewritten.message).toContain("once at submission");
+    expect(contradictory.code).toBe("coordination.invalid-transition");
 
     const foreignMember = await refusalOf(() =>
       workflowMutation(fixture, "op-delivery-member", {
@@ -1068,7 +1088,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(await workflowFootprint(fixture.context)).toEqual(settled);
   });
 
-  test("semantic replay: a satisfied effect is the current success with no receipt and no churn (A12)", async () => {
+  test("semantic replay: a distinct operation id re-applies the effect against current state (A12)", async () => {
     const fixture = await workflowFixture("satisfied-effect");
     const policy = { plan_parallelism: "parallel" };
     const expected = await liveWorkflowToken(fixture);
@@ -1076,16 +1096,19 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     const settled = await workflowFootprint(fixture.context);
 
     // A DIFFERENT operation id and the token read BEFORE the commit: the effect
-    // is already held, so this is the current success - no receipt row, no
-    // revision, no timestamp - and the drift is reported as provenance (A10),
+    // is already held, but there is no effect-held no-op — a distinct operation
+    // acts on the state this transaction reads, re-applying the same policy
+    // under its own receipt. The token drift is reported as provenance (A10),
     // never as a refusal.
-    const held = await workflowMutation(fixture, "op-already-held", { kind: "execution-policy", policy }, { expected });
-    expect(held.replayed).toBe(true);
-    expect(held.recovery?.outcome).toBe("already-satisfied");
-    expect(held.recovery?.commitState).toBe("none");
-    expect(held.recovery?.warnings?.[0]?.code).toBe("execution.token-drifted");
-    expect(held.recovery?.warnings?.[0]?.path).toBe("expected");
-    expect(await workflowFootprint(fixture.context)).toEqual(settled);
+    const fresh = await workflowMutation(fixture, "op-distinct-policy", { kind: "execution-policy", policy }, { expected });
+    expect(fresh.replayed).toBe(false);
+    expect(fresh.recovery?.outcome).toBe("applied");
+    expect(fresh.recovery?.warnings?.[0]?.code).toBe("execution.token-drifted");
+    expect(fresh.recovery?.warnings?.[0]?.path).toBe("expected");
+    const after = await workflowFootprint(fixture.context);
+    expect(Number(after.workflow_revision)).toBe(Number(settled.workflow_revision) + 1);
+    const state = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
+    expect(state.execution_policy).toEqual(policy);
   });
 
   test("unrelated revision: a token drifted by a committed sibling change is recomputed, sibling retained (A10)", async () => {
@@ -1198,7 +1221,7 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
     expect(await workflowFootprint(fixture.context)).toEqual(settled);
   });
 
-  test("semantic replay: a superseded receipt is disclosed, never restored (A13)", async () => {
+  test("retry semantics: a repeat of the same operation id replays, a new one acts on current state (A13)", async () => {
     const fixture = await workflowFixture("superseded-receipt");
     const pause = await workflowMutation(fixture, "op-supersede", {
       kind: "lifecycle",
@@ -1206,25 +1229,28 @@ describe("execution-workflow: \u00A74.1/\u00A74.2 semantic replay and typed caus
       reason: "operator hold",
     });
     expect(pause.replayed).toBe(false);
-    // A later accepted operation moves the SAME field on: the recorded effect no
-    // longer holds, so its receipt is historical evidence and is never served as
-    // current state.
+    // A later accepted operation moves the SAME field on.
     await workflowMutation(fixture, "op-supersede-on", { kind: "lifecycle", status: "running", reason: "operator release" });
     const current = await workflowFootprint(fixture.context);
     expect(parsedJson(current.workflow_state).status).toBe("running");
 
-    const refused = await refusalOf(() =>
-      workflowMutation(fixture, "op-supersede", { kind: "lifecycle", status: "paused", reason: "operator hold" }),
-    );
-    expect(refused.code).toBe("execution.effect-superseded");
-    const recovery = recoveryOf(refused.details);
-    expect(recovery.outcome).toBe("unresolved");
-    expect(recovery.commitState).toBe("none");
-    const problems = problemsOf(recovery);
-    expect(problems[0]!.path).toBe("operation.status");
-    expect(listOf(problems[0]!, "currentFacts")).toContain("running");
-    expect(String(problems[0]!.withheldEffect)).toContain("never restored");
+    // The SAME operation id repeats its recorded receipt exactly: there is no
+    // effect-held comparison, so a receipt whose effect a later operation
+    // superseded is still the recorded receipt of its own intent.
+    const replay = await workflowMutation(fixture, "op-supersede", { kind: "lifecycle", status: "paused", reason: "operator hold" });
+    expect(replay.replayed).toBe(true);
+    expect(replay.recovery?.outcome).toBe("already-satisfied");
     expect(await workflowFootprint(fixture.context)).toEqual(current);
+
+    // A DISTINCT operation id is a fresh operation acting on current state: it
+    // re-applies the pause and spends its own revision.
+    const fresh = await workflowMutation(fixture, "op-supersede-again", {
+      kind: "lifecycle",
+      status: "paused",
+      reason: "operator hold again",
+    });
+    expect(fresh.replayed).toBe(false);
+    expect(parsedJson((await workflowFootprint(fixture.context)).workflow_state).status).toBe("paused");
   });
 
   test("authority epoch: a generation change is re-resolved and never replays the old epoch (A26)", async () => {
@@ -1682,18 +1708,21 @@ describe("execution-workflow: the Prepare amendment's components on the ACTIVE r
     const state = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
     expect(state.integration_worktree_path).toBe(realpathSync(fresh));
 
-    // The CANONICAL spelling of that same checkout is the effect already held:
-    // the intent is recomputed against the state this transaction reads (A09/A12),
-    // so the second spelling spends no revision and reports no applied component.
+    // The CANONICAL spelling of that same checkout through a DISTINCT operation
+    // id is a fresh operation: the intent is recomputed against the state this
+    // transaction reads, so it re-applies the same canonical path under its own
+    // receipt instead of being answered by an effect-held no-op.
     const afterAlias = await workflowFootprint(fixture.context);
     const repeat = await workflowMutation(fixture, "op-amendment-alias-repeat", {
       kind: "integration-worktree",
       path: fresh,
     });
-    expect(repeat.recovery?.outcome).toBe("already-satisfied");
-    expect(repeat.recovery?.applied).toEqual([]);
-    expect(repeat.recovery?.commitState).toBe("none");
-    expect(await workflowFootprint(fixture.context)).toEqual(afterAlias);
+    expect(repeat.replayed).toBe(false);
+    expect(repeat.recovery?.applied).toEqual([fileRouteEntry("integration-worktree", realpathSync(fresh))]);
+    expect(repeat.recovery?.commitState).toBe("committed");
+    expect(Number((await workflowFootprint(fixture.context)).workflow_revision)).toBe(
+      Number(afterAlias.workflow_revision) + 1,
+    );
   });
 });
 

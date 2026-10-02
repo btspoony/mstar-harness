@@ -404,19 +404,16 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     await expect(
       registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay", expectedCatalogRevision: 0, project: "another-project" })),
     ).rejects.toMatchObject({ code: "store.operation-conflict" });
-    // A committed registration is not re-registered (create-only), even under
-    // a fresh operation id.
-    // R1/R6/A09 — …except when it is the SAME registration: the same workflow,
-    // identity and reviewed delta already fully hold, so the repeat is a
-    // successful no-op returning the recorded receipt (no second row, no
-    // timestamp or revision churn).
-    expect(
-      await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay-2", expectedCatalogRevision: 1 })),
-    ).toEqual(receipt);
+    // A fresh operation id meeting the committed registration of this workflow
+    // id is NOT a retry — the committed replay is keyed by operation id, and
+    // uniqueness per workflow id is what the create-only refusal expresses.
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-replay-2", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({ code: "catalog.registration-conflict" });
     expect((await catalogPlan(context, PLAN_ID)).title).toBe("State projection plan");
     expect((await listCatalog(context, {})).total).toBe(1);
-    // A DIFFERENT registration of the same workflow id is not a retry: the
-    // create-only refusal stands and nothing is replaced.
+    // A DIFFERENT registration of the same workflow id is not a retry either:
+    // the same create-only refusal stands and nothing is replaced.
     await expect(
       registerCatalogExecution(
         context,
@@ -434,19 +431,17 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
 
     // Simulates the PERSISTED EFFECT of a normal plan progress (Todo ->
     // InReview) without exercising the progress mutation itself — the point
-    // under regression is the replay's key face, which deliberately EXCLUDES
-    // the row status: a retry of the same committed registration after the
-    // row evolved must replay its receipt, not answer a false
-    // registration-conflict over a state the progress route wrote.
+    // under regression is that the replay is keyed by operation id and request
+    // hash, so a retry of the same committed registration after the row evolved
+    // replays its receipt, not a false registration-conflict over a state the
+    // progress route wrote.
     const snapshotDoc = JSON.parse(readFileSync(join(harnessDir, "workflows", "wf-plan-1", "snapshot.json"), "utf8")) as {
       plans: Array<{ status: string }>;
     };
     snapshotDoc.plans[0]!.status = "InReview";
     writeFileSync(join(harnessDir, "workflows", "wf-plan-1", "snapshot.json"), `${JSON.stringify(snapshotDoc, null, 2)}\n`);
 
-    expect(
-      await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-progress-retry", expectedCatalogRevision: 1 })),
-    ).toEqual(receipt);
+    expect(await registerCatalogExecution(context, request)).toEqual(receipt);
     expect((await listCatalog(context, {})).total).toBe(1);
   });
 
@@ -727,7 +722,7 @@ describe("catalog execution registration \u2014 interrupted registration restart
     expect(entity.relativePath).toBe(`${planId}.md`);
   });
 
-  test("registration recovery \u2014 a registration that already fully holds is a successful no-op (A09)", async () => {
+  test("registration recovery \u2014 a fresh operation id against a committed registration is a create-only conflict (A09)", async () => {
     const { harnessDir, context } = await fixture("repeat-noop-");
     const request = planRequest({ harnessDir, operationId: "op-repeat", expectedCatalogRevision: 0 });
     const receipt = await registerCatalogExecution(context, request);
@@ -735,20 +730,22 @@ describe("catalog execution registration \u2014 interrupted registration restart
     const snapshotBytes = readFileSync(snapshotPath, "utf8");
     const rootBytes = readFileSync(join(harnessDir, "status.json"), "utf8");
 
-    // The same registration asked for again under a fresh operation id: the
-    // current success is returned, with no duplicate row, no re-timestamp and
-    // no revision or catalog churn.
-    const repeated = await registerCatalogExecution(
-      context,
-      planRequest({ harnessDir, operationId: "op-repeat-2", expectedCatalogRevision: 0 }),
-    );
-    expect(repeated).toEqual(receipt);
+    // The SAME operation id repeats its recorded receipt (the replay above).
+    expect(await registerCatalogExecution(context, request)).toEqual(receipt);
+
+    // A FRESH operation id meeting the committed registration of this workflow
+    // id is not a retry: uniqueness by workflow id is the semantic constraint,
+    // expression by the create-only refusal — nothing is replaced, deleted or
+    // re-timestamped.
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-repeat-2", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({ code: "catalog.registration-conflict" });
     expect(readFileSync(snapshotPath, "utf8")).toBe(snapshotBytes);
     expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(rootBytes);
     expect((await listCatalog(context, {})).total).toBe(1);
     expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-    // The second attempt recorded no operation of its own.
+    // The refused attempt recorded no operation of its own.
     const handle = await openStore(context, "read");
     const own = handle.db
       .prepare("select count(*) as n from catalog_operations where operation_id = ?")
