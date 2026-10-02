@@ -37,7 +37,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
@@ -243,12 +243,13 @@ function databaseSourceLocationError(location: unknown): string | null {
     return "unknown database source table";
   }
   const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[location.table as ProjectionSourceTable];
-  if (!isPlainObject(location.keys)) return "database source keys do not match the table primary key";
-  const keys = Object.keys(location.keys);
+  const sourceKeys = location.keys;
+  if (!isPlainObject(sourceKeys)) return "database source keys do not match the table primary key";
+  const keys = Object.keys(sourceKeys);
   if (
     keys.length !== primaryKeys.length ||
-    primaryKeys.some((key) => !Object.prototype.hasOwnProperty.call(location.keys, key)) ||
-    keys.some((key) => typeof location.keys[key] !== "string" || location.keys[key] === "")
+    primaryKeys.some((key) => !Object.prototype.hasOwnProperty.call(sourceKeys, key)) ||
+    keys.some((key) => typeof sourceKeys[key] !== "string" || sourceKeys[key] === "")
   ) {
     return "database source keys do not match the table primary key";
   }
@@ -786,18 +787,18 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     const locations: ProjectionSourceLocation[] = [];
     const diagnostics: SourceDiagnostic[] = [];
     const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
-    const recordInvalid = (sourceSpec: SourceSpec, content: string, message: string, readState: "ok" | "invalid" = "ok"): void => {
+    const recordInvalid = (sourceSpec: Extract<SourceSpec, { source: "database" }>, content: string, message: string, readState: "ok" | "invalid" = "ok"): void => {
       const sha256 = readState === "invalid" ? null : createHash("sha256").update(content, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "invalid", diagnostic: message, declared: true });
-      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: readState, table: sourceSpec.table as ProjectionSourceTable, keys: sourceSpec.keys! });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: readState, table: sourceSpec.table, keys: sourceSpec.keys });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
-    const record = (spec: SourceSpec, content: string, shaText = content): void => {
+    const record = (sourceSpec: Extract<SourceSpec, { source: "database" }>, content: string, shaText = content): void => {
       const sha256 = createHash("sha256").update(shaText, "utf8").digest("hex");
-      sources.push({ sourceKey: spec.sourceKey, kind: spec.kind, rootKind: spec.rootKind, relativePath: spec.relativePath, sha256, state: "ok", diagnostic: null, declared: spec.declared });
-      locations.push({ source: "database", sourceKey: spec.sourceKey, relativePath: spec.relativePath, sha256, state: "ok", table: spec.table as ProjectionSourceTable, keys: spec.keys! });
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "ok", diagnostic: null, declared: sourceSpec.declared });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: "ok", table: sourceSpec.table, keys: sourceSpec.keys });
     };
-    const spec = (table: ProjectionSourceTable, kind: ProjectionSourceKind, rel: string, keys: Record<string, string>): SourceSpec => ({
+    const spec = (table: ProjectionSourceTable, kind: ProjectionSourceKind, rel: string, keys: Record<string, string>): Extract<SourceSpec, { source: "database" }> => ({
       source: "database", sourceKey: sourceKeyOf(kind, "harness", rel), kind, rootKind: "harness", relativePath: rel, declared: true, table, keys,
     });
     const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all() as Array<{ workflow_id: string; entry_json: string }>;
@@ -927,8 +928,8 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const pinRevision = authorityPlanView.frozenInput?.entity_revision ?? (isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin.entity_revision : null);
       record(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
       const mappedCoordination = authorityPlanView.coordination;
-      const progress = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress : {};
-      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progress.summary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
+      const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
+      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     const leases = servedWorkflowIds.length === 0
       ? []
