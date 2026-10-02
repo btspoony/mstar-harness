@@ -873,6 +873,42 @@ describe("workflow.register — catalog plan paths", () => {
     expect(prepared.exitCode).toBe(0);
     expect(jsonOf(prepared).command).toBe("plan.prepare");
   });
+  test("canonical absolute registration uses the configured plans root", async () => {
+    const fixture = await activeFixture("mstar-register-configured-plans-root");
+    writeText(join(fixture.harnessDir, ".mstarc"), "[config]\nplan_dir=custom-plans\n");
+    fixture.planMarkdown = join(fixture.harnessDir, "custom-plans", `${PLAN_ID}.md`);
+    writeText(fixture.planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeText(fixture.assignmentPath, assignmentText({
+      harnessDir: fixture.harnessDir,
+      planMarkdown: fixture.planMarkdown,
+      worktreePath: fixture.worktreePath,
+      sddDir: fixture.sddDir,
+    }));
+
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token, fixture.planMarkdown);
+
+    const entity = (await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity;
+    expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
+    const storedPlanFile = join(fixture.harnessDir, "custom-plans", entity.relativePath);
+    expect(storedPlanFile).toBe(fixture.planMarkdown);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+
+    const tokens = await tokensOf(fixture);
+    const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
+    const prepared = runCli(
+      [
+        "plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
+        "--assignment", fixture.assignmentPath, "--expect", tokens.plan,
+        "--operation", "prepare-configured-path", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode).toBe(0);
+    expect(jsonOf(prepared).command).toBe("plan.prepare");
+  });
 });
 
 describe("workflow.register — state-aware transport refusals", () => {
