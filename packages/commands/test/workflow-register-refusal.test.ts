@@ -41,10 +41,25 @@ function input(id: string, harness: string, present: readonly string[]) {
 }
 
 const routes = [
-  { id: "workflow.register", missing: ["session identity", "expect", "operation"], fields: ["expect", "operation"] },
-  { id: "workflow.evidence", missing: ["session identity", "sessionRef", "expect", "operation"], fields: ["sessionRef", "expect", "operation"] },
-  { id: "iteration.register", missing: ["session identity", "expect", "operation"], fields: ["expect", "operation"] },
+  { id: "workflow.register", fields: ["expect", "operation"], labels: ["session identity", "expect", "operation"] },
+  { id: "workflow.evidence", fields: ["sessionRef", "expect", "operation"], labels: ["session identity", "sessionRef", "expect", "operation"] },
+  { id: "iteration.register", fields: ["expect", "operation"], labels: ["session identity", "expect", "operation"] },
 ];
+
+function missingDiagnosticSet(message: string): Set<string> {
+  const prefix = "Active registration is missing ";
+  const end = message.indexOf(". CLI:");
+  if (!message.startsWith(prefix) || end < 0) throw new Error(`missing diagnostic section: ${message}`);
+  return new Set(message.slice(prefix.length, end).split(", "));
+}
+
+function missingCombinations(labels: readonly string[], activeFields: readonly string[]) {
+  return Array.from({ length: 2 ** labels.length }, (_, mask) => {
+    const missing = labels.filter((_, index) => (mask & (1 << index)) !== 0);
+    const present = labels.filter((label) => !missing.includes(label));
+    return { missing, present };
+  }).filter(({ missing, present }) => missing.length > 0 && activeFields.some((field) => present.includes(field)));
+}
 
 async function refuse(id: string, fields: string[], identity = true) {
   const ctx = context(identity ? "main-session" : undefined);
@@ -53,17 +68,15 @@ async function refuse(id: string, fields: string[], identity = true) {
 
 describe("active registration refusal diagnostics", () => {
   for (const route of routes) {
-    for (const field of route.missing) {
-      test(`${route.id} identifies missing ${field}`, async () => {
-        const missingIdentity = field === "session identity";
-        const provided = route.fields.filter((candidate) => missingIdentity || candidate !== field);
-        const result = await refuse(route.id, provided, !missingIdentity);
+    const combinations = missingCombinations(route.labels, route.fields);
+    for (const { missing, present } of combinations) {
+      const hasIdentity = !missing.includes("session identity");
+      const presentArguments = present.filter((field) => field !== "session identity");
+      test(`${route.id} aggregates missing fields: ${missing.join(" + ")}`, async () => {
+        const result = await refuse(route.id, presentArguments, hasIdentity);
         expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
         if (result.status !== "usage") throw new Error("expected usage refusal");
-        expect(result.message).toContain(field);
-        for (const other of route.missing) {
-          expect(result.message.includes(`missing ${other}`)).toBe(other === field);
-        }
+        expect(missingDiagnosticSet(result.message)).toEqual(new Set(missing));
         expect(result.message).toContain("CLI");
         expect(result.message).toContain("--session-id");
         expect(result.message).toContain("MSTAR_HOST_SESSION_ID");
@@ -75,17 +88,17 @@ describe("active registration refusal diagnostics", () => {
     }
   }
 
-  test("several missing fields are reported together and session.run child semantics are explained", async () => {
-    const result = await refuse("workflow.register", ["operation"], false);
-    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (result.status !== "usage") throw new Error("expected usage refusal");
-    expect(result.status === "usage" ? result.message : "").toContain("Active registration is missing session identity, expect.");
-    expect(result.status === "usage" ? result.message : "").not.toContain("missing operation");
-    expect(result.status === "usage" ? result.message : "").toContain("minted local identity");
-    expect(result.status === "usage" ? result.message : "").toContain("main session");
-    expect(result.status === "usage" ? result.message : "").toContain("--session-id");
+  test("no-identity refusals explain session.run child semantics for register and evidence", async () => {
+    const register = await refuse("workflow.register", ["operation"], false);
+    expect(register).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (register.status !== "usage") throw new Error("expected usage refusal");
+    expect(register.message).toContain("session.run child carries a minted local identity");
+    expect(register.message).toContain("main session or pass an explicit --session-id");
+
     const evidence = await refuse("workflow.evidence", ["sessionRef"], false);
-    expect(evidence.status === "usage" ? evidence.message : "").toContain("session.run child carries a minted local identity");
-    expect(evidence.status === "usage" ? evidence.message : "").toContain("main session or pass an explicit --session-id");
+    expect(evidence).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (evidence.status !== "usage") throw new Error("expected usage refusal");
+    expect(evidence.message).toContain("session.run child carries a minted local identity");
+    expect(evidence.message).toContain("main session or pass an explicit --session-id");
   });
 });
