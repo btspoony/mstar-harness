@@ -145,7 +145,7 @@ describe("command discovery", () => {
     expect(overridden.input.safeParse({ name: "x" }).success).toBe(true);
   });
 
-  test("session selector publishes caller@cli and derivable@mcp route facts", () => {
+  test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
       cli: {
         path: ["plan", "note"],
@@ -164,7 +164,7 @@ describe("command discovery", () => {
       { name: "name", ownership: "caller", route: "cli" },
       { name: "title", ownership: "caller", route: "cli" },
       { name: "session", ownership: "caller", route: "cli" },
-      { name: "session", ownership: "derivable", route: "mcp", help: "resolved from the MCP connection context when omitted" },
+      { name: "session", ownership: "caller", route: "mcp", help: "must be supplied by the caller on each MCP call" },
     ]);
   });
 

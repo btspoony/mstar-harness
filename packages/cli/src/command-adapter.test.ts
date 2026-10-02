@@ -34,5 +34,14 @@ test("CLI contract declares session resolution order and the coordinator excepti
   expect(definition).toBeDefined();
   const contract = renderCommandContract(definition!, "cli");
   expect(contract).toContain("--session-id takes precedence over MSTAR_HOST_SESSION_ID");
+  expect(contract).toContain("otherwise it is unset");
   expect(contract).toContain("Coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id");
+});
+test("MCP contract requires caller-supplied session identity per call", () => {
+  const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.bind");
+  expect(definition).toBeDefined();
+  const contract = renderCommandContract(definition!, "mcp");
+  expect(contract).toContain("must be supplied by the caller on each MCP call");
+  expect(contract).not.toContain("connection context");
+  expect(contract).not.toContain("Derived:");
 });

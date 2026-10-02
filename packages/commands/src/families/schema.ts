@@ -58,11 +58,12 @@ export type CommandSchemaSelection =
  * One field table per command. Requirements carry route-verified sources:
  * explicit consumer metadata is published verbatim, the CLI adapter's argv
  * collection yields a `caller` hint on the `cli` route for every argument and
- * default-less option, and the session selector is `caller` on `cli` /
- * `derivable` on `mcp` (adapter fallback to the resolved context). Never
- * derived from the input schema — its `required` array stays the separate
- * enforcement fact. Explicit entries override derived ones per name; anything
- * unannotated stays unknown, never all-optional.
+ * default-less option, and the session selector is `caller` on both routes:
+ * CLI accepts the flag/environment fallback, while MCP requires the caller
+ * to supply the session identity per call. Never derived from the input
+ * schema — its `required` array stays the separate enforcement fact. Explicit
+ * entries override derived ones per name; anything unannotated stays unknown,
+ * never all-optional.
  */
 function commandRequirements(definition: CommandDefinition): readonly CommandRequirement[] {
   const explicit = definition.requirements ?? [];
@@ -71,16 +72,16 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
     .filter((entry) => !overridden.has(`cli:${entry.key}`))
     .map((entry) => ({ name: entry.key, ownership: "caller" as const, route: "cli" as const }));
   const requirements: CommandRequirement[] = [...explicit, ...hinted];
-  // Route-verified session facts from the adapters: the CLI action reads the
-  // session selector from argv; the MCP handler falls back from the supplied
-  // field to the resolved connection context.
+  // Route-verified session facts from the adapters: CLI collects the session
+  // selector from argv (with its environment fallback); MCP reads it from the
+  // per-call input, while its context resolver supplies nothing.
   const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
   if (sessionOption !== undefined) {
     if (!overridden.has(`cli:${sessionOption.key}`)) {
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "derivable", route: "mcp", help: "resolved from the MCP connection context when omitted" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "must be supplied by the caller on each MCP call" });
     }
   }
   return requirements;
