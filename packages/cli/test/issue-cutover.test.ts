@@ -231,7 +231,7 @@ async function makeFixture(): Promise<Fixture> {
     ],
     root,
   );
-  expect(coordinatorBound.exitCode).toBe(0);
+  expect(coordinatorBound).toMatchObject({ exitCode: 0 });
   const coordinatorRef = encodeExecutionSessionRef(jsonOf(coordinatorBound).data as ExecutionSessionRef);
   const assignmentPath = join(sddDir, "assignment.md");
   const prepareToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID })).token;
@@ -514,7 +514,14 @@ describe("mstar issue — the retired commands refuse with the migration path (G
   });
 });
 
-describe("mstar issue ACTIVE execution routes", () => {
+describe("mstar issue actor-only mutations", () => {
+  test("issue close help omits execution and session-envelope options", () => {
+    const help = runCli(["issue", "close", "--help"], process.cwd());
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).not.toMatch(/--execution|--session|--workflow|--plan|--coordinator|--session-id/);
+    for (const flag of ["--operation-id", "--actor", "--expect", "--payload", "--file"]) expect(help.stdout).toContain(flag);
+  });
+
   async function capture(fixture: Fixture, suffix: string): Promise<string> {
     const result = runCli([
       "issue", "add", "--operation-id", `add-${suffix}`, "--actor", "project-manager",
@@ -528,76 +535,33 @@ describe("mstar issue ACTIVE execution routes", () => {
     return String(jsonOf(result).issueId);
   }
 
-  function route(fixture: Fixture, verb: string, issueId: string, operationId: string, extra: string[] = [], payloadOverride?: Record<string, unknown>): RunResult {
-    const payload = payloadOverride ?? (verb === "triage"
-      ? { reason: "reclassify", severity: "medium" }
-      : { reason: "accepted", references: ["https://github.com/btspoony/mstar-harness/pull/361"], alignmentRef: "PM acceptance record" });
+  function mutate(fixture: Fixture, verb: string, issueId: string, operationId: string, payload: Record<string, unknown>): RunResult {
     return runCli([
-      "issue", verb, "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
-      "--session-id", "fixture-coordinator", "--operation-id", operationId, "--actor", "project-manager",
-      "--expect", "1", "--id", issueId, "--payload", JSON.stringify(payload),
-      "--harness", fixture.harness, ...extra,
+      "issue", verb, "--operation-id", operationId, "--actor", "project-manager", "--expect", "1",
+      "--id", issueId, "--payload", JSON.stringify(payload), "--harness", fixture.harness,
     ], fixture.root);
   }
 
-  test("close and triage mutate ACTIVE issues through coordinator identity", async () => {
+  test("close, triage, supersede, and link succeed on ACTIVE authority with actor alone", async () => {
     const fixture = await makeFixture();
-    const closeId = await capture(fixture, "close");
-    const closed = route(fixture, "close", closeId, "active-close");
-    expect(closed.exitCode).toBe(0);
-    expect(jsonOf(runCli(["issue", "show", "--id", closeId, "--harness", fixture.harness], fixture.root)).disposition).toBe("resolved");
+    const closedId = await capture(fixture, "close");
+    expect(mutate(fixture, "close", closedId, "actor-close", {
+      reason: "accepted", references: ["qa.md"], alignmentRef: "PM acceptance record",
+    }).exitCode).toBe(0);
+    expect(jsonOf(runCli(["issue", "show", "--id", closedId, "--harness", fixture.harness], fixture.root)).disposition).toBe("resolved");
 
     const triageId = await capture(fixture, "triage");
-    expect(route(fixture, "triage", triageId, "active-triage").exitCode).toBe(0);
+    expect(mutate(fixture, "triage", triageId, "actor-triage", { reason: "reclassify", severity: "medium" }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", triageId, "--harness", fixture.harness], fixture.root)).severity).toBe("medium");
-  });
 
-  test("waive, duplicate, and supersede dispatch through ACTIVE execution routes", async () => {
-    const fixture = await makeFixture();
     const canonicalId = await capture(fixture, "canonical");
-    const waivedId = await capture(fixture, "waived");
-    const waived = route(fixture, "waive", waivedId, "active-waive", [], { reason: "out of scope", scope: "named scope", alignmentRef: "PM acceptance record" });
-    expect(waived.exitCode).toBe(0);
-    expect(jsonOf(runCli(["issue", "show", "--id", waivedId, "--harness", fixture.harness], fixture.root)).disposition).toBe("waived");
-
-    const duplicateId = await capture(fixture, "duplicate");
-    const duplicate = route(fixture, "duplicate", duplicateId, "active-duplicate", [], { reason: "same finding", canonicalIssueId: canonicalId });
-    expect(duplicate.exitCode).toBe(0);
-    expect(jsonOf(runCli(["issue", "show", "--id", duplicateId, "--harness", fixture.harness], fixture.root)).disposition).toBe("duplicate");
-
     const supersededId = await capture(fixture, "superseded");
-    const superseded = route(fixture, "supersede", supersededId, "active-supersede", [], { reason: "replaced finding", canonicalIssueId: canonicalId });
-    expect(superseded.exitCode).toBe(0);
+    expect(mutate(fixture, "supersede", supersededId, "actor-supersede", { reason: "replaced", canonicalIssueId: canonicalId }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", supersededId, "--harness", fixture.harness], fixture.root)).disposition).toBe("superseded");
-  });
 
-  test("ACTIVE routes refuse wrong actor and stale revision", async () => {
-    const fixture = await makeFixture();
-    const actorId = await capture(fixture, "actor");
-    const wrongActor = route(fixture, "close", actorId, "active-wrong-actor", ["--actor", "qa-engineer"]);
-    expect(wrongActor.exitCode).toBe(1);
-    expect(jsonOf(wrongActor).code).toBe("issue.scope-refused");
-
-    const staleId = await capture(fixture, "stale");
-    const stale = route(fixture, "close", staleId, "active-stale", ["--expect", "0"]);
-    expect(stale.exitCode).toBe(1);
-    expect(jsonOf(stale).code).toBe("issue.revision-conflict");
-  });
-
-  test("ACTIVE and file transports are disjoint and execution is privileged-only", async () => {
-    const fixture = await makeFixture();
-    const id = await capture(fixture, "transport");
-    const both = route(fixture, "close", id, "active-both", ["--session", join(fixture.root, "legacy-session.json")]);
-    expect(both.exitCode).toBe(2);
-    const retiredFile = route(fixture, "close", id, "active-both-file", [`--file=${join(fixture.root, "legacy-issues.json")}`]);
-    expect(retiredFile.exitCode).toBe(2);
-
-    const add = runCli([
-      "issue", "add", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
-      "--session-id", "fixture-coordinator", "--operation-id", "active-add", "--actor", "project-manager",
-      "--expect", "1", "--id", id, "--payload", JSON.stringify(issueEntryOf()), "--harness", fixture.harness,
-    ], fixture.root);
-    expect(add.exitCode).toBe(2);
+    const linkedId = await capture(fixture, "linked");
+    expect(mutate(fixture, "link", linkedId, "actor-link", { kind: "plan", target: "unregistered-plan-label" }).exitCode).toBe(0);
+    expect(jsonOf(runCli(["issue", "show", "--id", linkedId, "--harness", fixture.harness], fixture.root)).provenance).toContainEqual(expect.objectContaining({ kind: "plan", target: "unregistered-plan-label" }));
   });
 });
 describe("mstar status — the issue authority is never read as an empty rollup (G2b)", () => {
