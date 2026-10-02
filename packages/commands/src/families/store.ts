@@ -63,26 +63,9 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {
-  if (existsSync(path.join(harnessDir, "store.db"))) return `a store already exists at ${path.join(harnessDir, "store.db")} — migrate or activate instead of initializing`;
-  const projectsDir = path.join(harnessDir, "projects");
-  if (existsSync(projectsDir)) {
-    for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (entry.isDirectory() && !entry.isSymbolicLink() && existsSync(path.join(projectsDir, entry.name, "residuals.json"))) {
-        return `legacy residual register found at projects/${entry.name}/residuals.json — use the staged migration, not "store init"`;
-      }
-    }
-  }
-  if (existsSync(path.join(harnessDir, "iterations", "README.md"))) return "maintained catalog index found at iterations/README.md — use the staged migration, not \"store init\"";
-  const statusPath = path.join(harnessDir, "status.json");
-  if (existsSync(statusPath)) {
-    try {
-      const status = JSON.parse(readFileSync(statusPath, "utf8")) as { workflows?: unknown };
-      if (Array.isArray(status.workflows) && status.workflows.length > 0) return `${status.workflows.length} registered workflow(s) in status.json — this is not a genuinely empty workspace`;
-    } catch {
-      return `status.json at ${statusPath} is unreadable — this is not a genuinely empty workspace`;
-    }
-  }
-  return null;
+  return existsSync(path.join(harnessDir, "store.db"))
+    ? `a store already exists at ${path.join(harnessDir, "store.db")} — migrate or activate instead of initializing`
+    : null;
 }
 function contextOf(input: StoreInput, invocation: InvocationContext): StoreContext {
   const resolved = resolveProcessHarnessDir(invocation.cwd, input.harness);

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   closeFileWorkflow,
@@ -76,14 +76,6 @@ function authorityRecoveryHint(code: string): string {
 function isDetailsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function hasRegisteredLegacyWorkflows(statusPath: string): boolean {
-  try {
-    const status = JSON.parse(readFileSync(statusPath, "utf8")) as unknown;
-    return isDetailsRecord(status) && Array.isArray(status.workflows) && status.workflows.length > 0;
-  } catch {
-    return true;
-  }
-}
 
 function todayString(): string {
   const now = new Date();
@@ -123,16 +115,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             const hasIssueStore = existsSync(path.join(harnessDir, "store.db"));
             const statusPath = path.join(harnessDir, "status.json");
             const hasLegacyStatus = existsSync(statusPath);
-            const hasRegisteredWorkflows = hasLegacyStatus && hasRegisteredLegacyWorkflows(statusPath);
-            legacyUpgradeEntry = hasIssueStore || hasRegisteredWorkflows
+            legacyUpgradeEntry = hasIssueStore
               ? "mstar store safe-upgrade"
               : hasLegacyStatus
                 ? "mstar store init → mstar store safe-upgrade"
                 : "mstar harness scaffold";
             legacyUpgradeDetails = { entry: legacyUpgradeEntry };
-            if (!hasIssueStore && hasRegisteredWorkflows) {
-              legacyUpgradeDetails.limitation = "This status.json registers workflows, so the workspace is nonempty: store init refuses it, and store safe-upgrade cannot run without a store. The required single-entry upgrade path is tracked in #325/#326.";
-            }
             try {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {

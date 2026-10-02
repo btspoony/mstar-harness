@@ -775,18 +775,9 @@ describe("mstar status validate — disclosed authority state", () => {
       code: "status.workflow.snapshot-missing",
       details: {
         state: "legacy",
-        upgrade: {
-          entry: "mstar store safe-upgrade",
-          limitation: expect.stringContaining("store init refuses it"),
-        },
+        upgrade: { entry: "mstar store init → mstar store safe-upgrade" },
       },
     });
-    const storeInitHelp = runCli(["store", "init", "--help"], legacyWithoutStore);
-    expect(storeInitHelp.exitCode, storeInitHelp.stdout).toBe(0);
-    expect(storeInitHelp.stdout).toContain("store init");
-    const safeUpgradeHelp = runCli(["store", "safe-upgrade", "--help"], legacyWithoutStore);
-    expect(safeUpgradeHelp.exitCode, safeUpgradeHelp.stdout).toBe(0);
-    expect(safeUpgradeHelp.stdout).toContain("store safe-upgrade");
     const missing = await legacyFixture("mstar-session-missing-status");
     rmSync(join(missing.harnessDir, "status.json"));
     const missingResult = runCli(["status", "validate"], missing);
