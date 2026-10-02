@@ -87,15 +87,31 @@ describe("dashboard ACTIVE projection views", () => {
         { kind: "iteration", id, title: "Synthetic iteration", rootKind: "iterations", relativePath: id },
         { operationId: "dashboard-synthetic-iteration", actor: "test" },
       );
-      for (const view of ["workflows", "workflow-detail", "iterations", "iteration-detail"] as const) {
-        const envelope = await readDashboardView({
-          context,
-          view,
-          ...(view.endsWith("detail") ? { id } : {}),
-        });
-        expect(envelope.projection.freshness).toBe("current");
-        expect(envelope.data).not.toBeNull();
-      }
+      const workflows = await readDashboardView({ context, view: "workflows" });
+      expect(workflows.projection.freshness).toBe("current");
+      expect(workflows.data?.items).toContainEqual(expect.objectContaining({
+        id,
+        status: "running",
+        phase: "phase-1-prepare",
+      }));
+
+      const workflow = await readDashboardView({ context, view: "workflow-detail", id });
+      expect(workflow.projection.freshness).toBe("current");
+      expect(workflow.data).toMatchObject({ id, status: "running", phase: "phase-1-prepare" });
+
+      const iterations = await readDashboardView({ context, view: "iterations" });
+      expect(iterations.projection.freshness).toBe("current");
+      expect(iterations.data?.items).toContainEqual(expect.objectContaining({
+        iterationId: id,
+        workflow: { id, status: "running", phase: "phase-1-prepare", activeRegistration: true },
+      }));
+
+      const iteration = await readDashboardView({ context, view: "iteration-detail", id });
+      expect(iteration.projection.freshness).toBe("current");
+      expect(iteration.data).toMatchObject({
+        iterationId: id,
+        workflow: { id, status: "running", phase: "phase-1-prepare", activeRegistration: true },
+      });
     } finally {
       rmSync(harnessDir, { recursive: true, force: true });
     }
