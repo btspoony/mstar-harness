@@ -449,28 +449,33 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const workflowId = "wf-retired-files";
     const planId = "plan-retired-files";
     const f = await activeWorkflowFixture("active-retired-files-", workflowId, planId);
-    const first = await refreshProjections(f.context);
-    const initial = await projections(f);
     const statusPath = join(f.harness, "status.json");
     const snapshotPath = join(f.harness, "workflows", workflowId, "snapshot.json");
+    write(statusPath, rootDoc([{ id: "wf-leftover", dir: "workflows/wf-leftover" }]));
+    write(join(f.harness, "workflows", "wf-leftover", "snapshot.json"), snapshotDoc("wf-leftover"));
+    write(snapshotPath, snapshotDoc(workflowId));
 
-    write(statusPath, rootDoc([]));
-    write(snapshotPath, snapshotDoc(workflowId, { status: "completed" }));
+    const first = await refreshProjections(f.context);
+    expect(first).toMatchObject({ freshness: "current", diagnostics: [] });
+    const initial = await projections(f);
+
+    write(statusPath, rootDoc([{ id: "wf-leftover-changed", dir: "workflows/wf-leftover-changed" }]));
+    write(snapshotPath, snapshotDoc(workflowId, { status: "completed", updated_at: `${STARTED_AT}-changed` }));
     const changed = await refreshProjections(f.context);
-    expect(changed.generation).toBe(first.generation);
+    expect(changed).toMatchObject({ freshness: "current", diagnostics: [], generation: first.generation });
     expect((await projections(f)).sources).toEqual(initial.sources);
 
-    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-added-retired", dir: "workflows/wf-added-retired" }]));
     write(join(f.harness, "workflows", "wf-added-retired", "snapshot.json"), snapshotDoc("wf-added-retired"));
     const added = await refreshProjections(f.context);
-    expect(added.generation).toBe(first.generation);
+    expect(added).toMatchObject({ freshness: "current", diagnostics: [], generation: first.generation });
     expect((await projections(f)).sources).toEqual(initial.sources);
 
     rmSync(statusPath);
     rmSync(snapshotPath);
+    rmSync(join(f.harness, "workflows", "wf-leftover", "snapshot.json"));
     rmSync(join(f.harness, "workflows", "wf-added-retired", "snapshot.json"));
     const deleted = await refreshProjections(f.context);
-    expect(deleted.generation).toBe(first.generation);
+    expect(deleted).toMatchObject({ freshness: "current", diagnostics: [], generation: first.generation });
     expect((await projections(f)).sources).toEqual(initial.sources);
   });
 
