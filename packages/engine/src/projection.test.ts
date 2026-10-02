@@ -54,6 +54,7 @@ afterEach(() => {
   delete process.env.MSTAR_PROJECTION_CHURN_PATH;
   delete process.env.MSTAR_PROJECTION_DB_CHURN;
   delete process.env.MSTAR_STORE_TEST_RUNNER;
+  delete process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR;
 });
 
 type Fixture = {
@@ -435,6 +436,27 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       })],
     });
   });
+  test("an unreadable ACTIVE authority blocks capture without enumerating registry history", async () => {
+    const workflowId = "wf-authority-unreadable";
+    const planId = "plan-authority-unreadable";
+    const f = await activeWorkflowFixture("active-authority-unreadable-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const lastGood = await projectedRows(f);
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR = "test graph reader failure";
+
+    const capture = await captureProjectionSources(f.context);
+    expect(capture).toMatchObject({ blocked: true, sources: [], locations: [] });
+    expect(capture.diagnostics).toEqual([{
+      sourceKey: "root:harness:execution/registry",
+      reason: "invalid",
+      message: "execution authority unreadable: test graph reader failure",
+    }]);
+    const stale = await refreshProjections(f.context);
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation, sources: [], changedKeys: [] });
+    expect(stale.diagnostics).toEqual(capture.diagnostics);
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
   test("an empty ACTIVE authority publishes a current empty projection", async () => {
     const f = await fixture("active-empty-");
     await initializeExecutionAuthority(f.context);
@@ -542,7 +564,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect((await projections(f)).workflows).not.toContainEqual(expect.objectContaining({ id: workflowId }));
     expect(report.sources).not.toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}` }));
   });
-  test("malformed ACTIVE plan JSON retains last-good rows with a named source diagnostic", async () => {
+  test("malformed ACTIVE plan JSON returns a safe authority diagnostic and retains last-good rows", async () => {
     const workflowId = "wf-corrupt-plan";
     const planId = "plan-corrupt-plan";
     const f = await activeWorkflowFixture("corrupt-plan-", workflowId, planId);
@@ -554,11 +576,11 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     } finally { handle.close(); }
     const stale = await refreshProjections(f.context);
-    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation, sources: [], changedKeys: [] });
     expect(stale.diagnostics).toEqual([expect.objectContaining({
-      sourceKey: `workflow:harness:execution/plans/${workflowId}/${planId}`,
+      sourceKey: "root:harness:execution/registry",
       reason: "invalid",
-      message: "invalid: plan state or coordination is not valid JSON",
+      message: expect.stringContaining(`execution_plans(${workflowId},${planId}).state_json`),
     })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
@@ -578,8 +600,12 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     } finally { handle.close(); }
     const stale = await refreshProjections(f.context);
-    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
-    expect(stale.diagnostics).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, reason: "invalid" }));
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation, sources: [], changedKeys: [] });
+    expect(stale.diagnostics).toEqual([expect.objectContaining({
+      sourceKey: "root:harness:execution/registry",
+      reason: "invalid",
+      message: expect.stringContaining(`execution_workflows(${workflowId}).state_json`),
+    })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
   test("an ACTIVE compass that fails domain parsing is reported invalid without movement noise", async () => {
@@ -601,38 +627,44 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect(stale.diagnostics).toEqual([expect.objectContaining({ sourceKey, reason: "invalid" })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
-  test("ACTIVE registry shape and SQL-key identity corruption retain last-good rows", async () => {
-    const workflowId = "wf-identity-check";
-    const planId = "plan-identity-check";
-    const f = await activeWorkflowFixture("active-identity-check-", workflowId, planId);
-    const initial = await refreshProjections(f.context);
-    const lastGood = await projectedRows(f);
-    const handle = await openStore(f.context, "write");
-    try {
-      const registryRow = handle.db.prepare("select entry_json from execution_registry where workflow_id = ?").get(workflowId) as { entry_json: string };
-      const entry = JSON.parse(registryRow.entry_json) as Record<string, unknown>;
-      entry.type = "not-a-workflow-type";
-      entry.started_at = 42;
-      delete entry.dir;
-      handle.db.prepare("update execution_registry set entry_json = ? where workflow_id = ?").run(JSON.stringify(entry), workflowId);
-      const workflowRow = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
-      const workflowState = JSON.parse(workflowRow.state_json) as Record<string, unknown>;
-      workflowState.id = "different-workflow";
-      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(workflowState), workflowId);
-      const planRow = handle.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string };
-      const planState = JSON.parse(planRow.state_json) as Record<string, unknown>;
-      planState.id = "different-plan";
-      handle.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(planState), workflowId, planId);
-      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    } finally { handle.close(); }
-    const stale = await refreshProjections(f.context);
-    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
-    expect(stale.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceKey: "root:harness:execution/registry", reason: "invalid" }),
-      expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, reason: "invalid" }),
-      expect.objectContaining({ sourceKey: `workflow:harness:execution/plans/${workflowId}/${planId}`, reason: "invalid" }),
-    ]));
-    expect(await projectedRows(f)).toEqual(lastGood);
+  test("ACTIVE registry, workflow, and plan identity corruption fail closed with last-good rows", async () => {
+    for (const kind of ["registry", "workflow", "plan"] as const) {
+      const workflowId = `wf-identity-${kind}`;
+      const planId = `plan-identity-${kind}`;
+      const f = await activeWorkflowFixture(`active-identity-${kind}-`, workflowId, planId);
+      const initial = await refreshProjections(f.context);
+      const lastGood = await projectedRows(f);
+      const handle = await openStore(f.context, "write");
+      try {
+        if (kind === "registry") {
+          const row = handle.db.prepare("select entry_json from execution_registry where workflow_id = ?").get(workflowId) as { entry_json: string };
+          const entry = JSON.parse(row.entry_json) as Record<string, unknown>;
+          entry.type = "not-a-workflow-type";
+          entry.started_at = 42;
+          delete entry.dir;
+          handle.db.prepare("update execution_registry set entry_json = ? where workflow_id = ?").run(JSON.stringify(entry), workflowId);
+        } else if (kind === "workflow") {
+          const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
+          const state = JSON.parse(row.state_json) as Record<string, unknown>;
+          state.id = "different-workflow";
+          handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+        } else {
+          const row = handle.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string };
+          const state = JSON.parse(row.state_json) as Record<string, unknown>;
+          state.id = "different-plan";
+          handle.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(state), workflowId, planId);
+        }
+        handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+      } finally { handle.close(); }
+      const stale = await refreshProjections(f.context);
+      expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation, sources: [], changedKeys: [] });
+      expect(stale.diagnostics).toEqual([expect.objectContaining({
+        sourceKey: "root:harness:execution/registry",
+        reason: "invalid",
+        message: expect.stringContaining(`execution_${kind === "registry" ? "registry" : `${kind}s`}`),
+      })]);
+      expect(await projectedRows(f)).toEqual(lastGood);
+    }
   });
   test("ACTIVE movement regression: plan insertion and captured-row update", async () => {
     // Subcase A: plan membership changes after capture.

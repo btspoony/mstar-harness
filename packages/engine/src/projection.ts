@@ -737,6 +737,15 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
     ? captureExecutionProjectionSources(context)
     : captureFileProjectionSources(context);
 }
+function safeExecutionAuthorityError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "unknown read failure";
+  const payloadStart = raw.indexOf("{");
+  const text = (payloadStart < 0 ? raw : `${raw.slice(0, payloadStart).trimEnd()} [payload omitted]`)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\b(token|secret|password|credential|authorization)\s*[:=]\s*[^,;\s]+/gi, "$1=[redacted]")
+    .slice(0, 240);
+  return `execution authority unreadable: ${text || "read failure"}`;
+}
 
 async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const inputs = await readCatalogInputs(context);
@@ -747,12 +756,28 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   } finally {
     revisionHandle.close();
   }
-  let servedGraph: ExecutionState | null = null;
-  let servedGraphError = false;
+  let servedGraph: ExecutionState;
   try {
+    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR) {
+      throw new Error(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
+    }
     servedGraph = (await readExecutionState(context)).data;
-  } catch {
-    servedGraphError = true;
+  } catch (error) {
+    const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
+    const message = safeExecutionAuthorityError(error);
+    const sources: ProjectionSourceDigest[] = [];
+    const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
+    return {
+      formatVersion: PROJECTION_FORMAT_VERSION,
+      catalogRevision: inputs.catalogRevision,
+      storeRevision: capturedStoreRevision,
+      sources,
+      rows,
+      diagnostics: [{ sourceKey, reason: "invalid", message }],
+      sourceSetHash: computeSourceSetHash(inputs.catalogRevision, sources),
+      blocked: true,
+      locations: [],
+    };
   }
   const handle = await openStore(context, "read");
   try {
@@ -796,8 +821,8 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     if (malformedRegistryJson) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed entry JSON", "invalid");
     else if (invalidRegistryEntry) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains mismatched or domain-invalid entry JSON");
     else record(registrySpec, JSON.stringify(registry));
-    const graphWorkflows = servedGraph?.workflows ?? [];
-    const servedWorkflowIds = servedGraph ? graphWorkflows.map((workflow) => workflow.state.id) : registry.map((item) => item.workflow_id);
+    const graphWorkflows = servedGraph.workflows;
+    const servedWorkflowIds = graphWorkflows.map((workflow) => workflow.state.id);
     const registryIds = new Set(servedWorkflowIds);
     const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
     const workflows = servedWorkflowIds.length === 0
@@ -823,8 +848,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         recordInvalid(workflowSpec, item.state_json, "invalid: workflow state has an invalid object, type, or status");
         continue;
       }
-      const projectionState = servedWorkflowById.get(item.workflow_id)?.state ?? state;
-      workflowStateById.set(item.workflow_id, projectionState);
+      const servedWorkflow = servedWorkflowById.get(item.workflow_id);
+      if (!servedWorkflow) {
+        recordInvalid(workflowSpec, item.state_json, "invalid: served workflow is missing from the execution authority graph");
+        continue;
+      }
+      const projectionState = servedWorkflow.state;
       const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
       const workflowErrors = workflowValidation.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
       if (workflowErrors.length > 0) {
@@ -849,7 +878,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       : db.prepare(`select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id, plan_id`)
           .all(...servedWorkflowIds) as Array<{ workflow_id: string; plan_id: string; revision: number; state_json: string; coordination_json: string }>;
     for (const row of plans) {
-      if (servedGraph && !servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id)) continue;
+      if (!servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id)) continue;
       const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
       let state: unknown;
       let coordination: unknown;
@@ -891,19 +920,22 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
           continue;
         }
       }
-      const pinRevision = authorityPlanView?.frozenInput?.entity_revision ?? (isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin.entity_revision : null);
+      if (!authorityPlanView) {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: served plan is missing from the execution authority graph");
+        continue;
+      }
+      const pinRevision = authorityPlanView.frozenInput?.entity_revision ?? (isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin.entity_revision : null);
       record(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
-      const mappedPlan = authorityPlanView?.plan ?? planState;
-      const mappedCoordination = authorityPlanView ? authorityPlanView.coordination : coordinationState;
+      const mappedCoordination = authorityPlanView.coordination;
       const progress = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress : {};
-      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(mappedPlan.status), progress: text(progress.summary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(mappedPlan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
+      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progress.summary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
     const leases = servedWorkflowIds.length === 0
       ? []
       : db.prepare(`select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id, plan_id`)
           .all(...servedWorkflowIds) as Array<{ workflow_id: string; plan_id: string; lease_json: string }>;
     for (const lease of leases) {
-      if (servedGraph && !servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id)) continue;
+      if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id)) continue;
       const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
       let value: unknown;
       try { value = JSON.parse(lease.lease_json); } catch {
@@ -916,7 +948,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         continue;
       }
       const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
-      const mappedLease = servedGraph ? servedLease : value;
+      const mappedLease = servedLease;
       if (!mappedLease) continue;
       record(leaseSpec, lease.lease_json);
       rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(mappedLease.holder), worktreePath: text(mappedLease.worktree_path), expiresAt: text(mappedLease.expires_at) });
@@ -946,7 +978,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       : db.prepare(`select workflow_id, lease_json from execution_integration_leases where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id`)
           .all(...servedWorkflowIds) as Array<{ workflow_id: string; lease_json: string }>;
     for (const row of integrationLeases) {
-      if (servedGraph && !servedIntegrationLeaseIds.has(row.workflow_id)) continue;
+      if (!servedIntegrationLeaseIds.has(row.workflow_id)) continue;
       const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
       let value: unknown;
       try { value = JSON.parse(row.lease_json); } catch {
@@ -959,19 +991,10 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         continue;
       }
       const servedLease = servedWorkflowById.get(row.workflow_id)?.integrationLease;
-      const mappedLease = servedGraph ? servedLease : value;
+      const mappedLease = servedLease;
       if (!mappedLease) continue;
       record(leaseSpec, row.lease_json);
       rows.leases.push({ workflowId: row.workflow_id, planId: text(mappedLease.plan_id) ?? "", kind: "integration-merge", holder: text(mappedLease.holder), worktreePath: null, expiresAt: text(mappedLease.expires_at) });
-    }
-    if (servedGraphError && diagnostics.length === 0) {
-      const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
-      const registrySource = sources.find((source) => source.sourceKey === sourceKey);
-      if (registrySource) {
-        registrySource.state = "invalid";
-        registrySource.diagnostic = "invalid: the execution authority rejected its served graph";
-      }
-      diagnostics.push({ sourceKey, reason: "invalid", message: "invalid: the execution authority rejected its served graph" });
     }
     sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     locations.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
@@ -1404,7 +1427,9 @@ function recordRetainedHealth(
     const meta = ensureProjectionFormat(db);
     const diagnostics = [...capture.diagnostics, ...movementDiagnostics(movement, attempts)];
     const freshness: ProjectionFreshness = meta.generation === null ? "unavailable" : "stale";
-    const changedKeys = changedSourceKeys(readPublishedFingerprints(db, meta.generation), capture.sources);
+    const changedKeys = capture.blocked && capture.sources.length === 0
+      ? []
+      : changedSourceKeys(readPublishedFingerprints(db, meta.generation), capture.sources);
     db.prepare("update projection_meta set checked_at = ?, freshness = ?, last_error_json = ? where id = 1").run(
       checkedAt,
       freshness,
