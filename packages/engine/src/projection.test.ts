@@ -527,6 +527,56 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect((await projections(f)).meta.generation).toBe(initial.generation);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
+  test("a released ACTIVE lease row is not projected as a current lease", async () => {
+    const workflowId = "wf-released-lease";
+    const planId = "plan-released-lease";
+    const f = await activeWorkflowFixture("active-released-lease-", workflowId, planId);
+    const leaseJson = JSON.stringify({
+      holder: "released-holder", claimed_at: STARTED_AT, worktree_path: "/tmp/wt", working_branch: "feature/x",
+      session_label: "plan-pm", lease_id: "00000000-0000-4000-8000-000000000000",
+      holder_session_id: "released-holder", holder_role: "plan-pm",
+      plan_worktree_path: "/tmp/wt", plan_branch: "feature/x", heartbeat_at: STARTED_AT, status: "released",
+    });
+    const handle = await openStore(f.context, "write");
+    try {
+      handle.db.prepare(
+        "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
+      ).run(workflowId, planId, leaseJson);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+    const report = await refreshProjections(f.context);
+    expect(report.diagnostics).toEqual([]);
+    const dashboard = await withStoreRead(f.context, queryDashboard("workflows"));
+    const plan = dashboard.data.items.find((item) => item.id === workflowId)?.plans.find((plan) => plan.planId === planId);
+    expect(plan).toBeDefined();
+    expect(plan?.leases).toEqual([]);
+    const generation = (await projections(f)).meta.generation;
+    // The tombstone row persists in the authority; a second refresh is stable.
+    const again = await refreshProjections(f.context);
+    expect(again).toMatchObject({ freshness: "current", generation });
+  });
+
+  test("authority activation between a files capture and publication refuses stale publication", async () => {
+    const f = await fixture("files-activate-midflight-");
+    // A plain fixture store carries execution_meta with authority_state
+    // 'legacy' — the files arm captures it, activation flips it mid-flight.
+    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-files", dir: "workflows/wf-files" }]));
+    write(join(f.harness, "workflows", "wf-files", "snapshot.json"), snapshotDoc("wf-files"));
+    const first = await refreshProjections(f.context);
+    expect(first).toMatchObject({ freshness: "current", published: true });
+    const capture = await captureProjectionSources(f.context);
+    const handle = await openStore(f.context, "write");
+    try {
+      handle.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+    await expect(publishProjectionCapture(f.context, capture)).rejects.toMatchObject({
+      code: "projection.source-stale",
+      message: expect.stringContaining("root:harness:execution/authority"),
+    });
+    // The retained generation is untouched; the next refresh takes the ACTIVE arm.
+    expect((await projections(f)).meta.generation).toBe(first.generation);
+  });
+
   test("two ACTIVE source movements produce stale health without advancing generation", async () => {
     const workflowId = "wf-double-movement";
     const planId = "plan-double-movement";

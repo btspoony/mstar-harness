@@ -824,8 +824,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
     const workflows = servedWorkflowIds.length === 0
       ? []
-      : db.prepare(`select workflow_id, state_json from execution_workflows where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id`)
-          .all(...servedWorkflowIds) as Array<{ workflow_id: string; state_json: string }>;
+      : selectWhereIn<{ workflow_id: string; state_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
     const workflowIds = new Set(workflows.map((item) => item.workflow_id));
     for (const item of registry) {
       if (!workflowIds.has(item.workflow_id)) {
@@ -872,8 +876,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
     const plans = servedWorkflowIds.length === 0
       ? []
-      : db.prepare(`select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id, plan_id`)
-          .all(...servedWorkflowIds) as Array<{ workflow_id: string; plan_id: string; revision: number; state_json: string; coordination_json: string }>;
+      : selectWhereIn<{ workflow_id: string; plan_id: string; revision: number; state_json: string; coordination_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${placeholders}) order by workflow_id, plan_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
     for (const row of plans) {
       if (!servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id)) continue;
       const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
@@ -929,8 +937,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     }
     const leases = servedWorkflowIds.length === 0
       ? []
-      : db.prepare(`select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id, plan_id`)
-          .all(...servedWorkflowIds) as Array<{ workflow_id: string; plan_id: string; lease_json: string }>;
+      : selectWhereIn<{ workflow_id: string; plan_id: string; lease_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${placeholders}) order by workflow_id, plan_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
     for (const lease of leases) {
       if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id)) continue;
       const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
@@ -945,10 +957,13 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         continue;
       }
       const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
-      const mappedLease = servedLease;
-      if (!mappedLease) continue;
+      // A released lease row is a retained tombstone the authority keeps for
+      // ABA/holder rules; the dashboard must not show past ownership as a
+      // current lease, so released rows are projection-invisible (the same
+      // treatment the authority applies to released integration leases).
+      if (!servedLease || servedLease.status === "released") continue;
       record(leaseSpec, lease.lease_json);
-      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(mappedLease.holder), worktreePath: text(mappedLease.worktree_path), expiresAt: text(mappedLease.expires_at) });
+      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(servedLease.holder), worktreePath: text(servedLease.worktree_path), expiresAt: text(servedLease.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
       const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
@@ -972,8 +987,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     }
     const integrationLeases = servedWorkflowIds.length === 0
       ? []
-      : db.prepare(`select workflow_id, lease_json from execution_integration_leases where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id`)
-          .all(...servedWorkflowIds) as Array<{ workflow_id: string; lease_json: string }>;
+      : selectWhereIn<{ workflow_id: string; lease_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, lease_json from execution_integration_leases where workflow_id in (${placeholders}) order by workflow_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
     for (const row of integrationLeases) {
       if (!servedIntegrationLeaseIds.has(row.workflow_id)) continue;
       const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
@@ -1553,6 +1572,21 @@ function assertCaptureShape(capture: ProjectionCapture): void {
   }
 }
 
+const PROJECTION_IN_BATCH = 500;
+
+/** `select ... where col in (...)` over a possibly large served-id set, chunked
+ * to stay under SQLite's bind-variable limit; result rows are concatenated in
+ * chunk order (callers re-sort or key by id, never by query order). */
+function selectWhereIn<T>(db: StoreDb, sql: (placeholders: string) => string, ids: readonly string[], params: (id: string) => unknown[]): T[] {
+  const rows: T[] = [];
+  for (let start = 0; start < ids.length; start += PROJECTION_IN_BATCH) {
+    const chunk = ids.slice(start, start + PROJECTION_IN_BATCH);
+    const statement = db.prepare(sql(chunk.map(() => "?").join(",")));
+    rows.push(...(statement.all(...chunk.flatMap(params)) as T[]));
+  }
+  return rows;
+}
+
 async function attemptPublication(context: StoreContext, capture: ProjectionCapture, attempts: number): Promise<PublishAttempt> {
   const mismatched = await verifyCaptureStable(context, capture);
   if (mismatched.length > 0) return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
@@ -1563,6 +1597,28 @@ async function attemptPublication(context: StoreContext, capture: ProjectionCapt
   try {
     assertProjectionTables(handle);
     db.exec("begin immediate");
+    // Arm/authority agreement, decided INSIDE the publication transaction: a
+    // files-arm capture must not publish after the authority activated (and an
+    // authority-arm capture must not publish after a deactivation, should one
+    // ever exist). Activation bumps the store revision without touching the
+    // catalog revision, so the revision compares alone cannot catch it. A store
+    // below migration 4 has no execution_meta and cannot activate — no guard.
+    const executionMetaTable = db
+      .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_meta'")
+      .get() as { n?: number } | undefined;
+    if (executionMetaTable?.n) {
+      const authorityRow = db.prepare("select authority_state from execution_meta where id = 1").get() as
+        | { authority_state?: unknown }
+        | undefined;
+      const authorityActive = authorityRow?.authority_state === "active";
+      if (capture.storeRevision === undefined && authorityActive) {
+        db.exec("rollback");
+        return {
+          kind: "source-stale",
+          movement: { kind: "sources", keys: ["root:harness:execution/authority"] },
+        };
+      }
+    }
     if (capture.storeRevision !== undefined) {
       const storeRevision = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
       if (storeRevision.revision !== capture.storeRevision) {
