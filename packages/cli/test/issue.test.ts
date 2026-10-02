@@ -93,62 +93,6 @@ async function makeHarness(): Promise<{ root: string; harness: string }> {
   return { root, harness };
 }
 
-/**
- * The canonical live-workflow authority the engine's own bind produces
- * (contract §4): the session envelope at
- * `workflows/<id>/sessions/plan-pm-<session-id>.json` plus that workflow's
- * coordination record pointing at it.
- */
-function writeBoundEnvelope(harness: string, planId = "20260918-a"): string {
-  const workflowId = "wf-issue";
-  const sessionId = "11111111-1111-1111-1111-111111111111";
-  const sessionPath = join(harness, "workflows", workflowId, "sessions", `plan-pm-${sessionId}.json`);
-  writeJson(sessionPath, {
-    schema_version: 1,
-    role: "plan-pm",
-    session_id: sessionId,
-    workflow_id: workflowId,
-    plan_id: planId,
-    harness_root: harness,
-  });
-  writeJson(join(harness, "workflows", workflowId, "snapshot.json"), {
-    schema_version: 1,
-    id: workflowId,
-    type: "iteration",
-    status: "running",
-    started_at: "2026-09-18T00:00:00Z",
-    updated_at: "2026-09-18T00:00:00Z",
-    plans: [
-      {
-        id: planId,
-        plan_id: planId,
-        title: `Plan ${planId}`,
-        file: `.mstar/plans/${planId}.md`,
-        status: "Todo",
-        coordination: {
-          revision: 1,
-          session: { session_id: sessionId, session_file: sessionPath, bound_at: "2026-09-18T00:00:00Z" },
-        },
-      },
-    ],
-  });
-  return sessionPath;
-}
-
-/** A caller-written envelope at an arbitrary path: parseable, never issued. */
-function writeHandWrittenEnvelope(root: string, harness: string, planId = "20260918-a"): string {
-  const path = join(root, "hand-written-session.json");
-  writeJson(path, {
-    schema_version: 1,
-    role: "plan-pm",
-    session_id: "22222222-2222-2222-2222-222222222222",
-    workflow_id: "wf-issue",
-    plan_id: planId,
-    harness_root: harness,
-  });
-  return path;
-}
-
 describe("mstar issue CLI bundle", () => {
   test("records runtimes >= the issue-store floors (Node 24.18.0, Bun 1.4.0)", () => {
     // Evidence: subprocess launchers used below. Print so the report names them.
