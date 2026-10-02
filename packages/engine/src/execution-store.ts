@@ -1758,6 +1758,11 @@ function readCommittedReceipt<T>(
   if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
   const recovery = receipt.operationRecovery;
   if (recovery !== undefined) {
+    // Historical DB receipts stay READABLE: the envelope's own recovery fields
+    // are validated (a corrupt row is still `store.corrupt`), but a retired
+    // per-operation sidecar's `details` — the previous-seal provenance the
+    // reseal producers no longer emit — is accepted as recorded diagnostic
+    // payload rather than being re-asserted against a retired digest shape.
     if (
       !isPlainObject(recovery) ||
       !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) ||
@@ -1770,19 +1775,9 @@ function readCommittedReceipt<T>(
     ) {
       throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
     }
-    const details = recovery.details;
-    if (
-      details !== undefined &&
-      (!isPlainObject(details) ||
-        !isNonEmptyString(details.previous_prepared_at) ||
-        !isNonEmptyString(details.previous_prepared_by) ||
-        typeof details.previous_assignment_sha256 !== "string" ||
-        !/^[a-f0-9]{64}$/.test(details.previous_assignment_sha256))
-    ) {
-      throw corrupt(`${what}.result_json carries invalid previous-seal provenance`);
-    }
   }
-  // Stored diagnostic payload; its envelope and immutable seal identity were checked above.
+  // Stored diagnostic payload; its envelope was checked above and a retired
+  // `details` provenance is passed through unchanged for the reader.
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
   return {
     data: receipt.data as T,
