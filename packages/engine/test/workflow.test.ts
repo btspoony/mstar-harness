@@ -1998,17 +1998,45 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     expect((JSON.parse(readFileSync(failStatus, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
   });
 
-  test("foreign orphan refusals: compass, branch, project, rows, snapshot id, coordinator; key order alone recovers", async () => {
-    // Row identity/order mismatch refuses.
+  test("foreign orphan refusals: compass, branch, project, row ids/paths, snapshot id, coordinator; reversal and key order alone recover", async () => {
+    // Row REORDER alone recovers: plan rows are a keyed collection located by
+    // id, and no consumer authorizes by row order. The orphan's bytes are kept.
+    {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const orphanBytes = readFileSync(snapshotPath, "utf8");
+      writeFileSync(statusPath, emptyRoot());
+      const reorderedRows = [...options(root).rows].reverse();
+      const { startedAt: _c, ...noClock } = options(root, { rows: reorderedRows });
+      const recovered = await registerIterationWorkflow(id, noClock);
+      expect(recovered.recovered).toBe(true);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(orphanBytes);
+      expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toHaveLength(1);
+    }
+    // A row whose declared `file` points at a DIFFERENT plan document (the
+    // same id, another path) is a different registration: the row path is part
+    // of the identity, so it refuses with bytes unchanged.
     {
       const { root, statusPath, snapshotPath } = harness();
       await registerIterationWorkflow(id, options(root));
       const before = readFileSync(snapshotPath, "utf8");
       writeFileSync(statusPath, emptyRoot());
-      const foreignRows = [...options(root).rows].reverse();
-      await expect(registerIterationWorkflow(id, options(root, { rows: foreignRows }))).rejects.toThrow(
-        /different registration identity/,
+      // A second plan document exists at the alternate path, so the refusal
+      // comes from the registration-identity comparison, not the path prover.
+      writeFileSync(
+        join(root, "plans", "relocated-elsewhere.md"),
+        `# Engine producer\n\n**plan_id:** ${ROW_IDS[0]}\n`,
       );
+      const rows = [
+        { id: ROW_IDS[0], title: "Engine producer", file: "plans/relocated-elsewhere.md" },
+        { id: ROW_IDS[1], title: "CLI verb", file: `plans/${ROW_IDS[1]}.md` },
+      ];
+      // The row-path fact is enforced by the registration's own plan-path
+      // prover (the declared `file` must resolve to the registered plan
+      // document), so a relocated path refuses before any write.
+      await expect(
+        registerIterationWorkflow(id, options(root, { rows })),
+      ).rejects.toThrow(/not the registered plan file/);
       expect(readFileSync(snapshotPath, "utf8")).toBe(before);
       expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
     }

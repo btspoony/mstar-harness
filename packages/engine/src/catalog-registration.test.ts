@@ -1282,55 +1282,56 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
   });
 
 
-  test("migration retirement matches its remaining set facts by key, not enumeration order (A4)", async () => {
-    const { harnessDir, context } = await fixture("migration-retire-reordered-");
-    // Two pending execution-written rows for two DIFFERENT workflow ids whose
-    // operation ids enumerate in the OPPOSITE order to their journal insertion
-    // order. The retirement is addressed by operation id (a key), and each row
-    // is matched to its own snapshot + root entry by id/dir — never by position
-    // in the pending set — so reversing the request's enumeration is equivalent.
-    const rows = [
-      { operationId: "op-reorder-a", workflowId: "wf-reorder-a", planId: "plan-reorder-a" },
-      { operationId: "op-reorder-b", workflowId: "wf-reorder-b", planId: "plan-reorder-b" },
-    ];
-    for (const [index, row] of rows.entries()) {
-      const planId = row.planId;
-      await registerCatalogEntity(
-        context,
-        { kind: "plan", id: planId, title: "Already registered", rootKind: "plans", relativePath: `elsewhere-${index}.md` },
-        { operationId: `seed-reorder-${index}`, actor: "project-manager" },
-      );
-    }
-    for (const row of rows) {
-      await expect(
-        registerCatalogExecution(
-          context,
-          planRequest({
-            harnessDir,
-            operationId: row.operationId,
-            expectedCatalogRevision: 2,
-            workflowId: row.workflowId,
-            planId: row.planId,
-          }),
-        ),
-      ).rejects.toMatchObject({ code: "catalog.duplicate" });
-    }
+  test("migration retirement refuses an existing snapshot with a different coordinator binding or row path (C3)", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-ownership-");
+    await registerCatalogEntity(
+      context,
+      { kind: "plan", id: PLAN_ID, title: "Already registered", rootKind: "plans", relativePath: "elsewhere.md" },
+      { operationId: "seed-ownership", actor: "project-manager" },
+    );
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-stale-ownership", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+
+    // (a) A validly shaped FOREIGN coordinator binding: the recorded identity
+    // names a coordinator the candidate does not carry, so recovery/publish
+    // must refuse rather than write a root entry over another owner's workflow.
     const handle = await openStore(context, "write");
     handle.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    const before = handle.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-ownership");
     handle.close();
+    const bound = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    bound.coordination = {
+      coordinator: { session_id: "foreign-session", session_file: join(harnessDir, "sessions", "foreign-session.json"), bound_at: "2026-09-18T00:00:00.000Z" },
+    };
+    writeFileSync(snapshotPath, `${JSON.stringify(bound, null, 2)}\n`);
+    await expect(
+      retireStaleCatalogExecutionsForMigration(context, ["op-stale-ownership"], "owner approved discard"),
+    ).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("registration bytes are missing or belong to a different workflow"),
+    });
+    const afterBind = await openStore(context, "read");
+    expect(afterBind.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-ownership")).toEqual(before);
+    afterBind.close();
 
-    // Reversed enumeration relative to insertion order.
-    await retireStaleCatalogExecutionsForMigration(context, rows.map((row) => row.operationId).reverse(), "owner approved discard");
-    const after = await openStore(context, "read");
-    const phases = after.db
-      .prepare("select operation_id, phase from catalog_operations where operation_id in (?, ?) order by operation_id asc")
-      .all(...rows.map((row) => row.operationId)) as Array<{ operation_id: string; phase: string }>;
-    after.close();
-    expect(phases).toEqual([
-      { operation_id: "op-reorder-a", phase: "aborted" },
-      { operation_id: "op-reorder-b", phase: "aborted" },
-    ]);
-    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+    // (b) A DIFFERENT declared row `file` with the same row id: the path is part
+    // of the registration identity, so it must refuse too.
+    const rebound = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    delete rebound.coordination;
+    const rows = rebound.plans as Array<Record<string, unknown>>;
+    rows[0]!.file = "plans/relocated-elsewhere.md";
+    writeFileSync(snapshotPath, `${JSON.stringify(rebound, null, 2)}\n`);
+    await expect(
+      retireStaleCatalogExecutionsForMigration(context, ["op-stale-ownership"], "owner approved discard"),
+    ).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("registration bytes are missing or belong to a different workflow"),
+    });
+    const afterPath = await openStore(context, "read");
+    expect(afterPath.db.prepare("select * from catalog_operations where operation_id = ?").get("op-stale-ownership")).toEqual(before);
+    afterPath.close();
   });
 
   test("migration retirement refuses ordinary pending rows and empty dispositions without writing", async () => {

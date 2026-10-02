@@ -47,7 +47,7 @@ import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe (see status.ts).
-import { registerWorkflowEntryLocked, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
+import { registerWorkflowEntryLocked, rowPlanIds, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 import {
   assertExecutionFileReadAllowed,
@@ -2026,33 +2026,38 @@ export type RegisterPlanWorkflowResult = {
 };
 
 /**
- * Compare two snapshots' REGISTRATION IDENTITY by explicit field: the header
- * fields a registration freezes (type, delivery kind, project, completion
- * policy, compass ref, branch anchors, coordinator binding) plus the addressed
- * plan rows by their own `id`/`title`/`file` keys in order. It is deliberately
- * NOT a canonical serialization of the two snapshots: `status` and any other
- * mutable execution progress are outside the identity (a progressed orphan
- * still recovers), and the row collection is an ordered sequence compared
- * element-wise — never sorted and never re-serialized as one object.
+ * Compare two snapshots' REGISTRATION IDENTITY by NAMED PRIMITIVE FIELD, never
+ * by any serialized form. The identity is the header fields a registration
+ * freezes — `id`, `type`, `delivery_kind`, `project`, `completion_policy`,
+ * `compass_ref`, the branch anchors `branch.base`/`source`/`integration`/
+ * `target`, and the coordinator binding's `session_id`/`session_file` — plus the
+ * addressed plan rows as a KEYED collection: each row's declared `id` is the
+ * key and its `file` the direct path value. Rows are matched by key, not by
+ * enumeration position (no consumer authorizes by row order; rows are located
+ * by id), and `title`/`status`/any prose or progress field is outside the
+ * identity — a progressed or reordered orphan still recovers.
  *
  * Used by the create-only producers' crash/retry recovery: re-running the
  * producer must not duplicate identity, so a mismatch refuses instead of
  * adopting a foreign registration.
  */
 function registrationIdentityMatches(existing: WorkflowSnapshot, candidate: WorkflowSnapshot): boolean {
-  const coordinatorOf = (snapshot: WorkflowSnapshot): string | null => {
-    const coordinator = snapshot.coordination?.coordinator;
-    return coordinator ? `${coordinator.session_id}\u0000${coordinator.session_file}` : null;
+  const branchField = (snapshot: WorkflowSnapshot, key: "base" | "source" | "integration" | "target"): unknown => {
+    const branch = snapshot.branch;
+    return isPlainObject(branch) ? branch[key] ?? null : null;
   };
-  const branchOf = (snapshot: WorkflowSnapshot): string => {
-    const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
-    return Object.keys(branch)
-      .sort()
-      .map((key) => `${key}=${String(branch[key])}`)
-      .join("\u0000");
+  const coordinatorField = (snapshot: WorkflowSnapshot, key: "session_id" | "session_file"): unknown =>
+    snapshot.coordination?.coordinator?.[key] ?? null;
+  const rowFileById = (snapshot: WorkflowSnapshot): Map<string, unknown> | null => {
+    const rows = snapshot.plans ?? [];
+    const map = new Map<string, unknown>();
+    for (const row of rows) {
+      const id = rowPlanIds(row)[0];
+      if (id === undefined || map.has(id)) return null; // a row with no/duplicate id is not a valid registration
+      map.set(id, row.file ?? null);
+    }
+    return map;
   };
-  const rowsOf = (snapshot: WorkflowSnapshot): string[] =>
-    (snapshot.plans ?? []).map((row) => `${String(row.id ?? row.plan_id ?? "")}\u0000${String(row.title ?? "")}\u0000${String(row.file ?? "")}`);
 
   if (
     (existing.id ?? null) !== (candidate.id ?? null) ||
@@ -2060,15 +2065,23 @@ function registrationIdentityMatches(existing: WorkflowSnapshot, candidate: Work
     (existing.delivery_kind ?? null) !== (candidate.delivery_kind ?? null) ||
     (existing.project ?? null) !== (candidate.project ?? null) ||
     (existing.completion_policy ?? null) !== (candidate.completion_policy ?? null) ||
-    (existing.compass_ref ?? null) !== (candidate.compass_ref ?? null) ||
-    branchOf(existing) !== branchOf(candidate) ||
-    coordinatorOf(existing) !== coordinatorOf(candidate)
+    (existing.compass_ref ?? null) !== (candidate.compass_ref ?? null)
   ) {
     return false;
   }
-  const left = rowsOf(existing);
-  const right = rowsOf(candidate);
-  return left.length === right.length && left.every((row, index) => row === right[index]);
+  for (const anchor of ["base", "source", "integration", "target"] as const) {
+    if (branchField(existing, anchor) !== branchField(candidate, anchor)) return false;
+  }
+  for (const member of ["session_id", "session_file"] as const) {
+    if (coordinatorField(existing, member) !== coordinatorField(candidate, member)) return false;
+  }
+  const left = rowFileById(existing);
+  const right = rowFileById(candidate);
+  if (left === null || right === null || left.size !== right.size) return false;
+  for (const [id, file] of left) {
+    if (!right.has(id) || right.get(id) !== file) return false;
+  }
+  return true;
 }
 
 /**

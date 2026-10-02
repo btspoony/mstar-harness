@@ -642,68 +642,58 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
 }
 
 /**
- * The registration identity this request registers, recorded in the journal and
- * re-matched later by explicit field. It is a PROJECTION of the reviewed
- * snapshot (header identity fields + addressed plan row ids), never a digest:
- * the journal stores it for diagnosis, and the comparison below reads the
- * fields rather than comparing this string.
+ * The registration identity this request registers, recorded in the journal as
+ * an explicit NAMED-FIELD record (never a digest): the header identity fields,
+ * the four named branch anchors, the coordinator binding, and each addressed
+ * plan row by its declared `id` key with its `file` path value. The later
+ * comparison reads these fields directly — it never compares this serialized
+ * string.
  */
 function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
-  return stableJson({ kind, ...registrationIdentityFields(snapshot) });
-}
-
-/** The explicit registration-identity fields two snapshots are matched on. */
-type RegistrationIdentityFields = {
-  id: string | null;
-  type: string | null;
-  delivery_kind: string | null;
-  project: string | null;
-  completion_policy: string | null;
-  compass_ref: string | null;
-  /** The branch anchors as explicit `key=value` pairs, sorted — never a serialized object. */
-  compactBranch: string;
-  /**
-   * The addressed plan row ids. The plan collection is an ORDERED sequence whose
-   * enumeration is part of the registered identity (a reordered orphan is a
-   * different registration), so the ids are compared element-wise in order —
-   * never sorted and never re-serialized as a whole object.
-   */
-  planIds: string[];
-};
-
-/**
- * The comparison the producers use for orphan recovery, by registration kind,
- * expressed as EXPLICIT registration-identity fields and plan ROW KEYS rather
- * than a canonical serialization of the two snapshots. The frozen identity is
- * the same field set the registration declares (type, delivery kind, project,
- * completion policy, branch anchors, compass ref) plus the addressed plan row
- * ids — never a digest and never a whole-object serialization whose enumeration
- * could gate a semantically identical registration.
- */
-function registrationIdentityFields(snapshot: WorkflowSnapshot): RegistrationIdentityFields {
   const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
-  const compactBranch = Object.keys(branch)
-    .sort()
-    .map((key) => `${key}=${String(branch[key])}`)
-    .join("\u0000");
-  return {
+  const coordinator = snapshot.coordination?.coordinator;
+  return JSON.stringify({
+    kind,
     id: typeof snapshot.id === "string" ? snapshot.id : null,
     type: typeof snapshot.type === "string" ? snapshot.type : null,
     delivery_kind: typeof snapshot.delivery_kind === "string" ? snapshot.delivery_kind : null,
     project: typeof snapshot.project === "string" ? snapshot.project : null,
     completion_policy: typeof snapshot.completion_policy === "string" ? snapshot.completion_policy : null,
     compass_ref: typeof snapshot.compass_ref === "string" ? snapshot.compass_ref : null,
-    compactBranch,
-    planIds: (snapshot.plans ?? []).map((row) => rowPlanIds(row)[0] ?? ""),
-  };
+    branch: {
+      base: branch.base ?? null,
+      source: branch.source ?? null,
+      integration: branch.integration ?? null,
+      target: branch.target ?? null,
+    },
+    coordinator:
+      coordinator === undefined
+        ? null
+        : { session_id: coordinator.session_id ?? null, session_file: coordinator.session_file ?? null },
+    rows: (snapshot.plans ?? []).map((row) => ({ id: rowPlanIds(row)[0] ?? null, file: row.file ?? null })),
+  });
+}
+
+/** One named primitive field off a plain record, or `null` when absent. */
+function fieldOf(record: Record<string, unknown>, key: string): unknown {
+  return record[key] ?? null;
+}
+
+/** The declared `file` path of one plan row, read directly (never serialized). */
+function rowFileByIdOf(row: unknown): unknown {
+  return isPlainObject(row) ? row.file ?? null : null;
 }
 
 /**
- * Compare the current snapshot's explicit registration-identity fields with the
- * recorded envelope's. The envelope is a plain object of the same projection
- * (header identity fields + plan row ids), so it is read field-by-field and
- * never re-serialized for comparison. Mutable execution progress is not part of
- * the projection, so plan status never gates the match.
+ * Compare the current snapshot's registration identity with the recorded
+ * NAMED-FIELD record by reading each field directly: the header identity
+ * fields, the four named branch anchors, the coordinator binding's
+ * `session_id`/`session_file` (ownership), and the plan rows as a KEYED
+ * collection — each row's declared `id` is the key and its `file` the direct
+ * path value. Rows are matched by key, not by enumeration position (no consumer
+ * authorizes by row order), and `title`/`status`/any prose or progress field is
+ * outside the identity, so a progressed or reordered orphan still recovers. No
+ * field is compared through a serialized or compact form.
  */
 function migrationIdentityMatches(
   kind: CatalogExecutionKind,
@@ -713,32 +703,56 @@ function migrationIdentityMatches(
 ): boolean {
   let recorded: Record<string, unknown>;
   try {
-    recorded = JSON.parse(identity) as Record<string, unknown>;
+    const parsed = JSON.parse(identity) as unknown;
+    if (!isPlainObject(parsed)) {
+      return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
+    }
+    recorded = parsed;
   } catch {
     return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
   }
-  const b: RegistrationIdentityFields = {
-    id: typeof recorded.id === "string" ? recorded.id : null,
-    type: typeof recorded.type === "string" ? recorded.type : null,
-    delivery_kind: typeof recorded.delivery_kind === "string" ? recorded.delivery_kind : null,
-    project: typeof recorded.project === "string" ? recorded.project : null,
-    completion_policy: typeof recorded.completion_policy === "string" ? recorded.completion_policy : null,
-    compass_ref: typeof recorded.compass_ref === "string" ? recorded.compass_ref : null,
-    compactBranch: typeof recorded.compactBranch === "string" ? recorded.compactBranch : "",
-    planIds: Array.isArray(recorded.planIds) ? recorded.planIds.filter((id): id is string => typeof id === "string") : [],
+
+  const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
+  const coordinator = snapshot.coordination?.coordinator;
+  const coordinatorOf = (source: Record<string, unknown>, member: string): unknown =>
+    source.coordinator === null || source.coordinator === undefined
+      ? null
+      : isPlainObject(source.coordinator)
+        ? fieldOf(source.coordinator, member)
+        : null;
+  const planFileById = (rows: readonly unknown[]): Map<string, unknown> | null => {
+    const map = new Map<string, unknown>();
+    for (const row of rows) {
+      const id = isPlainObject(row) ? rowPlanIds(row)[0] : undefined;
+      if (id === undefined || map.has(id)) return null;
+      map.set(id, rowFileByIdOf(row));
+    }
+    return map;
   };
-  const a = registrationIdentityFields(snapshot);
-  return (
-    a.id === b.id &&
-    a.type === b.type &&
-    a.delivery_kind === b.delivery_kind &&
-    a.project === b.project &&
-    a.completion_policy === b.completion_policy &&
-    a.compass_ref === b.compass_ref &&
-    a.compactBranch === b.compactBranch &&
-    a.planIds.length === b.planIds.length &&
-    a.planIds.every((planId, index) => planId === b.planIds[index])
-  );
+
+  if (fieldOf(recorded, "id") !== (snapshot.id ?? null)) return false;
+  if (fieldOf(recorded, "type") !== (snapshot.type ?? null)) return false;
+  if (fieldOf(recorded, "delivery_kind") !== (snapshot.delivery_kind ?? null)) return false;
+  if (fieldOf(recorded, "project") !== (snapshot.project ?? null)) return false;
+  if (fieldOf(recorded, "completion_policy") !== (snapshot.completion_policy ?? null)) return false;
+  if (fieldOf(recorded, "compass_ref") !== (snapshot.compass_ref ?? null)) return false;
+
+  const recordedBranch = isPlainObject(recorded.branch) ? (recorded.branch as Record<string, unknown>) : {};
+  for (const anchor of ["base", "source", "integration", "target"] as const) {
+    if (fieldOf(recordedBranch, anchor) !== (branch[anchor] ?? null)) return false;
+  }
+  for (const member of ["session_id", "session_file"] as const) {
+    if (coordinatorOf(recorded, member) !== (coordinator?.[member] ?? null)) return false;
+  }
+
+  const recordedRows = Array.isArray(recorded.rows) ? recorded.rows : [];
+  const left = planFileById(snapshot.plans ?? []);
+  const right = planFileById(recordedRows);
+  if (left === null || right === null || left.size !== right.size) return false;
+  for (const [id, file] of left) {
+    if (!right.has(id) || right.get(id) !== file) return false;
+  }
+  return true;
 }
 
 /**
