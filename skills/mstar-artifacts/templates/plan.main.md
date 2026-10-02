@@ -24,11 +24,14 @@ Edit attribution example (synthetic only): [local ignored record: `2026-01-01T00
 
 Who advances this plan row's engine state, and what records each transition:
 
-- **Scoped sequence** — one engine verb per transition; never a hand-edited snapshot: `bind --coordinator` → `prepare` → `bind` → `progress` → `handoff` → `accept` → `integration-start` → Git merge → `integration-accept` → `complete`.
-- **Evidence order** — `compound` disposition, PR identity and merge evidence are recorded **after** the row is `Done`; the engine refuses those writes while any plan row is not `Done`. The delivery tail runs on a completed row, never ahead of it.
-- **Snapshot declares no integration anchors** → the row cannot reach `Done` today: stop at a submitted/accepted handoff, report the blockage to the coordinator, and never fabricate a terminal state (`Done`, `completed`, PR identity, merge record).
+- **Route is declared, not inferred** — the engine selects the completion route from the workflow's registered `type` and declared `delivery_kind`, never from integration anchors that happen to be absent. Missing anchors neither choose a route nor waive genuinely missing registration facts.
+- **Scoped sequence** — one engine verb per transition; never a hand-edited snapshot: `bind --coordinator` → `prepare` → `bind` → `progress` → `handoff` → `accept`, then this row's declared route to completion:
+  - **iteration** (`type: iteration`, or any non-standalone workflow) — pinned `integration-start` → the operator's explicit merge in the recorded integration checkout → `integration-accept` → `complete`; completion releases **both** leases. Absent integration anchors keep this route blocked at a submitted/accepted handoff: report the blockage to the coordinator and never fabricate a terminal state (`Done`, `completed`, PR identity, merge record).
+  - **standalone development** (`type: plan`, `delivery_kind: development`, exactly one row) — `complete` straight from the accepted handoff; no integration record; only the row's execution lease releases and the workflow stays `running` until its delivery tail and the close. Missing registration fields such as `branch.target` are incomplete registration, not an exemption — the declared Git proofs (pinned source/target anchors, PR identity, verified merge) still gate the delivery tail.
+  - **standalone report-only** (`type: plan`, `delivery_kind: verification/report-only`, exactly one row) — record the registered `completion_policy`'s fulfilment (`delivery.completion` naming that same policy and its evidence) **before** the row is `Done`, then `complete` straight from the accepted handoff; no merge, no integration branch or checkout, no synthesised Git proof. A mismatching, empty, or missing fulfilment refuses completion exactly as an absent one does.
+- **Evidence order** — `compound` disposition, and on the iteration/development routes PR identity and merge evidence, are recorded **after** the row is `Done`; the engine refuses those writes while any plan row is not `Done`. The report-only fulfilment is the declared exception: it is recorded **before** the row is marked `Done`. The delivery tail runs on a completed row, never ahead of it.
 
-Semantics and failure behavior → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
+Semantics, routes, and failure behavior → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
 
 ---
 
