@@ -44,6 +44,7 @@ import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./itera
 import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
 import { rowPlanId, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { resolveCurrentAuthority } from "./store-read.js";
 import {
   LEGACY_WORKTREE_PATH_CODE,
   validateWorkflowSnapshot,
@@ -166,6 +167,7 @@ export type ProjectionSourceLocation =
 export type ProjectionCapture = {
   formatVersion: number;
   catalogRevision: number;
+  storeRevision?: number | null;
   sources: ProjectionSourceDigest[];
   rows: ProjectionRows;
   diagnostics: SourceDiagnostic[];
@@ -719,6 +721,8 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
 // Capture
 // ---------------------------------------------------------------------------
 
+
+
 /**
  * Read, validate and fingerprint the whole source set without writing
  * anything. Source I/O happens ONLY here (and in the publication
@@ -726,6 +730,87 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
  * the transaction" rule is structural rather than a convention.
  */
 export async function captureProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
+  const authority = await resolveCurrentAuthority(context);
+  return authority.route === "execution"
+    ? captureExecutionProjectionSources(context)
+    : captureFileProjectionSources(context);
+}
+
+async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
+  const inputs = await readCatalogInputs(context);
+  const handle = await openStore(context, "read");
+  try {
+    const db = handle.db;
+    const sources: ProjectionSourceDigest[] = [];
+    const locations: ProjectionSourceLocation[] = [];
+    const diagnostics: SourceDiagnostic[] = [];
+    const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
+    const record = (spec: SourceSpec, content: string, shaText = content): void => {
+      const sha256 = createHash("sha256").update(shaText, "utf8").digest("hex");
+      sources.push({ sourceKey: spec.sourceKey, kind: spec.kind, rootKind: spec.rootKind, relativePath: spec.relativePath, sha256, state: "ok", diagnostic: null, declared: spec.declared });
+      locations.push({ source: "database", sourceKey: spec.sourceKey, relativePath: spec.relativePath, sha256, state: "ok", table: spec.table as ProjectionSourceTable, keys: spec.keys! });
+    };
+    const spec = (table: ProjectionSourceTable, kind: ProjectionSourceKind, rel: string, keys: Record<string, string>): SourceSpec => ({
+      source: "database", sourceKey: sourceKeyOf(kind, "harness", rel), kind, rootKind: "harness", relativePath: rel, declared: true, table, keys,
+    });
+    const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all() as Array<{ workflow_id: string; entry_json: string }>;
+    record(spec("execution_registry", "root", "execution/registry", {}), JSON.stringify(registry));
+    for (const item of registry) {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(item.workflow_id) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      record(spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id }), row.state_json);
+      rows.workflows.push({
+        id: item.workflow_id, type: state.type as ProjectedWorkflow["type"], status: state.status as string,
+        phase: null, startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
+        branchBase: null, branchSource: null, branchIntegration: null, branchTarget: null, activeRegistration: 1,
+      });
+    }
+    const plans = db.prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans order by workflow_id, plan_id").all() as Array<{ workflow_id: string; plan_id: string; state_json: string; coordination_json: string }>;
+    for (const row of plans) {
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      const coordination = JSON.parse(row.coordination_json) as Record<string, unknown>;
+      const pin = isPlainObject(state.metadata) && isPlainObject(state.metadata.catalog_pin) ? state.metadata.catalog_pin : {};
+      record(spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id }), `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
+      rows.plans.push({ workflowId: row.workflow_id, planId: row.plan_id, status: text(state.status), progress: null, phase: null, doneAt: text(state.done_at), catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null });
+      const lease = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id) as { lease_json: string } | undefined;
+      if (lease) {
+        const value = JSON.parse(lease.lease_json) as Record<string, unknown>;
+        record(spec("execution_leases", "workflow", `execution/leases/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id }), lease.lease_json);
+        rows.leases.push({ workflowId: row.workflow_id, planId: row.plan_id, kind: "execution", holder: text(value.holder), worktreePath: text(value.worktree_path), expiresAt: text(value.expires_at) });
+      }
+      void coordination;
+    }
+    for (const doc of inputs.compassDocs) {
+      const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const read = readSource(fspec);
+      if (read.state !== "ok" || read.content === null) {
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: read.state });
+        diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
+      } else {
+        const parsed = deriveCompass(doc.iterationId, read.content, doc.relativePath);
+        if ("diagnostic" in parsed) diagnostics.push({ sourceKey: fspec.sourceKey, reason: "invalid", message: parsed.diagnostic });
+        else rows.compasses.push(parsed);
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
+      }
+    }
+    for (const row of db.prepare("select workflow_id, lease_json from execution_integration_leases order by workflow_id").all() as Array<{ workflow_id: string; lease_json: string }>) {
+      const lease = JSON.parse(row.lease_json) as Record<string, unknown>;
+      record(spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id }), row.lease_json);
+      rows.leases.push({ workflowId: row.workflow_id, planId: text(lease.plan_id) ?? "", kind: "integration-merge", holder: text(lease.holder), worktreePath: null, expiresAt: text(lease.expires_at) });
+    }
+    sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
+    locations.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
+    const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
+    const storeMeta = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
+    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: storeMeta.revision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
+  } finally {
+    handle.close();
+  }
+}
+
+async function captureFileProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const harness = catalogRootDir(context, "harness");
   const inputs = await readCatalogInputs(context);
 
@@ -1276,6 +1361,12 @@ async function attemptPublication(context: StoreContext, capture: ProjectionCapt
   try {
     assertProjectionTables(handle);
     const db = handle.db;
+    if (capture.storeRevision !== undefined && capture.storeRevision !== null) {
+      const storeRevision = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
+      if (storeRevision.revision !== capture.storeRevision) {
+        return { kind: "source-stale", movement: { kind: "sources", keys: ["root:harness:execution/store-revision"] } };
+      }
+    }
     if (capture.blocked) {
       return { kind: "report", report: recordRetainedHealth(db, capture, null, attempts) };
     }

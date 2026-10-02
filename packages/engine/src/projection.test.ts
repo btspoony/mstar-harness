@@ -29,6 +29,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { catalogRootDir, linkCatalogEntities, registerCatalogEntity, type CatalogOperation } from "./catalog.js";
+import { createExecutionWorkflow, initializeExecutionAuthority, readExecutionState } from "./execution-store.js";
+import { queryDashboard, withStoreRead } from "./store-read.js";
+import type { ExecutionCaller } from "./execution-store.js";
+import type { WorkflowSnapshot } from "./workflow.js";
 import { captureIssue } from "./issue.js";
 import {
   captureProjectionSources,
@@ -362,6 +366,35 @@ function issueInput(occurrenceKey: string) {
     discoveredAt: STARTED_AT,
   };
 }
+
+  test("ACTIVE execution rows publish through the dashboard projection", async () => {
+    const f = await fixture("active-smoke-");
+    const initialized = await initializeExecutionAuthority(f.context);
+    const workflowId = "wf-active-smoke";
+    const planId = "plan-active-smoke";
+    await registerCatalogEntity(
+      f.context,
+      { kind: "plan", id: planId, title: "Active plan", rootKind: "plans", relativePath: `${planId}.md` },
+      op("active-plan"),
+    );
+    const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId, planId: null };
+    await createExecutionWorkflow({ ...f.context, caller }, {
+      entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
+      snapshot: {
+        schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT,
+        updated_at: STARTED_AT, plans: [{ id: planId, title: "Active plan", file: `${planId}.md`, status: "Todo" }],
+        delivery_kind: "development", branch: { source: "feature/active", target: "main" },
+      } as unknown as WorkflowSnapshot,
+      expected: initialized.token,
+      operationId: "active-create",
+    });
+    const report = await refreshProjections(f.context);
+    expect(report).toMatchObject({ freshness: "current", published: true, generation: 1 });
+    expect(await projections(f)).toMatchObject({ workflows: [expect.objectContaining({ id: workflowId })], plans: [expect.objectContaining({ workflow_id: workflowId, plan_id: planId })] });
+    const dashboard = await withStoreRead(f.context, queryDashboard("workflows"));
+    expect(dashboard.projection).toMatchObject({ freshness: "current", generation: 1 });
+    expect(dashboard.data).toMatchObject({ items: [expect.objectContaining({ id: workflowId })] });
+  });
 
 describe("projection publication and last-good handling", () => {
   test("malformed execution registry entry JSON is classified as invalid", async () => {
