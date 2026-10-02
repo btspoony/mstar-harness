@@ -111,7 +111,7 @@ describe("active registration refusal diagnostics", () => {
     expect(evidence.message).toContain("active session reference returned by the plan bind receipt");
     expect(evidence.message).toContain("pass it as --session-ref on the CLI or sessionRef in MCP input");
     expect(evidence.message).toContain("For workflow.register, expect is the root token from the root entry in mstar status validate");
-    expect(evidence.message).toContain("for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate or plan show");
+    expect(evidence.message).toContain("for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate");
 
     const register = await refuse("workflow.register", ["operation"]);
     expect(register.status).toBe("usage");

@@ -29,7 +29,7 @@ function activeRegistrationRefusal(
   const recovery = [
     "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID.",
     "MCP: the host must pass sessionId per call.",
-    "For workflow.register, expect is the root token from the root entry in mstar status validate; for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate or plan show; for other workflow-scoped writes, use that addressed scope's own token.",
+    "For workflow.register, expect is the root token from the root entry in mstar status validate; for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate; for other workflow-scoped writes, use that addressed scope's own token.",
     "operation is your own replay id.",
     ...(missing.includes("sessionRef") ? ["sessionRef is the active session reference returned by the plan bind receipt; pass it as --session-ref on the CLI or sessionRef in MCP input."] : []),
     ...(!hasSessionIdentity ? ["A session.run child carries a minted local identity; run the command in the main session or pass an explicit --session-id."] : []),
