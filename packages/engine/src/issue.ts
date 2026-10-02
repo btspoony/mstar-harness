@@ -361,23 +361,27 @@ export class IssueError extends Error {
   }
 }
 export function assertIssueTriageVocabulary(patch: IssueTriage): void {
-  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
+  if (patch.kind !== undefined && (typeof patch.kind !== "string" || !Object.hasOwn(KINDS, patch.kind))) {
     throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
   }
-  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
+  if (
+    patch.severity !== undefined &&
+    (typeof patch.severity !== "string" || !Object.hasOwn(SEVERITIES, patch.severity))
+  ) {
     throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
   }
 }
 
 export function assertIssueLinkVocabulary(link: IssueLink): void {
   if ("relation" in link) {
-    if (!Object.hasOwn(RELATIONS, link.relation)) {
+    if (typeof link.relation !== "string" || !Object.hasOwn(RELATIONS, link.relation)) {
       throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
     }
-  } else if (!Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
+  } else if (typeof link.kind !== "string" || !Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
     throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
   }
 }
+
 
 
 
@@ -1961,13 +1965,7 @@ export async function linkIssue(
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   const session = authorizeMutation(context, mutation);
-  if ("relation" in link) {
-    if (!Object.hasOwn(RELATIONS, link.relation)) {
-      throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
-    }
-  } else if (!Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
-    throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
-  }
+  assertIssueLinkVocabulary(link);
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
     assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), session);
   }

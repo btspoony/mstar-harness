@@ -11,6 +11,7 @@ import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from ".
 import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import {
+  assertIssueTriageVocabulary,
   IssueError,
   assertCaptureRequest,
   appendOccurrence,
@@ -38,6 +39,12 @@ import {
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-test-"));
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
+
+test("triage vocabulary rejects array values instead of coercing them to keys", () => {
+  expect(() => assertIssueTriageVocabulary({ kind: ["bug"] } as never)).toThrow(
+    expect.objectContaining({ code: "issue.scope-refused" }),
+  );
+});
 afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
