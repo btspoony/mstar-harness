@@ -1272,9 +1272,9 @@ export function assertTerminalDisposition(disposition: TerminalDisposition): voi
 }
 
 /**
- * Legacy issue-write seat mapping retained for the plan-scoped route and the
- * milestone-assignment path; unscoped issue writes use `requireCaptureSeat`
- * directly and do not authorize through a session envelope.
+ * Shared role-to-seat mapping for session-authorized issue paths. The
+ * plan-scoped route uses the `plan-pm` mapping; milestone assignment separately
+ * validates its session against this seat vocabulary.
  */
 const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
   "plan-pm": "project-manager",
@@ -1289,10 +1289,7 @@ const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
  */
 const CAPTURE_SEAT = "project-manager";
 
-/**
- * The session role → actor mapping used by the plan-scoped route and milestone
- * assignment only. It does not authorize unscoped issue writes.
- */
+/** Derive the audited actor for plan-scoped issue capture and closure. */
 export function issueWriteSeat(role: string): string {
   if (!Object.hasOwn(ENVELOPE_SEATS, role)) {
     throw new IssueError("issue.scope-refused", `Session role ${JSON.stringify(role)} holds no issue-write seat`);
@@ -1312,9 +1309,8 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Bind a session envelope to the issue mutation paths that still require it:
- * the plan-scoped route and milestone assignment. Ordinary unscoped issue
- * writes use `requireCaptureSeat` and do not call this function.
+ * Bind the session envelope for milestone assignment. Unscoped issue writes
+ * use `requireCaptureSeat` and do not call this function.
  */
 function authorizeMutation(context: StoreContext, mutation: MutationContext): CoordinationSession {
   const { session, sessionPath } = readScopedSession(mutation.sessionFile);

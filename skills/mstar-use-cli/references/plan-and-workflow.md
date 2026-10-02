@@ -28,13 +28,14 @@ The execution route is selected by `execution_meta.authority_state`, not by `sto
 - `mstar status validate` reports the root and per-workflow tokens when state is active; `mstar plan show` reports the addressed plan token. Use the token matching the mutation scope.
 - Legacy file-form operation routes are retired; their flags are not a supported alternative to the active route.
 
+- The **reference is a lookup, not a bearer credential**: it names a stored session row, grants no authority by itself, and the engine compares the independently acquired caller inside its own transaction — so a copied reference under another identity refuses without writing.
+- Launching: `mstar session run --workflow <id> --role <coordinator|plan-pm> [--plan <id>] [--harness <absolute-path>] -- <argv>` mints **one** local identity for the child, overwrites the identity channel, deletes the legacy one, and propagates the child's exit code (or re-raises the signal that killed it). Repeated CLI invocations inside that child share the identity; a **new** launcher is a new identity and cannot claim the old one — a stopped owner needs the explicit recovery verb (→ § Recovery), never a copied id.
+
 ## Issue-store writes
 
 Unscoped `mstar issue` writes are actor-only store mutations: every write verb (`add`, `occurrence`, `triage`, `close`, `waive`, `duplicate`, `supersede`, and `link`) takes `--actor` + `--operation-id`, with optional `--expect` and `--payload`/`--file`. They do not take a session, envelope, workflow, or execution-authority address. The plan-scoped `mstar plan issue-add` and `mstar plan issue-close` routes remain inside their plan session and retain the plan coordination protocol described below.
 
 For `mstar issue link --kind plan|iteration --target <id>`, the target is recorded as a provenance label; the issue store does not verify that the plan or iteration exists. A future read-only `issue doctor` report for dangling provenance is deferred and would not gate writes.
-- The **reference is a lookup, not a bearer credential**: it names a stored session row, grants no authority by itself, and the engine compares the independently acquired caller inside its own transaction — so a copied reference under another identity refuses without writing.
-- Launching: `mstar session run --workflow <id> --role <coordinator|plan-pm> [--plan <id>] [--harness <absolute-path>] -- <argv>` mints **one** local identity for the child, overwrites the identity channel, deletes the legacy one, and propagates the child's exit code (or re-raises the signal that killed it). Repeated CLI invocations inside that child share the identity; a **new** launcher is a new identity and cannot claim the old one — a stopped owner needs the explicit recovery verb (→ § Recovery), never a copied id.
 
 ## Session and address model
 
