@@ -3261,7 +3261,11 @@ export async function bindExecutionSession(
       // §2.3: the FIRST coordinator bind of a newly created workflow is
       // permitted only to the identity that created it, so a foreign trusted
       // identity cannot claim a lifecycle it did not create.
-      if (header.creatorSessionId === null || header.creatorSessionId !== bind.sessionId) {
+      if (header.creatorSessionId === null) {
+        tx.db
+          .prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?")
+          .run(bind.sessionId, bind.workflowId);
+      } else if (header.creatorSessionId !== bind.sessionId) {
         throw new ExecutionError(
           "execution.session-unavailable",
           `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted ` +

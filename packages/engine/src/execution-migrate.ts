@@ -3050,14 +3050,20 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
   tx.db
     .prepare(
       "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) " +
-        "values (?, 1, null, ?, ?, ?)",
+        "values (?, 1, ?, ?, ?, ?)",
     )
     // §6 the imported lifecycle keeps its OWN validated timestamps: a migration
     // is not an edit of the history it imports, so the header's `created_at` /
     // `updated_at` are the source snapshot's `started_at` / `updated_at` read
     // back verbatim. `now` is used only for the migration's own receipt and
     // apply bookkeeping.
-    .run(workflowId, JSON.stringify(header), snapshot.started_at, snapshot.updated_at);
+    .run(
+      workflowId,
+      workflow.coordinator !== null ? workflow.coordinator.session_id : null,
+      JSON.stringify(header),
+      snapshot.started_at,
+      snapshot.updated_at,
+    );
   // §2.2/§4.2 registry membership is what selects an ACTIVE lifecycle, so a
   // terminal workflow dir the register no longer lists is imported as HISTORY:
   // its workflow/plan rows and sealed inputs land, and no root membership is

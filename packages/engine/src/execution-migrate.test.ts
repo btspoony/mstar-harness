@@ -1157,7 +1157,8 @@ describe("execution-stage", () => {
     expect(header.coordination).toBeUndefined();
     expect(header.integration_merge_lease).toBeUndefined();
     expect(header.delivery_kind).toBe("development");
-    expect(primaryHeader.creator_session_id).toBeNull();
+    expect(primaryHeader.creator_session_id).toBe(COORDINATOR_SESSION);
+    expect(headers.find((row) => row.workflow_id === SECONDARY)!.creator_session_id).toBeNull();
 
     // ── registry entries are the root register's own entries, verbatim
     const registry = rawAll<{ entry_json: string }>(
