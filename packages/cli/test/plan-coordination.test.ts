@@ -687,6 +687,25 @@ describe("mstar plan — session identity", () => {
     expect(String(jsonOf(explicit).message)).toContain("--resume accepts no --session-id or --harness");
   });
 
+  test("--resume rejects a host-supplied identity with no CLI source", async () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    const result = await executeCommand(
+      "plan.bind",
+      { resume: coordinator },
+      {
+        cwd: fixture.root,
+        controlRoot: null,
+        sessionId: "host-session-mcp",
+        versions: { engine: null, cli: "test", plugin: null, host: null, platform: "test" },
+        signal: new AbortController().signal,
+        effects: {},
+      },
+    );
+    expect(result.status).toBe("usage");
+    expect(result.message).toContain("--resume accepts no --session-id or --harness");
+  });
+
   test("--coordinator still refuses a flag that belongs to another address form", () => {
     const fixture = makeFixture();
     const refused = runCli(
