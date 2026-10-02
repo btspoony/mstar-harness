@@ -112,7 +112,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             const harnessDir = executionHarness(context);
             if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
             const hasIssueStore = existsSync(path.join(harnessDir, "store.db"));
-            legacyUpgradeEntry = hasIssueStore ? "mstar store safe-upgrade" : "mstar harness scaffold";
+            const hasLegacyStatus = existsSync(path.join(harnessDir, "status.json"));
+            legacyUpgradeEntry = hasIssueStore
+              ? "mstar store safe-upgrade"
+              : hasLegacyStatus
+                ? "mstar store init → mstar store safe-upgrade"
+                : "mstar harness scaffold";
             try {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {
@@ -149,8 +154,10 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 selfCheck: {
                   couldNotRead: "legacy status register is missing",
                   recovery: legacyUpgradeEntry === "mstar harness scaffold"
-                    ? "No issue store exists; run mstar harness scaffold to initialize this empty harness before proceeding."
-                    : "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs.",
+                    ? "No issue store or legacy status exists; run mstar harness scaffold to initialize this empty workspace."
+                    : legacyUpgradeEntry === "mstar store init → mstar store safe-upgrade"
+                      ? "A legacy status register exists without an issue store; first run mstar store init, then run mstar store safe-upgrade with its required inputs."
+                      : "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs.",
                 },
               });
             }

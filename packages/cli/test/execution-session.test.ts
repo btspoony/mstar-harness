@@ -762,6 +762,20 @@ describe("mstar status validate — disclosed authority state", () => {
       state: "legacy",
       upgrade: { entry: "mstar store safe-upgrade" },
     });
+    const legacyWithoutStore = await legacyFixture("mstar-session-legacy-without-store");
+    rmSync(join(legacyWithoutStore.harnessDir, "store.db"));
+    const legacyWithoutStoreResult = runCli(["status", "validate"], legacyWithoutStore);
+    expect(legacyWithoutStoreResult.exitCode).toBe(0);
+    expect(dataOf(legacyWithoutStoreResult)).toMatchObject({
+      state: "legacy",
+      upgrade: { entry: "mstar store init → mstar store safe-upgrade" },
+    });
+    const storeInitHelp = runCli(["store", "init", "--help"], legacyWithoutStore);
+    expect(storeInitHelp.exitCode, storeInitHelp.stdout).toBe(0);
+    expect(storeInitHelp.stdout).toContain("store init");
+    const safeUpgradeHelp = runCli(["store", "safe-upgrade", "--help"], legacyWithoutStore);
+    expect(safeUpgradeHelp.exitCode, safeUpgradeHelp.stdout).toBe(0);
+    expect(safeUpgradeHelp.stdout).toContain("store safe-upgrade");
     const missing = await legacyFixture("mstar-session-missing-status");
     rmSync(join(missing.harnessDir, "status.json"));
     const missingResult = runCli(["status", "validate"], missing);
