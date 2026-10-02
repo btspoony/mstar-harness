@@ -24,7 +24,7 @@
  * - a rebuild leaves issue/catalog revisions and rows untouched;
  * - a format-version bump discards the old generation and rebuilds.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -64,8 +64,8 @@ type Fixture = {
   projectsDir: string;
 };
 
-async function fixture(name: string): Promise<Fixture> {
-  const workspace = mkdtempSync(join(ROOT, name));
+async function fixture(name: string, root = ROOT): Promise<Fixture> {
+  const workspace = mkdtempSync(join(root, name));
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: workspace };
@@ -1072,25 +1072,32 @@ describe("projection publication and last-good handling", () => {
   });
 
   test("a store that predates migration 3 refuses actionably instead of projecting nothing", async () => {
-    const f = await fixture("schema-outdated-");
-    await seedStandard(f);
-    const handle = await openStore(f.context, "write");
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "mstar-projection-schema-outdated-"));
     try {
-      dropProjectionTables(handle.db);
-      // The recorded history must stay contiguous: a store that predates the
-      // projection schema predates every later migration too.
-      handle.db.exec("delete from schema_version where version >= 3");
+      const f = await fixture("store-", isolatedRoot);
+      await seedStandard(f);
+      const handle = await openStore(f.context, "write");
+      try {
+        dropProjectionTables(handle.db);
+        // The recorded history must stay contiguous: a store that predates the
+        // projection schema predates every later migration too.
+        handle.db.exec("delete from schema_version where version >= 3");
+      } finally {
+        handle.close();
+      }
+      // The pure capture still works (it reads no projection table) ...
+      const capture = await captureProjectionSources(f.context);
+      expect(capture.blocked).toBe(false);
+      // ... and publication refuses with the upgrade pointer, writing nothing.
+      const actualError = await refreshProjections(f.context).then(() => null, (error: unknown) => error);
+      expect(existsSync(join(f.harness, "store.db"))).toBe(true);
+      expect(actualError).toMatchObject({
+        code: "projection.schema-outdated",
+        message: expect.stringContaining("mstar store safe-upgrade"),
+      });
     } finally {
-      handle.close();
+      rmSync(isolatedRoot, { recursive: true, force: true });
     }
-    // The pure capture still works (it reads no projection table) ...
-    const capture = await captureProjectionSources(f.context);
-    expect(capture.blocked).toBe(false);
-    // ... and publication refuses with the upgrade pointer, writing nothing.
-    await expect(refreshProjections(f.context)).rejects.toMatchObject({
-      code: "projection.schema-outdated",
-      message: expect.stringContaining("mstar store safe-upgrade"),
-    });
   });
 });
 
