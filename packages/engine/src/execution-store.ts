@@ -85,6 +85,7 @@ import {
   type StoreDb,
 } from "./store-db.js";
 import {
+  WORKFLOW_TERMINAL_STATUSES,
   isTerminalSnapshot,
   rowValidationRoute,
   validateWorkflowSnapshot,
@@ -2377,6 +2378,23 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
     );
   }
   return mine;
+}
+
+/**
+ * Require the caller's bound session and a non-terminal lifecycle within the
+ * transaction that will perform an authorized issue write.
+ */
+export function requireLiveExecutionCallerSession(tx: ExecutionTransaction, caller: ExecutionCaller): ExecutionSessionRef {
+  const address = ownSessionAddress(caller);
+  const live = liveSession(tx, address);
+  const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, caller.workflowId);
+  if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(workflow.state.status)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `workflow ${caller.workflowId} is ${workflow.state.status} — a live coordination session authorizes issue writes only on a running lifecycle`,
+    );
+  }
+  return live.ref;
 }
 
 /** §2.1: a reference from another store or another epoch fences before anything is read. */

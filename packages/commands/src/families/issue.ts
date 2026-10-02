@@ -4,14 +4,21 @@ import {
   appendOccurrence,
   captureIssue,
   closeIssue,
+  closeIssueExecution,
+  createFsStore,
+  executionContextFor,
   getIssue,
   ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
+  linkIssueExecution,
   listIssues,
   resolveProcessHarnessDir,
+  setArtifactStore,
   triageIssue,
+  triageIssueExecution,
   type CaptureInput,
   type ClosureEvidence,
+  type ExecutionIdentity,
   type IssueFilter,
   type IssueLink,
   type IssueTriage,
@@ -40,6 +47,10 @@ const inputSchema = z.object({
   actor: z.string().optional(),
   session: z.string().optional(),
   expect: z.number().int().nonnegative().optional(),
+  execution: z.boolean().optional(),
+  workflow: z.string().optional(),
+  plan: z.string().optional(),
+  coordinator: z.boolean().optional(),
   payload: z.unknown().optional(),
 });
 type IssueInput = z.infer<typeof inputSchema>;
@@ -55,6 +66,9 @@ const readVerbs: Record<string, true> = { list: true, show: true, export: true }
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
+}
+function usage(id: string, message: string): CommandEnvelope<never> {
+  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
 }
 function refused(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
@@ -131,6 +145,42 @@ function issueFilter(input: IssueInput): IssueFilter {
 async function execute(id: string, input: IssueInput, invocation: InvocationContext): Promise<CommandEnvelope<unknown>> {
   try {
     const context = storeContext(input, invocation);
+    if (input.execution === true) {
+      const verb = id.slice("issue.".length);
+      if (!["triage", "close", "waive", "duplicate", "supersede", "link"].includes(verb)) {
+        return usage(id, "--execution is supported only for privileged issue mutations");
+      }
+      if (input.session !== undefined) return usage(id, "pre-activation and active transports are disjoint");
+      if (invocation.sessionId === undefined || input.workflow === undefined || (input.coordinator === true) === (input.plan !== undefined)) {
+        return usage(id, "active issue mutation requires runtime session identity, workflow, and exactly one of coordinator or plan");
+      }
+      const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
+      if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+      setArtifactStore(createFsStore(root));
+      const identity: ExecutionIdentity = {
+        source: invocation.host === undefined ? "local" : "host",
+        sessionId: invocation.sessionId,
+        workflowId: input.workflow,
+        role: input.coordinator ? "coordinator" : "plan-pm",
+        planId: input.coordinator ? null : input.plan!,
+      };
+      const activeContext = executionContextFor({ harnessDir: root }, identity);
+      const issueId = requiredId(input);
+      const issueMutation = mutation(input, true);
+      if (verb === "triage") {
+        return ok(id, await triageIssueExecution(activeContext, issueId, validatePayload(input, "IssueTriage", verb) as IssueTriage, issueMutation));
+      }
+      if (verb === "link") {
+        return ok(id, await linkIssueExecution(activeContext, issueId, validatePayload(input, "IssueLink", verb) as IssueLink, issueMutation));
+      }
+      return ok(id, await closeIssueExecution(
+        activeContext,
+        issueId,
+        terminalDisposition[verb]!,
+        validatePayload(input, "ClosureEvidence", verb) as ClosureEvidence,
+        issueMutation,
+      ));
+    }
     if (id === "issue.list" || id === "issue.export") {
       const page = await listIssues(context, issueFilter(input));
       if (id === "issue.export" && input.id !== undefined && input.id.trim() !== "") return ok(id, await getIssue(context, input.id.trim()));
@@ -217,19 +267,23 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     severity: "--severity <severity>", query: "--query <text>", limit: "--limit <n>", offset: "--offset <n>",
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     session: "--session <path>", expect: "--expect <n>", payload: "--payload <json>",
+    execution: "--execution", workflow: "--workflow <id>", plan: "--plan <id>", coordinator: "--coordinator",
   };
-  const options = Object.keys(inputSchema.shape).map((key) => ({
-    key,
-    flags: optionFlags[key]!,
-    required: payloadType[verb] !== undefined && (key === "operationId" || key === "actor"),
-  }));
+  const options = [
+    ...Object.keys(inputSchema.shape).map((key) => ({
+      key,
+      flags: optionFlags[key]!,
+      required: payloadType[verb] !== undefined && (key === "operationId" || key === "actor"),
+    })),
+    { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
+  ];
   return {
     id,
     cli: { path: ["issue", verb], aliases: [], arguments: [], options },
     input: inputSchema,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
-    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.`,
+    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.${payloadType[verb] !== undefined && !["add", "occurrence"].includes(verb) ? " On an ACTIVE execution authority use --execution --workflow with the bound session identity." : ""}`,
     ...(payloadType[verb] !== undefined
       ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], verb), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),

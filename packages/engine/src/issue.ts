@@ -1594,6 +1594,62 @@ function assertMultiPlanAcceptance(db: StoreDb, issueId: string, evidence: Closu
   }
 }
 
+export function triageIssueOn(
+  db: StoreDb,
+  issueId: string,
+  patch: IssueTriage,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
+  requireNonblank("reason", patch.reason);
+  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
+    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
+  }
+  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
+    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
+  }
+  const hash = requestHash("triageIssue", {
+    issueId,
+    patch,
+    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+  });
+
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
+
+  const issue = db.prepare("select id, revision, kind, severity, impact, acceptance, owner from issues where id = ?").get(issueId) as
+    | {
+        id: string;
+        revision: number;
+        kind: IssueKind;
+        severity: Severity;
+        impact: string;
+        acceptance: string;
+        owner: string | null;
+      }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  requireExpectedRevision(mutation, issue.revision);
+
+  const at = nowRfc3339();
+  db.prepare(
+    "update issues set kind = ?, severity = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?",
+  ).run(
+    patch.kind ?? issue.kind,
+    patch.severity ?? issue.severity,
+    patch.impact !== undefined ? requireNonblank("impact", patch.impact) : issue.impact,
+    patch.acceptance !== undefined ? requireNonblank("acceptance", patch.acceptance) : issue.acceptance,
+    patch.owner !== undefined ? patch.owner : issue.owner,
+    issue.revision + 1,
+    at,
+    issueId,
+  );
+  const storeRevision = receiptStoreRevision(db, composed);
+  const receipt: IssueReceipt = { issueId, revision: issue.revision + 1, storeRevision, created: false };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
+
 export async function triageIssue(
   context: StoreContext,
   issueId: string,
@@ -1608,54 +1664,7 @@ export async function triageIssue(
     throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
   }
   authorizeMutation(context, mutation);
-  const hash = requestHash("triageIssue", {
-    issueId,
-    patch,
-    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
-  });
-
-  return withWrite(context, (handle) => {
-    const db = handle.db;
-    const existingOp = lookupOperation(db, mutation.operationId);
-    if (existingOp) return replayOrConflict(existingOp, hash);
-
-    const issue = db.prepare("select id, revision, kind, severity, impact, acceptance, owner from issues where id = ?").get(issueId) as
-      | {
-          id: string;
-          revision: number;
-          kind: IssueKind;
-          severity: Severity;
-          impact: string;
-          acceptance: string;
-          owner: string | null;
-        }
-      | undefined;
-    if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
-    requireExpectedRevision(mutation, issue.revision);
-
-    const at = nowRfc3339();
-    db.prepare(
-      "update issues set kind = ?, severity = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?",
-    ).run(
-      patch.kind ?? issue.kind,
-      patch.severity ?? issue.severity,
-      patch.impact !== undefined ? requireNonblank("impact", patch.impact) : issue.impact,
-      patch.acceptance !== undefined ? requireNonblank("acceptance", patch.acceptance) : issue.acceptance,
-      patch.owner !== undefined ? patch.owner : issue.owner,
-      issue.revision + 1,
-      at,
-      issueId,
-    );
-    const storeRevision = bumpStoreRevision(db);
-    const receipt: IssueReceipt = {
-      issueId,
-      revision: issue.revision + 1,
-      storeRevision,
-      created: false,
-    };
-    recordOperation(db, mutation.operationId, hash, receipt, at);
-    return receipt;
-  });
+  return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation));
 }
 
 /**

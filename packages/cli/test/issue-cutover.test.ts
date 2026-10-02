@@ -515,6 +515,71 @@ describe("mstar issue — the retired commands refuse with the migration path (G
 });
 
 describe("mstar status — the issue authority is never read as an empty rollup (G2b)", () => {
+describe("mstar issue ACTIVE execution routes", () => {
+  async function capture(fixture: Fixture, suffix: string): Promise<string> {
+    const result = runCli([
+      "issue", "add", "--operation-id", `add-${suffix}`, "--actor", "project-manager",
+      "--payload", JSON.stringify(issueEntryOf({
+        sourceIdentity: `active-${suffix}`, rootCauseKey: `active-root-${suffix}`,
+        acceptanceKey: `active-accept-${suffix}`, occurrenceKey: `active-occ-${suffix}`,
+      })),
+      "--harness", fixture.harness,
+    ], fixture.root);
+    expect(result.exitCode).toBe(0);
+    return String(jsonOf(result).issueId);
+  }
+
+  function route(fixture: Fixture, verb: string, issueId: string, operationId: string, extra: string[] = []): RunResult {
+    const payload = verb === "triage"
+      ? { reason: "reclassify", severity: "medium" }
+      : { reason: "accepted", references: ["https://github.com/btspoony/mstar-harness/pull/361"], alignmentRef: "PM acceptance record" };
+    return runCli([
+      "issue", verb, "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+      "--session-id", "fixture-coordinator", "--operation-id", operationId, "--actor", "project-manager",
+      "--expect", "1", "--id", issueId, "--payload", JSON.stringify(payload),
+      "--harness", fixture.harness, ...extra,
+    ], fixture.root);
+  }
+
+  test("close and triage mutate ACTIVE issues through coordinator identity", async () => {
+    const fixture = await makeFixture();
+    const closeId = await capture(fixture, "close");
+    const closed = route(fixture, "close", closeId, "active-close");
+    expect(closed.exitCode).toBe(0);
+    expect(jsonOf(runCli(["issue", "show", "--id", closeId, "--harness", fixture.harness], fixture.root)).disposition).toBe("resolved");
+
+    const triageId = await capture(fixture, "triage");
+    expect(route(fixture, "triage", triageId, "active-triage").exitCode).toBe(0);
+    expect(jsonOf(runCli(["issue", "show", "--id", triageId, "--harness", fixture.harness], fixture.root)).severity).toBe("medium");
+  });
+
+  test("ACTIVE routes refuse wrong actor and stale revision", async () => {
+    const fixture = await makeFixture();
+    const actorId = await capture(fixture, "actor");
+    const wrongActor = route(fixture, "close", actorId, "active-wrong-actor", ["--actor", "qa-engineer"]);
+    expect(wrongActor.exitCode).toBe(1);
+    expect(jsonOf(wrongActor).code).toBe("issue.scope-refused");
+
+    const staleId = await capture(fixture, "stale");
+    const stale = route(fixture, "close", staleId, "active-stale", ["--expect", "0"]);
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale).code).toBe("issue.revision-conflict");
+  });
+
+  test("ACTIVE and file transports are disjoint and execution is privileged-only", async () => {
+    const fixture = await makeFixture();
+    const id = await capture(fixture, "transport");
+    const both = route(fixture, "close", id, "active-both", ["--session", join(fixture.root, "legacy-session.json")]);
+    expect(both.exitCode).toBe(2);
+
+    const add = runCli([
+      "issue", "add", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+      "--session-id", "fixture-coordinator", "--operation-id", "active-add", "--actor", "project-manager",
+      "--expect", "1", "--id", id, "--payload", JSON.stringify(issueEntryOf()), "--harness", fixture.harness,
+    ], fixture.root);
+    expect(add.exitCode).toBe(2);
+  });
+});
   test("a missing store refuses the rollup and the findings gate", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-nostore-")));
     roots.push(root);
