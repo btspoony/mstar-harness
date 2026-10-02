@@ -113,7 +113,7 @@ export function renderCommandContract(definition: CommandDefinition, route: "cli
   const descriptor = getCommandSchemas([definition])[0]!;
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
-    lines.push("Session identity: --session-id takes precedence over MSTAR_HOST_SESSION_ID; otherwise it is unset. Coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and does not accept the environment value.");
+    lines.push("Session identity resolves from --session-id or MSTAR_HOST_SESSION_ID; for active token-authorized writes it is attribution, not authorization. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and rejects the environment value. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity.");
   }
   if (route === "mcp") {
     // The CLI route prints this same syntax as commander's Usage line, built
@@ -289,7 +289,7 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
 export function resolveCliSessionIdentity(sessionId: unknown): Pick<InvocationContext, "sessionId" | "sessionIdSource"> {
   if (typeof sessionId === "string") return { sessionId, sessionIdSource: "flag" };
   const environmentSessionId = process.env.MSTAR_HOST_SESSION_ID;
-  return typeof environmentSessionId === "string"
+  return typeof environmentSessionId === "string" && environmentSessionId.trim() !== ""
     ? { sessionId: environmentSessionId, sessionIdSource: "env" }
     : {};
 }

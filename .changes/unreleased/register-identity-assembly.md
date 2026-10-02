@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root, cli, commands, engine
+packages: root, cli, commands
 ---
 
 - **CLI session identity now resolves from `--session-id` first, then `MSTAR_HOST_SESSION_ID`, and otherwise remains unset**, with the selected source attributed in the invocation context. Coordinator bootstrap (`plan bind --coordinator`) remains an explicit-only exception: it requires `--session-id` and rejects the environment fallback.

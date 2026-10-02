@@ -8,7 +8,7 @@ import type { CommandEffects, InvocationContext } from "../src/types.js";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function context(sessionId?: string): InvocationContext {
+function context(sessionId?: string, sessionIdSource?: "flag" | "env"): InvocationContext {
   const cwd = mkdtempSync(path.join(os.tmpdir(), "workflow-register-refusal-"));
   roots.push(cwd);
   const effects: CommandEffects = {
@@ -17,7 +17,7 @@ function context(sessionId?: string): InvocationContext {
     async startDashboard() { throw new Error("not used"); },
     async openBrowser() { throw new Error("not used"); },
   };
-  return { cwd, controlRoot: null, versions: { engine: null, cli: null, plugin: null, host: null, platform: null }, signal: new AbortController().signal, effects, ...(sessionId === undefined ? {} : { sessionId }) };
+  return { cwd, controlRoot: null, versions: { engine: null, cli: null, plugin: null, host: null, platform: null }, signal: new AbortController().signal, effects, ...(sessionId === undefined ? {} : { sessionId }), ...(sessionIdSource === undefined ? {} : { sessionIdSource }) };
 }
 
 function definition(id: string) {
@@ -66,6 +66,8 @@ async function refuse(id: string, fields: string[], identity = true) {
   return definition(id).execute(input(id, ctx.cwd, fields), ctx);
 }
 
+
+
 describe("active registration refusal diagnostics", () => {
   for (const route of routes) {
     const combinations = missingCombinations(route.labels, route.fields);
@@ -100,5 +102,32 @@ describe("active registration refusal diagnostics", () => {
     if (evidence.status !== "usage") throw new Error("expected usage refusal");
     expect(evidence.message).toContain("session.run child carries a minted local identity");
     expect(evidence.message).toContain("main session or pass an explicit --session-id");
+  });
+
+  test("recovery explains sessionRef acquisition and expect token scope", async () => {
+    const evidence = await refuse("workflow.evidence", ["expect", "operation"]);
+    expect(evidence.status).toBe("usage");
+    if (evidence.status !== "usage") throw new Error("expected usage refusal");
+    expect(evidence.message).toContain("session reference returned by the plan bind receipt");
+    expect(evidence.message).toContain("For workflow.register, expect is the root token from the root entry in mstar status validate");
+    expect(evidence.message).toContain("for evidence and other workflow-scoped writes, use that workflow's or plan's own token");
+
+    const register = await refuse("workflow.register", ["operation"]);
+    expect(register.status).toBe("usage");
+    if (register.status !== "usage") throw new Error("expected usage refusal");
+    expect(register.message).toContain("For workflow.register, expect is the root token");
+  });
+
+  test("legacy coordinator bind explains env identity refusal", async () => {
+    const ctx = context("environment-session", "env");
+    const result = await definition("plan.bind").execute({
+      coordinator: true,
+      workflow: "wf-test",
+    }, ctx);
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (result.status !== "usage") throw new Error("expected usage refusal");
+    expect(result.message).toContain("legacy pre-activation coordinator bootstrap");
+    expect(result.message).toContain("does not accept env-provided identity");
+    expect(result.message).toContain("pass --session-id explicitly");
   });
 });
