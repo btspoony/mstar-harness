@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { McpServer, type Transport } from "@modelcontextprotocol/server";
 import { correctiveMessage, withToolCorrection } from "../src/mcp/correction.js";
+import { serveMcpStdioOver } from "../src/mcp/stdio.js";
 
 type Message = Parameters<NonNullable<Transport["onmessage"]>>[0];
 
@@ -167,5 +168,41 @@ describe("MCP tool correction", () => {
     const closedError = { ...lateError, id: "closed-id" };
     await wrapped.send(closedError);
     expect(sent[2]).toEqual(closedError);
+  });
+
+  test("suggests from the real command catalog through the production stdio assembly", async () => {
+    const { serverTransport, clientTransport } = linkedTransports();
+    const handle = serveMcpStdioOver(serverTransport);
+    try {
+      let nextId = 0;
+      const responseHandlers = new Map<string | number, (message: Message) => void>();
+      clientTransport.onmessage = (message) => {
+        if ("id" in message && message.id !== null && !("method" in message)) {
+          responseHandlers.get(message.id)?.(message);
+        }
+      };
+      const request = async (method: string, params: Record<string, unknown>) => {
+        const id = ++nextId;
+        const response = new Promise<Message>((resolve) => responseHandlers.set(id, resolve));
+        await clientTransport.send({ jsonrpc: "2.0", id, method, params });
+        const result = await response;
+        responseHandlers.delete(id);
+        return result;
+      };
+      await request("initialize", {
+        protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "test-client", version: "1" },
+      });
+      await clientTransport.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+
+      const response = await request("tools/call", { name: "mstar_plan_issue", arguments: {} });
+      expect(response).toMatchObject({
+        error: {
+          code: -32602,
+          message: expect.stringContaining("Did you mean mstar_plan_issue_add?"),
+        },
+      });
+    } finally {
+      handle.close();
+    }
   });
 });
