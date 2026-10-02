@@ -1,5 +1,6 @@
 import { resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { serveStdio, StdioServerTransport, type StdioServerHandle } from "@modelcontextprotocol/server/stdio";
+import type { Transport } from "@modelcontextprotocol/server";
 import { withToolCorrection } from "./correction.js";
 import type { McpEffects } from "./effects.js";
 import { createMcpServer } from "./server.js";

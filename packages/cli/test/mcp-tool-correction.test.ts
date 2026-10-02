@@ -202,7 +202,7 @@ describe("MCP tool correction", () => {
         },
       });
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });
