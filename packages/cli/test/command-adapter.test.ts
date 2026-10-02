@@ -8,8 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { registerMcpCommand } from "../src/mcp/command";
-import { mcpToolInputSchema } from "../src/mcp/register";
-import { mapParserError, registerCliCommands, usageEnvelope } from "../src/command-adapter";
+import { mcpToolInputSchema, registerMcpCommands } from "../src/mcp/register";
+import { mapParserError, registerCliCommands, renderCommandContract, usageEnvelope } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 const census = [
@@ -291,6 +291,28 @@ describe("generated CLI adapter", () => {
     expect(envelope.data.fields.some((field: { name: string }) => field.name === "title")).toBe(true);
   });
 
+  test("published descriptions label only declared input fields as payloads", () => {
+    const persist = getCommandDefinitions().find((definition) => definition.id === "persist.write");
+    const worktree = getCommandDefinitions().find((definition) => definition.id === "worktree.check");
+    if (persist === undefined || worktree === undefined) throw new Error("canonical definitions missing");
+
+    const persistCli = renderCommandContract(persist, "cli");
+    expect(persistCli).toContain("Payload contracts: status, snapshot, review, json");
+    expect(persistCli).not.toContain("Payload fields:");
+    expect(persistCli).not.toContain("decoded against the declared schema");
+
+    const persistMcp = renderCommandContract(persist, "mcp");
+    expect(persistMcp).toContain("Payload contracts:");
+    expect(persistMcp).not.toContain("Payload fields:");
+
+    const worktreeCli = renderCommandContract(worktree, "cli");
+    expect(worktreeCli).toContain("Payload fields: tracks");
+    expect(worktreeCli).toContain("Payload field values arrive as JSON strings and are decoded against the declared schema.");
+    const worktreeMcp = renderCommandContract(worktree, "mcp");
+    expect(worktreeMcp).toContain("Payload fields: tracks");
+    expect(worktreeMcp).not.toContain("arrive as JSON strings");
+  });
+
   test("host detect is a real read", async () => {
     const result = await run(["host", "detect", "--signals", "question"]);
     expect(result.status).toBe(0);
@@ -309,6 +331,136 @@ describe("generated CLI adapter", () => {
     expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema", JSON.parse(result.stdout).message));
   });
 });
+
+describe("schema selector routes", () => {
+  test("CLI --command returns the selected leaf contract with the typed tracks schema", async () => {
+    const result = await run(["schema", "--command", "worktree.check"]);
+    expect(result.status).toBe(0);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ version: 1, command: "schema", status: "ok", exitCode: 0 });
+    expect(envelope.data.kind).toBe("command");
+    expect(envelope.data.descriptor.id).toBe("worktree.check");
+    // The discovery route publishes the same contract the runtime enforces:
+    // tracks is the typed array, not an opaque placeholder.
+    expect(envelope.data.descriptor.input.properties.tracks).toMatchObject({ type: "array" });
+    expect(envelope.data.descriptor.payloadSchemas).toHaveProperty("tracks");
+  });
+
+  test("CLI --family returns a compact member list", async () => {
+    const result = await run(["schema", "--family", "worktree"]);
+    expect(result.status).toBe(0);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope.data.kind).toBe("family");
+    expect(envelope.data.family).toBe("worktree");
+    const ids = envelope.data.members.map((member: { id: string }) => member.id);
+    expect(ids).toContain("worktree.check");
+    for (const member of envelope.data.members) {
+      expect(Object.keys(member).sort()).toEqual(["description", "id"]);
+    }
+  });
+
+  test("CLI refuses an unknown command id with grouped selectors", async () => {
+    const result = await run(["schema", "--command", "no-such-command"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "schema", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).toContain("available families");
+  });
+
+  test("CLI refuses colliding positional and option selectors", async () => {
+    const result = await run(["schema", "CaptureInput", "--command", "worktree.check"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope.status).toBe("usage");
+    expect(envelope.exitCode).toBe(2);
+    expect(envelope.message).toContain("exactly one");
+  });
+
+  test("MCP registers the schema tool with the exactly-one input contract", () => {
+    const definition = getCommandDefinitions().find((entry) => entry.id === "schema");
+    if (definition === undefined) throw new Error("schema command definition missing");
+    const toolSchema = mcpToolInputSchema(definition).toJSONSchema() as { anyOf?: readonly Record<string, unknown>[] };
+    const branches = toolSchema.anyOf ?? [];
+    expect(branches).toHaveLength(3);
+    const selectorKeys = branches.map((branch) => {
+      expect(branch.additionalProperties).toBe(false);
+      const properties = Object.keys(branch.properties as object);
+      expect(properties).toHaveLength(1);
+      return properties[0];
+    });
+    expect(selectorKeys).toEqual(["command", "family", "type"]);
+  });
+
+  test("MCP schema tool resolves a family query and refuses an empty one", async () => {
+    let handler: ((input: unknown, extra: { mcpReq: { signal: AbortSignal } }) => Promise<unknown>) | undefined;
+    const server = {
+      registerTool(name: string, _options: unknown, registered: typeof handler) {
+        if (name === "mstar_schema") handler = registered;
+      },
+    };
+    registerMcpCommands(server as never, getCommandDefinitions(), () => context());
+    if (handler === undefined) throw new Error("mstar_schema tool not registered");
+    const signal = { mcpReq: { signal: new AbortController().signal } };
+
+    const family = await handler!({ family: "worktree" }, signal) as {
+      structuredContent: { status: string; data: { kind: string; members: readonly { id: string }[] } };
+    };
+    expect(family.structuredContent.status).toBe("ok");
+    expect(family.structuredContent.data.kind).toBe("family");
+    expect(family.structuredContent.data.members.some((member) => member.id === "worktree.check")).toBe(true);
+
+    const empty = await handler!({}, signal) as {
+      structuredContent: { status: string; code: string; message: string };
+    };
+    expect(empty.structuredContent.status).toBe("usage");
+    expect(empty.structuredContent.exitCode).toBe(2);
+    expect(empty.structuredContent.message).toContain("exactly one");
+  });
+});
+describe("payload option decoding", () => {
+  test("worktree cleanup accepts a lone --worktree path as a one-element list", async () => {
+    const result = await run(["worktree", "cleanup", "--worktree", "/abs/some-path"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    // The lone path decoded cleanly into a one-element list: the refusal is
+    // the missing --workflow validation, not a payload JSON decode error.
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).not.toContain("payload");
+    expect(envelope.message).not.toContain("valid JSON");
+    expect(envelope.details?.diagnostics).toBeUndefined();
+  });
+
+  test("worktree cleanup --apply --worktree <path> decodes the lone path before execution", async () => {
+    const result = await run(["worktree", "cleanup", "--apply", "--worktree", "/abs/some-path"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).not.toContain("payload");
+    expect(envelope.message).not.toContain("valid JSON");
+    expect(envelope.details?.diagnostics).toBeUndefined();
+  });
+
+  test("worktree cleanup refuses a JSON-object --worktree occurrence via the declared schema", async () => {
+    const result = await run(["worktree", "cleanup", "--worktree", '{"a":1}']);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).toContain("Invalid command payload");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
+    expect(diagnostics[0]?.path).toBe("worktree[0]");
+  });
+
+  test("worktree cleanup refuses a malformed JSON-looking --worktree occurrence", async () => {
+    const result = await run(["worktree", "cleanup", "--worktree", "{not json"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout);
+    expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.message).toContain("Invalid command payload");
+    const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
+    expect(diagnostics[0]?.path).toBe("worktree[0]");
+  });
+});
+
 test("payload decoding reports malformed JSON as usage without executing the command", async () => {
   const result = await run(["report", "--arguments", "[not-json"]);
   expect(result.status).toBe(2);

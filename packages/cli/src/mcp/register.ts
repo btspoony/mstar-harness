@@ -3,6 +3,7 @@ import { executeCommand } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
+import { renderCommandContract } from "../command-adapter.js";
 import { validateCommandOutcome } from "./outcome.js";
 export type ResolveContext = (
   definition: CommandDefinition,
@@ -85,7 +86,7 @@ export function registerMcpCommands(
 
   for (const { definition, name } of tools) {
     server.registerTool(name, {
-      description: definition.description,
+      description: renderCommandContract(definition, "mcp"),
       inputSchema: mcpToolInputSchema(definition),
       outputSchema: definition.output,
     }, async (input, extra) => {

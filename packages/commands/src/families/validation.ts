@@ -38,7 +38,6 @@ import {
   validateSchemaYaml,
   type GateResult,
   type QcAlignmentAssignment,
-  type WorktreeTrack,
   WorkflowSnapshotValidationError,
   readWorkflowSnapshot,
   resolveProcessHarnessDir,
@@ -46,11 +45,27 @@ import {
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
-import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import type { CommandDefinition, CommandEnvelope, InvocationContext, PayloadDescriptor } from "../types.js";
+
+/** One contract for `worktree.check --tracks`: the typed input field drives publication and boundary validation, while the shared schema also serves the CLI's JSON decoding and the discovery descriptor. Error messages carry indexed `tracks[N].<field>` paths (the array index is the last numeric path segment, whether the schema runs wrapped in the input object or bare), so a refused request names the offending member. */
+const trackPrefix = (path: readonly PropertyKey[]): string => {
+  const index = path.filter((part) => typeof part === "number").at(-1);
+  return typeof index === "number" ? `tracks[${index}]` : "tracks";
+};
+const tracksSchema = z.array(
+  z.object(
+    {
+      worktreePath: z.string({ error: (issue) => `${trackPrefix(issue.path ?? [])}.worktreePath must be a string` }),
+      workingBranch: z.string({ error: (issue) => `${trackPrefix(issue.path ?? [])}.workingBranch must be a string` }),
+    },
+    { error: (issue) => `${trackPrefix(issue.path ?? [])} must be an object with string worktreePath and workingBranch` },
+  ),
+  { error: () => "tracks must be an array of {worktreePath, workingBranch}" },
+);
 
 type Input = {
   assignmentFile?: string; branch?: string; planId?: string; plan?: string; workflow?: string; harness?: string; integration?: string;
-  mainBranch?: string; control?: string; l2?: boolean; tracks?: string; files?: string[]; mode?: string; reviewers?: string[];
+  mainBranch?: string; control?: string; l2?: boolean; tracks?: { worktreePath: string; workingBranch: string }[]; files?: string[]; mode?: string; reviewers?: string[];
   target?: string; type?: string; prVariant?: boolean; dir?: string; docPath?: string; knowledgeDir?: string;
   skillDir?: string; rolesDir?: string; skillsDir?: string; reportFile?: string;
 };
@@ -65,7 +80,7 @@ function assignmentExecutionMode(text: string): string {
 const verbs = ["dispatch.validate", "worktree.check", "worktree.qc-alignment", "review.seats", "lint", "design-md.validate", "compound.validate", "skill.lint", "roles.validate", "qc.validate-report"] as const;
 const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
   "dispatch.validate": z.object({ assignmentFile: z.string().optional(), branch: z.string().optional() }),
-  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), l2: z.boolean().optional(), tracks: z.string().optional() }),
+  "worktree.check": z.object({ planId: z.string().optional(), plan: z.string().optional(), workflow: z.string().optional(), harness: z.string().optional(), integration: z.string().optional(), mainBranch: z.string().optional(), control: z.string().optional(), l2: z.boolean().optional(), tracks: tracksSchema.optional() }),
   "worktree.qc-alignment": z.object({ files: z.array(z.string()).optional() }),
   "review.seats": z.object({ assignmentFile: z.string().optional(), mode: z.string().optional(), reviewers: z.array(z.string()).optional() }),
   lint: z.object({ target: z.string().optional(), type: z.string().optional(), prVariant: z.boolean().optional() }),
@@ -180,18 +195,13 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       }
       case "worktree.check": {
         if (input.l2) {
-          const raw = required(input.tracks, "usage: worktree check --l2 --tracks <json>");
-          let parsed: unknown;
-          try { parsed = JSON.parse(raw); } catch { throw new SddScriptError("usage: worktree check --l2 --tracks <json> — invalid JSON", 2); }
-          if (!Array.isArray(parsed)) throw new SddScriptError("usage: worktree check --l2 --tracks <json> — expected a JSON array of {worktreePath, workingBranch}", 2);
-          const tracks: WorktreeTrack[] = [];
-          for (const item of parsed) {
-            if (item === null || typeof item !== "object" || !("worktreePath" in item) || typeof item.worktreePath !== "string" || !("workingBranch" in item) || typeof item.workingBranch !== "string") {
-              throw new SddScriptError("usage: worktree check --l2 --tracks <json> — every track needs string worktreePath + workingBranch", 2);
-            }
-            tracks.push({ worktreePath: item.worktreePath, workingBranch: item.workingBranch });
-          }
-          const gate = l2PreDispatchCheck({ tracks });
+          // `tracks` reaches here already validated: the typed input field is
+          // the boundary contract (published schema == enforced shape), and the
+          // CLI adapter decodes the raw JSON string through the same shared
+          // schema before executeCommand. Only the absent-field usage gate
+          // remains family-owned.
+          if (input.tracks === undefined) throw new SddScriptError("usage: worktree check --l2 --tracks <json>", 2);
+          const gate = l2PreDispatchCheck({ tracks: input.tracks });
           return gate.ok ? ok(id, gateData(gate)) : rejected(id, gate, "worktree.l2.invalid");
         }
         const plan = input.plan ?? input.planId;
@@ -392,6 +402,9 @@ const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: st
 function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unknown> {
   const id = verb;
   const item = contract[verb];
-  return { id, cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) }, input: schemas[verb], output: commandEnvelopeSchema, effects: item.effects, description: item.description, execute: (input, context) => execute(id, input, context) };
+  const payloads: Record<string, PayloadDescriptor> | undefined = verb === "worktree.check"
+    ? { tracks: { schema: tracksSchema, help: "JSON array of {worktreePath, workingBranch}; the CLI passes the JSON string, MCP passes the object array" } }
+    : undefined;
+  return { id, cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) }, input: schemas[verb], output: commandEnvelopeSchema, effects: item.effects, description: item.description, ...(payloads === undefined ? {} : { payloads }), execute: (input, context) => execute(id, input, context) };
 }
 export function getValidationCommandDefinitions(): readonly CommandDefinition[] { return verbs.map(definition); }
