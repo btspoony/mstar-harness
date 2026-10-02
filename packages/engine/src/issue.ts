@@ -1513,28 +1513,6 @@ function readScopedSession(sessionFile: string | undefined): { session: Coordina
   }
 }
 
-/** Identity for new plan/iteration links is the validated envelope's plan_id / workflow_id (no catalog table in this plan). */
-function assertPlanIterationIdentity(
-  kind: "plan" | "iteration",
-  target: string,
-  session: CoordinationSession,
-): void {
-  if (kind === "plan") {
-    if (session.role !== "plan-pm" || session.plan_id !== target) {
-      throw new IssueError(
-        "issue.scope-refused",
-        "New plan provenance must match the plan-pm session envelope plan_id; arbitrary targets are refused until catalog identity exists.",
-      );
-    }
-    return;
-  }
-  if (session.workflow_id !== target) {
-    throw new IssueError(
-      "issue.scope-refused",
-      "New iteration provenance must match the session envelope workflow_id; arbitrary targets are refused until catalog identity exists.",
-    );
-  }
-}
 
 function requireExpectedRevision(mutation: MutationContext, current: number): void {
   if (mutation.expectedRevision === undefined) {
@@ -1549,24 +1527,12 @@ function requireExpectedRevision(mutation: MutationContext, current: number): vo
 }
 
 /**
- * Disposition-specific evidence requirements (contract §4/§6).
+ * Disposition-specific payload requirements (contract §4/§6). The actor is
+ * audited separately; this validates evidence content, not execution authority.
  *
- * Who may close is decided by `authorizeMutation` before this runs: the
- * envelope proves the seat, and an actor string is never authority. That is
- * §4's whole execution route, because §6 makes the leaf QA seat an **evidence
- * authority**, not a second execution credential — "leaf audit/QC/QA seats
- * return evidence and never write the store". So when the QA gate is the
- * authority for a `resolved` closure, the QA seat's acceptance arrives as this
- * closure's evidence and the envelope-proven seat performs the write; the
- * store therefore declares no unreachable `qa-engineer` credential path.
- *
- * `resolved` requires both halves of that evidence: the verification
- * `references` (what was accepted) and the acceptance authority in
- * `alignmentRef` (who accepted it — the QA gate's acceptance or the PM
- * acceptance record). Recording the authority is what keeps a QA-gate-backed
- * closure distinguishable in the append-only history from one resting on no
- * acceptance evidence at all; without it, a `resolved` closure would record
- * nothing about which §4 authority it was made under.
+ * `resolved` requires both verification `references` and the acceptance
+ * authority in `alignmentRef`, keeping QA-gate-backed closure distinguishable
+ * in append-only history from a closure without acceptance evidence.
  */
 export function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
   requireNonblank("reason", evidence.reason);
@@ -1676,9 +1642,9 @@ export async function triageIssue(
   patch: IssueTriage,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
   requireNonblank("reason", patch.reason);
   assertIssueTriageVocabulary(patch);
-  authorizeMutation(context, mutation);
   return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true));
 }
 
@@ -1797,8 +1763,8 @@ export async function closeIssue(
   evidence: ClosureEvidence,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
   assertTerminalDisposition(disposition);
-  authorizeMutation(context, mutation);
   assertClosureAuthority(disposition, evidence);
   return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
 }
@@ -1866,14 +1832,9 @@ export async function assignIssueMilestone(
 }
 
 /**
- * The link body on a handle the caller already owns and has already
- * authorized: it appends one relation or one provenance row and is idempotent
- * per `(issue, link)` as well as per operation id, so a retry converges instead
- * of duplicating a link. It reads no session file, opens no store and begins no
- * transaction — the link vocabulary and the plan/iteration identity of the
- * target belong to the transport's pre-transaction half — and a caller that owns
- * the transaction passes its own `ComposedTransactionRevision` so the link joins
- * the single store-revision advance instead of adding one of its own.
+ * Appends one relation or provenance row to a caller-owned transaction. It is
+ * idempotent per `(issue, link)` as well as per operation id; plan/iteration
+ * targets are recorded provenance labels, not catalog lookups.
  */
 export function linkIssueOn(
   db: StoreDb,
@@ -1964,10 +1925,7 @@ export async function linkIssue(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  const session = authorizeMutation(context, mutation);
+  requireCaptureSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
-  if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
-    assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), session);
-  }
   return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
 }
