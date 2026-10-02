@@ -5,10 +5,9 @@
  * network access).
  *
  * Enforced distinctions:
- * - integrity (retained artifacts match recorded facts) stays separate from
- *   outcome (what the recorded child did), from applicability (may this
- *   evidence still back the current declared inputs) and from coverage
- *   (always review-required, never machine-decided).
+ * - Artifact identity, shape, path, existence, type and completeness checks
+ *   stay separate from recorded outcome and applicability; content hashes
+ *   are provenance rather than integrity evidence.
  * - A complete failed run is valid failure evidence: integrity passes while
  *   the reported outcome stays failed.
  * - Applicability follows one fixed first-match order: integrity failure,
@@ -582,6 +581,23 @@ describe("assessSddEvidenceReuse", () => {
     const matchesBefore = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, before);
     expect(matchesBefore.applicability).toBe("candidate");
     expect(matchesBefore.changedInputs).toEqual([]);
+  });
+  test("before/after path-state movement stays uncertain when the target matches after", () => {
+    const before = snapshot();
+    const missing = {
+      ...fileEntry(),
+      kind: "missing" as const,
+      sha256: null,
+      bytes: null,
+      executable: null,
+      error: null,
+    };
+    const after = snapshot({ entries: [missing] });
+    const rec = record({ before, after });
+    const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, after);
+    expect(assessment.applicability).toBe("uncertain");
+    expect(assessment.reasons).toContain("input.concurrent-change");
+    expect(assessment.changedInputs).toContain("src/alpha.ts");
   });
 
   test("unknown target plus digest-only drift reports uncertainty without a changed-content claim", () => {

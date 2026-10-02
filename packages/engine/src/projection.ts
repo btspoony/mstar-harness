@@ -603,9 +603,8 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
 
 /**
  * Read, validate and fingerprint the whole source set without writing
- * anything. Source I/O happens ONLY here (and in the publication
- * re-verification), so the read boundary's "discover/read/validate outside
- * the transaction" rule is structural rather than a convention.
+ * anything. Source I/O happens here, outside publication's transaction; the
+ * fingerprint is recorded provenance, not a publication re-verification gate.
  */
 export async function captureProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const harness = catalogRootDir(context, "harness");

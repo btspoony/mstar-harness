@@ -1264,6 +1264,7 @@ export function assessSddEvidenceReuse(
 
   const after = rec.after;
   const beforeAfterPaths = after !== null ? diffEntryPaths(rec.before.entries, after.entries) : [];
+  const beforeAfterMoved = beforeAfterPaths.length > 0;
 
   let lane = unusableTargetLane;
   if (target !== undefined) {
@@ -1299,7 +1300,7 @@ export function assessSddEvidenceReuse(
     // only an integrity-valid run without a target is not-assessed.
     applicability = integrity.ok ? "not-assessed" : "uncertain";
     reasons.add("target.absent");
-    if (!rec.before.stable || (after !== null && !after.stable)) reasons.add("input.concurrent-change");
+    if (!rec.before.stable || (after !== null && !after.stable) || beforeAfterMoved) reasons.add("input.concurrent-change");
     if (declarationUnknown) reasons.add("coverage.unknown");
   } else {
     // Rules 3-5: target comparison lanes.
@@ -1315,20 +1316,19 @@ export function assessSddEvidenceReuse(
     if (repoMissing || repoDifferent) reasons.add("input.repository");
     if (targetHeadMissing) reasons.add("input.unknown");
     if (lane.usable && lane.unknowns.includes("target.expected-head-mismatch")) reasons.add("target.expected-head-mismatch");
-    if (unstable) reasons.add("input.concurrent-change");
+    if (unstable || beforeAfterMoved) reasons.add("input.concurrent-change");
     if (declarationUnknown) reasons.add("coverage.unknown");
     if (!integrity.ok) {
       // Rule 1: integrity failure is uncertain whether or not a target exists.
       applicability = "uncertain";
-    } else if (recordUnknowns || targetUnknown || unstable || repoMissing || repoDifferent || targetHeadMissing || declarationUnknown) {
+    } else if (recordUnknowns || targetUnknown || unstable || beforeAfterMoved || repoMissing || repoDifferent || targetHeadMissing || declarationUnknown) {
       // Unknown, unstable, repository or coverage conditions remain uncertain.
       applicability = "uncertain";
     } else if (outcome !== "passed") {
       // A failed or incomplete proof cannot satisfy a passing criterion.
       applicability = "uncertain";
     } else if (after !== null && (lane.paths.length > 0 || lane.toolDiffers || lane.envDiffers)) {
-      // Rule 5: known differences in tested bytes, tool content or selected
-      // environment.
+      // Semantic path-state, tool metadata or selected environment differences.
       applicability = "changed";
       reasons.add("input.changed");
     } else {

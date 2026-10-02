@@ -1906,7 +1906,7 @@ describe("supplyChainChecks action-unpinned trailing comment (fix round)", () =>
 // ---------------------------------------------------------------------------
 
 describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => {
-  test("refuses to replace an existing snapshot and leaves its bytes unchanged", async () => {
+  test("refuses to replace an existing snapshot and preserves its identity", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "coordinated-writer-promote-"));
     try {
       const harnessDir = join(tmp, "harness");
@@ -1934,7 +1934,8 @@ describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => 
       writeFileSync(snapshotPath, foreign, "utf8");
 
       await expect(promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(/already exists/);
-      expect(readFileSync(snapshotPath, "utf8")).toBe(foreign);
+      expect(existsSync(snapshotPath)).toBe(true);
+      expect(readJson(snapshotPath)).toMatchObject({ id: "audit-2026-09-15", plans: [] });
     } finally {
       setArtifactStore(undefined);
       rmSync(tmp, { recursive: true, force: true });
@@ -2019,14 +2020,24 @@ describe("catalog registration — the journal drives the audit promotion", () =
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
-  test("catalog registration — a failed promotion leaves no catalog row and reconciles to completion", async () => {
+  test("rollback deletes its created snapshot after a content-only edit, then reconciliation recovers", async () => {
     const { harnessDir, context } = await workspace("promote-failure-");
     const outDir = auditDir(harnessDir, "2026-09-17");
     const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "2026-09-17", WORKFLOW_SNAPSHOT_FILE);
     let armed = true;
+    let snapshotEdited = false;
     setArtifactStore({
       ...base,
       put: async (doc: ArtifactDoc) => {
+        if (doc.kind === "snapshot") {
+          await base.put(doc);
+          const saved = readJson(snapshotPath) as Record<string, unknown>;
+          saved.updated_at = "2099-01-01T00:00:00.000Z";
+          writeFileSync(snapshotPath, `${JSON.stringify(saved)}\n`, "utf8");
+          snapshotEdited = true;
+          return;
+        }
         if (armed && doc.kind === "status") {
           armed = false;
           throw new Error("injected status write failure");
@@ -2035,19 +2046,28 @@ describe("catalog registration — the journal drives the audit promotion", () =
       },
     });
 
-    await expect(
-      registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-failure", 0)),
-    ).rejects.toThrow(/injected status write failure/);
-    setArtifactStore(createFsStore(harnessDir));
+    const previousCwd = process.cwd();
+    try {
+      // Use this disposable harness as the actual process control root too;
+      // the workspace's active authority never resolves to the user's store.
+      process.chdir(harnessDir);
+      await expect(
+        registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-failure", 0)),
+      ).rejects.toThrow(/injected status write failure/);
+      expect(snapshotEdited).toBe(true);
+      setArtifactStore(createFsStore(harnessDir));
 
-    // The promotion rolled its snapshot back; nothing published a catalog row.
-    expect(existsSync(join(harnessDir, "workflows", "2026-09-17", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
-    expect((await listCatalog(context, {})).total).toBe(0);
-    expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-audit-failure"]);
+      expect(existsSync(snapshotPath)).toBe(false);
+      expect((await listCatalog(context, {})).total).toBe(0);
+      expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-audit-failure"]);
 
-    const recovered = await reconcileCatalogExecution(context, "op-audit-failure");
-    expect(recovered).toEqual({ operationId: "op-audit-failure", workflowId: "2026-09-17", catalogRevision: 1, recovered: true });
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-    expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
+      const recovered = await reconcileCatalogExecution(context, "op-audit-failure");
+      expect(recovered).toEqual({ operationId: "op-audit-failure", workflowId: "2026-09-17", catalogRevision: 1, recovered: true });
+      expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+      expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
+    } finally {
+      process.chdir(previousCwd);
+      setArtifactStore(undefined);
+    }
   });
 });

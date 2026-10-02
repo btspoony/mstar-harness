@@ -1157,8 +1157,8 @@ async function applyMigratePlanLocked(
     
   }
 
- // 3. Notes ledgers (additive; raw-byte ownership guard — the JSONL bytes
- // are preserved verbatim, never re-serialized).
+ // 3. Notes ledgers are create-only destinations and retain their planned
+ // contents exactly; an existing regular file is left untouched.
   for (const notes of plan.notesFiles) {
     const content = notes.lines.length > 0 ? `${notes.lines.join("\n")}\n` : "";
     writeRawMigrateTarget(workflowTargetOf(notes.file), Buffer.from(content, "utf8"));
