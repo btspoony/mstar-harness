@@ -131,7 +131,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("workflow.register", "active registration requires main session identity, expect and operation");
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow!, role: "coordinator", planId: null };
           const { catalogRevision } = await readCatalogRevisions({ harnessDir });
-          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath: input.planFile! }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
+          const canonicalPlanAbs = path.isAbsolute(input.planFile!) ? path.resolve(input.planFile!) : path.join(harnessDir, input.planFile!);
+          const plansRelative = path.relative(path.join(harnessDir, "plans"), canonicalPlanAbs);
+          const relativePath = plansRelative === ".." || plansRelative.startsWith(`..${path.sep}`) || path.isAbsolute(plansRelative) ? input.planFile! : plansRelative;
+          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
         }
         await assertLegacyRoute(harnessDir, "workflow register");
         return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));

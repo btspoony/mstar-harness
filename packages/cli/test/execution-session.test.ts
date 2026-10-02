@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   encodeExecutionSessionRef,
+  getCatalog,
   initializeExecutionAuthority,
   initializeStore,
   readExecutionAuthority,
@@ -221,7 +222,7 @@ async function legacyFixture(label: string): Promise<Fixture> {
 }
 
 /** Register the workflow through the ACTIVE registration route (the real producer chain). */
-function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity, rootToken: string): void {
+function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity, rootToken: string, planFile = `plans/${PLAN_ID}.md`): void {
   const registered = runCli(
     [
       "workflow",
@@ -233,7 +234,7 @@ function registerThroughAuthority(fixture: Fixture, identity: ExecutionIdentity,
       "--plan-title",
       "Execution session transport plan",
       "--plan-file",
-      `plans/${PLAN_ID}.md`,
+      planFile,
       "--delivery-kind",
       "development",
       "--branch-source",
@@ -837,6 +838,40 @@ describe("mstar status validate — disclosed authority state", () => {
         recovery: expect.stringContaining("Preserve the corrupt database and legacy sources"),
       },
     });
+  });
+});
+
+describe("workflow.register — catalog plan paths", () => {
+  test.each([
+    ["harness-relative", false],
+    ["canonical-absolute", true],
+  ])("%s registration stores the plans-root-relative document and prepares successfully", async (label, canonicalAbsolute) => {
+    const fixture = await activeFixture(`mstar-register-plan-path-${label}`);
+    const planFile = canonicalAbsolute ? fixture.planMarkdown : `plans/${PLAN_ID}.md`;
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+
+    registerThroughAuthority(fixture, identity, initial.token, planFile);
+
+    const entity = (await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity;
+    expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
+    const storedPlanFile = join(fixture.harnessDir, "plans", entity.relativePath);
+    expect(storedPlanFile).toBe(fixture.planMarkdown);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+
+    const tokens = await tokensOf(fixture);
+    const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
+    const prepared = runCli(
+      [
+        "plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
+        "--assignment", fixture.assignmentPath, "--expect", tokens.plan,
+        "--operation", "prepare-registered-path", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode).toBe(0);
+    expect(jsonOf(prepared).command).toBe("plan.prepare");
   });
 });
 
