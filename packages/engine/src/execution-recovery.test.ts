@@ -746,22 +746,23 @@ describe("execution-restore", () => {
     const walPath = `${world.dbPath}-wal`;
 
     // A writer that commits while the replacement is being decided writes the
-    // store's WAL, and those frames are NOT in the database bytes the
-    // checkpoint hash covers — so the replacement may not proceed past them.
-    // The window to reach is the one INSIDE the replacement sequence, which
-    // opens once the durable pre-replacement receipt is on disk: the sidecar is
-    // therefore created from the first event-loop turn after that receipt
-    // appears, i.e. while the sequence is still awaiting rather than after it
-    // has stopped checking.
-    const receiptDir = join(world.harness, "archived", "store-migration", "recovery");
+    // store's WAL, and those frames are NOT in the database bytes the checkpoint
+    // covers — so the replacement may not proceed past them. The window to reach
+    // is the one INSIDE the replacement sequence, after the sidecar identities
+    // were snapshotted and before the rename: the prepared scratch image
+    // (`.store-restore-<id>.db`) is copied in that window, and the sequence then
+    // awaits its verification, so the injector keys on that image and lands a
+    // fresh sidecar file in the yield.
     const sidecarBytes = Buffer.alloc(4096, 0x7a);
     const scratchPath = `${walPath}.appearing-writer`;
+    const scratchImageExists = (): boolean =>
+      readdirSync(world.harness).some((name) => name.startsWith(".store-restore-") && name.endsWith(".db"));
     let injected = false;
     let stop = false;
     const injector = (async () => {
       while (!stop) {
         await nextTurn();
-        if (injected || !existsSync(receiptDir) || readdirSync(receiptDir).length === 0) continue;
+        if (injected || !scratchImageExists()) continue;
         // A new file, moved into the WAL's own name: the sidecar a writer
         // creates is a file the checkpoint never saw, not a rewrite of one it
         // did.
@@ -1357,8 +1358,8 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     expect(await liveAuthority(world.context)).toEqual(liveState);
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
 
-    // An interrupted tail the POINT recorded is carried by exact hash instead of
-    // being guessed at.
+    // An interrupted tail the POINT recorded is carried as a recorded identity
+    // instead of being guessed at.
     writeFileSync(bodies.notes, clean);
     const interruptedTail = '{"v":1,"ts":2';
     writeFileSync(
@@ -1372,7 +1373,7 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     expect(carried.retainedDigest).toBe(second.retained!.digest);
   });
 
-  test("Phase 2b reconciles a crashed attempt by exact hash and proceeds on a moved retained set", async () => {
+  test("Phase 2b reconciles a crashed attempt from its durable receipt and proceeds on a moved retained set", async () => {
     const world = await recoveryWorld("phase2b-crash");
     const bodies = plantBodies(world);
     const point = await recoveryPoint(world, "crash-retained-point");
@@ -1394,8 +1395,8 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     });
     expect(crash.message).toContain("before-replacement");
 
-    // The durable receipt decides the store by exact hash and carries both
-    // retained digests, so the retained verification is resumable rather than
+    // The durable receipt names both sides' bytes and carries both retained
+    // digests as records, so a crashed attempt is resumable rather than
     // repeated from memory.
     const pending = recoveryRecords(world).at(-1)!;
     expect(pending.phase).toBe("replacing");

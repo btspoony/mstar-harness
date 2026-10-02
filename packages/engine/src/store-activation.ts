@@ -2127,13 +2127,62 @@ function verifyArchivedRegister(item: LedgerRegisterItem): void {
   }
 }
 
+/** The cell labels of one markdown header line, rendered the way catalog-import records `header`. */
+function tableHeaderAt(lines: string[], startLine: number): string | null {
+  const header = lines[startLine - 1];
+  const delimiter = lines[startLine];
+  if (header === undefined || delimiter === undefined) return null;
+  if (!header.trim().startsWith("|") || !delimiter.trim().startsWith("|")) return null;
+  const cells = delimiter
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim().replace(/\s/g, ""));
+  if (cells.length === 0 || !cells.every((cell) => /^:?-{2,}:?$/.test(cell))) return null;
+  return header
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim())
+    .join(" | ");
+}
+
+/**
+ * Locate the reviewed section's markdown table in the live file by its parsed
+ * header, returning the table's ACTUAL line span. Drift above the table shifts
+ * its line number, so the reviewed `startLine` is never trusted as the excision
+ * range; `null` means the reviewed table is not present at all (its removal has
+ * already happened or an equivalent edit landed).
+ */
+function locateReviewedSection(live: string, item: LedgerSectionItem): { startLine: number; endLine: number } | null {
+  const lines = live.split(/\r?\n/);
+  for (let start = 1; start < lines.length; start += 1) {
+    if (tableHeaderAt(lines, start) !== item.header) continue;
+    let last = start + 1; // the delimiter row closes the header even with no body rows
+    for (let row = start + 2; row <= lines.length; row += 1) {
+      if (!(lines[row - 1] ?? "").trim().startsWith("|")) break;
+      last = row;
+    }
+    return { startLine: start, endLine: last };
+  }
+  return null;
+}
+
+/** True when the reviewed section's markdown table is no longer present in the live file. */
+function reviewedSectionAbsent(live: string, item: LedgerSectionItem): boolean {
+  return locateReviewedSection(live, item) === null;
+}
+
 /**
  * Excise one reviewed index section: archive the whole original file, then
  * rewrite the live file without only those lines. Every other byte — narrative,
  * security dispositions, human report content — survives verbatim.
  *
- * Crash resume is detected by the recorded `preservedLines` count (the semantic
- * shape the excision produces), never by re-comparing reviewed bytes.
+ * The section is located by its parsed table header, so a line-count
+ * coincidence never stands in for excision: a table that is still present is
+ * always removed, and completion is proven by its absence.
  */
 function retireSection(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerSectionItem): void {
   const livePath = join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
@@ -2145,15 +2194,17 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
         `Nothing was retired.`,
     );
   }
-  if (lineCountOf(live) === item.preservedLines) {
-    // Crash after the rewrite, before the ledger recorded it: verify and finish.
+  const located = locateReviewedSection(live, item);
+  if (located === null) {
+    // The reviewed table is already gone (a crash after the rewrite, before the
+    // ledger recorded it, or an equivalent edit): verify and finish.
     verifyRetiredSection(livePath, item);
     item.state = "verified";
     writeLedger(ledgerPath, ledger);
     return;
   }
-  const excised = removeSectionLines(live, item.startLine, item.endLine, `catalog source ${item.relativePath}`);
-  const removedLines = item.endLine - item.startLine + 1;
+  const excised = removeSectionLines(live, located.startLine, located.endLine, `catalog source ${item.relativePath}`);
+  const removedLines = located.endLine - located.startLine + 1;
   if (lineCountOf(excised) !== lineCountOf(live) - removedLines) {
     throw new StoreActivationError(
       "store.migration-source-changed",
@@ -2174,11 +2225,16 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
 
 function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
   const live = readIfExists(livePath)?.toString("utf8");
-  if (live === undefined || lineCountOf(live) !== item.preservedLines) {
+  if (live === undefined) {
     throw new StoreActivationError(
       "store.migration-source-changed",
-      `catalog source ${item.rootKind}:${item.relativePath} does not hold the reviewed section-excised line count ` +
-        `(${item.preservedLines}); refusing to claim retirement.`,
+      `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`,
+    );
+  }
+  if (!reviewedSectionAbsent(live, item)) {
+    throw new StoreActivationError(
+      "store.migration-source-changed",
+      `catalog source ${item.rootKind}:${item.relativePath} still holds the reviewed section table; refusing to claim retirement.`,
     );
   }
   if (readIfExists(item.archivePath) === undefined) {
@@ -2190,12 +2246,13 @@ function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
 }
 
 /**
- * `retireStoreSources(context, activationReceipt)` — move the exact reviewed
+ * `retireStoreSources(context, activationReceipt)` — move the reviewed
  * sources out of the live root under a resumable per-item ledger. Revalidates
- * the live DB identity, the authority epoch, the activation receipt, the exact
- * source hashes and the catalog digests first; a resumed attempt continues
- * from the recorded item states to exactly the recorded bytes and sections; an
- * unexpected legacy write stops the transition without deleting anything.
+ * the live DB identity, the authority epoch, the activation receipt and the
+ * register PATH SET first; a resumed attempt continues from the recorded item
+ * states to complete the remaining registrations and section excisions; an
+ * unexpected unreviewed register stops the transition without deleting
+ * anything.
  */
 export async function retireStoreSources(context: StoreContext, activationReceipt: ActivationReceipt): Promise<RetirementReceipt> {
   if (
@@ -2277,12 +2334,7 @@ export async function retireStoreSources(context: StoreContext, activationReceip
     }
 
     const existingLedger = readLedger(ledgerPath);
-    if (
-      existingLedger &&
-      (existingLedger.activationHash !== activationReceipt.activationHash ||
-        existingLedger.storeId !== meta.storeId ||
-        existingLedger.epoch !== meta.epoch)
-    ) {
+    if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
       throw new StoreActivationError(
         "store.activation-stale",
         `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another ` +

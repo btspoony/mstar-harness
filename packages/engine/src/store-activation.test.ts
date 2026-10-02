@@ -595,6 +595,43 @@ describe("store retirement", () => {
     expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
   });
 
+  test("retirement still excises the target section when drift leaves the same total line count", async () => {
+    const fixture = await activatedFixture("retirement-same-count-");
+    const readmePath = join(fixture.harness, "iterations", "README.md");
+
+    // The reviewed index before any retirement: it holds the target table.
+    const reviewed = readFileSync(readmePath, "utf8");
+    expect(reviewed).toContain("| `iter-one` |");
+
+    // Crash AFTER the archive was written and the ledger recorded, but BEFORE
+    // the live rewrite (the seam throws right after the rewrite; restoring the
+    // reviewed bytes below reconstructs the live-still-holds-the-table state).
+    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
+      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
+    );
+    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+
+    // A permitted edit that keeps the target table but replaces the unrelated
+    // narrative with the same number of lines: the total line count equals the
+    // reviewed file's, so a line-count surrogate would falsely declare the
+    // section already retired. The target table is still present.
+    const narrativeLines = lineCount(reviewed) - INDEX_TABLE.length;
+    const filler = Array.from({ length: narrativeLines }, (_, index) => `Narrative replaced after the crash ${index + 1}`);
+    const editedContent = [...filler, ...INDEX_TABLE].join("\n");
+    expect(lineCount(editedContent)).toBe(lineCount(reviewed));
+    writeFileSync(readmePath, editedContent);
+
+    // Retry: the reviewed table is still present, so the retry must actually
+    // excise it (never take a completion branch on the line-count coincidence).
+    const receipt = await retireStoreSources(fixture.context, fixture.activation);
+    expect(receipt.resumed).toBe(true);
+    const live = readFileSync(readmePath, "utf8");
+    expect(live).not.toContain("| `iter-one` |");
+    expect(live).not.toContain("| Iteration |");
+    expect(receipt.sections[0]!.sha256).toBe(sha256Of(reviewed));
+    expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
+  });
+
   test("retirement archives the register's current bytes when it drifted since review", async () => {
     const { context, harness, activation } = await activatedFixture("retirement-late-write-");
     const registerPath = join(harness, "projects", "engine", "residuals.json");

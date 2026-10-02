@@ -443,15 +443,32 @@ describe("store-migrate apply", () => {
     }
   });
 
-  test("apply accepts the reviewed register path set regardless of enumeration order (reversed)", async () => {
-    const { context, harness, manifest } = await createStagedApplyFixture("reversed-");
-    // The reviewed register path set is compared by sorted keys, so re-writing
-    // every reviewed register (in reverse project order) is not drift.
-    for (const project of manifest.sources.map((source) => source.project).reverse()) {
-      writeRegister(harness, project, { entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" })] } });
-    }
-    const receipt = await applyStoreMigration(context, manifest);
+  test("apply accepts a reversed reviewed register enumeration with equivalent facts", async () => {
+    const { context, manifest } = await createStagedApplyFixture("reversed-");
+    // Genuinely reorder the compared set: the supplied manifest's register
+    // enumeration is reversed (the source set is otherwise identical), so apply
+    // must accept it by keyed membership, not by position. A reversed copy is
+    // used so the fixture's on-disk registers stay the reviewed ones.
+    const reversed: typeof manifest = {
+      ...manifest,
+      sources: [...manifest.sources].reverse(),
+      retirement: { ...manifest.retirement, registers: [...manifest.retirement.registers].reverse() },
+    };
+    const receipt = await applyStoreMigration(context, reversed);
     expect(receipt.phase).toBe("applied");
+
+    // Semantic negative control: dropping one reviewed register is still refused.
+    const missing: typeof manifest = {
+      ...manifest,
+      sources: manifest.sources.filter((source) => source.project !== "engine"),
+    };
+    try {
+      await applyStoreMigration(context, missing);
+      throw new Error("expected the missing-register source set to refuse the apply");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-source-changed");
+    }
   });
 
   test("apply refuses an unresolved manifest and a live active store", async () => {

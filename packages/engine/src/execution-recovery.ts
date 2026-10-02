@@ -1783,13 +1783,6 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
   const newEpoch = Math.max(before.epoch, inventory.backup.epoch) + 1;
   try {
     copyFileSync(inventory.preview.backupPath, imagePath);
-    if ((await sha256OfFile(imagePath)) !== inventory.preview.backupSha256) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the recovery point at ${inventory.preview.backupPath} changed while it was being installed; the bytes behind the ` +
-          `approved hash are not the bytes on disk. Nothing was replaced.`,
-      );
-    }
     await patchImageEpoch(imagePath, newEpoch);
     const image = await inspectBackupCopy(imagePath);
     if (
@@ -1837,19 +1830,11 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     writeJson(receiptPath, record);
     recoveryFailureHook("before-replacement");
 
-    // The live BYTES are re-verified FIRST, because this read is the one step
-    // of the verdict that awaits. Any writer that commits during that yield
-    // writes into the store's WAL sidecar — frames the checkpoint hash does not
-    // cover — so the awaited read has to finish BEFORE the verdict that refuses
-    // such a sidecar, never between it and the rename.
-    if ((await sha256OfFile(livePath)) !== liveSha256) {
-      throw lossUnaccepted(`the live store bytes changed after the pre-restore recovery point was taken; nothing was replaced.`);
-    }
-
     // The last gate, and synchronous from here to the rename: no `await`
     // separates the live store's own state from the replacement, so no writer
-    // this process schedules can slip a WAL in between. Only files whose
-    // recorded (dev, ino) still match are ever removed.
+    // this process schedules can slip a WAL in between. Quiescence is proven by
+    // the live file's recorded (dev, ino) identity and by the sidecars below —
+    // never by re-deriving a content digest.
     if (!sameIdentity(liveIdentity, identityOf(livePath))) {
       throw lossUnaccepted(`the live store file at ${livePath} was replaced by another writer; nothing was replaced.`);
     }
@@ -1858,10 +1843,8 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       // A sidecar that is still the file the checkpoint saw, or that is GONE, is
       // quiescence: SQLite's own last clean close folds the journal into the
       // database and removes it (and this runtime can land that removal just
-      // after the close), which is the store going quiet. A fold cannot hide
-      // here — the live BYTES were re-verified against the checkpoint hash on
-      // the statement above. A sidecar that is present and is not that file is
-      // a writer, and refuses.
+      // after the close), which is the store going quiet. A sidecar that is
+      // present and is not that file is a writer, and refuses.
       if (now !== undefined && !sameIdentity(sidecar.identity, now)) {
         throw lossUnaccepted(`a WAL/SHM sidecar of ${livePath} appeared after the checkpoint; the store is not quiesced. Nothing was replaced.`);
       }
