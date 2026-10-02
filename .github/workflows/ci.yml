@@ -473,6 +473,13 @@ jobs:
       - name: Build engine and judgment dist
         run: bun run engine:build && bun run judgment:build
 
+      # The shadow-supervisor container-only cases bypass Docker via their test
+      # launcher and append the probe denial log to /mnt/output on the runner
+      # host; pre-create it runner-writable so those cases run instead of
+      # skipping. The suite's capability guard fails this job if it is absent.
+      - name: Provide /mnt/output for the container-only judgment cases
+        run: sudo install -d -o "$(id -un)" -g "$(id -gn)" /mnt/output
+
       - name: Test judgment
         run: bun run --cwd packages/judgment test
 

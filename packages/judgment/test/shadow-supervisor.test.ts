@@ -60,7 +60,9 @@ const testLauncher = (child: ApprovedChild, runId: string) => spawn(process.exec
 // The container-only cases bypass Docker via testLauncher, so the probe fixture runs
 // directly on the host: it lists /proc and appends its denial log to /mnt/output.
 // Detect that declared capability instead of trusting the platform alone, and name
-// it visibly whenever the cases are skipped.
+// it visibly whenever the cases are skipped. CI must not lose this witness to a
+// silent skip: the test-judgment job pre-creates a runner-writable /mnt/output, and
+// the capability guard below fails the CI run when the capability is still missing.
 let containerOnlySkipReason: string | null = null;
 if (process.platform !== "linux") containerOnlySkipReason = "Linux platform";
 if (containerOnlySkipReason === null) {
@@ -161,6 +163,12 @@ describe("trusted shadow supervisor", () => {
     }).failures).toContain("probe-lifecycle-invalid");
   }, 15_000);
 
+  test("CI provides the container-only capability instead of silently skipping the witness", () => {
+    if (process.env.CI !== "true") return; // Local hosts may legitimately lack the mounts.
+    if (containerOnlySkipReason !== null) {
+      throw new Error(`test-judgment CI lacks the declared container-only capability: ${containerOnlySkipReason}; pre-create a runner-writable /mnt/output so the container-only cases run instead of skipping`);
+    }
+  });
   test.skipIf(containerOnlySkip)("freezes baseline before real probe child and reports component-only measured events (requires Linux container /mnt mounts and /proc)", async () => {
     const args = inputs(workspace());
     const result = await runShadowSupervisor({ ...args, runRoot: args.root, runId: "run-1", evidenceClass: "component", baseline: args.baseline }, undefined, testLauncher);
