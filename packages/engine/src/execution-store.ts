@@ -2391,7 +2391,7 @@ export function requireLiveExecutionCallerSession(tx: ExecutionTransaction, call
   if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(workflow.state.status)) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `workflow ${caller.workflowId} is ${workflow.state.status} — a live coordination session authorizes issue writes only on a running lifecycle`,
+      `workflow ${caller.workflowId} is ${workflow.state.status} \u2014 a live coordination session authorizes issue writes only on a running lifecycle`,
     );
   }
   return live.ref;

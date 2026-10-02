@@ -37,7 +37,7 @@ async function fixture() {
     sourceIdentity: `source-${sequence}`, rootCauseKey: `root-${sequence}`, acceptanceKey: `accept-${sequence}`,
     occurrenceKey: `occ-${sequence}`, sourceKind: "qc", location: "file.ts", observedBehavior: "observed", evidence: ["evidence"], discoveredAt: TS,
   }, { operationId: `capture-${sequence}`, actor: "project-manager" });
-  return { store, context, issue, bound: bound.data };
+  return { store, context, issue, bound: bound.data, workflow: created.data.workflows[0]! };
 }
 const mut = (operationId: string, expectedRevision = 1, actor = "project-manager") => ({ operationId, actor, expectedRevision });
 
@@ -72,6 +72,51 @@ test("link route admits relations and PRs but enforces plan identity and coordin
   await linkIssueExecution(f.context, f.issue.issueId, { kind: "pr", target: "pr-1" }, mut("pr", 2));
   await expect(linkIssueExecution(f.context, f.issue.issueId, { kind: "plan", target: "other-plan" }, mut("other-plan", 3))).rejects.toMatchObject({ code: "issue.scope-refused" });
   await expect(linkIssueExecution(f.context, f.issue.issueId, { kind: "plan", target: "p-1" }, mut("coordinator-plan", 3))).rejects.toMatchObject({ code: "issue.scope-refused" });
+});
+
+test("plan-PM links persist only provenance for the caller's own plan", async () => {
+  const f = await fixture();
+  const db = new DatabaseSync(storeDbPath(f.store));
+  try {
+    db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
+      JSON.stringify({
+        prepared: {
+          assignment_path: join(f.store.harnessDir, "assignments/p-1.md"),
+          assignment_sha256: "a".repeat(64),
+          plan_sha256: "b".repeat(64),
+          qa_gate: "mandatory",
+          findings_cleanup: "allow-residual",
+          prepared_by: "coord-1",
+          prepared_at: TS,
+        },
+      }),
+      "wf-issues",
+      "p-1",
+    );
+    const row = db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("wf-issues", "p-1") as { state_json: string };
+    const state = JSON.parse(row.state_json) as Record<string, unknown>;
+    state.metadata = {
+      worktree_path: join(f.store.harnessDir, "worktrees/p-1"),
+      working_branch: "feature/p-1",
+    };
+    db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(state), "wf-issues", "p-1");
+  } finally {
+    db.close();
+  }
+  const planCaller: ExecutionCaller = { sessionId: "plan-1", role: "plan-pm", workflowId: "wf-issues", planId: "p-1" };
+  await bindExecutionSession({ ...f.store, caller: planCaller }, {
+    workflowId: "wf-issues",
+    planId: "p-1",
+    role: "plan-pm",
+    expected: f.workflow.planTokens["p-1"],
+    operationId: "bind-plan-pm",
+  });
+  const context: ExecutionContext = { ...f.store, caller: planCaller };
+  const own = await linkIssueExecution(context, f.issue.issueId, { kind: "plan", target: "p-1" }, mut("plan-own"));
+  expect(own.revision).toBe(2);
+  expect((await getIssue(f.store, f.issue.issueId)).provenance).toContainEqual(expect.objectContaining({ kind: "plan", target: "p-1" }));
+  await expect(linkIssueExecution(context, f.issue.issueId, { kind: "plan", target: "other-plan" }, mut("plan-other", 2))).rejects.toMatchObject({ code: "issue.scope-refused" });
+  await expect(linkIssueExecution(f.context, f.issue.issueId, { kind: "plan", target: "p-1" }, mut("coordinator-plan", 2))).rejects.toMatchObject({ code: "issue.scope-refused" });
 });
 
 test("routes require a live bound session and a running workflow", async () => {
