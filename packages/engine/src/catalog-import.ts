@@ -12,13 +12,10 @@
  *   error and never a fabricated row (§4).
  * - Import applies a REVIEWED plan through the shared catalog domain verbs
  *   (P1 `registerCatalogEntity` / `linkCatalogEntities`), so every write keeps
- *   the store's epoch/role/idempotency/transaction rules. The reviewed source
- *   hashes are re-verified before the first write; a conflict or a source drift
- *   refuses the whole import instead of silently preferring one source. A
- *   failure AFTER writes started is never a silent prefix: the applied prefix
- *   is journalled progress and the failure is rethrown as an explicit
- *   `catalog.import-partial` error that reports what applied and how to resume
- *   (RV-3).
+ *   its transaction and journal rules. Source hashes remain provenance; drift
+ *   does not veto an import. A failure AFTER writes started is never a silent
+ *   prefix: applied proposals are journalled progress and the failure reports
+ *   the exact partial state and resume guidance (RV-3).
  * - Import never creates a workflow session, retires an index or repairs issue
  *   authority; live index retirement belongs to the cutover plan's G6.
  *
@@ -112,11 +109,10 @@ const ORDINARY_FILES: Record<string, true> = { "readme.md": true, "install.md": 
 const COMPASS_FILE = "delivery-compass.md";
 const ROADMAP_FILE = "roadmap.md";
 
-/** Stable refusal codes for the import transport. */
+/** Refusal codes for import shape, semantic conflicts and partial progress. */
 export type CatalogImportErrorCode =
   | "catalog.import-invalid-plan"
   | "catalog.import-conflict"
-  | "catalog.import-source-drift"
   | "catalog.import-unknown-input"
   | "catalog.import-partial";
 
@@ -1366,9 +1362,8 @@ async function readLocalCatalog(context: StoreContext): Promise<Map<string, Cata
 
 /**
  * `planCatalogImport(context, inputs)` -- the reviewed-mapping step (§4): the
- * caller supplies the identity/relations it reviewed, the engine re-reads the
- * named sources for the reviewed hashes and reports conflicts and what cannot
- * be recovered. Reads only.
+ * caller supplies the identity/relations it reviewed; source digests are
+ * recorded as provenance.
  */
 export async function planCatalogImport(context: StoreContext, inputs: CatalogImportInput[]): Promise<CatalogImportPlan> {
   if (!Array.isArray(inputs)) throw invalidPlan("inputs must be an array of reviewed import inputs");
@@ -1543,9 +1538,8 @@ function requirePlan(plan: CatalogImportPlan): void {
 }
 
 /**
- * Re-check a reviewed plan against the current sources and the plan's own
- * conflicts. Read-only: the same check `importCatalog` refuses on, exposed so a
- * reviewer can reconcile hashes before writing (§4).
+ * Report source changes since review as provenance; this diagnostic does not
+ * gate `importCatalog`.
  */
 export async function verifyCatalogImport(context: StoreContext, plan: CatalogImportPlan): Promise<CatalogImportVerification> {
   requirePlan(plan);
@@ -1562,30 +1556,18 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
       state: read.state === "ok" ? "changed" : read.state,
     });
   }
-  return { ok: plan.conflicts.length === 0 && drift.length === 0, conflicts: plan.conflicts, drift };
+  return { ok: plan.conflicts.length === 0, conflicts: plan.conflicts, drift };
 }
 
 /**
  * `importCatalog(context, plan, operation)` -- apply a reviewed plan.
  *
- * The reviewed hashes are verified first and a conflict blocks: nothing is
- * written when the plan disagrees with itself or its sources moved. Each
- * proposal is then applied through the shared catalog domain verbs, with a
- * deterministic per-proposal operation id derived from `operation.operationId`,
- * so a retry (or a second call after a crash) replays the applied rows and
- * converges instead of double-writing. No workflow session is created and no
- * index is retired.
- *
- * A mid-plan failure is NEVER a silent prefix (RV-3): the domain verbs commit
- * each applied proposal together with its journal row, so the applied prefix
- * is persisted progress, and the failure is rethrown as an explicit
- * `catalog.import-partial` error naming exactly what applied, which proposal
- * failed, and how to resume (re-run the SAME plan with the SAME operationId —
- * applied proposals replay idempotently from the journal). The verbs are not
- * re-entered inside one caller-managed transaction: each owns its own
- * transaction and journal rules (the P1 boundary the registration journal
- * also keeps), so the resumable journal — not a hand-rolled second writer —
- * is the atomicity story here.
+ * The reviewed hashes are provenance, not an applicability gate. Conflicts
+ * block before writes; proposals then apply through the shared catalog domain
+ * verbs with deterministic per-proposal operation ids so retries converge.
+ * A mid-plan failure is NEVER a silent prefix: applied proposals are journalled
+ * progress and the failure is rethrown with the exact partial state and resume
+ * guidance. Each domain verb owns its transaction and journal rules.
  */
 export async function importCatalog(
   context: StoreContext,
@@ -1603,16 +1585,6 @@ export async function importCatalog(
     throw new CatalogImportError(
       "catalog.import-conflict",
       `the plan carries ${plan.conflicts.length} unresolved conflict(s); no source is preferred silently. First: ${first.message}`,
-    );
-  }
-  const verification = await verifyCatalogImport(context, plan);
-  if (verification.drift.length > 0) {
-    const first = verification.drift[0]!;
-    throw new CatalogImportError(
-      "catalog.import-source-drift",
-      `the reviewed source ${first.sourceKey} is ${first.state} since review ` +
-        `(expected ${first.expectedSha256.slice(0, 12)}, actual ${first.actualSha256 === null ? "none" : first.actualSha256.slice(0, 12)}); ` +
-        `${verification.drift.length} source(s) drifted and nothing was imported`,
     );
   }
 

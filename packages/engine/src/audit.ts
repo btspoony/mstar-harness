@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileS
 import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
 import { withStatusWriteLock } from "./lease.js";
-import { readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
+import { withProtectedWrite } from "./coordination-write.js";
 import { assertSafePathComponent } from "./path.js";
 import { getArtifactStore } from "./store.js";
 import { registerWorkflowEntryLocked, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
@@ -1709,7 +1709,7 @@ export async function promoteAuditPlans(
           `remove that workflow before promoting again`,
       );
     }
-    let createdVersion: string | undefined;
+    let snapshotCreated = false;
     try {
       // Create-only (`absent`) under the root lock: the snapshot is written
       // through the routed writer, which validates it, refuses to replace an
@@ -1717,22 +1717,17 @@ export async function promoteAuditPlans(
       // (spec §C4). The snapshot's own lock nests inside the root lock --
       // root → snapshot is the documented acquisition order.
       await writeWorkflowSnapshot(snapshot, workflowDir, { createOnly: true });
-      createdVersion = readArtifactBytes(snapshotPath)?.version;
+      snapshotCreated = true;
       await registerWorkflowEntryLocked(statusPath, entry);
     } catch (error) {
-      // Roll back ONLY the exact snapshot version this call created, under
-      // the snapshot lock: a snapshot another writer changed in the meantime
-      // is never deleted.
-      if (createdVersion !== undefined) {
-        await withStatusWriteLock(snapshotPath, async () => {
-          const current = readArtifactBytes(snapshotPath);
-          if (current === undefined || current.version !== createdVersion) return;
-          const remove = store.delete?.bind(store);
-          if (remove !== undefined) {
-            await withProtectedWrite(snapshotPath, "delete", () => remove({ kind: "snapshot", key: workflowId }));
-          }
-        });
-      }
+      // Roll back only a snapshot this attempt actually created.
+      await withStatusWriteLock(snapshotPath, async () => {
+        if (!snapshotCreated || !existsSync(snapshotPath)) return;
+        const remove = store.delete?.bind(store);
+        if (remove !== undefined) {
+          await withProtectedWrite(snapshotPath, "delete", () => remove({ kind: "snapshot", key: workflowId }));
+        }
+      });
       try {
  // Remove the workflow dir only when empty — a concurrent writer's
  // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if

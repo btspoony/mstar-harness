@@ -49,7 +49,7 @@ describe("roadmap-authority transactional domain", () => {
     await expect(readRoadmapAuthority(context, "missing-project")).rejects.toMatchObject({ code: "roadmap.project-not-found" });
   });
 
-  test("reviewed imports preserve exact content, revisions, replay receipts, and reject stale or drifted requests atomically", async () => {
+  test("reviewed imports retain provenance, preserve numeric revisions, and permit source edits", async () => {
     const context = await freshProject("project-reviewed");
     const sourcePath = join(context.harnessDir, "candidate.md");
     const initial = content("project-reviewed", "Exact source text.");
@@ -101,20 +101,12 @@ describe("roadmap-authority transactional domain", () => {
     const stable = await readRoadmapAuthority(context, "project-reviewed");
     expect(stable.roadmap?.contentMarkdown).toBe(replaced);
 
-    const beforeDrift = await openStore(context, "read");
-    const driftRevision = beforeDrift.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
-    beforeDrift.close();
     writeFileSync(sourcePath, content("project-reviewed", "Drifted source."), "utf8");
-    await expect(importRoadmapAuthority(context, review, { operationId: "op-import" })).resolves.toEqual(receipt);
-    await expect(importRoadmapAuthority(context, review, { operationId: "op-drift" })).rejects.toMatchObject({ code: "roadmap.source-drift" });
-    const afterDrift = await openStore(context, "read");
-    const afterDriftRevision = afterDrift.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
-    const driftReceipt = afterDrift.db.prepare("select operation_id from store_operations where operation_id='op-drift'").get();
-    afterDrift.close();
-    expect(afterDriftRevision.revision).toBe(driftRevision.revision);
-    expect(driftReceipt).toBeUndefined();
-    expect((await readRoadmapAuthority(context, "project-reviewed")).roadmap?.revision).toBe(2);
-    await expect(importRoadmapAuthority(context, review, { operationId: "op-conflict" })).rejects.toBeInstanceOf(RoadmapError);
+    const refreshedReview = await reviewRoadmapImport(context, "project-reviewed", sourcePath);
+    const driftReceipt = await importRoadmapAuthority(context, refreshedReview, { operationId: "op-source-edited" });
+    expect(driftReceipt.revision).toBe(3);
+    expect((await readRoadmapAuthority(context, "project-reviewed")).roadmap?.contentMarkdown).toContain("Drifted source.");
+    await expect(importRoadmapAuthority(context, review, { operationId: "op-stale" })).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
   });
 
   test("migration is explicit, removes only disposable roadmap projection, and missing stores refuse", async () => {

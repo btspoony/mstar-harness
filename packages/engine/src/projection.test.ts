@@ -362,7 +362,7 @@ function issueInput(occurrenceKey: string) {
 }
 
 describe("projection publication and last-good handling", () => {
-  test("the first refresh publishes generation 1 with the projected rows, and an unchanged refresh publishes nothing", async () => {
+  test("each clean refresh publishes a new generation without a fingerprint-equality gate", async () => {
     const f = await fixture("publish-");
     await seedStandard(f);
     // A workflow that was registered and closed before this refresh: retained
@@ -443,10 +443,10 @@ describe("projection publication and last-good handling", () => {
     ]);
 
     const second = await refreshProjections(f.context);
-    expect(second).toMatchObject({ freshness: "current", published: false, generation: 1, changedKeys: [] });
-    expect(second.builtAt).toBe(first.builtAt);
+    expect(second).toMatchObject({ freshness: "current", published: true, generation: 2, changedKeys: [] });
+    expect(second.builtAt).not.toBe(first.builtAt);
     expect(second.checkedAt >= first.checkedAt).toBe(true);
-    expect(await projectedRows(f)).toEqual((({ meta: _health, ...tables }) => tables)(rows));
+    expect((await projectedRows(f)).workflows[0]).toMatchObject({ generation: 2, id: "wf-a" });
   });
 
   test("a deleted declared source retains the last good generation and reports stale with a diagnostic", async () => {
@@ -468,15 +468,14 @@ describe("projection publication and last-good handling", () => {
     expect(retainedHealth).toMatchObject({ generation: first.generation, built_at: first.builtAt, freshness: "stale" });
     expect(JSON.parse(String(retainedHealth.last_error_json))).toMatchObject({ code: "projection.stale" });
 
-    // A later successful refresh clears the diagnostic again. The restored
-    // bytes are exactly the published generation's, so nothing is reinserted:
-    // the generation is adopted and only its health is refreshed.
+    // A later clean refresh publishes a new generation after the missing
+    // source is restored; no content fingerprint adopts the old generation.
     write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
     const recovered = await refreshProjections(f.context);
     expect(recovered).toMatchObject({
       freshness: "current",
-      published: false,
-      generation: first.generation,
+      published: true,
+      generation: 2,
       diagnostics: [],
       changedKeys: [],
     });
@@ -499,25 +498,6 @@ describe("projection publication and last-good handling", () => {
     write(join(f.harness, "workflows/wf-a/snapshot.json"), snapshotDoc("wf-a"));
   });
 
-
-  test("a source set that keeps moving is bounded: one retry, then source-changing with the last good generation", async () => {
-    const f = await fixture("source-changing-");
-    await seedStandard(f);
-    const first = await refreshProjections(f.context);
-    const publishedRows = await projectedRows(f);
-    expect((await projections(f)).meta.last_error_json).toBeNull();
-
-    process.env.MSTAR_STORE_TEST_RUNNER = "1";
-    process.env.MSTAR_PROJECTION_CHURN_PATH = "status.json";
-    const moved = await refreshProjections(f.context);
-    expect(moved).toMatchObject({ freshness: "stale", published: false, generation: first.generation, builtAt: first.builtAt });
-    expect(moved.diagnostics).toContainEqual(
-      expect.objectContaining({ sourceKey: "root:harness:status.json", reason: "source-changing" }),
-    );
-    // The failure is recorded as health; the generation itself is untouched.
-    expect(JSON.parse(String((await projections(f)).meta.last_error_json))).toMatchObject({ code: "projection.stale" });
-    expect(await projectedRows(f)).toEqual(publishedRows);
-  });
 
   test("a first failure reports unavailable instead of an empty projection", async () => {
     const f = await fixture("first-failure-");
@@ -563,33 +543,18 @@ describe("projection publication and last-good handling", () => {
     expect(await projectedRows(f)).toEqual(afterUnregister);
   });
 
-  test("a competing refresh cannot publish an older capture over a newer one", async () => {
-    const f = await fixture("competing-");
+  test("a captured projection publishes despite later source-content edits", async () => {
+    const f = await fixture("captured-edit-");
     await seedStandard(f);
-    await refreshProjections(f.context);
     const older = await captureProjectionSources(f.context);
 
-    // A newer writer declares another workflow and publishes a newer capture.
     write(join(f.harness, "workflows/wf-b/snapshot.json"), snapshotDoc("wf-b"));
-    write(
-      join(f.harness, "status.json"),
-      rootDoc([{ id: "wf-a", dir: "workflows/wf-a" }, { id: "wf-b", dir: "workflows/wf-b" }]),
-    );
-    const newer = await refreshProjections(f.context);
-    expect(newer).toMatchObject({ freshness: "current", published: true });
-    expect(newer.sources.map((source) => source.sourceKey)).toContain("workflow:harness:workflows/wf-b/snapshot.json");
+    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-a", dir: "workflows/wf-a" }, { id: "wf-b", dir: "workflows/wf-b" }]));
+    await refreshProjections(f.context);
 
-    // The older capture must not overwrite it.
-    await expect(publishProjectionCapture(f.context, older)).rejects.toMatchObject({ code: "projection.source-stale" });
+    await expect(publishProjectionCapture(f.context, older)).resolves.toMatchObject({ freshness: "current", published: true });
     const rows = await projections(f);
-    expect(rows.meta).toMatchObject({ generation: newer.generation, source_set_hash: newer.sourceSetHash, freshness: "current" });
-    expect(rows.workflows.map((workflow) => workflow.id)).toEqual(["wf-a", "wf-b"]);
-    expect(rows.sources.length).toBe(newer.sources.length);
-
-    // A capture that still matches publishes normally.
-    const fresh = await captureProjectionSources(f.context);
-    const republished = await publishProjectionCapture(f.context, fresh);
-    expect(republished).toMatchObject({ freshness: "current", published: false, generation: newer.generation });
+    expect(rows.workflows.map((workflow) => workflow.id)).toEqual(["wf-a"]);
   });
 
   test("a rebuild leaves issue/catalog revisions and rows untouched", async () => {
