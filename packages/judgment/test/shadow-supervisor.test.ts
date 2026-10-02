@@ -78,8 +78,8 @@ const protocolWorker = `
 // Launcher for the protocol worker, injecting exactly the mailbox bytes the
 // production controlled-exercise launcher injects (scripts/shadow.ts): the worker's
 // request is valid by construction and lands in the supervisor-watched request
-// directory, so the supervisor's foreign-request gate and mailbox authorship are
-// genuinely exercised on the supervisor side.
+// directory, so the supervisor's foreign-request validation (it passes) and its
+// mailbox/status/artifact handling are genuinely exercised on the supervisor side.
 const protocolLauncher = (pack: ReviewDecisionPack, pilot: JudgmentPilot) =>
   (child: ApprovedChild, runId: string, plan: ShadowMountPlan) => spawn(process.execPath, [child.executable, runId], {
     env: { PATH: process.env.PATH ?? "", HOME: plan.scratch, JEV_REQUESTS_DIR: plan.requests, JEV_PACK_BYTES: Buffer.from(canonicalJsonBytes(pack)).toString("base64"), JEV_PILOT_DIGEST: createHash("sha256").update(canonicalJsonBytes(pilot)).digest("hex") },
@@ -246,6 +246,15 @@ describe("trusted shadow supervisor", () => {
     expect(await runShadowCommand(["study", "--root", failed.root], testLauncher)).toBe(1);
     expect(await runShadowCommand(["assess", "--root", failed.root])).toBe(2);
 
+    // Scope note (isolation gap, deliberately visible): these study-closure cases
+    // do NOT exercise the container/mount isolation semantics they used to — the
+    // rewrite runs them on the host launcher, and this test job has no configured
+    // container worker image/namespace launcher. What IS still verified here: the
+    // host-side capability probe and loud guard (confinement case above), the
+    // supervisor's mailbox closure over valid requests and its
+    // status/artifact authorship, the provider-recorded request -> evaluate ->
+    // record chain, and the assess command's refusals of failed or
+    // run-identity-mismatched study results.
     // Success baseline through the supervisor's public controlled-provider inputs
     // (the shadow command's own synthetic-offline injection shape): the protocol
     // worker posts a mailbox-valid request over the supervisor-watched request
@@ -289,9 +298,9 @@ describe("trusted shadow supervisor", () => {
   }, 15_000);
 
   test("finite study and assess commands consume child artifacts", async () => {
-    // Supervised study run through the controlled-provider inputs; the provider
-    // response is the shadow command's own synthetic shape, so the live-provider
-    // witness remains a documented gap while the mailbox protocol, artifact
+    // Supervised study run through the controlled-provider inputs (see the scope
+    // note above for the isolation gap); the provider response is the shadow
+    // command's own synthetic shape, while the mailbox protocol, artifact
     // authority, and assess consumption are exercised end-to-end.
     const fixture = inputs(workspace(), protocolWorker);
     writeFileSync(join(fixture.root, "study-manifest.json"), JSON.stringify({ schema: "mstar.shadow-study/v1", runId: "run-1", evidenceClass: "component", pack: fixture.pack, pilot: fixture.pilot, child: { ...fixture.child, maxElapsedMs: 10_000 }, mountPlan: fixture.mountPlan, baseline: fixture.baseline }));
