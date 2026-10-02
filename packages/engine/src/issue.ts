@@ -1452,8 +1452,7 @@ function assertEngineIssuedSession(harnessDir: string, sessionPath: string, sess
 }
 
 /**
- * Plan/iteration provenance uses the existing coordination session envelope.
- * Credentials are never written into SQLite.
+ * Read the session envelope used by milestone assignment and plan-scoped coordination.
  */
 function readScopedSession(sessionFile: string | undefined): { session: CoordinationSession; sessionPath: string } {
   if (!sessionFile) {

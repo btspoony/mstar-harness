@@ -687,6 +687,16 @@ describe("issue family witnesses", () => {
     expect(audit(success, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
       .toMatchObject({ compliant: true, countedCalls: 1 });
 
+    const missingExpect: Interaction = { label: "missing revision CAS refusal", context: "warm", extraDependency: "", calls: [] };
+    const missing = await countedCall(missingExpect, "execute", "issue.triage", {
+      id: receipt.issueId, payload: { reason: "unversioned", severity: "critical" },
+      operationId: "op-missing-expect", actor: "project-manager",
+    }, context);
+    expect(missing).toMatchObject({ status: "refused", code: "issue.revision-conflict", exitCode: 1 });
+    const afterMissing = await countedCall(missingExpect, "execute", "issue.show", { id: receipt.issueId }, context);
+    expect(afterMissing.status).toBe("ok");
+    if (afterMissing.status === "ok") expect(afterMissing.data).toMatchObject({ revision: receipt.revision + 1, severity: "low" });
+
     const refusals: Interaction = { label: "stale revision refusal", context: "warm", extraDependency: "", calls: [] };
     const staleAttempt = await countedCall(refusals, "execute", "issue.triage", {
       id: receipt.issueId, payload: { reason: "reclassify", severity: "critical" },

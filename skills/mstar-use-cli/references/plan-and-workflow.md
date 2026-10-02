@@ -33,9 +33,9 @@ The execution route is selected by `execution_meta.authority_state`, not by `sto
 
 ## Issue-store writes
 
-Unscoped `mstar issue` writes are actor-only store mutations: every write verb (`add`, `occurrence`, `triage`, `close`, `waive`, `duplicate`, `supersede`, and `link`) takes `--actor` + `--operation-id`, with optional `--expect` and `--payload`/`--file`. They do not take a session, envelope, workflow, or execution-authority address. The plan-scoped `mstar plan issue-add` and `mstar plan issue-close` routes remain inside their plan session and retain the plan coordination protocol described below.
+Unscoped `mstar issue` writes are actor-only store mutations: every write verb (`add`, `occurrence`, `triage`, `close`, `waive`, `duplicate`, `supersede`, and `link`) requires `--actor` + `--operation-id` and a payload via `--payload` or `--file`. `--expect` is required for `triage`, each terminal disposition (`close`, `waive`, `duplicate`, `supersede`), and `link` row-CAS; omitting it refuses with `issue.revision-conflict`. They do not take a session, envelope, workflow, or execution-authority address. The plan-scoped `mstar plan issue-add` and `mstar plan issue-close` routes remain inside their plan session and retain the plan coordination protocol described below.
 
-For `mstar issue link --kind plan|iteration --target <id>`, the target is recorded as a provenance label; the issue store does not verify that the plan or iteration exists. A future read-only `issue doctor` report for dangling provenance is deferred and would not gate writes.
+For example: `mstar issue link --id <issue-id> --actor project-manager --operation-id link-1 --expect <revision> --payload '{"kind":"plan","target":"<id>"}'`. The target is recorded as a provenance label; the issue store does not verify that the plan or iteration exists. A future read-only `issue doctor` report for dangling provenance is deferred and would not gate writes.
 
 ## Session and address model
 
