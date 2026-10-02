@@ -226,10 +226,10 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
     const upgradeDefinition = getCommandDefinitions().find((definition) => definition.cli.path.join(" ") === upgradeTokens.slice(1).join(" "));
     if (entry !== "mstar store safe-upgrade" || upgradeDefinition === undefined) failures.push(`Guard 8: J0 step 2 — upgrade entry did not resolve to supported command: ${entry || "missing"}`);
     const j0AttestationPath = join(legacy.repo, "attestation.json");
-    writeFileSync(j0AttestationPath, JSON.stringify({
+    const j0Attestation = {
       version: 1,
       attestedAt: "2026-10-01T00:00:00.000Z",
-      operator: { actor: "fixture-operator", authorizationRef: "fixture-only-upgrade" },
+      operator: { actor: "fixture-operator", authorizationRef: "fixture" },
       consumers: [{
         entryId: "fixture-coordinator",
         kind: "coordinator",
@@ -241,7 +241,12 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
         disposition: "reloaded",
       }],
       stoppedSessions: [],
-    }), "utf8");
+    };
+    const j0AttestationBytes = Buffer.from(JSON.stringify(j0Attestation));
+    writeFileSync(j0AttestationPath, j0AttestationBytes);
+    if (!readFileSync(j0AttestationPath).equals(j0AttestationBytes)) failures.push("Guard 8: J0 attestation must equal deterministic template output");
+    const writtenJ0Attestation = JSON.parse(readFileSync(j0AttestationPath, "utf8")) as { operator?: { authorizationRef?: unknown } };
+    if (writtenJ0Attestation.operator?.authorizationRef !== "fixture") failures.push("Guard 8: J0 attestation authorizationRef must be the synthetic fixture value");
     if (upgradeDefinition !== undefined) j0Calls++;
     const upgradeResult = upgradeDefinition === undefined ? null : await executeCommand(upgradeDefinition.id, {
       harness: legacy.harnessDir,
@@ -261,7 +266,7 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       measuredCalls: j0Calls,
       bar: 3,
       status: "blocked",
-      dependency: "attestation provisioning path undecided (design §6 Q2)",
+      dependency: "attestation acquisition has no supported counted path yet (design §6 Q2 decision pending)",
     });
 
     const activeState = await createFixture("active-state", true);
@@ -366,13 +371,18 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
     const j2Workflow = Array.isArray(j2Data.workflows) ? j2Data.workflows[0] as { token?: string } | undefined : undefined;
     if (j2Workflow?.token !== undefined) j2Calls++;
     const attestationPath = join(j2.repo, "attestation.json");
-    writeFileSync(attestationPath, JSON.stringify({
+    const j2Attestation = {
       version: 1,
       attestedAt: "2026-10-01T00:00:00.000Z",
       operator: { actor: "reachability-fixture", authorizationRef: "fixture" },
       consumers: [{ entryId: "fixture", kind: "coordinator", entrypoint: "fixture", runtime: "bun", runtimeVersion: "1.4.0", version: "test", current: true, disposition: "reloaded" }],
       stoppedSessions: [],
-    }), "utf8");
+    };
+    const j2AttestationBytes = Buffer.from(JSON.stringify(j2Attestation));
+    writeFileSync(attestationPath, j2AttestationBytes);
+    if (!readFileSync(attestationPath).equals(j2AttestationBytes)) failures.push("Guard 8: J2 attestation must equal deterministic template output");
+    const writtenJ2Attestation = JSON.parse(readFileSync(attestationPath, "utf8")) as { operator?: { authorizationRef?: unknown } };
+    if (writtenJ2Attestation.operator?.authorizationRef !== "fixture") failures.push("Guard 8: J2 attestation authorizationRef must be the synthetic fixture value");
     const recovery = j2Workflow?.token === undefined ? null : await executeCommand("session.recover", {
       workflow: "reachability-j2",
       unowned: true,
@@ -401,14 +411,14 @@ export async function checkInstructionReachability(cliCommands: ReadonlySet<stri
       const details = lifecycle === null ? "recovery produced no session reference/token" : `${lifecycle.status} ${lifecycle.code} ${"message" in lifecycle ? lifecycle.message : ""}`;
       failures.push(`Guard 8: J2 step 3 workflow lifecycle — ${details}`);
     }
-    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: j2Calls, bar: 3, status: "blocked", dependency: "attestation provisioning path undecided (design §6 Q2)" });
+    ledger.push({ journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: j2Calls, bar: 3, status: "blocked", dependency: "attestation acquisition has no supported counted path yet (design §6 Q2 decision pending)" });
     rmSync(active.repo, { recursive: true, force: true });
     rmSync(j2.repo, { recursive: true, force: true });
   } catch (error) {
     failures.push(`Guard 8: fixture execution failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const row of ledger) {
-    if (row.status === "blocked" && row.measuredCalls <= row.bar && row.dependency !== "attestation provisioning path undecided (design §6 Q2)") failures.push(`Guard 8: ${row.journey} stale dependency — measured ${row.measuredCalls}/${row.bar} calls but dependency is ${row.dependency ?? "none"}`);
+    if (row.status === "blocked" && row.measuredCalls <= row.bar && (row.dependency === null || row.dependency.trim() === "")) failures.push(`Guard 8: ${row.journey} stale dependency — measured ${row.measuredCalls}/${row.bar} calls but dependency is ${row.dependency ?? "none"}`);
     if (row.measuredCalls > row.bar) failures.push(`Guard 8: ${row.journey} exceeds ${row.bar}-call bar at ${row.measuredCalls}`);
   }
   return { failures, ledger };

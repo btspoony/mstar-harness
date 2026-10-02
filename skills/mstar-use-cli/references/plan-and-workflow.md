@@ -50,6 +50,7 @@ mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reaso
 
 - The prior holder is **named** — or `--unowned` when the workflow records none; the two are mutually exclusive and neither is guessed. The stop attestation must name that holder stopped/reloaded, the workflow's **exact** execution token is the CAS, and the operation id is the replay key.
 - Recovery is active DB only. Pre-activation Prepare recovery is retired; do not use file/JSON snapshot forms.
+- `authorizationRef` is an audit reference, not an authorization source: it MUST identify a real external authorization event (explicit user/operator instruction or confirmation). An agent MUST NOT synthesize it from its own task or assignment.
 
 ## Verb → role boundary
 
