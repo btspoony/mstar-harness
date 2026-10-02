@@ -719,11 +719,11 @@ describe("issue family witnesses", () => {
     if (shown.status === "ok") expect(shown.data).toMatchObject({ severity: "medium" });
   });
 
-  test("unauthorized terminal disposition refuses and issue state survives", async () => {
+  test("actor-only close succeeds and issue state reads back as resolved", async () => {
     const { context } = await issueStoreContext();
-    const interaction: Interaction = { label: "disposition guard", context: "warm", extraDependency: "", calls: [] };
+    const interaction: Interaction = { label: "actor-only close", context: "warm", extraDependency: "", calls: [] };
 
-    // Controlled setup: create the issue the guard instruction targets.
+    // Controlled setup: create the open issue that the actor-only close resolves.
     const added = await setupCall(interaction, "issue.add", { payload: capturePayload(), operationId: "op-guard", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
