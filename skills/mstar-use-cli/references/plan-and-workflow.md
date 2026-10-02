@@ -10,12 +10,12 @@ Payload discovery: `mstar-harness schema PlanProgress` describes `plan progress`
 
 ## Transports
 
-The execution route is selected by `execution_meta.authority_state`, not by `store_meta.authority_state`: `store_meta` governs issue/catalog authority, while `execution_meta` governs coordinated workflow operations. Use `mstar status validate` as the discriminating read. Its `state` is `active`, `legacy`, or `unreadable`: `active` is the supported operating route; `legacy` is unsupported and provides only `upgrade.entry: "mstar store safe-upgrade"`; `unreadable` reports what could not be read and the recovery needed to make it readable.
+The execution route is selected by `execution_meta.authority_state`, not by `store_meta.authority_state`: `store_meta` governs issue/catalog authority, while `execution_meta` governs coordinated workflow operations. Use `mstar status validate` as the discriminating read. Its `state` is `active`, `legacy`, or `unreadable`: `active` is the supported operating route; `legacy` is unsupported and resolves `upgrade.entry` per observed files—an existing store uses `mstar store safe-upgrade`; an unregistered legacy status file without a store reports `mstar store init` → `mstar store safe-upgrade`; a registered-workflow status file without a store retains the safe-upgrade entry with a `limitation` because `store init` refuses nonempty workspaces and safe-upgrade cannot run without a store (the single-entry path is tracked in #325/#326); a truly empty workspace uses `mstar harness scaffold`. `unreadable` reports what could not be read and the recovery needed to make it readable.
 
 | State | Supported action |
 |---|---|
 | `active` | Use the active DB route below. |
-| `legacy` | Do not use file-form operation flags; run the single upgrade entry `mstar store safe-upgrade`. |
+| `legacy` | Do not use file-form operation flags; follow this read's `upgrade.entry` and any `upgrade.limitation`. Registered-workflow legacy files without a store remain blocked on the single-entry path tracked in #325/#326. |
 | `unreadable` | Follow the reported self-check recovery, then rerun `mstar status validate`. |
 
 ## Active transport

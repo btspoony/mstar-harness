@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   closeFileWorkflow,
@@ -76,6 +76,14 @@ function authorityRecoveryHint(code: string): string {
 function isDetailsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+function hasRegisteredLegacyWorkflows(statusPath: string): boolean {
+  try {
+    const status = JSON.parse(readFileSync(statusPath, "utf8")) as unknown;
+    return isDetailsRecord(status) && Array.isArray(status.workflows) && status.workflows.length > 0;
+  } catch {
+    return true;
+  }
+}
 
 function todayString(): string {
   const now = new Date();
@@ -108,16 +116,23 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           const defaultTarget = parsed.data.path === undefined;
           let target = parsed.data.path;
           let legacyUpgradeEntry = "mstar store safe-upgrade";
+          let legacyUpgradeDetails: { entry: string; limitation?: string } = { entry: legacyUpgradeEntry };
           if (defaultTarget) {
             const harnessDir = executionHarness(context);
             if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
             const hasIssueStore = existsSync(path.join(harnessDir, "store.db"));
-            const hasLegacyStatus = existsSync(path.join(harnessDir, "status.json"));
-            legacyUpgradeEntry = hasIssueStore
+            const statusPath = path.join(harnessDir, "status.json");
+            const hasLegacyStatus = existsSync(statusPath);
+            const hasRegisteredWorkflows = hasLegacyStatus && hasRegisteredLegacyWorkflows(statusPath);
+            legacyUpgradeEntry = hasIssueStore || hasRegisteredWorkflows
               ? "mstar store safe-upgrade"
               : hasLegacyStatus
                 ? "mstar store init → mstar store safe-upgrade"
                 : "mstar harness scaffold";
+            legacyUpgradeDetails = { entry: legacyUpgradeEntry };
+            if (!hasIssueStore && hasRegisteredWorkflows) {
+              legacyUpgradeDetails.limitation = "This status.json registers workflows, so the workspace is nonempty: store init refuses it, and store safe-upgrade cannot run without a store. The required single-entry upgrade path is tracked in #325/#326.";
+            }
             try {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {
@@ -150,7 +165,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
               return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, {
                 path: target,
                 state: "legacy",
-                upgrade: { entry: legacyUpgradeEntry },
+                upgrade: legacyUpgradeDetails,
                 selfCheck: {
                   couldNotRead: "legacy status register is missing",
                   recovery: legacyUpgradeEntry === "mstar harness scaffold"
@@ -169,7 +184,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           }
           const gate = validateStatusV2(target);
           const data = defaultTarget
-            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: { entry: legacyUpgradeEntry } }
+            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: legacyUpgradeDetails }
             : { path: target, violations: gate.ok ? [] : gate.violations };
           return gate.ok
             ? ok("status.validate", data)

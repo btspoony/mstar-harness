@@ -764,11 +764,22 @@ describe("mstar status validate — disclosed authority state", () => {
     });
     const legacyWithoutStore = await legacyFixture("mstar-session-legacy-without-store");
     rmSync(join(legacyWithoutStore.harnessDir, "store.db"));
+    writeJson(join(legacyWithoutStore.harnessDir, "status.json"), {
+      version: 2,
+      updated_at: "2026-09-21",
+      workflows: [{ id: "wf-registered", type: "iteration", status: "running", started_at: "2026-09-21T00:00:00Z", dir: "workflows/wf-registered" }],
+    });
     const legacyWithoutStoreResult = runCli(["status", "validate"], legacyWithoutStore);
-    expect(legacyWithoutStoreResult.exitCode).toBe(0);
-    expect(dataOf(legacyWithoutStoreResult)).toMatchObject({
-      state: "legacy",
-      upgrade: { entry: "mstar store init → mstar store safe-upgrade" },
+    expect(legacyWithoutStoreResult.exitCode).toBe(1);
+    expect(jsonOf(legacyWithoutStoreResult)).toMatchObject({
+      code: "status.workflow.snapshot-missing",
+      details: {
+        state: "legacy",
+        upgrade: {
+          entry: "mstar store safe-upgrade",
+          limitation: expect.stringContaining("store init refuses it"),
+        },
+      },
     });
     const storeInitHelp = runCli(["store", "init", "--help"], legacyWithoutStore);
     expect(storeInitHelp.exitCode, storeInitHelp.stdout).toBe(0);
