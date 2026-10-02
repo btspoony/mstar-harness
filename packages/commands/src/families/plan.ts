@@ -216,7 +216,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       }
       let bindInput: BindPlanSessionInput;
       if (input.resume !== undefined) {
-        if (context.sessionId !== undefined || input.harness !== undefined) {
+        if (context.sessionIdSource === "flag" || input.harness !== undefined) {
           return usage(id, "--resume accepts no --session-id or --harness");
         }
         const resumePath = absolutePath(input.resume, "resume");

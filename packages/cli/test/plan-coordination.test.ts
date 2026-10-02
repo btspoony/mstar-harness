@@ -667,6 +667,26 @@ describe("mstar plan — session identity", () => {
     expect(jsonOf(resumed).session_id).toBe(readJson(coordinator).session_id);
   });
 
+  test("--resume ignores ambient env identity but still rejects an explicit session flag", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    const resumed = runCli(
+      ["plan", "bind", "--resume", coordinator, "--json"],
+      fixture.root,
+      { MSTAR_HOST_SESSION_ID: "ambient-session-must-not-block-resume" },
+    );
+    expect(resumed.exitCode).toBe(0);
+    expect(jsonOf(resumed).outcome).toBe("resumed");
+    expect(String(jsonOf(resumed).message)).not.toContain("--resume accepts no --session-id or --harness");
+
+    const explicit = runCli(
+      ["plan", "bind", "--resume", coordinator, "--session-id", "explicit-session", "--json"],
+      fixture.root,
+    );
+    expect(explicit.exitCode).toBe(2);
+    expect(String(jsonOf(explicit).message)).toContain("--resume accepts no --session-id or --harness");
+  });
+
   test("--coordinator still refuses a flag that belongs to another address form", () => {
     const fixture = makeFixture();
     const refused = runCli(
