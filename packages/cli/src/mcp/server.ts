@@ -6,6 +6,7 @@ import { registerMcpCommands, type ResolveContext } from "./register.js";
 export function createMcpServer(
   resolveContext: ResolveContext,
   definitions: readonly CommandDefinition[] = getCommandDefinitions(),
+  onToolsRegistered?: (names: readonly string[]) => void,
 ): McpServer {
   const server = new McpServer({ name: "mstar-harness", version: cliManifest.version });
   const services: Array<{ close(): Promise<void> }> = [];
@@ -29,6 +30,6 @@ export function createMcpServer(
     });
     return requestContext;
   };
-  registerMcpCommands(server, definitions, createRequestContext, services);
+  registerMcpCommands(server, definitions, createRequestContext, services, onToolsRegistered);
   return server;
 }
