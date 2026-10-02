@@ -1272,12 +1272,9 @@ export function assertTerminalDisposition(disposition: TerminalDisposition): voi
 }
 
 /**
- * Seats an existing session envelope authorizes (contract §4: existing harness
- * authorization semantics, not a new local auth service). Both roles
- * `readSessionEnvelope` accepts are PM seats — `plan-pm` binds one plan,
- * `coordinator` binds the lifecycle — so a validated envelope proves the
- * `project-manager` seat. The requested actor stays an audit label: it must
- * match the seat the envelope proves and is never the authority.
+ * Legacy issue-write seat mapping retained for the plan-scoped route and the
+ * milestone-assignment path; unscoped issue writes use `requireCaptureSeat`
+ * directly and do not authorize through a session envelope.
  */
 const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
   "plan-pm": "project-manager",
@@ -1293,11 +1290,8 @@ const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
 const CAPTURE_SEAT = "project-manager";
 
 /**
- * The seat one bound session writes issues as. `ENVELOPE_SEATS` is the ONE
- * role → seat mapping: the file route derives the seat from the envelope it
- * validated, and the DB coordination route from its store-held session role, so
- * a DB `plan-pm` holds exactly the seat a file envelope proves and the audited
- * actor of an issue transition is the same value on both routes.
+ * The session role → actor mapping used by the plan-scoped route and milestone
+ * assignment only. It does not authorize unscoped issue writes.
  */
 export function issueWriteSeat(role: string): string {
   if (!Object.hasOwn(ENVELOPE_SEATS, role)) {
@@ -1318,42 +1312,9 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Bind the envelope that authorizes a privileged mutation to the engine's own
- * record (contract §4: existing harness authorization semantics, not a new
- * local auth service), then derive the seat from it.
- *
- * A JSON document that merely *parses* as an envelope is never a credential,
- * so the caller cannot choose the authority file. The envelope must be the one
- * the engine itself issues (`bindPlanSession`):
- *
- *  1. at the path the workflow's own record binds — `assertEngineIssuedSession`
- *     compares the presented file with the snapshot's recorded
- *     `coordination.session.session_file` / `coordination.coordinator.session_file`
- *     exactly (the same recorded-path rule the coordination writers enforce), and
- *     accepts that bound path in either engine-issued shape: the canonical
- *     `sessions/<role>-<session_id>.json` a current bind writes, or the pre-#264
- *     bare `sessions/<session_id>.json` that released 3.11.0 workflows record
- *     (both roles — 3.11.0 had no role prefix). A copy at any other path refuses
- *     even when byte-identical and fully bound;
- *  2. under the harness root that owns this store — an envelope issued for
- *     another control root refuses;
- *  3. for a **live** workflow — the workflow's snapshot must exist, validate,
- *     and not be terminal (`completed|failed|stopped`);
- *  4. and that workflow's own coordination record must point back at exactly
- *     this file and session id — the snapshot's `coordination.coordinator` for
- *     a `coordinator` envelope, the named plan row's `coordination.session` for
- *     a `plan-pm` envelope.
- *
- * Point 4 is the binding `assertCoordinatedSnapshotWriter` (`workflow.ts`)
- * already enforces against a snapshot's recorded session file, and the one the
- * scoped writers enforce through `assertCoordinatorBinding` /
- * `assertRowBinding` (`coordination.ts`); the store applies the same rule to
- * its own privileged verbs instead of inventing a signature scheme. It raises
- * the authority artifact from "a file the caller picked" to "the engine's
- * record for a live workflow": forging authority now requires rewriting the
- * workflow's validated, engine-owned coordination record, not just dropping a
- * plausible JSON file somewhere — the level of trust contract §4 accepts
- * ("do not claim security against a user who directly controls the DB file").
+ * Bind a session envelope to the issue mutation paths that still require it:
+ * the plan-scoped route and milestone assignment. Ordinary unscoped issue
+ * writes use `requireCaptureSeat` and do not call this function.
  */
 function authorizeMutation(context: StoreContext, mutation: MutationContext): CoordinationSession {
   const { session, sessionPath } = readScopedSession(mutation.sessionFile);
