@@ -554,7 +554,11 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     } finally { handle.close(); }
     const stale = await refreshProjections(f.context);
     expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
-    expect(stale.diagnostics).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/plans/${workflowId}/${planId}`, reason: "invalid" }));
+    expect(stale.diagnostics).toEqual([expect.objectContaining({
+      sourceKey: `workflow:harness:execution/plans/${workflowId}/${planId}`,
+      reason: "invalid",
+      message: "invalid: plan state or coordination is not valid JSON",
+    })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
 
@@ -575,6 +579,25 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const stale = await refreshProjections(f.context);
     expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
     expect(stale.diagnostics).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, reason: "invalid" }));
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
+  test("an ACTIVE compass that fails domain parsing is reported invalid without movement noise", async () => {
+    const f = await activeWorkflowFixture("active-invalid-compass-", "wf-compass", "plan-compass");
+    await registerCatalogEntity(f.context, { kind: "iteration", id: "iter-a", title: "Iteration A", rootKind: "iterations", relativePath: "iter-a" }, op("active-compass-iteration"));
+    await registerCatalogEntity(f.context, { kind: "document", id: "doc-compass", title: "Compass", rootKind: "iterations", relativePath: "iter-a/delivery-compass.md", documentKind: "compass" }, op("active-compass-doc"));
+    await linkCatalogEntities(f.context, { from: { kind: "iteration", id: "iter-a" }, relation: "documents", to: { kind: "document", id: "doc-compass" } }, op("active-compass-link"));
+    write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS);
+    const first = await refreshProjections(f.context);
+    expect(first).toMatchObject({ freshness: "current", published: true });
+    const lastGood = await projectedRows(f);
+    const relativePath = "iter-a/delivery-compass.md";
+    write(join(f.iterationsDir, relativePath), "plain text that is not a delivery compass\n");
+
+    const stale = await refreshProjections(f.context);
+    const sourceKey = "compass:iterations:iter-a/delivery-compass.md";
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: first.generation });
+    expect(stale.sources).toContainEqual(expect.objectContaining({ sourceKey, state: "invalid" }));
+    expect(stale.diagnostics).toEqual([expect.objectContaining({ sourceKey, reason: "invalid" })]);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
   test("ACTIVE registry shape and SQL-key identity corruption retain last-good rows", async () => {

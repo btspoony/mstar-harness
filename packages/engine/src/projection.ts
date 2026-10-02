@@ -747,10 +747,10 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     const locations: ProjectionSourceLocation[] = [];
     const diagnostics: SourceDiagnostic[] = [];
     const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
-    const recordInvalid = (sourceSpec: SourceSpec, content: string, message: string): void => {
-      const sha256 = createHash("sha256").update(content, "utf8").digest("hex");
+    const recordInvalid = (sourceSpec: SourceSpec, content: string, message: string, readState: "ok" | "invalid" = "ok"): void => {
+      const sha256 = readState === "invalid" ? null : createHash("sha256").update(content, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "invalid", diagnostic: message, declared: true });
-      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: "ok", table: sourceSpec.table as ProjectionSourceTable, keys: sourceSpec.keys! });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: readState, table: sourceSpec.table as ProjectionSourceTable, keys: sourceSpec.keys! });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (spec: SourceSpec, content: string, shaText = content): void => {
@@ -763,15 +763,24 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     });
     const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all() as Array<{ workflow_id: string; entry_json: string }>;
     const registrySpec = spec("execution_registry", "root", "execution/registry", {});
+    const malformedRegistryJson = registry.some((item) => {
+      try {
+        JSON.parse(item.entry_json);
+        return false;
+      } catch {
+        return true;
+      }
+    });
     const invalidRegistryEntry = registry.find((item) => {
       try {
         const entry: unknown = JSON.parse(item.entry_json);
         return !isPlainObject(entry) || entry.id !== item.workflow_id || !validateWorkflowEntry(entry).ok;
       } catch {
-        return true;
+        return false;
       }
     });
-    if (invalidRegistryEntry) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed or mismatched entry JSON");
+    if (malformedRegistryJson) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed entry JSON", "invalid");
+    else if (invalidRegistryEntry) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains mismatched or domain-invalid entry JSON");
     else record(registrySpec, JSON.stringify(registry));
     const registryIds = new Set(registry.map((item) => item.workflow_id));
     const workflows = db.prepare("select workflow_id, state_json from execution_workflows order by workflow_id").all() as Array<{ workflow_id: string; state_json: string }>;
@@ -787,7 +796,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
       let state: unknown;
       try { state = JSON.parse(item.state_json); } catch {
-        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state is not valid JSON");
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state is not valid JSON", "invalid");
         continue;
       }
       if (!isPlainObject(state) || state.id !== item.workflow_id || !WORKFLOW_LIFECYCLE_TYPES.includes(state.type as never) || !WORKFLOW_LIFECYCLE_STATUSES.includes(state.status as never)) {
@@ -820,7 +829,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         state = JSON.parse(row.state_json);
         coordination = JSON.parse(row.coordination_json);
       } catch {
-        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state or coordination is not valid JSON");
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state or coordination is not valid JSON", "invalid");
         continue;
       }
       const plan = isPlainObject(state) ? { ...state, coordination } : state;
@@ -862,7 +871,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
       let value: unknown;
       try { value = JSON.parse(lease.lease_json); } catch {
-        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON");
+        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON", "invalid");
         continue;
       }
       const validation = validateExecutionLease(value);
@@ -877,22 +886,27 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readSource(fspec);
       if (read.state !== "ok" || read.content === null) {
-        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
         locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: read.state });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
-      } else {
-        const parsed = deriveCompass(doc.iterationId, read.content, doc.relativePath);
-        if ("diagnostic" in parsed) diagnostics.push({ sourceKey: fspec.sourceKey, reason: "invalid", message: parsed.diagnostic });
-        else rows.compasses.push(parsed);
-        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
-        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
+        continue;
       }
+      const parsed = deriveCompass(doc.iterationId, read.content, doc.relativePath);
+      if ("diagnostic" in parsed) {
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "invalid", diagnostic: parsed.diagnostic, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "invalid" });
+        diagnostics.push({ sourceKey: fspec.sourceKey, reason: "invalid", message: parsed.diagnostic });
+        continue;
+      }
+      rows.compasses.push(parsed);
+      sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
+      locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
     }
     for (const row of db.prepare("select workflow_id, lease_json from execution_integration_leases order by workflow_id").all() as Array<{ workflow_id: string; lease_json: string }>) {
       const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
       let value: unknown;
       try { value = JSON.parse(row.lease_json); } catch {
-        recordInvalid(leaseSpec, row.lease_json, "invalid: integration lease is not valid JSON");
+        recordInvalid(leaseSpec, row.lease_json, "invalid: integration lease is not valid JSON", "invalid");
         continue;
       }
       const validation = validateIntegrationMergeLease(value);
@@ -1135,7 +1149,8 @@ async function verifyCaptureStable(context: StoreContext, capture: ProjectionCap
   try {
     for (const location of capture.locations) {
       const observed = readSource(location, handle?.db);
-      if (observed.state !== location.state || observed.sha256 !== location.sha256) mismatched.push(location.sourceKey);
+      const stableInvalidFile = location.source === "file" && location.state === "invalid" && observed.state === "ok" && observed.sha256 === location.sha256;
+      if (!stableInvalidFile && (observed.state !== location.state || observed.sha256 !== location.sha256)) mismatched.push(location.sourceKey);
     }
   } finally {
     handle?.close();
