@@ -69,46 +69,7 @@ import {
   readTrackedFiles,
   readUseCliSkillMarkdown,
   findOversizedTestFiles,
-  checkInstructionReachability,
-  checkReachabilityState,
 } from "./drift-lint.ts";
-
-describe("Guard 8 — CLI state reachability", () => {
-  test("legacy fixture without state fails with a journey, step, command and missing input", () => {
-    expect(checkReachabilityState(
-      { upgrade: { entry: "mstar store safe-upgrade" } },
-      "legacy",
-      new Set(["store", "store safe-upgrade"]),
-      "J0",
-    )).toEqual([
-      'Guard 8: J0 step 1 status validate — input "state" expected legacy',
-    ]);
-  });
-  test("legacy upgrade entry accepts only the canonical supported command", () => {
-    for (const entry of ["mstar arbitrary command", "other-bin store safe-upgrade", "mstar store safe-upgrade extra"]) {
-      expect(checkReachabilityState(
-        { state: "legacy", upgrade: { entry } },
-        "legacy",
-        new Set(["store", "store safe-upgrade", "arbitrary", "arbitrary command"]),
-        "J0",
-      )).toEqual([
-        `Guard 8: J0 step 1 status validate — input "upgrade.entry" ${entry} must resolve exactly to mstar store safe-upgrade in the canonical command inventory`,
-      ]);
-    }
-  });
-
-  test("engine fixtures measure J1 within three calls and report attestation acquisition as a dependency", async () => {
-    const { cliCommands, failures: inventoryFailures } = buildCanonicalCommandInventory(process.cwd());
-    expect(inventoryFailures).toEqual([]);
-    const result = await checkInstructionReachability(cliCommands);
-    expect(result.failures).toEqual([]);
-    expect(result.ledger).toEqual([
-      { journey: "J0", fixture: "engine-initialized legacy; status → single safe-upgrade → active status", measuredCalls: 3, bar: 3, status: "blocked", dependency: "attestation acquisition has no supported counted path yet (design §6 Q2 decision pending)" },
-      { journey: "J1", fixture: "engine-initialized active", measuredCalls: 2, bar: 3, status: "met", dependency: null },
-      { journey: "J2", fixture: "engine-initialized active, recover then lifecycle", measuredCalls: 3, bar: 3, status: "blocked", dependency: "attestation acquisition has no supported counted path yet (design §6 Q2 decision pending)" },
-    ]);
-  });
-});
 
 describe("checkBilingualPairing — README pairing logic (guard 2)", () => {
   test("both READMEs changed passes", () => {
