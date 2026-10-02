@@ -457,6 +457,14 @@ export function buildReport(args: ReportArgs): ReportResult {
     let unitHasUsage = false;
     let unitUnknownIdentity = false;
     for (const t of Object.values(unit.turns)) {
+      // v1 states recorded before invocation accounting have turns without
+      // metrics.invocations. Refuse instead of throwing mid-aggregation: the
+      // counts cannot be invented, and this run directory cannot be upgraded
+      // in place (a same-directory rerun reuses completed units), so the
+      // recovery is a fresh eval run directory.
+      if (t.metrics.invocations === undefined) {
+        return fail([`unit ${unitId} turn ${t.turn} carries no invocation accounting: this scheduler state predates the invocation metrics and cannot be upgraded in place (a same-directory rerun reuses completed units); prepare a fresh eval run directory, run the eval there, and report that run's manifest`]);
+      }
       totalMs += t.metrics.elapsedMs;
       elapsedTurns += 1;
       basisCounts[t.metrics.usageBasis] += 1;

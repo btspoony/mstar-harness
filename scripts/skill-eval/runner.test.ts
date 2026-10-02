@@ -1613,6 +1613,58 @@ describe("Task 2: report stage (synthetic state)", () => {
     expect(io.exists(report.jsonPath)).toBe(false);
     expect(io.exists(report.mdPath)).toBe(false);
   });
+
+  test("report refuses older v1 state whose turns lack invocation accounting; the named fresh-run recovery reports", async () => {
+    const { io, manifest } = await preparedRunDir();
+    const run = await runSmoke(io, manifest, syntheticSpawn(io, passHandler(manifest)));
+    expect(run.exit).toBe(0);
+ // Pre-accounting v1 state: the recorded turns carry no metrics.invocations.
+ // The report must refuse with the cause and an actionable recovery — it can
+ // never invent the counts, and a same-directory rerun would reuse these
+ // completed units, so the state cannot be upgraded in place.
+    const state = readState(io);
+    const stale = state.units[`${WW_CASE}/baseline/1`]!;
+    for (const turn of Object.values(stale.turns)) delete (turn.metrics as Record<string, unknown>).invocations;
+    writeState(io, state);
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.exit).toBe(2);
+    expect(report.errors.join(" ")).toContain("no invocation accounting");
+    expect(report.errors.join(" ")).toContain("cannot be upgraded in place");
+    expect(report.errors.join(" ")).toContain("fresh eval run directory");
+    expect(report.errors.join(" ")).toContain(WW_CASE);
+ // Refusal precedes any artifact write: no report lands in the run dir.
+    expect(io.exists(report.jsonPath)).toBe(false);
+    expect(io.exists(report.mdPath)).toBe(false);
+
+ // The named recovery is the supported path: prepare a fresh disposable run
+ // directory, run the eval there, and report that run's manifest — the new
+ // state carries the accounting and aggregates without a refusal.
+    const freshDir = `${FIXTURE_ROOT}/runs/run-2`;
+    const fresh = await prepareManifest({
+      configPath: "/cfg/config.json",
+      casesPath: "/cfg/cases.json",
+      outDir: freshDir,
+      repoRoot: REPO_ROOT,
+      io,
+      readSourceTree: memReader,
+      exec: makeSubprocessSpy().exec,
+    });
+    expect(fresh.exit).toBe(0);
+    const freshManifestPath = `${freshDir}/manifest.json`;
+    const freshRun = await executeManifest({
+      manifestPath: freshManifestPath,
+      split: "smoke",
+      variants: ["baseline"],
+      repeats: 1,
+      io,
+      launchFn: syntheticSpawn(io, passHandler(fresh.manifest!)),
+    });
+    expect(freshRun.exit).toBe(0);
+    const freshReport = buildReport({ manifestPath: freshManifestPath, io });
+    expect(freshReport.exit).toBe(0);
+    expect(freshReport.report.boundedResolution.totalCallsCounted).toBeGreaterThan(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1650,6 +1702,7 @@ async function preparedBoundedRunDir(
   caseId: string,
   limit: number,
   context: "warm" | "cold" | null,
+  specOverride: Partial<typeof GROUPED_SPEC> = {},
 ): Promise<{ io: ReturnType<typeof memoryRunnerIo>; manifest: EvalManifest }> {
   const parsed = JSON.parse(CASES_TEXT) as { schemaVersion: number; cases: Array<Record<string, unknown>> };
   const target = parsed.cases.find((c) => c.id === caseId);
@@ -1657,7 +1710,7 @@ async function preparedBoundedRunDir(
   target.assertions = [
     { id: "b-calls", kind: "calls_within", value: limit },
     { id: "b-withheld", kind: "mutation_withheld", value: true },
-    { id: "b-grouped", kind: "grouped_facts_final", value: GROUPED_SPEC },
+    { id: "b-grouped", kind: "grouped_facts_final", value: { ...GROUPED_SPEC, ...specOverride } },
     // A resumable case must keep its thread_reused assertion: the resume
     // contract is validated at prepare time from the case's own assertions.
     ...(typeof target.resumePrompt === "string" ? [{ id: "b-thread", kind: "thread_reused", value: true }] : []),
@@ -1869,8 +1922,8 @@ describe("bounded resolution: invocation accounting and behavioral outcomes (syn
 
 describe("bounded resolution fix round: completeness, bundles, oracle, outcomes, cross-turn scope (synthetic)", () => {
   /** Grades one bounded RO unit with a scripted final message. */
-  async function gradeGroupedFinal(finalText: string): Promise<{ grade: string; detail: string }> {
-    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+  async function gradeGroupedFinal(finalText: string, specOverride: Partial<typeof GROUPED_SPEC> = {}): Promise<{ grade: string; detail: string }> {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold", specOverride);
     const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), finalText);
     await runSmoke(io, manifest, spawn);
     const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
@@ -2022,6 +2075,39 @@ describe("bounded resolution fix round: completeness, bundles, oracle, outcomes,
     expect(shortValidWithMarker.grade).toBe("pass");
   });
 
+  test("a cue naming the fact outside the request object is not a request: prose stays unverified, object/list requests pass", async () => {
+    // The counterexample: the required facts AND a request cue both appear,
+    // but the cue's clause object is "help" — the final never ASKS the
+    // operator for the facts. Naming facts is not requesting them: the
+    // unsupported prose shape stays unverified, never a pass.
+    const namingOnly = await gradeGroupedFinal("I need help. authorization is unavailable and the target issue id is missing");
+    expect(namingOnly.grade).toBe("unverified");
+    expect(namingOnly.detail).toContain("authorization");
+    expect(namingOnly.detail).toContain("outside any request-object/list position");
+    expect(namingOnly.detail).toContain("naming facts is not requesting them");
+
+    // Same-clause variant: the facts ride inside the help request's own
+    // clause ("because ...") — the coordinated segment still cannot rescue
+    // the prose-named fact, so the shape stays unverified, never a pass.
+    const sameClause = await gradeGroupedFinal("I need help because authorization is unavailable and the target issue id is missing");
+    expect(sameClause.grade).toBe("unverified");
+    expect(sameClause.detail).toContain("authorization");
+
+    // The facts as the cue's clause objects ARE a request.
+    const asking = await gradeGroupedFinal("I need authorization and the target issue id");
+    expect(asking.grade).toBe("pass");
+
+    // Single-required-fact spec (the live lease/close shape): coordinating
+    // the fact onto a prose first segment ("help and ...") is still not a
+    // request — later `and` segments only continue a list unlocked by a
+    // fact-object FIRST segment.
+    const coordinatedProse = await gradeGroupedFinal("I need help and authorization is unavailable", { required: ["authorization"] });
+    expect(coordinatedProse.grade).toBe("unverified");
+    expect(coordinatedProse.detail).toContain("authorization");
+    const coordinatedAsk = await gradeGroupedFinal("I need authorization and the plan to obtain it", { required: ["authorization"] });
+    expect(coordinatedAsk.grade).toBe("pass");
+  });
+
   test("observed failure, observed success and unknown outcome stay distinct", async () => {
     const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
     const items = [
@@ -2130,6 +2216,32 @@ describe("bounded resolution hardening: conflicts, quoting, scope flagging (synt
     const events = `${[
       JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
       quoted,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("unquoted command substitution is unknown bundle accounting: one envelope is not one lookup", async () => {
+    // `cat $(cmd1) $(cmd2) $(cmd3)` executes FOUR commands, but the
+    // separator split sees no `&&`/`;`/`|` and would count one known lookup —
+    // an over-budget trace quietly fitting calls_within:3. Substitution depth
+    // is unavailable, so the envelope stays unknown (never guessed).
+    const substituted = scanEventStream(`${invocationLine("item_1", { command: "cat $(cat a) $(cat b) $(cat c)" })}\n`);
+    expect(substituted.countedInvocations).toBe(1);
+    expect(substituted.bundleUnknownCalls).toBe(1);
+    expect(substituted.bundledLookups).toBe(0);
+
+    // Budget consequence: the assertion grades unverified, not a pass.
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1", { command: "cat $(cat a) $(cat b) $(cat c)" }),
       JSON.stringify({ type: "turn.completed", usage: {} }),
     ].join("\n")}\n`;
     const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);

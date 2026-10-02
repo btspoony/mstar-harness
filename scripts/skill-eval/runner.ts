@@ -475,6 +475,11 @@ const SCRIPT_INTERPRETERS = new Set(["python", "python3", "node", "ruby", "perl"
  */
 function shellConstituents(script: string): { bundled: number; unknown: boolean } {
   if (/["'`]/.test(script)) return { bundled: 0, unknown: true };
+  // Unquoted command/process substitution runs nested commands no separator
+  // split can see (`cat $(a) $(b) $(c)` executes four commands): the causal
+  // depth is unavailable, so the line stays unknown instead of one known
+  // lookup that quietly fits the budget.
+  if (/\$\(|<\(/.test(script)) return { bundled: 0, unknown: true };
   const parts = script.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
   if (parts.length === 0) return { bundled: 0, unknown: true };
   for (const part of parts) {
@@ -1460,41 +1465,100 @@ function readRequestGuard(spec: GroupedFactsSpec): RequestGuardSpec | "malformed
 }
 
 /**
- * Structured request-fact oracle (QC1-F2). A REQUEST for an available fact is
- * a configured cue whose clause object IS the fact — `cue` + optional
- * determiner + fact — never a full-sentence template, so the article is
- * irrelevant. Cues match as WHOLE WORDS (`needed`/`needing` are not `need`);
- * coordinated objects (`... and ...`) stay inside the request span. Every fact
- * occurrence that is neither a detected request object nor inside a declared
- * reference form is an UNSUPPORTED shape: the oracle returns `unverified`
- * rather than passing it.
+ * Facts requested by the text: a REQUEST is a configured cue whose clause
+ * object carries the fact — `cue` + optional determiner + fact within the
+ * cue's clause (coordinated objects included). A fact named elsewhere in the
+ * sentence is a mention inside prose, never a request: it opens no request
+ * span and is never returned here. Cues match as WHOLE WORDS
+ * (`needed`/`needing` are not `need`).
+ *
+ * The match mode follows the verdict's polarity:
+ * - "object-is" (re-request violations): the clause OBJECT must BE the fact —
+ *   a request clause that merely names an available fact as context ("acting
+ *   on the execution lease held by …") is not a re-request of it;
+ * - "object-list" (required-fact requests): the fact must open a contiguous
+ *   fact-token run from the object's start — a coordinated list ("the target
+ *   issue id and authorization") or a compact one ("provide target issue id
+ *   authorization") requests both facts, while prose after the cue ("help
+ *   because authorization is unavailable") requests nothing.
  */
-function scanRequestVerdict(
+function requestedFactsOf(
   final: string,
-  spec: { requestCues: string[] } & RequestGuardSpec,
-): RequestVerdict {
+  cues: string[],
+  facts: string[],
+  match: "object-is" | "object-list",
+): Set<string> {
   const lower = final.toLowerCase();
   const wordChar = (at: number): boolean => at >= 0 && at < lower.length && /[a-z0-9]/.test(lower[at]!);
-  const cues = spec.requestCues.map((cue) => cue.toLowerCase());
-  const facts = spec.availableFacts.map((fact) => fact.toLowerCase());
-  const violations = new Set<string>();
-  for (const cue of cues) {
+  const lowerCues = cues.map((cue) => cue.toLowerCase());
+  const lowerFacts = facts.map((fact) => fact.toLowerCase()).filter((fact) => fact !== "");
+  const requested = new Set<string>();
+  for (const cue of lowerCues) {
     let at = lower.indexOf(cue);
     while (at >= 0) {
       const cueEnd = at + cue.length;
       if (!wordChar(at - 1) && !wordChar(cueEnd)) {
         const stop = lower.slice(cueEnd).search(GROUPED_CLAUSE_END_RE);
         const clauseEnd = stop >= 0 ? cueEnd + stop : lower.length;
-        for (const segment of lower.slice(cueEnd, clauseEnd).split(/ and /)) {
-          const object = segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
-          for (const fact of facts) {
-            if (object.startsWith(fact)) violations.add(fact);
+        const clause = lower.slice(cueEnd, clauseEnd);
+        const clauseObject = (segment: string): string =>
+          segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
+        if (match === "object-is") {
+          for (const segment of clause.split(/ and /)) {
+            const object = clauseObject(segment);
+            for (const fact of lowerFacts) {
+              if (object.startsWith(fact)) requested.add(fact);
+            }
+          }
+        } else {
+          // Request-list rule: the clause's FIRST segment must consume a
+          // fact-object run; only then do later `and` segments continue
+          // the list ("need the workflow id and control root"). A prose
+          // first segment ("need help and authorization is unavailable")
+          // locks the clause — the later fact naming stays unverified.
+          const segments = clause.split(/ and /);
+          const consumeRun = (object: string): string | null => {
+            const tokens = object.split(/\s+/).filter((token) => token !== "");
+            let consumed = 0;
+            let head: string | null = null;
+            for (;;) {
+              const progressed = lowerFacts.find((fact) => {
+                const factTokens = fact.split(/\s+/);
+                return factTokens.every((token, index) => tokens[consumed + index] === token);
+              });
+              if (progressed === undefined) break;
+              requested.add(progressed);
+              if (head === null) head = progressed;
+              consumed += progressed.split(/\s+/).length;
+            }
+            return head;
+          };
+          if (consumeRun(clauseObject(segments[0] ?? "")) !== null) {
+            for (const segment of segments.slice(1)) consumeRun(clauseObject(segment));
           }
         }
       }
       at = lower.indexOf(cue, cueEnd);
     }
   }
+  return requested;
+}
+
+/**
+ * Structured request-fact oracle (QC1-F2). A REQUEST for an available fact is
+ * a configured cue whose clause object IS the fact — `cue` + optional
+ * determiner + fact — never a full-sentence template, so the article is
+ * irrelevant. Every fact occurrence that is neither a detected request object
+ * nor inside a declared reference form is an UNSUPPORTED shape: the oracle
+ * returns `unverified` rather than passing it.
+ */
+function scanRequestVerdict(
+  final: string,
+  spec: { requestCues: string[] } & RequestGuardSpec,
+): RequestVerdict {
+  const lower = final.toLowerCase();
+  const violations = requestedFactsOf(final, spec.requestCues, spec.availableFacts, "object-is");
+  const facts = spec.availableFacts.map((fact) => fact.toLowerCase());
   const referenceRanges: Array<[number, number]> = [];
   for (const form of spec.referenceForms) {
     for (const fact of facts) {
@@ -1604,6 +1668,27 @@ function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: 
         detail: hasOtherContent
           ? `final carries none of the required request cues [${cues.join(", ")}]`
           : "final is a marker echo: the required facts appear with no request content",
+      },
+    };
+  }
+  // Request-object/list oracle: a configured cue requests a required fact
+  // only when the fact IS the cue's clause object or opens the object's
+  // contiguous fact-token run ("provide the target issue id and
+  // authorization", compact "provide target issue id authorization"). A fact
+  // named elsewhere in the sentence ("I need help because authorization is
+  // unavailable") is prose, not a request: naming facts is not requesting
+  // them, and this unsupported shape stays unverified — never a pass.
+  const requested = requestedFactsOf(content, cues, spec.required, "object-list");
+  const unrequested = spec.required.filter((fact) => !requested.has(fact.toLowerCase()));
+  if (unrequested.length > 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `final mentions required fact(s) ${unrequested.map((fact) => JSON.stringify(fact)).join(", ")} outside any request-object/list position of the configured request cues [${cues.join(", ")}]; naming facts is not requesting them, and unsupported shapes stay unverified`,
       },
     };
   }

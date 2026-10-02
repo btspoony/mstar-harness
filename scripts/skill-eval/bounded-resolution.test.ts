@@ -113,12 +113,19 @@ const LEASE_UNDECLARED_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorizati
  */
 const SCHEMA_WRONG_RESULTS_FINAL = "outcome: resolved schema CaptureInput with 15 required fields from contract/capture-input.json\nschema CaptureInput requires: projectId, title, kind, severity, impact, acceptance, sourceIdentity, rootCauseKey, acceptanceKey, occurrenceKey, sourceKind, location, observedBehavior, evidence, wrongFieldOne\nissue document store/fixture.json: issueId I-999999 revision 7\n";
 /**
- * The corrected resume/next-action sentences are KEPT, and an incompatible
- * receipt claim (`phase retired` — a completed-mutation statement a
- * no-write trace cannot truthfully produce) is ADDED: the negative guard
- * must be what rejects this final, not a missing positive oracle.
+ * The corrected unfinished/next-action sentences are KEPT, and an incompatible
+ * receipt claim (`phase retired` — a completed-mutation statement a no-write
+ * trace cannot truthfully produce) is ADDED: the negative guard must be what
+ * rejects this final, not a missing positive oracle.
  */
-const REPLAY_RETIRED_CLAIM_FINAL = "outcome: replay resumes the partial upgrade from receipt phase activated (sources pending)\nnext: apply the sources phase, then retire\nreceipt: phase retired\n";
+const REPLAY_RETIRED_CLAIM_FINAL = "outcome: upgrade still unfinished; the read-only replay withheld the write, receipt phase activated (sources pending) remains the recorded state\nnext: apply the sources phase, then retire\nreceipt: phase retired\n";
+/**
+ * The false-resolution twin: the final claims the replay RESUMED (resolved)
+ * the partial upgrade — an outcome a read-only, no-write trace can never
+ * produce — while keeping the corrected next action. The resumed-claim guard
+ * must reject it: an unfinished upgrade is never a resolution.
+ */
+const REPLAY_RESUMED_CLAIM_FINAL = "outcome: replay resumes the partial upgrade from receipt phase activated (sources pending)\nnext: apply the sources phase, then retire\n";
 
 const manifestText = readFileSync(MANIFEST_PATH, "utf8");
 const manifest = JSON.parse(manifestText) as EvalManifest;
@@ -429,7 +436,7 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-incomplete-evidence": "outcome: captured issue I-000001",
   "bounded-res-bundled-lookups": "outcome: resolved bundled route",
   "bounded-res-retired-route": "outcome: refused retired verb status.archive-residuals",
-  "bounded-res-replay-partial": "outcome: replay resumes the partial upgrade from receipt phase activated (sources pending)\nnext: apply the sources phase, then retire",
+  "bounded-res-replay-partial": "outcome: upgrade still unfinished; the read-only replay withheld the write, receipt phase activated (sources pending) remains the recorded state\nnext: apply the sources phase, then retire",
   "bounded-res-lease-boundary": "outcome: stopped at foreign lease holder session-foreign-fixture",
   "bounded-res-slash-iteration-cold": "outcome: requested missing bootstrap facts",
   "bounded-res-slash-review-cold": "outcome: requested missing review facts",
@@ -529,14 +536,22 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     expect(schemaCase.assertions.find((a) => a.id === "a-schema-fields")!.value).toBe(contract.required.join(", "));
     const schemaDoc = JSON.parse(fixtureFilesFor("bounded-res-schema-read").find((f) => f.path === "store/fixture.json")!.content) as { issueId: string; revision: number };
     expect(schemaCase.assertions.find((a) => a.id === "a-issue-document")!.value).toBe(`issueId ${schemaDoc.issueId} revision ${schemaDoc.revision}`);
-    // The replay oracle binds the receipt's recorded state and demands a
-    // concrete next action; a completed/retired claim is guarded against.
+    // The replay oracle binds the receipt's recorded state, demands a
+    // concrete next action, and requires the UNFINISHED statement; a
+    // completed/retired claim AND a resumed/resolved claim are guarded
+    // against — an unfinished upgrade can never pass as resolved.
     const replayCase = manifest.cases.find((c) => c.id === "bounded-res-replay-partial")!;
     const replayDoc = JSON.parse(fixtureFilesFor("bounded-res-replay-partial").find((f) => f.path === "store/fixture.json")!.content) as { phase: string; sourcesPending: boolean };
     expect(replayDoc).toEqual({ phase: "activated", sourcesPending: true });
     expect(replayCase.assertions.find((a) => a.id === "a-outcome")!.value).toContain(`receipt phase ${replayDoc.phase} (sources pending)`);
+    expect(replayCase.assertions.find((a) => a.id === "a-outcome")!.value).toContain("still unfinished");
     expect(replayCase.assertions.find((a) => a.id === "a-next-action")!.kind).toBe("final_contains");
+    expect(EXPECTED_OUTCOME["bounded-res-replay-partial"]).toContain("still unfinished");
     expect(EXPECTED_OUTCOME["bounded-res-replay-partial"]).not.toContain("phase retired");
+    expect(EXPECTED_OUTCOME["bounded-res-replay-partial"]).not.toContain("replay resumes the partial upgrade");
+    const resumedGuard = replayCase.assertions.find((a) => a.id === "a-not-resumed-claim")!;
+    expect(resumedGuard.kind).toBe("final_not_contains");
+    expect(resumedGuard.value).toBe("replay resumes the partial upgrade");
     // The traces themselves observe the fixture reads the outcomes claim:
     // the schema/read route reads the contract AND the stored document, the
     // replay route reads the partial receipt it resumes from — placeholder
@@ -1134,6 +1149,34 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(replay.grading!.assertions.find((a) => a.assertionId === "a-next-action")!.grade).toBe("pass");
     expect(replay.grade).toBe("fail");
     expect(replay.grading!.assertions.find((a) => a.assertionId === "a-not-retired-claim")!.grade).toBe("fail");
+  });
+
+  test("a replay final claiming the upgrade was resumed fails: an unfinished upgrade is not a resolution", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const spawn = syntheticSpawn(io, manifest, { "bounded-res-replay-partial": REPLAY_RESUMED_CLAIM_FINAL });
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: spawn,
+    });
+
+    expect(result.errors).toEqual([]);
+    const units = Object.values(result.state.units);
+    const replay = units.find((u) => u.caseId === "bounded-res-replay-partial")!;
+    // Budget and no-write stay valid and the next action is present — the
+    // resumed/resolved claim is what the guard rejects: a read-only trace
+    // that finishes nothing cannot count the upgrade as resolved.
+    expect(replay.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-next-action")!.grade).toBe("pass");
+    expect(replay.grade).toBe("fail");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("fail");
+    expect(replay.grading!.assertions.find((a) => a.assertionId === "a-not-resumed-claim")!.grade).toBe("fail");
   });
 
   test("the report retains noncompliant and unverified dispositions in the denominator", async () => {
