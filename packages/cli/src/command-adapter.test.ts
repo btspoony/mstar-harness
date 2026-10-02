@@ -40,7 +40,7 @@ test("CLI contract declares session resolution and legacy-route exceptions", () 
   const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.bind");
   expect(definition).toBeDefined();
   const contract = renderCommandContract(definition!, "cli");
-  expect(contract).toContain("Session identity resolves from --session-id or MSTAR_HOST_SESSION_ID");
+  expect(contract).toContain("Session identity resolves --session-id first, then MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset");
   expect(contract).toContain("active token-authorized writes it is attribution, not authorization");
   expect(contract).toContain("legacy pre-activation coordinator bootstrap");
   expect(contract).toContain("requires an explicit --session-id and rejects the environment value");
