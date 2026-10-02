@@ -52,6 +52,7 @@ afterAll(() => {
 });
 afterEach(() => {
   delete process.env.MSTAR_PROJECTION_CHURN_PATH;
+  delete process.env.MSTAR_PROJECTION_DB_CHURN;
   delete process.env.MSTAR_STORE_TEST_RUNNER;
 });
 
@@ -420,6 +421,14 @@ function issueInput(occurrenceKey: string) {
     const refreshed = await withStoreRead(f.context, queryDashboard("workflows"));
     expect(refreshed.projection).toMatchObject({ freshness: "current", generation: initial.generation! + 1 });
     expect((await projections(f)).plans).toEqual(expect.arrayContaining([expect.objectContaining({ plan_id: "plan-inserted" }), expect.objectContaining({ plan_id: planId })]));
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify({ kind: "insert-plan", workflowId, planId: "plan-retry-inserted" });
+    const retried = await refreshProjections(f.context);
+    expect(retried).toMatchObject({ freshness: "current", published: true, generation: initial.generation! + 2 });
+    expect((await projections(f)).plans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ plan_id: "plan-inserted" }),
+      expect.objectContaining({ plan_id: "plan-retry-inserted" }),
+    ]));
   });
 
   test("an updated ACTIVE row after capture refuses publication without serving older JSON as current", async () => {
@@ -448,6 +457,11 @@ function issueInput(occurrenceKey: string) {
     const refreshed = await withStoreRead(f.context, queryDashboard("workflows"));
     expect(refreshed.projection).toMatchObject({ freshness: "current", generation: initial.generation! + 1 });
     expect(await projections(f)).toMatchObject({ workflows: [expect.objectContaining({ id: workflowId, status: "completed" })] });
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify({ kind: "update-row", workflowId, planId });
+    const retried = await refreshProjections(f.context);
+    expect(retried).toMatchObject({ freshness: "current", published: true, generation: initial.generation! + 2 });
+    expect((await projections(f)).workflows[0]).toMatchObject({ id: workflowId, status: "completed", updated_at: `${STARTED_AT}-churn` });
   });
 
 
