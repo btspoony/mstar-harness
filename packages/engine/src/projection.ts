@@ -1533,25 +1533,28 @@ async function applyDatabaseChurn(context: StoreContext): Promise<void> {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
   const encoded = process.env.MSTAR_PROJECTION_DB_CHURN;
   if (!encoded) return;
-  delete process.env.MSTAR_PROJECTION_DB_CHURN;
   const request: unknown = JSON.parse(encoded);
-  if (!isPlainObject(request) || (request.kind !== "insert-plan" && request.kind !== "update-row") ||
-      typeof request.workflowId !== "string" || typeof request.planId !== "string") {
+  const requests = Array.isArray(request) ? request : [request];
+  const next = requests.shift();
+  if (requests.length === 0) delete process.env.MSTAR_PROJECTION_DB_CHURN;
+  else process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify(requests);
+  if (!isPlainObject(next) || (next.kind !== "insert-plan" && next.kind !== "update-row") ||
+      typeof next.workflowId !== "string" || typeof next.planId !== "string") {
     throw new Error("invalid projection DB churn test request");
   }
   const handle = await openStore(context, "write");
   try {
-    if (request.kind === "insert-plan") {
+    if (next.kind === "insert-plan") {
       handle.db.prepare(
         "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
           "values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')",
-      ).run(request.workflowId, request.planId, request.workflowId, JSON.stringify({ id: request.planId, title: request.planId, file: `plans/${request.planId}.md`, status: "Todo" }));
+      ).run(next.workflowId, next.planId, next.workflowId, JSON.stringify({ id: next.planId, title: next.planId, file: `plans/${next.planId}.md`, status: "Todo" }));
     } else {
-      const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(request.workflowId) as { state_json: string } | undefined;
+      const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(next.workflowId) as { state_json: string } | undefined;
       if (!current) throw new Error("projection DB churn workflow is missing");
       const state = JSON.parse(current.state_json) as Record<string, unknown>;
       state.updated_at = `${String(state.updated_at)}-churn`;
-      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), request.workflowId);
+      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), next.workflowId);
     }
     handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
   } finally {

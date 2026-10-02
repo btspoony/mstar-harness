@@ -434,6 +434,93 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       })],
     });
   });
+  test("an empty ACTIVE authority publishes a current empty projection", async () => {
+    const f = await fixture("active-empty-");
+    await initializeExecutionAuthority(f.context);
+
+    const refreshed = await withStoreRead(f.context, queryDashboard("workflows"));
+
+    expect(refreshed.projection).toMatchObject({ freshness: "current", generation: 1 });
+    expect(refreshed.data).toMatchObject({ items: [], total: 0 });
+    expect(await projections(f)).toMatchObject({ workflows: [], plans: [], leases: [], compasses: [] });
+  });
+
+  test("leftover retired workflow files do not alter ACTIVE projection sources", async () => {
+    const workflowId = "wf-retired-files";
+    const planId = "plan-retired-files";
+    const f = await activeWorkflowFixture("active-retired-files-", workflowId, planId);
+    const first = await refreshProjections(f.context);
+    const initial = await projections(f);
+    const statusPath = join(f.harness, "status.json");
+    const snapshotPath = join(f.harness, "workflows", workflowId, "snapshot.json");
+
+    write(statusPath, rootDoc([]));
+    write(snapshotPath, snapshotDoc(workflowId, { status: "completed" }));
+    const changed = await refreshProjections(f.context);
+    expect(changed.generation).toBe(first.generation);
+    expect((await projections(f)).sources).toEqual(initial.sources);
+
+    write(join(f.harness, "status.json"), rootDoc([{ id: "wf-added-retired", dir: "workflows/wf-added-retired" }]));
+    write(join(f.harness, "workflows", "wf-added-retired", "snapshot.json"), snapshotDoc("wf-added-retired"));
+    const added = await refreshProjections(f.context);
+    expect(added.generation).toBe(first.generation);
+    expect((await projections(f)).sources).toEqual(initial.sources);
+
+    rmSync(statusPath);
+    rmSync(snapshotPath);
+    rmSync(join(f.harness, "workflows", "wf-added-retired", "snapshot.json"));
+    const deleted = await refreshProjections(f.context);
+    expect(deleted.generation).toBe(first.generation);
+    expect((await projections(f)).sources).toEqual(initial.sources);
+  });
+
+  test("a deleted ACTIVE row refuses stale publication and retains last-good rows", async () => {
+    const workflowId = "wf-deleted-before-verify";
+    const planId = "plan-deleted-before-verify";
+    const f = await activeWorkflowFixture("active-delete-row-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const lastGood = await projectedRows(f);
+    const capture = await captureProjectionSources(f.context);
+    const handle = await openStore(f.context, "write");
+    try {
+      handle.db.prepare("delete from execution_sessions where workflow_id = ? and plan_id = ?").run(workflowId, planId);
+      handle.db.prepare("delete from execution_leases where workflow_id = ? and plan_id = ?").run(workflowId, planId);
+      handle.db.prepare("delete from execution_inputs where workflow_id = ? and plan_id = ?").run(workflowId, planId);
+      handle.db.prepare("delete from execution_plans where workflow_id = ? and plan_id = ?").run(workflowId, planId);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+
+    await expect(publishProjectionCapture(f.context, capture)).rejects.toMatchObject({
+      code: "projection.source-stale",
+      message: expect.stringContaining(`workflow:harness:execution/plans/${workflowId}/${planId}`),
+    });
+    expect((await projections(f)).meta.generation).toBe(initial.generation);
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
+  test("two ACTIVE source movements produce stale health without advancing generation", async () => {
+    const workflowId = "wf-double-movement";
+    const planId = "plan-double-movement";
+    const f = await activeWorkflowFixture("active-double-movement-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const lastGood = await projectedRows(f);
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify([
+      { kind: "update-row", workflowId, planId },
+      { kind: "update-row", workflowId, planId },
+    ]);
+
+    const stale = await refreshProjections(f.context);
+
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
+    expect(stale.diagnostics).toContainEqual(expect.objectContaining({
+      sourceKey: "root:harness:execution/store-revision",
+      reason: "source-changing",
+    }));
+    expect((await projections(f)).meta.generation).toBe(initial.generation);
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
+
+
   test("an execution workflow row absent from the registry is still projected inactive", async () => {
     const f = await fixture("active-unregistered-");
     await initializeExecutionAuthority(f.context);
