@@ -1282,6 +1282,57 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
   });
 
 
+  test("migration retirement matches its remaining set facts by key, not enumeration order (A4)", async () => {
+    const { harnessDir, context } = await fixture("migration-retire-reordered-");
+    // Two pending execution-written rows for two DIFFERENT workflow ids whose
+    // operation ids enumerate in the OPPOSITE order to their journal insertion
+    // order. The retirement is addressed by operation id (a key), and each row
+    // is matched to its own snapshot + root entry by id/dir — never by position
+    // in the pending set — so reversing the request's enumeration is equivalent.
+    const rows = [
+      { operationId: "op-reorder-a", workflowId: "wf-reorder-a", planId: "plan-reorder-a" },
+      { operationId: "op-reorder-b", workflowId: "wf-reorder-b", planId: "plan-reorder-b" },
+    ];
+    for (const [index, row] of rows.entries()) {
+      const planId = row.planId;
+      await registerCatalogEntity(
+        context,
+        { kind: "plan", id: planId, title: "Already registered", rootKind: "plans", relativePath: `elsewhere-${index}.md` },
+        { operationId: `seed-reorder-${index}`, actor: "project-manager" },
+      );
+    }
+    for (const row of rows) {
+      await expect(
+        registerCatalogExecution(
+          context,
+          planRequest({
+            harnessDir,
+            operationId: row.operationId,
+            expectedCatalogRevision: 2,
+            workflowId: row.workflowId,
+            planId: row.planId,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    }
+    const handle = await openStore(context, "write");
+    handle.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    handle.close();
+
+    // Reversed enumeration relative to insertion order.
+    await retireStaleCatalogExecutionsForMigration(context, rows.map((row) => row.operationId).reverse(), "owner approved discard");
+    const after = await openStore(context, "read");
+    const phases = after.db
+      .prepare("select operation_id, phase from catalog_operations where operation_id in (?, ?) order by operation_id asc")
+      .all(...rows.map((row) => row.operationId)) as Array<{ operation_id: string; phase: string }>;
+    after.close();
+    expect(phases).toEqual([
+      { operation_id: "op-reorder-a", phase: "aborted" },
+      { operation_id: "op-reorder-b", phase: "aborted" },
+    ]);
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
+  });
+
   test("migration retirement refuses ordinary pending rows and empty dispositions without writing", async () => {
     const { harnessDir, context } = await fixture("migration-retire-refuse-");
     setArtifactStore(failingStore(harnessDir, "snapshot"));

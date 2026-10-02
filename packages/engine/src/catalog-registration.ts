@@ -87,14 +87,18 @@ import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
-import { findRegisteredWorkflow, registerWorkflowEntryLocked, validateWorkflowEntry, type WorkflowEntry } from "./status.js";
+import {
+  findRegisteredWorkflow,
+  registerWorkflowEntryLocked,
+  rowPlanIds,
+  validateWorkflowEntry,
+  type WorkflowEntry,
+} from "./status.js";
 import {
   WORKFLOW_SNAPSHOT_FILE,
   assertDeliveryRegistrationCoherence,
   derivePlanRegistration,
-  iterationWorkflowRegistrationIdentity,
   iterationWorkflowSnapshot,
-  planWorkflowRegistrationIdentity,
   planWorkflowSnapshot,
   readWorkflowSnapshot,
   registerIterationWorkflow,
@@ -638,18 +642,68 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
 }
 
 /**
- * The comparison the producers use for orphan recovery, by registration kind.
- * Audit promotions are `type: plan` snapshots and compare through the plan
- * subset (timestamps excluded — a retry never fails because the clock moved).
+ * The registration identity this request registers, recorded in the journal and
+ * re-matched later by explicit field. It is a PROJECTION of the reviewed
+ * snapshot (header identity fields + addressed plan row ids), never a digest:
+ * the journal stores it for diagnosis, and the comparison below reads the
+ * fields rather than comparing this string.
  */
-function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
-  return kind === "iteration" ? iterationWorkflowRegistrationIdentity(snapshot) : planWorkflowRegistrationIdentity(snapshot);
+function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
+  return stableJson({ kind, ...registrationIdentityFields(snapshot) });
+}
+
+/** The explicit registration-identity fields two snapshots are matched on. */
+type RegistrationIdentityFields = {
+  id: string | null;
+  type: string | null;
+  delivery_kind: string | null;
+  project: string | null;
+  completion_policy: string | null;
+  compass_ref: string | null;
+  /** The branch anchors as explicit `key=value` pairs, sorted — never a serialized object. */
+  compactBranch: string;
+  /**
+   * The addressed plan row ids. The plan collection is an ORDERED sequence whose
+   * enumeration is part of the registered identity (a reordered orphan is a
+   * different registration), so the ids are compared element-wise in order —
+   * never sorted and never re-serialized as a whole object.
+   */
+  planIds: string[];
+};
+
+/**
+ * The comparison the producers use for orphan recovery, by registration kind,
+ * expressed as EXPLICIT registration-identity fields and plan ROW KEYS rather
+ * than a canonical serialization of the two snapshots. The frozen identity is
+ * the same field set the registration declares (type, delivery kind, project,
+ * completion policy, branch anchors, compass ref) plus the addressed plan row
+ * ids — never a digest and never a whole-object serialization whose enumeration
+ * could gate a semantically identical registration.
+ */
+function registrationIdentityFields(snapshot: WorkflowSnapshot): RegistrationIdentityFields {
+  const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
+  const compactBranch = Object.keys(branch)
+    .sort()
+    .map((key) => `${key}=${String(branch[key])}`)
+    .join("\u0000");
+  return {
+    id: typeof snapshot.id === "string" ? snapshot.id : null,
+    type: typeof snapshot.type === "string" ? snapshot.type : null,
+    delivery_kind: typeof snapshot.delivery_kind === "string" ? snapshot.delivery_kind : null,
+    project: typeof snapshot.project === "string" ? snapshot.project : null,
+    completion_policy: typeof snapshot.completion_policy === "string" ? snapshot.completion_policy : null,
+    compass_ref: typeof snapshot.compass_ref === "string" ? snapshot.compass_ref : null,
+    compactBranch,
+    planIds: (snapshot.plans ?? []).map((row) => rowPlanIds(row)[0] ?? ""),
+  };
 }
 
 /**
- * Project away execution progress before comparing migration ownership. The
- * existing registration identity remains the single source of its stable
- * fields; normalizing its mutable status members preserves that field set.
+ * Compare the current snapshot's explicit registration-identity fields with the
+ * recorded envelope's. The envelope is a plain object of the same projection
+ * (header identity fields + plan row ids), so it is read field-by-field and
+ * never re-serialized for comparison. Mutable execution progress is not part of
+ * the projection, so plan status never gates the match.
  */
 function migrationIdentityMatches(
   kind: CatalogExecutionKind,
@@ -663,21 +717,28 @@ function migrationIdentityMatches(
   } catch {
     return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
   }
-  const coordinator = recorded.coordinator;
-  const recordedSnapshot = {
-    ...recorded,
-    coordination: coordinator === null || coordinator === undefined ? undefined : { coordinator },
-  } as unknown as WorkflowSnapshot;
-  return migrationOwnershipIdentity(kind, snapshot) === migrationOwnershipIdentity(kind, recordedSnapshot);
-}
-function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
-  const registration = {
-    ...snapshot,
-    status: "running",
-    plans: snapshot.plans.map((plan) => ({ ...plan, status: "Todo" })),
-    coordination: snapshot.coordination === undefined ? undefined : { coordinator: snapshot.coordination.coordinator },
-  } as WorkflowSnapshot;
-  return onDiskIdentity(kind, registration);
+  const b: RegistrationIdentityFields = {
+    id: typeof recorded.id === "string" ? recorded.id : null,
+    type: typeof recorded.type === "string" ? recorded.type : null,
+    delivery_kind: typeof recorded.delivery_kind === "string" ? recorded.delivery_kind : null,
+    project: typeof recorded.project === "string" ? recorded.project : null,
+    completion_policy: typeof recorded.completion_policy === "string" ? recorded.completion_policy : null,
+    compass_ref: typeof recorded.compass_ref === "string" ? recorded.compass_ref : null,
+    compactBranch: typeof recorded.compactBranch === "string" ? recorded.compactBranch : "",
+    planIds: Array.isArray(recorded.planIds) ? recorded.planIds.filter((id): id is string => typeof id === "string") : [],
+  };
+  const a = registrationIdentityFields(snapshot);
+  return (
+    a.id === b.id &&
+    a.type === b.type &&
+    a.delivery_kind === b.delivery_kind &&
+    a.project === b.project &&
+    a.completion_policy === b.completion_policy &&
+    a.compass_ref === b.compass_ref &&
+    a.compactBranch === b.compactBranch &&
+    a.planIds.length === b.planIds.length &&
+    a.planIds.every((planId, index) => planId === b.planIds[index])
+  );
 }
 
 /**

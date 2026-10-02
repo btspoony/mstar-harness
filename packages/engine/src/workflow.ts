@@ -2026,29 +2026,49 @@ export type RegisterPlanWorkflowResult = {
 };
 
 /**
- * Identity subset compared on recovery (contract §4b: re-running the producer
- * must not duplicate identity). Timestamps (`started_at`/`updated_at`/`bound_at`)
- * are excluded by design - the orphaned snapshot's timestamps are preserved,
- * not rewritten, and a retry does not fail merely because the clock moved.
+ * Compare two snapshots' REGISTRATION IDENTITY by explicit field: the header
+ * fields a registration freezes (type, delivery kind, project, completion
+ * policy, compass ref, branch anchors, coordinator binding) plus the addressed
+ * plan rows by their own `id`/`title`/`file` keys in order. It is deliberately
+ * NOT a canonical serialization of the two snapshots: `status` and any other
+ * mutable execution progress are outside the identity (a progressed orphan
+ * still recovers), and the row collection is an ordered sequence compared
+ * element-wise — never sorted and never re-serialized as one object.
  *
- * Shared with the catalog registration journal (`catalog-registration.ts`),
- * which re-verifies the on-disk registration identity before it publishes the
- * catalog delta (contract §3 step 3) - one definition of "which registration
- * this is", never a second one. Audit promotions are `type: plan` snapshots
- * and compare through this same subset.
+ * Used by the create-only producers' crash/retry recovery: re-running the
+ * producer must not duplicate identity, so a mismatch refuses instead of
+ * adopting a foreign registration.
  */
-export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
-  const coordinator = snapshot.coordination?.coordinator;
-  return stableJson({
-    type: snapshot.type,
-    status: snapshot.status,
-    delivery_kind: snapshot.delivery_kind ?? null,
-    project: snapshot.project ?? null,
-    completion_policy: snapshot.completion_policy ?? null,
-    branch: snapshot.branch ?? null,
-    plans: snapshot.plans,
-    coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
-  });
+function registrationIdentityMatches(existing: WorkflowSnapshot, candidate: WorkflowSnapshot): boolean {
+  const coordinatorOf = (snapshot: WorkflowSnapshot): string | null => {
+    const coordinator = snapshot.coordination?.coordinator;
+    return coordinator ? `${coordinator.session_id}\u0000${coordinator.session_file}` : null;
+  };
+  const branchOf = (snapshot: WorkflowSnapshot): string => {
+    const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
+    return Object.keys(branch)
+      .sort()
+      .map((key) => `${key}=${String(branch[key])}`)
+      .join("\u0000");
+  };
+  const rowsOf = (snapshot: WorkflowSnapshot): string[] =>
+    (snapshot.plans ?? []).map((row) => `${String(row.id ?? row.plan_id ?? "")}\u0000${String(row.title ?? "")}\u0000${String(row.file ?? "")}`);
+
+  if (
+    (existing.id ?? null) !== (candidate.id ?? null) ||
+    (existing.type ?? null) !== (candidate.type ?? null) ||
+    (existing.delivery_kind ?? null) !== (candidate.delivery_kind ?? null) ||
+    (existing.project ?? null) !== (candidate.project ?? null) ||
+    (existing.completion_policy ?? null) !== (candidate.completion_policy ?? null) ||
+    (existing.compass_ref ?? null) !== (candidate.compass_ref ?? null) ||
+    branchOf(existing) !== branchOf(candidate) ||
+    coordinatorOf(existing) !== coordinatorOf(candidate)
+  ) {
+    return false;
+  }
+  const left = rowsOf(existing);
+  const right = rowsOf(candidate);
+  return left.length === right.length && left.every((row, index) => row === right[index]);
 }
 
 /**
@@ -2245,7 +2265,7 @@ export async function registerPlanWorkflow(
       // against the EXISTING snapshot bytes; an identity mismatch refuses
       // instead of adopting a foreign registration.
       const existing = readWorkflowSnapshot(workflowDir);
-      if (planWorkflowRegistrationIdentity(existing.snapshot) !== planWorkflowRegistrationIdentity(snapshot)) {
+      if (!registrationIdentityMatches(existing.snapshot, snapshot)) {
         throw new Error(
           `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +
             `with a different registration identity \u2014 remove that workflow or register under a different id`,
@@ -2333,31 +2353,13 @@ export type RegisterIterationWorkflowResult = {
 };
 
 /**
- * Identity subset compared on iteration registration recovery (the plan
- * producer's `planWorkflowRegistrationIdentity` sibling). Adds the snapshot
- * `id` itself - comparing only the path is insufficient - and the
- * `{ session_id, session_file }` coordinator projection: a candidate never
- * carries a coordinator, so an already-bound orphan refuses rather than
- * silently attaching another owner's workflow. Timestamps stay excluded -
- * the orphan's timestamps are preserved, not rewritten.
- *
- * Exported for the catalog registration journal
- * (`catalog-registration.ts`), which re-verifies this exact identity before
- * publishing a catalog delta (contract §3 step 3).
+ * The iteration producer's registration identity is compared through the same
+ * explicit-field rule as the plan producer (`registrationIdentityMatches`):
+ * the header identity fields plus the ordered plan rows. `id` is part of that
+ * comparison, so comparing only the path is insufficient, and an already-bound
+ * orphan (a candidate never carries a coordinator) refuses rather than silently
+ * attaching another owner's workflow. Timestamps stay outside the identity.
  */
-export function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
-  const coordinator = snapshot.coordination?.coordinator;
-  return stableJson({
-    id: snapshot.id,
-    type: snapshot.type,
-    status: snapshot.status,
-    compass_ref: snapshot.compass_ref ?? null,
-    branch: snapshot.branch ?? null,
-    project: snapshot.project ?? null,
-    plans: snapshot.plans,
-    coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
-  });
-}
 
 /**
  * Normalize the registration input's `compassRef` to the stored contract
@@ -2487,7 +2489,7 @@ export function iterationWorkflowSnapshot(
  * without replacing their bytes.
  *
  * Crash/retry recovery: a snapshot without its root entry (an orphan)
- * re-registers only when `iterationWorkflowRegistrationIdentity` matches -
+ * re-registers only when its registration identity matches (`registrationIdentityMatches`) -
  * the existing snapshot's bytes and timestamps are preserved verbatim and
  * the root entry is written with the orphan's `started_at` (`recovered:
  * true`). A differing identity (including a mismatched snapshot id or an
@@ -2650,8 +2652,7 @@ export async function registerIterationWorkflow(
       };
       if (
         existing.snapshot.id !== workflowId ||
-        iterationWorkflowRegistrationIdentity(identityProjection(existing.snapshot)) !==
-          iterationWorkflowRegistrationIdentity(identityProjection(snapshot))
+        !registrationIdentityMatches(identityProjection(existing.snapshot), identityProjection(snapshot))
       ) {
         throw new Error(
           `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +

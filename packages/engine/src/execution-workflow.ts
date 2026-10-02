@@ -684,21 +684,37 @@ async function readCloseEvidence(context: ExecutionContext, workflowId: string):
 }
 
 /**
- * §4.1 the commit-window half of the pinned evidence: the ONE fact that is not a
- * document re-read — a checkout the transition validated still has to exist as a
- * directory, because nothing records a checkout that is no longer there. The
- * compass bytes and the checkout's ref bytes are not re-compared: the phase gate
- * is evaluated over the compass the preflight read, and a later edit is a record
- * that has moved on, not a refusal.
+ * §4.1 the commit-window half of the pinned evidence: the current Git facts of
+ * the checkout this transition adopted, re-read immediately before the commit.
+ * The byte witnesses (a compass digest, a pinned ref digest) are gone — an edit
+ * to a document or a ref file is a record that has moved on, not a refusal. What
+ * is NOT a byte witness and must still hold is the branch fact: the checkout the
+ * transition is about to record has to be on the registered integration branch
+ * at the commit boundary, re-read through the same `assertBranchAlignment`
+ * validator the preflight used (a misaligned checkout is an invalid delivery
+ * fact, not digest drift). The candidate path must also still exist as a
+ * directory, because nothing records a checkout that is no longer there.
  */
 function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
-  if (evidence.worktree !== undefined && (!existsSync(evidence.worktree.path) || !statSync(evidence.worktree.path).isDirectory())) {
-    throw new CoordinationError(
-      "coordination.evidence-stale",
-      `the integration checkout ${evidence.worktree.path} disappeared after it was validated \u2014 nothing records a checkout ` +
-        `that is no longer there`,
-      { path: evidence.worktree.path },
-    );
+  if (evidence.worktree !== undefined) {
+    const { path, branch } = evidence.worktree;
+    if (!existsSync(path) || !statSync(path).isDirectory()) {
+      throw new CoordinationError(
+        "coordination.evidence-stale",
+        `the integration checkout ${path} disappeared after it was validated \u2014 nothing records a checkout ` +
+          `that is no longer there`,
+        { path },
+      );
+    }
+    const alignment = assertBranchAlignment(path, branch);
+    if (!alignment.ok) {
+      throw new CoordinationError(
+        "coordination.integration-diverged",
+        `the integration checkout ${path} is no longer on the registered integration branch (${summarize(alignment.violations)}) ` +
+          `\u2014 the branch fact is re-read at the commit boundary`,
+        { path, expected: branch },
+      );
+    }
   }
 }
 
@@ -981,9 +997,9 @@ async function resolveWorkflowIntent<Operation extends WorkflowExecutionOperatio
  * accepted operation and a committed receipt that makes an identical retry a
  * replay. The supplied token's ADDRESS and generation are strict; its REVISION is
  * transport freshness, so the frame recomputes the intent against the state it
- * reads now: a satisfied effect is a current success with no mutation (R6/A09/
- * A12), a relevant conflict is refused with the exact field (A11), a superseded
- * receipt is disclosed instead of restored (A13), and a superseded authority
+ * reads now: the SAME operation id replays its recorded receipt, a DISTINCT
+ * operation id acts on the current state (R6/A09/A12), a relevant conflict is
+ * refused with the exact field (A11), and a superseded authority
  * generation is re-resolved before anything is replayed (A26). It adds nothing a
  * caller can turn into permission: no gate verdict is read from the request, no
  * header field outside the operation's own member is writable, and identity

@@ -660,23 +660,54 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(misaligned.code).toBe("coordination.integration-diverged");
   });
 
-  test("a checkout switched between the probe and the commit does not refuse the integration-worktree transition", async () => {
+  test("a checkout switched off the integration branch in the window is refused at the commit boundary (C1)", async () => {
     const fixture = await workflowFixture("worktree-switched");
     // A request for the path the header ALREADY records is the same stored
-    // value; this call is a CHANGE, and the checkout it probes is switched in
-    // the read→commit window. The recorded path is a fact about WHICH checkout
-    // this lifecycle registers, not a re-read of its ref bytes.
+    // value; this call is a CHANGE, and the checkout is switched to a genuinely
+    // DIFFERENT branch in the read→commit window. That is not digest-only drift:
+    // the branch fact the accepted checkout must hold is invalid, so the
+    // existing `assertBranchAlignment` validator re-reads it at the commit
+    // boundary and refuses with the retained `coordination.integration-diverged`.
     withRaw(fixture.context, (db) => {
       db.prepare(
         "update execution_workflows set state_json = json_set(state_json, '$.integration_worktree_path', ?) where workflow_id = ?",
       ).run(join(fixture.repoRoot, "wt-recorded-earlier"), WORKFLOW_ID);
     });
+    const before = await workflowFootprint(fixture.context);
     setWorkflowWitnessGapForTest(() => {
       runGit(["checkout", "-q", "-b", "feature/switched-in-the-window"], fixture.integrationPath);
     });
+    let refused;
+    try {
+      refused = await refusalOf(() =>
+        workflowMutation(fixture, "op-worktree-switched", {
+          kind: "integration-worktree",
+          path: fixture.integrationPath,
+        }),
+      );
+    } finally {
+      setWorkflowWitnessGapForTest(undefined);
+    }
+    expect(refused.code).toBe("coordination.integration-diverged");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("a ref move inside the integration branch does not refuse the commit (digest-only drift)", async () => {
+    const fixture = await workflowFixture("worktree-same-branch");
+    withRaw(fixture.context, (db) => {
+      db.prepare(
+        "update execution_workflows set state_json = json_set(state_json, '$.integration_worktree_path', ?) where workflow_id = ?",
+      ).run(join(fixture.repoRoot, "wt-recorded-earlier"), WORKFLOW_ID);
+    });
+    // The checkout stays on the registered integration branch; only its ref/HEAD
+    // bytes move in the window (a commit). The branch fact is valid, so the
+    // deleted byte witness is not re-imposed and the transition commits.
+    setWorkflowWitnessGapForTest(() => {
+      runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "window move"], fixture.integrationPath);
+    });
     let receipt;
     try {
-      receipt = await workflowMutation(fixture, "op-worktree-switched", {
+      receipt = await workflowMutation(fixture, "op-worktree-same-branch", {
         kind: "integration-worktree",
         path: fixture.integrationPath,
       });
@@ -689,7 +720,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     );
   });
 
-  test("delivery evidence follows the declared kind, records once and refuses a rewritten PR identity", async () => {
+  test("delivery evidence follows the declared kind, records once, accepts a valid re-record and refuses a contradictory source", async () => {
     const fixture = await workflowFixture("delivery");
     // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence:
     // it is captured when it is observed, whatever the row's own `Done`
