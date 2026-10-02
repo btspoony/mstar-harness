@@ -2185,6 +2185,28 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
         db.close();
       }
       const before = executionFootprint(context);
+      const beforeWorkflow = rawDb(storePath(context));
+      let workflowBefore: Row;
+      try {
+        workflowBefore = one(
+          beforeWorkflow,
+          "select creator_session_id, revision from execution_workflows where workflow_id = 'wf-1'",
+        );
+      } finally {
+        beforeWorkflow.close();
+      }
+      const beforeSessions = sessionRows(context);
+      expect(beforeSessions).toEqual([
+        {
+          workflow_id: "wf-1",
+          role: "coordinator",
+          session_id: `prior-${state}`,
+          plan_id: null,
+          epoch,
+          revision: 1,
+          state,
+        },
+      ]);
       await expect(
         bindExecutionSession(
           domainContext(context, sessionCaller("wf-1", `fresh-${state}`)),
@@ -2192,6 +2214,15 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
         ),
       ).rejects.toMatchObject({ code: "execution.session-unavailable" });
       expect(executionFootprint(context)).toEqual(before);
+      const afterWorkflow = rawDb(storePath(context));
+      try {
+        expect(
+          one(afterWorkflow, "select creator_session_id, revision from execution_workflows where workflow_id = 'wf-1'"),
+        ).toEqual(workflowBefore);
+      } finally {
+        afterWorkflow.close();
+      }
+      expect(sessionRows(context)).toEqual(beforeSessions);
       const creator = rawDb(storePath(context));
       try {
         expect(one(creator, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
