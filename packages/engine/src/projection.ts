@@ -756,14 +756,22 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     });
     const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all() as Array<{ workflow_id: string; entry_json: string }>;
     record(spec("execution_registry", "root", "execution/registry", {}), JSON.stringify(registry));
+    const registryIds = new Set(registry.map((item) => item.workflow_id));
+    const workflows = db.prepare("select workflow_id, state_json from execution_workflows order by workflow_id").all() as Array<{ workflow_id: string; state_json: string }>;
+    const workflowIds = new Set(workflows.map((item) => item.workflow_id));
     for (const item of registry) {
-      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(item.workflow_id) as { state_json: string };
-      const state = JSON.parse(row.state_json) as Record<string, unknown>;
-      record(spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id }), row.state_json);
+      if (!workflowIds.has(item.workflow_id)) {
+        const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
+        diagnostics.push({ sourceKey, reason: "invalid", message: `invalid: registry membership has no workflow row (${item.workflow_id})` });
+      }
+    }
+    for (const item of workflows) {
+      const state = JSON.parse(item.state_json) as Record<string, unknown>;
+      record(spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id }), item.state_json);
       rows.workflows.push({
         id: item.workflow_id, type: state.type as ProjectedWorkflow["type"], status: state.status as string,
         phase: null, startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
-        branchBase: null, branchSource: null, branchIntegration: null, branchTarget: null, activeRegistration: 1,
+        branchBase: null, branchSource: null, branchIntegration: null, branchTarget: null, activeRegistration: registryIds.has(item.workflow_id),
       });
     }
     const plans = db.prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans order by workflow_id, plan_id").all() as Array<{ workflow_id: string; plan_id: string; state_json: string; coordination_json: string }>;
@@ -1223,9 +1231,10 @@ function recordRetainedHealth(
   capture: ProjectionCapture,
   movement: Movement | null,
   attempts: number,
+  transactionOpen = false,
 ): RefreshReport {
   const checkedAt = new Date().toISOString();
-  db.exec("begin immediate");
+  if (!transactionOpen) db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
     const diagnostics = [...capture.diagnostics, ...movementDiagnostics(movement, attempts)];
@@ -1243,7 +1252,7 @@ function recordRetainedHealth(
         sources: diagnostics,
       }),
     );
-    db.exec("commit");
+    if (!transactionOpen) db.exec("commit");
     return reportOf(
       { generation: meta.generation, freshness, builtAt: meta.builtAt, checkedAt, diagnostics },
       capture,
@@ -1251,10 +1260,12 @@ function recordRetainedHealth(
       false,
     );
   } catch (error) {
-    try {
-      db.exec("rollback");
-    } catch {
-      // connection-level failure during rollback -- nothing was committed
+    if (!transactionOpen) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback -- nothing was committed
+      }
     }
     throw error;
   }
@@ -1282,9 +1293,9 @@ function movementDiagnostics(movement: Movement | null, attempts: number): Sourc
  * the catalog revision inside that transaction). Identical captures keep the
  * published generation and only refresh `checked_at`/`freshness`.
  */
-function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshReport {
+function publishGeneration(db: StoreDb, capture: ProjectionCapture, transactionOpen = false): RefreshReport {
   const checkedAt = new Date().toISOString();
-  db.exec("begin immediate");
+  if (!transactionOpen) db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
     const previous = readPublishedFingerprints(db, meta.generation);
@@ -1293,7 +1304,7 @@ function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshRepo
       db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(
         checkedAt,
       );
-      db.exec("commit");
+      if (!transactionOpen) db.exec("commit");
       return reportOf(
         { generation: meta.generation, freshness: "current", builtAt: meta.builtAt, checkedAt, diagnostics: [] },
         capture,
@@ -1308,7 +1319,7 @@ function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshRepo
       "update projection_meta set generation = ?, format_version = ?, source_set_hash = ?, built_at = ?, checked_at = ?, " +
         "freshness = 'current', last_error_json = null where id = 1",
     ).run(generation, capture.formatVersion, capture.sourceSetHash, checkedAt, checkedAt);
-    db.exec("commit");
+    if (!transactionOpen) db.exec("commit");
     return reportOf(
       { generation, freshness: "current", builtAt: checkedAt, checkedAt, diagnostics: [] },
       capture,
@@ -1316,10 +1327,12 @@ function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshRepo
       true,
     );
   } catch (error) {
-    try {
-      db.exec("rollback");
-    } catch {
-      // connection-level failure during rollback -- the last good rows survive
+    if (!transactionOpen) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback -- the last good rows survive
+      }
     }
     throw error;
   }
@@ -1356,31 +1369,34 @@ function assertCaptureShape(capture: ProjectionCapture): void {
 async function attemptPublication(context: StoreContext, capture: ProjectionCapture, attempts: number): Promise<PublishAttempt> {
   const mismatched = await verifyCaptureStable(context, capture);
   if (mismatched.length > 0) return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
+  if (capture.storeRevision !== undefined) await applyDatabaseChurn(context);
 
   const handle = await openStore(context, "write");
+  const db = handle.db;
   try {
     assertProjectionTables(handle);
-    const db = handle.db;
-    if (capture.storeRevision !== undefined && capture.storeRevision !== null) {
+    db.exec("begin immediate");
+    if (capture.storeRevision !== undefined) {
       const storeRevision = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
       if (storeRevision.revision !== capture.storeRevision) {
+        db.exec("rollback");
         return { kind: "source-stale", movement: { kind: "sources", keys: ["root:harness:execution/store-revision"] } };
       }
     }
-    if (capture.blocked) {
-      return { kind: "report", report: recordRetainedHealth(db, capture, null, attempts) };
-    }
-    // The catalog revision is part of the fingerprint and the compass/roadmap
-    // paths come from it, so a move must be compared INSIDE the transaction:
-    // outside it, another catalog writer could land between check and commit.
-    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get() as
-      | { catalog_revision?: unknown }
-      | undefined;
-    const revision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
-    if (revision !== capture.catalogRevision) {
+    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get() as { catalog_revision?: unknown } | undefined;
+    const catalogRevision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
+    if (catalogRevision !== capture.catalogRevision) {
+      db.exec("rollback");
       return { kind: "source-stale", movement: { kind: "catalog" } };
     }
-    return { kind: "report", report: publishGeneration(db, capture) };
+    const report = capture.blocked
+      ? recordRetainedHealth(db, capture, null, attempts, true)
+      : publishGeneration(db, capture, true);
+    db.exec("commit");
+    return { kind: "report", report };
+  } catch (error) {
+    try { db.exec("rollback"); } catch { /* transaction may already be closed */ }
+    throw error;
   } finally {
     handle.close();
   }
@@ -1451,7 +1467,6 @@ async function applyDatabaseChurn(context: StoreContext): Promise<void> {
 
 export async function refreshProjections(context: StoreContext): Promise<RefreshReport> {
   let capture = await captureProjectionSources(context);
-  if (capture.storeRevision !== undefined) await applyDatabaseChurn(context);
   let attempt = await attemptPublication(context, capture, 1);
   if (attempt.kind === "source-stale") {
     capture = await captureProjectionSources(context);

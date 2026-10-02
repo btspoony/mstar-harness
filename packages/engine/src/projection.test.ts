@@ -396,6 +396,21 @@ function issueInput(occurrenceKey: string) {
     expect(dashboard.projection).toMatchObject({ freshness: "current", generation: 1 });
     expect(dashboard.data).toMatchObject({ items: [expect.objectContaining({ id: workflowId })] });
   });
+  test("an execution workflow row absent from the registry is still projected inactive", async () => {
+    const f = await fixture("active-unregistered-");
+    await initializeExecutionAuthority(f.context);
+    const workflowId = "wf-unregistered";
+    const handle = await openStore(f.context, "write");
+    try {
+      handle.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
+        .run(workflowId, JSON.stringify({ schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT }), STARTED_AT, STARTED_AT);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+    const report = await refreshProjections(f.context);
+    expect(report).toMatchObject({ freshness: "current", published: true });
+    expect((await projections(f)).workflows).toContainEqual(expect.objectContaining({ id: workflowId, active_registration: 0 }));
+    expect(report.sources).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, state: "ok" }));
+  });
   test("a plan inserted after ACTIVE capture refuses publication without changing the generation", async () => {
     const f = await fixture("active-plan-moved-");
     const initialized = await initializeExecutionAuthority(f.context);
