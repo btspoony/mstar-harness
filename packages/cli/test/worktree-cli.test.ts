@@ -775,20 +775,23 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
 
   test("--tracks invalid JSON → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", "{not json"]);
-    const output = expectOutput(result, "usage", "usage", 2);
-    expect(output.message).toContain("invalid JSON");
+    const output = expectOutput(result, "usage", "command.invalid-input", 2);
+    const diagnostics = output.details?.diagnostics as Array<{ path: string; code: string }>;
+    expect(diagnostics).toMatchObject([{ path: "tracks", code: "invalid_json" }]);
   });
 
   test("--tracks not an array → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", '{"worktreePath": "/x"}' ]);
-    const output = expectOutput(result, "usage", "usage", 2);
-    expect(output.message).toContain("expected a JSON array");
+    const output = expectOutput(result, "usage", "command.invalid-input", 2);
+    const diagnostics = output.details?.diagnostics as Array<{ path: string; code: string }>;
+    expect(diagnostics).toMatchObject([{ path: "tracks", code: "invalid_type" }]);
   });
 
   test("--tracks entry missing workingBranch → usage, exit 2", () => {
     const result = runCli(["worktree", "check", "--l2", "--tracks", '[{"worktreePath": "/abs/path"}]']);
-    const output = expectOutput(result, "usage", "usage", 2);
-    expect(output.message).toContain("every track needs string worktreePath + workingBranch");
+    const output = expectOutput(result, "usage", "command.invalid-input", 2);
+    const diagnostics = output.details?.diagnostics as Array<{ path: string; code: string }>;
+    expect(diagnostics).toMatchObject([{ path: "tracks[0].workingBranch", code: "invalid_type" }]);
   });
 });
 

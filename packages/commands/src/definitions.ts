@@ -162,6 +162,24 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
   return canonicalDefinitions;
 }
 
+/**
+ * One safe structured fact per schema violation, in the CLI payload decoder's
+ * diagnostic shape: field path, stable issue code, message and the first array
+ * index where relevant. Never carries submitted values.
+ */
+function inputDiagnostic(issue: z.ZodError["issues"][number]): Record<string, unknown> {
+  const path = issue.path.reduce((path: string, part: string | number | symbol) =>
+    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
+  "");
+  const index = issue.path.find((part) => typeof part === "number");
+  return {
+    path,
+    code: issue.code,
+    message: issue.message,
+    ...(typeof index === "number" ? { index } : {}),
+  };
+}
+
 export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
   const definition = canonicalDefinitions.find((entry) => entry.id === id);
   if (definition === undefined) {
@@ -189,6 +207,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
       code: "command.invalid-input",
       exitCode: 2,
       message: parsed.error.issues.map((issue) => issue.message).join("; "),
+      details: { diagnostics: parsed.error.issues.map(inputDiagnostic) },
     };
   }
   const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;

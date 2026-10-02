@@ -102,7 +102,7 @@ Each task fits **one focused implementer round** — the round closes the task's
 
 ### 8. Engine lifecycle ownership
 
-**Who advances this row's engine state, at which step, and what evidence records each transition?** The plan answers it explicitly: the scoped verb sequence it will be driven through, the delivery-tail evidence order (`compound` disposition → PR identity → verified merge, recorded **after** the row is `Done`), and — when the snapshot declares no integration anchors — that the row stops at an accepted handoff rather than promising a terminal state it cannot reach. Semantics → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
+**Who advances this row's engine state, at which step, and what evidence records each transition?** The plan answers it explicitly: the scoped verb sequence it will be driven through, the row's declared completion route — **iteration** retains pinned integration (`integration-start` → merge → `integration-accept`); **standalone development** completes straight from the accepted handoff; **standalone report-only** records the registered `completion_policy`'s fulfilment before `Done`, then completes from the accepted handoff — and the delivery-tail evidence order (`compound` disposition → PR identity → verified merge recorded **after** the row is `Done`; the report-only fulfilment **before** it). Declared route selection never reads absent anchors, and missing anchors never waive genuinely missing registration facts: a report-only workflow without integration anchors is not blocked, while an iteration missing its anchors and a development workflow missing declared registration fields such as `branch.target` keep their route-specific prerequisites. Semantics → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`; PM step sequence → `mstar-roles/references/project-manager/plan-management.md`.
 
 ## Relationship to existing plan elements
 
@@ -115,7 +115,7 @@ Each task fits **one focused implementer round** — the round closes the task's
 | Drift check | SDD `BASE_SHA` — generalized to all plans |
 | Done criteria | `plan.main.md` per-step checkboxes — elevated to machine-checkable |
 | Task shape / session fit | `plan.main.md` per-task **Effort (agent-oriented)** / **Split point** slots + `mstar-phase-gates` capacity quick-check — one-round Files-plus-gates closure per task |
-| Engine lifecycle ownership | `plan.main.md` **Engine lifecycle** block — scoped verb sequence, delivery-tail evidence order, and the no-integration-anchors conditional |
+| Engine lifecycle ownership | `plan.main.md` **Engine lifecycle** block — scoped verb sequence, declared completion routes (iteration / standalone development / standalone report-only), delivery-tail evidence order |
 
 ## When to apply
 

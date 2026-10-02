@@ -36,7 +36,7 @@ import {
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, listIssues, type CaptureInput } from "../src/issue.js";
-import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
+import { mutateExecutionWorkflow, recoverExecutionCoordinator } from "../src/execution-workflow.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -44,6 +44,7 @@ import {
   initializeExecutionAuthority,
   readExecutionPlan,
   readExecutionState,
+  readOwnExecutionSession,
   serializeExecutionValue,
   type ExecutionCaller,
   type ExecutionContext,
@@ -55,6 +56,7 @@ import {
   type ExecutionState,
   type ExecutionToken,
 } from "../src/execution-store.js";
+import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { CoordinationOperation } from "../src/index.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { WorkflowEntry } from "../src/status.js";
@@ -387,6 +389,359 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
     expect(ran).toBe(0);
     expect(footprint(context)).toEqual(before);
     expect(readFileSync(envelope, "utf8")).toBe(envelopeBytes);
+  });
+
+  test("reports grouped recovery facts on the unbound and foreign authority refusals", async () => {
+    const fixture = await seededWorkflow("boundary-grouped-session-refusal");
+    const { context, planTokens, planPm, planPmCaller } = fixture;
+    // A REAL, live, bound second plan-pm seat (the prepared-unbound peer plan),
+    // so the foreign case below presents a genuine other holder's reference —
+    // the scenario the sparse suite exercises.
+    const peerPmCaller = trustedCaller("host-peer-pm", "plan-pm", PEER_PLAN);
+    const peerPm = await bindExecutionSession(domainContext(context, peerPmCaller), {
+      workflowId: WORKFLOW_ID,
+      planId: PEER_PLAN,
+      role: "plan-pm",
+      expected: planTokens[PEER_PLAN],
+      operationId: "bind-peer-plan-grouped-refusal",
+    });
+    const before = footprint(context);
+    let ran = 0;
+    const attempt = (caller: ExecutionCaller, session: ExecutionSessionRef): Promise<unknown> =>
+      withExecutionPlanAuthority(
+        domainContext(context, caller),
+        { session, expected: planTokens[OWN_PLAN], planId: OWN_PLAN, operation: { kind: "residual-add", entries: [] } },
+        () => {
+          ran += 1;
+          return "leaked";
+        },
+      );
+    type GroupedRefusalDetails = {
+      current_facts?: string[];
+      sources_tried?: string[];
+      available_work?: string[];
+      caller_session?: string;
+      reference_session?: string;
+      row_state?: string;
+      recovery?: {
+        outcome?: string;
+        commitState?: string;
+        unresolved?: Array<{ code?: string; currentFacts?: string[]; availableWork?: string[] }>;
+      };
+    };
+    const refusalOf = async (
+      caller: ExecutionCaller,
+      session: ExecutionSessionRef,
+    ): Promise<{ code?: string; details?: GroupedRefusalDetails }> =>
+      attempt(caller, session).then(
+        () => {
+          throw new Error("expected a refusal");
+        },
+        (error: { code?: string; details?: GroupedRefusalDetails }) => error,
+      );
+
+    // (a) A SELF-CONSISTENT reference for a session the store never bound: the
+    // caller and the reference name the same unknown identity, so the address
+    // check passes and the binding lookup itself refuses.
+    const ghostCaller = { ...planPmCaller, sessionId: "host-never-bound" };
+    const unbound = await refusalOf(ghostCaller, { ...planPm, sessionId: "host-never-bound" });
+    expect(unbound.code).toBe("execution.session-unavailable");
+    expect(unbound.details?.current_facts?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(unbound.details?.current_facts)).toContain("host-never-bound");
+    expect(unbound.details?.sources_tried?.length).toBeGreaterThan(0);
+    expect(unbound.details?.available_work?.length).toBeGreaterThan(0);
+    expect(unbound.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    const unboundProblem = unbound.details?.recovery?.unresolved?.[0];
+    expect(unboundProblem?.code).toBe("execution.session-unavailable");
+    expect(unboundProblem?.currentFacts?.length).toBeGreaterThan(0);
+    expect(unboundProblem?.availableWork?.length).toBeGreaterThan(0);
+    // The refused call wrote nothing.
+    expect(footprint(context)).toEqual(before);
+
+    // The raw revoke is an INTENTIONAL fixture change and moves the same
+    // liveSession refusal into its row-state branch; it edits row state only,
+    // so the revision/row-count snapshot does not move. Scoped to the OWN row:
+    // the peer seat below must stay a LIVE foreign holder.
+    withRaw(context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where role = 'plan-pm' and session_id = ?").run(PLAN_PM_ID);
+    });
+    const revoked = await refusalOf(planPmCaller, planPm);
+    expect(revoked.code).toBe("execution.session-unavailable");
+    expect(revoked.details?.row_state).toBe("revoked");
+    expect(JSON.stringify(revoked.details?.current_facts)).toContain("revoked");
+
+    // (b) The live peer plan-pm's own reference presented by the p-1 seat:
+    // resolvePlanRead refuses the caller/reference identity mismatch BEFORE
+    // any binding lookup, so the revoke above never touches this path. The
+    // grouped contract lands beside the flat caller/reference identity facts.
+    const foreign = await refusalOf(planPmCaller, peerPm.data);
+    expect(foreign.code).toBe("coordination.session-mismatch");
+    expect(foreign.details?.caller_session).toBe(PLAN_PM_ID);
+    expect(foreign.details?.reference_session).toBe("host-peer-pm");
+    expect(foreign.details?.current_facts?.length).toBeGreaterThan(0);
+    const foreignFacts = JSON.stringify(foreign.details?.current_facts);
+    expect(foreignFacts).toContain(PLAN_PM_ID);
+    expect(foreignFacts).toContain("host-peer-pm");
+    expect(foreign.details?.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
+    const foreignProblem = foreign.details?.recovery?.unresolved?.[0];
+    expect(foreignProblem?.code).toBe("coordination.session-mismatch");
+    expect(foreignProblem?.currentFacts?.length).toBeGreaterThan(0);
+    expect(foreignProblem?.availableWork?.length).toBeGreaterThan(0);
+
+    expect(ran).toBe(0);
+    expect(footprint(context)).toEqual(before);
+  });
+
+  test("reports truthful recovery facts for suspended, revoked and previous-epoch rows", async () => {
+    const fixture = await seededWorkflow("boundary-truthful-recovery");
+    const { context, epoch, planPmCaller, coordinatorCaller } = fixture;
+    const workflowToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
+    const setRow = (state: string, rowEpoch: number, sessionId: string) =>
+      withRaw(context, (db) => {
+        db.prepare("update execution_sessions set state = ?, epoch = ? where workflow_id = ? and session_id = ?").run(
+          state,
+          rowEpoch,
+          WORKFLOW_ID,
+          sessionId,
+        );
+      });
+    type RefusalDetails = { available_work?: string[]; row_state?: string; row_epoch?: number };
+    const refusalOf = (caller: ExecutionCaller): Promise<{ code?: string; details?: RefusalDetails }> =>
+      readOwnExecutionSession(domainContext(context, caller)).then(
+        () => {
+          throw new Error("expected a refusal");
+        },
+        (error: { code?: string; details?: RefusalDetails }) => error,
+      );
+    const facts = (refusal: { details?: RefusalDetails }): string => JSON.stringify(refusal.details?.available_work);
+
+    // (a) plan-pm rows: suspended, revoked and epoch-invalidated states are all
+    // dead ends for the unchanged bind gate, so the facts say the recovery does
+    // not exist instead of offering a rebind that refusal always rejects.
+    setRow("suspended", epoch, PLAN_PM_ID);
+    const suspended = await refusalOf(planPmCaller);
+    expect(suspended.code).toBe("execution.session-unavailable");
+    expect(suspended.details?.row_state).toBe("suspended");
+    expect(facts(suspended)).not.toContain("resume or rebind");
+    expect(facts(suspended)).toContain("no recovery transition exists for a plan-pm session row");
+
+    setRow("revoked", epoch, PLAN_PM_ID);
+    const revoked = await refusalOf(planPmCaller);
+    expect(revoked.details?.row_state).toBe("revoked");
+    expect(facts(revoked)).not.toContain("resume or rebind");
+    expect(facts(revoked)).toContain("no recovery transition exists for a plan-pm session row");
+
+    setRow("active", epoch - 1, PLAN_PM_ID);
+    const staleEpoch = await refusalOf(planPmCaller);
+    expect(staleEpoch.details?.row_epoch).toBe(epoch - 1);
+    expect(facts(staleEpoch)).not.toContain("resume or rebind");
+    expect(facts(staleEpoch)).toContain("no recovery transition exists for a plan-pm session row");
+    // This row owns p-1's execution lease, and the view reader refuses ANY bind
+    // while its holder row is not active at this epoch — so the bind gate is
+    // proven unchanged on the coordinator row in (b), the one scope where a
+    // bind actually reaches it. Restore the holder row first.
+    setRow("active", epoch, PLAN_PM_ID);
+
+    // (b) coordinator rows: the facts name the ONE transition that actually
+    // reaches back — with its real, complete inputs — instead of a rebind.
+    setRow("suspended", epoch - 1, COORDINATOR_ID);
+    const staleCoord = await refusalOf(coordinatorCaller);
+    expect(facts(staleCoord)).not.toContain("resume or rebind");
+    const staleCoordFacts = facts(staleCoord);
+    expect(staleCoordFacts).toContain("recoverExecutionCoordinator");
+    expect(staleCoordFacts).toContain("operation id and a non-empty reason");
+    expect(staleCoordFacts).toContain("exactly one installed current-coordinator consumer");
+    expect(staleCoordFacts).toContain("stopped/reloaded");
+    expect(staleCoordFacts).toContain(COORDINATOR_ID);
+
+    setRow("revoked", epoch, COORDINATOR_ID);
+    const revokedCoord = await refusalOf(coordinatorCaller);
+    expect(facts(revokedCoord)).not.toContain("resume or rebind");
+    expect(facts(revokedCoord)).toContain("recoverExecutionCoordinator");
+    // The bind gate itself is proven UNCHANGED here — the coordinator scope is
+    // where a bind actually reaches it (no held lease lets the view reader
+    // refuse first): the state-specific recovery guidance names the transition
+    // and the bind on the revoked row still refuses.
+    await expect(
+      bindExecutionSession(domainContext(context, coordinatorCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: null,
+        role: "coordinator",
+        expected: workflowToken,
+        operationId: "bind-revoked-coordinator",
+      }),
+    ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+
+    // The named transition is REAL: walked with exactly the inputs the facts
+    // name — the current-epoch workflow token, an operation id and reason, this
+    // row as the named prior holder, and a valid attestation (the one current
+    // coordinator consumer plus the stop entry) — it revives the row the
+    // refusal reported as dead.
+    const attestation: ActivationAttestation = {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: TS,
+      operator: { actor: "ops-engineer", authorizationRef: "fixture-only-recovery" },
+      consumers: [
+        {
+          entryId: "fixture-coordinator",
+          kind: "coordinator",
+          entrypoint: "/fixture/engine",
+          runtime: "bun",
+          runtimeVersion: "1.4.0",
+          version: "fixture",
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [{ sessionId: COORDINATOR_ID, host: "fixture", state: "stopped" }],
+    };
+    const recovered = await recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+      expected: workflowToken,
+      operationId: "recover-revoked-row",
+      priorSessionId: COORDINATOR_ID,
+      reason: "regression: revive the row the recovery facts name",
+      attestation,
+    });
+    expect(recovered.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch, planId: null });
+    const live = await readOwnExecutionSession(domainContext(context, coordinatorCaller));
+    expect(live.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch });
+  });
+
+  test("offers only a reachable route when a replaced coordinator row reads while a live holder exists", async () => {
+    const fixture = await seededWorkflow("boundary-replaced-holder-guidance");
+    const { context, epoch, coordinatorCaller } = fixture;
+    const workflowToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
+    const RECOVERY_ID = "host-recovery";
+
+    // The real replacement: the recovery caller names host-coord as the prior
+    // holder with valid stop evidence, so host-coord's row turns revoked and
+    // host-recovery becomes the workflow's ACTIVE coordinator at this epoch.
+    const attestation = (stoppedSessionId: string): ActivationAttestation => ({
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: TS,
+      operator: { actor: "ops-engineer", authorizationRef: "fixture-only-recovery" },
+      consumers: [
+        {
+          entryId: "fixture-coordinator",
+          kind: "coordinator",
+          entrypoint: "/fixture/engine",
+          runtime: "bun",
+          runtimeVersion: "1.4.0",
+          version: "fixture",
+          current: true,
+          disposition: "reloaded",
+        },
+      ],
+      stoppedSessions: [{ sessionId: stoppedSessionId, host: "fixture", state: "stopped" }],
+    });
+    await recoverExecutionCoordinator(domainContext(context, trustedCaller(RECOVERY_ID, "coordinator", null)), {
+      expected: workflowToken,
+      operationId: "recover-live-holder-in",
+      priorSessionId: COORDINATOR_ID,
+      reason: "fixture: replace the coordinator with a live holder",
+      attestation: attestation(COORDINATOR_ID),
+    });
+
+    type RefusalDetails = { available_work?: string[]; row_state?: string };
+    const refusalOf = (caller: ExecutionCaller): Promise<{ code?: string; details?: RefusalDetails }> =>
+      readOwnExecutionSession(domainContext(context, caller)).then(
+        () => {
+          throw new Error("expected a refusal");
+        },
+        (error: { code?: string; details?: RefusalDetails }) => error,
+      );
+
+    // The replaced row reads: the refusal must not offer the recovery that
+    // names THIS row — a live holder exists, so recoverExecutionCoordinator
+    // refuses that naming (coordination.duplicate-holder) — and must state the
+    // attestation-bound route over the live holder WITHOUT implying any
+    // database-state change has to happen first.
+    const replaced = await refusalOf(coordinatorCaller);
+    expect(replaced.code).toBe("execution.session-unavailable");
+    expect(replaced.details?.row_state).toBe("revoked");
+    const facts = JSON.stringify(replaced.details?.available_work);
+    expect(facts).not.toContain(`names \\"${COORDINATOR_ID}\\" as the prior holder`);
+    expect(facts).not.toContain("it reactivates this");
+    expect(facts).toContain(RECOVERY_ID);
+    expect(facts).toContain("replaces only the holder it names");
+    expect(facts).toContain("own live reference");
+    expect(facts).toContain("attestation");
+    expect(facts).not.toContain("actually gone");
+    // The named duplicate-holder route is REAL: walking exactly the route the
+    // old guidance offered refuses while the live holder exists. The first
+    // recovery advanced the workflow revision, so the caller re-reads the
+    // current token first — the same re-read the refusal's own retry entry
+    // demands.
+    const currentToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
+    const before = footprint(context);
+    await expect(
+      recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+        expected: currentToken,
+        operationId: "recover-live-holder-duplicate",
+        priorSessionId: COORDINATOR_ID,
+        reason: "fixture: the old guidance offered this dead end",
+        attestation: attestation(COORDINATOR_ID),
+      }),
+    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    expect(footprint(context)).toEqual(before);
+
+    // The bind gate states the same truth: reviving the replaced row through a
+    // bind refuses, and its message no longer claims the recovery transition is
+    // "the only way back" while the live holder exists.
+    await expect(
+      bindExecutionSession(domainContext(context, coordinatorCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: null,
+        role: "coordinator",
+        expected: currentToken,
+        operationId: "bind-replaced-row-live-holder",
+      }),
+    ).rejects.toThrow(/holds the ACTIVE coordinator session "host-recovery".*replaces only the holder it names/s);
+    await expect(
+      bindExecutionSession(domainContext(context, coordinatorCaller), {
+        workflowId: WORKFLOW_ID,
+        planId: null,
+        role: "coordinator",
+        expected: currentToken,
+        operationId: "bind-replaced-row-live-holder-2",
+      }),
+    ).rejects.not.toThrow(/only way back/);
+
+    // The route the new guidance names is REAL without any fixture surgery:
+    // the LIVE holder's row stays ACTIVE, and the recovery that names THAT
+    // holder still refuses while its attestation carries no stop evidence for
+    // it — the attestation is the trust boundary, so the advertised
+    // prerequisite is enforced, not the database state.
+    await expect(
+      recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+        expected: currentToken,
+        operationId: "recover-over-live-holder-unattested",
+        priorSessionId: RECOVERY_ID,
+        reason: "fixture: naming the live holder without its stop evidence",
+        attestation: attestation(COORDINATOR_ID),
+      }),
+    ).rejects.toMatchObject({ code: "coordination.invalid-transition" });
+    expect(footprint(context)).toEqual(before);
+
+    // With the named holder's stop evidence, the same call proceeds — no
+    // preceding state change to the live holder's row: the recovery revokes
+    // that row, reactivates the replaced identity, and its own reference works
+    // again.
+    const over = await recoverExecutionCoordinator(domainContext(context, coordinatorCaller), {
+      expected: currentToken,
+      operationId: "recover-over-live-holder",
+      priorSessionId: RECOVERY_ID,
+      reason: "fixture: the attested stop of the live holder",
+      attestation: attestation(RECOVERY_ID),
+    });
+    expect(over.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch, planId: null });
+    const revokedHolder = rows(
+      context,
+      `select state from execution_sessions where session_id = '${RECOVERY_ID}'`,
+    ) as Array<{ state?: unknown }>;
+    expect(revokedHolder[0]?.state).toBe("revoked");
+    const revived = await readOwnExecutionSession(domainContext(context, coordinatorCaller));
+    expect(revived.data).toMatchObject({ sessionId: COORDINATOR_ID, role: "coordinator", epoch });
   });
 
   test("refuses a nested plan operation on the same store and commits only the outer one", async () => {

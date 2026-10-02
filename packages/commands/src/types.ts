@@ -19,6 +19,25 @@ export type PayloadDescriptor = Readonly<{
   help?: string;
 }>;
 
+export type CommandRequirementOwnership = "caller" | "derivable" | "unknown";
+
+export type CommandRequirementRoute = "cli" | "mcp";
+
+/**
+ * One verified route-specific ownership fact for an input field, recorded by a
+ * consumer that has checked how `route` obtains the value: `caller` fields are
+ * supplied by the caller on that route, `derivable` fields are filled by the
+ * route adapter. Ownership is never inferred from the input schema: the
+ * schema's own `required` array remains the enforcement fact, `unknown` makes
+ * no requiredness or omission claim, and an absent entry means unknown.
+ */
+export type CommandRequirement = Readonly<{
+  name: string;
+  ownership: CommandRequirementOwnership;
+  route: CommandRequirementRoute;
+  help?: string;
+}>;
+
 export type CommandEffect = "read" | "validate" | "write" | "stdin" | "process" | "service" | "browser";
 
 export type SurfaceVersions = Readonly<{
@@ -77,6 +96,7 @@ export interface CommandDefinition<I = unknown, O = unknown> {
   readonly effects: readonly CommandEffect[];
   readonly description: string;
   readonly payloads?: Readonly<Record<string, PayloadDescriptor>>;
+  readonly requirements?: readonly CommandRequirement[];
   decodeCliInput?(input: Record<string, unknown>): Record<string, unknown> | null;
   execute(input: I, context: InvocationContext): Promise<CommandEnvelope<O>>;
 }

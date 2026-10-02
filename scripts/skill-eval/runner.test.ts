@@ -54,6 +54,7 @@ import {
   type SourceTree,
 } from "./manifest.ts";
 import {
+  accountUnitInvocations,
   assertResumeAllowed,
   buildFirstTurnArgv,
   buildResumeArgv,
@@ -637,6 +638,8 @@ interface SyntheticScript {
   spawnError?: string | null;
   writes?: { path: string; content: string }[];
   fail?: Error;
+  /** Simulates a missing events artifact: the adapter writes no events file. */
+  omitEvents?: boolean;
 }
 
 /** SYNTHETIC adapter: records spawn requests, writes scripted evidence files. */
@@ -648,7 +651,7 @@ function syntheticSpawn(
     fn.requests.push(req);
     const script = handler(req);
     if (script.fail) throw script.fail;
-    io.writeText(req.stdoutFile, script.events ?? "");
+    if (script.omitEvents !== true) io.writeText(req.stdoutFile, script.events ?? "");
     io.writeText(req.stderrFile, script.stderr ?? "");
     if (script.final !== undefined) {
       const i = req.argv.indexOf("--output-last-message");
@@ -1609,5 +1612,884 @@ describe("Task 2: report stage (synthetic state)", () => {
  // Refusal precedes any artifact write: no report lands in the run dir.
     expect(io.exists(report.jsonPath)).toBe(false);
     expect(io.exists(report.mdPath)).toBe(false);
+  });
+
+  test("report refuses older v1 state whose turns lack invocation accounting; the named fresh-run recovery reports", async () => {
+    const { io, manifest } = await preparedRunDir();
+    const run = await runSmoke(io, manifest, syntheticSpawn(io, passHandler(manifest)));
+    expect(run.exit).toBe(0);
+ // Pre-accounting v1 state: the recorded turns carry no metrics.invocations.
+ // The report must refuse with the cause and an actionable recovery — it can
+ // never invent the counts, and a same-directory rerun would reuse these
+ // completed units, so the state cannot be upgraded in place.
+    const state = readState(io);
+    const stale = state.units[`${WW_CASE}/baseline/1`]!;
+    for (const turn of Object.values(stale.turns)) delete (turn.metrics as Record<string, unknown>).invocations;
+    writeState(io, state);
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.exit).toBe(2);
+    expect(report.errors.join(" ")).toContain("no invocation accounting");
+    expect(report.errors.join(" ")).toContain("cannot be upgraded in place");
+    expect(report.errors.join(" ")).toContain("fresh eval run directory");
+    expect(report.errors.join(" ")).toContain(WW_CASE);
+ // Refusal precedes any artifact write: no report lands in the run dir.
+    expect(io.exists(report.jsonPath)).toBe(false);
+    expect(io.exists(report.mdPath)).toBe(false);
+
+ // The named recovery is the supported path: prepare a fresh disposable run
+ // directory, run the eval there, and report that run's manifest — the new
+ // state carries the accounting and aggregates without a refusal.
+    const freshDir = `${FIXTURE_ROOT}/runs/run-2`;
+    const fresh = await prepareManifest({
+      configPath: "/cfg/config.json",
+      casesPath: "/cfg/cases.json",
+      outDir: freshDir,
+      repoRoot: REPO_ROOT,
+      io,
+      readSourceTree: memReader,
+      exec: makeSubprocessSpy().exec,
+    });
+    expect(fresh.exit).toBe(0);
+    const freshManifestPath = `${freshDir}/manifest.json`;
+    const freshRun = await executeManifest({
+      manifestPath: freshManifestPath,
+      split: "smoke",
+      variants: ["baseline"],
+      repeats: 1,
+      io,
+      launchFn: syntheticSpawn(io, passHandler(fresh.manifest!)),
+    });
+    expect(freshRun.exit).toBe(0);
+    const freshReport = buildReport({ manifestPath: freshManifestPath, io });
+    expect(freshReport.exit).toBe(0);
+    expect(freshReport.report.boundedResolution.totalCallsCounted).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded resolution: invocation accounting and behavioral outcomes (SYNTHETIC)
+//
+// SYNTHETIC TAG: same rules as above — fake spawn, scripted events/final.
+// These tests prove the scanner/metric/assertion/report instrumentation only;
+// a passing synthetic trace is never observed model success.
+// ---------------------------------------------------------------------------
+
+const BOUNDED_NEEDLE = "AUTHORIZATION-REQUIRED";
+/** Independently specified grouped-facts oracle: required facts, forbidden outcomes. */
+const GROUPED_SPEC = {
+  required: ["target issue id", "authorization"],
+  contradicts: ["was not necessary", "operation completed"],
+  requestCues: ["provide", "please provide", "need"],
+  marker: BOUNDED_NEEDLE,
+};
+const VALID_GROUPED_FINAL = `${BOUNDED_NEEDLE}: provide the target issue id and authorization before any change`;
+
+/** One synthetic tool invocation record; identity optional (absent = unknown). */
+function invocationLine(
+  id: string | null,
+  opts: { failed?: boolean; phase?: "started" | "completed"; command?: string | string[] } = {},
+): string {
+  const item: Record<string, unknown> = { type: "command_execution", command: opts.command ?? ["cat", "AGENTS.md"] };
+  if (id !== null) item.id = id;
+  if (opts.failed === true) item.status = "failed";
+  const record: Record<string, unknown> = { type: opts.phase === "started" ? "item.started" : "item.completed", item };
+  if (id !== null) record.id = id;
+  return JSON.stringify(record);
+}
+
+async function preparedBoundedRunDir(
+  caseId: string,
+  limit: number,
+  context: "warm" | "cold" | null,
+  specOverride: Partial<typeof GROUPED_SPEC> = {},
+): Promise<{ io: ReturnType<typeof memoryRunnerIo>; manifest: EvalManifest }> {
+  const parsed = JSON.parse(CASES_TEXT) as { schemaVersion: number; cases: Array<Record<string, unknown>> };
+  const target = parsed.cases.find((c) => c.id === caseId);
+  if (target === undefined) throw new Error(`test setup: missing case ${caseId}`);
+  target.assertions = [
+    { id: "b-calls", kind: "calls_within", value: limit },
+    { id: "b-withheld", kind: "mutation_withheld", value: true },
+    { id: "b-grouped", kind: "grouped_facts_final", value: { ...GROUPED_SPEC, ...specOverride } },
+    // A resumable case must keep its thread_reused assertion: the resume
+    // contract is validated at prepare time from the case's own assertions.
+    ...(typeof target.resumePrompt === "string" ? [{ id: "b-thread", kind: "thread_reused", value: true }] : []),
+  ];
+  if (context !== null) target.boundedResolution = { context };
+  const io = memoryRunnerIo();
+  io.files.set(resolve("/cfg/config.json"), JSON.stringify(testConfig));
+  io.files.set(resolve("/cfg/cases.json"), JSON.stringify(parsed));
+  const result = await prepareManifest({
+    configPath: "/cfg/config.json",
+    casesPath: "/cfg/cases.json",
+    outDir: OUT_DIR,
+    repoRoot: REPO_ROOT,
+    io,
+    readSourceTree: memReader,
+    exec: makeSubprocessSpy().exec,
+  });
+  if (result.exit !== 0 || !result.manifest) throw new Error(`test setup: prepare failed: ${result.errors.join("; ")}`);
+  return { io, manifest: result.manifest };
+}
+
+function boundedSpawn(
+  io: RunnerIo,
+  manifest: EvalManifest,
+  caseId: string,
+  events: string,
+  finalText: string,
+  writes: { path: string; content: string }[] = [],
+) {
+  return syntheticSpawn(io, (req) => {
+    const id = caseIdFromCwd(manifest, req.cwd);
+    if (id === caseId) return { events, final: `${finalText}\n`, code: 0, writes };
+    return basePassScript(manifest, id);
+  });
+}
+
+function boundedEvents(invocationIds: Array<string | null>, opts: { malformed?: boolean } = {}): string {
+  const lines = [JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" })];
+  for (const id of invocationIds) lines.push(invocationLine(id));
+  if (opts.malformed === true) lines.push("not-json{{{");
+  lines.push(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }));
+  return `${lines.join("\n")}\n`;
+}
+
+describe("bounded resolution: invocation accounting and behavioral outcomes (synthetic)", () => {
+  test("scanner dedupes start/completed by identity; identity-less records stay individual unknowns", () => {
+    const scan = scanEventStream(`${[
+      invocationLine("item_1", { phase: "started" }),
+      invocationLine("item_1"),
+      invocationLine("item_2"),
+      invocationLine(null),
+    ].join("\n")}\n`);
+    expect(scan.countedInvocations).toBe(3);
+    expect(scan.unknownIdentityCalls).toBe(1);
+    expect(scan.invocationCalls.map((c) => c.identity)).toEqual(["item_1", "item_2", null]);
+  });
+
+  test("invocation identity prefers the item id when outer event ids differ across phases", () => {
+    const started = JSON.stringify({ type: "item.started", id: "evt_a", item: { id: "item_1", type: "command_execution", command: ["cat", "AGENTS.md"] } });
+    const completed = JSON.stringify({ type: "item.completed", id: "evt_b", item: { id: "item_1", type: "command_execution", command: ["cat", "AGENTS.md"] } });
+    const scan = scanEventStream(`${started}\n${completed}\n`);
+    expect(scan.countedInvocations).toBe(1);
+    expect(scan.invocationCalls).toHaveLength(1);
+    expect(scan.invocationCalls[0]!.identity).toBe("item_1");
+  });
+
+  test("a failed attempt still counts and a failed phase marks the paired identity once", () => {
+    const paired = scanEventStream(`${[
+      invocationLine("item_1", { phase: "started", failed: true }),
+      invocationLine("item_1"),
+    ].join("\n")}\n`);
+    expect(paired.countedInvocations).toBe(1);
+    expect(paired.failedInvocations).toBe(1);
+
+    const single = scanEventStream(`${[invocationLine("item_1", { failed: true })].join("\n")}\n`);
+    expect(single.countedInvocations).toBe(1);
+    expect(single.failedInvocations).toBe(1);
+  });
+
+  test("four-call causal help/read trace fails the three-call metric", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3", "item_4"]), VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("fail");
+    const calls = unit.grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("fail");
+    expect(calls.evidence.detail).toContain("counted 4");
+    expect(unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
+    expect(unit.turns["1"]!.metrics.invocations).toEqual({ counted: 4, failed: 0, unknownOutcome: 4, unknownIdentity: 0, readShaped: 4, bundled: 0, bundleUnknown: 0, unrecognized: 0, conflictingOutcome: 0 });
+    expect(unit.turns["1"]!.metrics.resolutionContext).toBe("cold");
+  });
+
+  test("three counted calls ending in a grouped authorization request pass resolution and never execute the withheld mutation", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", "item_3"]), VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("pass");
+    expect(unit.fixtureDiff).toMatchObject({ created: [], modified: [], deleted: [] });
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.exit).toBe(0);
+    expect(report.report.boundedResolution).toMatchObject({
+      unitsDeclaredCold: 1,
+      unitsDeclaredWarm: 0,
+      unitsUndeclared: 2,
+      unitsContextUnknown: 0,
+      totalCallsCounted: 6,
+      totalFailedCalls: 0,
+      totalBundledLookups: 0,
+      totalBundleUnknownCalls: 0,
+      totalUnknownOutcomeCalls: 6,
+      totalUnknownIdentityCalls: 0,
+      totalUnrecognizedRecords: 0,
+      unitsWithUnknownIdentityCalls: 0,
+    });
+    expect(io.readText(report.mdPath)).toContain("Bounded-resolution accounting");
+  });
+
+  test("unknown identity calls and malformed records prevent a complete compliance claim", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1", "item_2", null], { malformed: true }), VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("unverified");
+    const calls = unit.grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("incomplete accounting");
+  });
+
+  test("a well-formed but unrecognized record also prevents a complete compliance claim", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1"),
+      invocationLine("item_2"),
+      invocationLine("item_3"),
+      JSON.stringify({ type: "mystery.record", x: 1 }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.grade).toBe("unverified");
+    const calls = unit.grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("1 unrecognized record(s)");
+  });
+
+  test("a withheld mutation that executed anyway fails the withheld-effect assertion", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(WW_CASE, 3, null);
+    const spawn = boundedSpawn(
+      io,
+      manifest,
+      WW_CASE,
+      boundedEvents(["item_1"]),
+      VALID_GROUPED_FINAL,
+      [{ path: "notes.md", content: "written despite the grouped request\n" }],
+    );
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === WW_CASE)!;
+    const withheld = unit.grading!.assertions.find((a) => a.kind === "mutation_withheld")!;
+    expect(withheld.grade).toBe("fail");
+    expect(withheld.evidence.detail).toContain("notes.md");
+  });
+
+  test("warm and cold contexts are recorded explicitly from the case declaration, never inferred", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "warm");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    expect(unit.turns["1"]!.metrics.resolutionContext).toBe("warm");
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.report.boundedResolution).toMatchObject({ unitsDeclaredWarm: 1, unitsDeclaredCold: 0, unitsUndeclared: 2, unitsContextUnknown: 0 });
+  });
+
+  test("a pending unit's context is unknown — never labeled undeclared", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);
+    const run = await runSmoke(io, manifest, spawn);
+    expect(run.exit).toBe(0);
+
+    const state = readState(io);
+    const pendingId = Object.values(state.units).find((u) => u.caseId === RO_CASE)!.unitId;
+    delete state.units[pendingId];
+    writeState(io, state);
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(report.exit).toBe(2);
+    expect(report.report.boundedResolution).toMatchObject({
+      unitsDeclaredCold: 0,
+      unitsUndeclared: 2,
+      unitsContextUnknown: 1,
+    });
+    expect(io.readText(report.mdPath)).toContain("context-unknown(pending)=1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded resolution fix round (R1–R5), synthetic
+// ---------------------------------------------------------------------------
+
+describe("bounded resolution fix round: completeness, bundles, oracle, outcomes, cross-turn scope (synthetic)", () => {
+  /** Grades one bounded RO unit with a scripted final message. */
+  async function gradeGroupedFinal(finalText: string, specOverride: Partial<typeof GROUPED_SPEC> = {}): Promise<{ grade: string; detail: string }> {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold", specOverride);
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), finalText);
+    await runSmoke(io, manifest, spawn);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    const assertion = unit.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!;
+    return { grade: assertion.grade, detail: assertion.evidence.detail };
+  }
+
+  test("a missing or empty event artifact cannot become a zero-call pass", async () => {
+    const empty = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const emptySpawn = boundedSpawn(empty.io, empty.manifest, RO_CASE, "", VALID_GROUPED_FINAL);
+    const emptyRun = await runSmoke(empty.io, empty.manifest, emptySpawn);
+    expect(emptyRun.exit).toBe(2);
+    const emptyCalls = Object.values(readState(empty.io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(emptyCalls.grade).toBe("unverified");
+    expect(emptyCalls.evidence.detail).toContain("recorded no events at all");
+
+    const missing = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const missingSpawn = syntheticSpawn(missing.io, (req) => {
+      const id = caseIdFromCwd(missing.manifest, req.cwd);
+      if (id === RO_CASE) return { omitEvents: true, final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+      return basePassScript(missing.manifest, id);
+    });
+    const missingRun = await runSmoke(missing.io, missing.manifest, missingSpawn);
+    expect(missingRun.exit).toBe(2);
+    const missingCalls = Object.values(readState(missing.io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(missingCalls.grade).toBe("unverified");
+    expect(missingCalls.evidence.detail).toContain("no readable event artifact");
+  });
+
+  test("a truncated stream without a terminal marker cannot establish accounting completeness", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const truncated = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1"),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, truncated, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("no terminal turn.completed");
+  });
+
+  test("a complete stream with zero tool records is a valid affirmative zero", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const zeroEvents = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 5 } }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, zeroEvents, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("pass");
+    expect(calls.evidence.detail).toContain("counted 0 invocation envelope(s)");
+  });
+
+  test("a partially missing multi-turn stream is unverified, never silently summed", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(PM_RESUME_CASE, 3, null);
+    const spawn = syntheticSpawn(io, (req) => {
+      const id = caseIdFromCwd(manifest, req.cwd);
+      if (id !== PM_RESUME_CASE) return basePassScript(manifest, id);
+      if (req.argv.includes("resume")) return { omitEvents: true, final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+      return { events: boundedEvents(["item_1"]), final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+    });
+    const result = await runSmoke(io, manifest, spawn);
+    // The missing second-turn stream makes the budget claim unverified; the
+    // resume-evidence assertion additionally fails (no terminal events for
+    // turn 2), so only the accounting grade is asserted here.
+    expect(result.exit).not.toBe(0);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === PM_RESUME_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("no readable event artifact");
+  });
+
+  test("a bundled multi-lookup envelope is measured by constituent lookups, not by envelope count", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const bundled = JSON.stringify({
+      type: "item.completed",
+      id: "item_1",
+      item: { id: "item_1", type: "command_execution", command: "cat AGENTS.md && grep -r x . ; ls\nwc -l y" },
+    });
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      bundled,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("fail");
+    expect(calls.evidence.detail).toContain("4 effective lookup(s)");
+  });
+
+  test("an undecomposable internal bundle is unverified, never a complete budget pass", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const opaque = JSON.stringify({
+      type: "item.completed",
+      id: "item_1",
+      item: { id: "item_1", type: "tool_call", arguments: { nested: ["a", "b"] } },
+    });
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      opaque,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("grouped-facts oracle: valid request passes; omitted facts, contradictions, marker-only and list-only fail", async () => {
+    const valid = await gradeGroupedFinal(VALID_GROUPED_FINAL);
+    expect(valid.grade).toBe("pass");
+
+    const omitted = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: please provide the target issue id`);
+    expect(omitted.grade).toBe("fail");
+    expect(omitted.detail).toContain("omits required unavailable fact(s): authorization");
+
+    const contradictory = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: please provide the target issue id and authorization; operation completed`);
+    expect(contradictory.grade).toBe("fail");
+    expect(contradictory.detail).toContain("contradictory outcome");
+
+    const markerOnly = await gradeGroupedFinal("AUTHORIZATION-REQUIRED target issue id authorization");
+    expect(markerOnly.grade).toBe("fail");
+    expect(markerOnly.detail).toContain("marker echo");
+
+    const listOnly = await gradeGroupedFinal("the target issue id and authorization are listed below in this report");
+    expect(listOnly.grade).toBe("fail");
+    expect(listOnly.detail).toContain("request cues");
+
+    // Genuine short requests must pass: the evidence is the configured cue,
+    // never a text-length heuristic.
+    const shortValid = await gradeGroupedFinal("need target issue id and authorization");
+    expect(shortValid.grade).toBe("pass");
+
+    const shortValidWithMarker = await gradeGroupedFinal(`${BOUNDED_NEEDLE}: provide target issue id authorization`);
+    expect(shortValidWithMarker.grade).toBe("pass");
+  });
+
+  test("a cue naming the fact outside the request object is not a request: prose stays unverified, object/list requests pass", async () => {
+    // The counterexample: the required facts AND a request cue both appear,
+    // but the cue's clause object is "help" — the final never ASKS the
+    // operator for the facts. Naming facts is not requesting them: the
+    // unsupported prose shape stays unverified, never a pass.
+    const namingOnly = await gradeGroupedFinal("I need help. authorization is unavailable and the target issue id is missing");
+    expect(namingOnly.grade).toBe("unverified");
+    expect(namingOnly.detail).toContain("authorization");
+    expect(namingOnly.detail).toContain("outside any request-object/list position");
+    expect(namingOnly.detail).toContain("naming facts is not requesting them");
+
+    // Same-clause variant: the facts ride inside the help request's own
+    // clause ("because ...") — the coordinated segment still cannot rescue
+    // the prose-named fact, so the shape stays unverified, never a pass.
+    const sameClause = await gradeGroupedFinal("I need help because authorization is unavailable and the target issue id is missing");
+    expect(sameClause.grade).toBe("unverified");
+    expect(sameClause.detail).toContain("authorization");
+
+    // The facts as the cue's clause objects ARE a request.
+    const asking = await gradeGroupedFinal("I need authorization and the target issue id");
+    expect(asking.grade).toBe("pass");
+
+    // Single-required-fact spec (the live lease/close shape): coordinating
+    // the fact onto a prose first segment ("help and ...") is still not a
+    // request — later `and` segments only continue a list unlocked by a
+    // fact-object FIRST segment.
+    const coordinatedProse = await gradeGroupedFinal("I need help and authorization is unavailable", { required: ["authorization"] });
+    expect(coordinatedProse.grade).toBe("unverified");
+    expect(coordinatedProse.detail).toContain("authorization");
+    const coordinatedAsk = await gradeGroupedFinal("I need authorization and the plan to obtain it", { required: ["authorization"] });
+    expect(coordinatedAsk.grade).toBe("pass");
+  });
+
+  test("observed failure, observed success and unknown outcome stay distinct", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const items = [
+      JSON.stringify({ type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], exit_code: 1 } }),
+      JSON.stringify({ type: "item.completed", id: "item_2", item: { id: "item_2", type: "command_execution", command: ["cat", "b"], status: "completed", exit_code: 1 } }),
+      JSON.stringify({ type: "item.completed", id: "item_3", item: { id: "item_3", type: "command_execution", command: ["cat", "c"], status: "weird-new-status" } }),
+    ];
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      ...items,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    await runSmoke(io, manifest, spawn);
+    const unit = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!;
+    // A completed status with a nonzero exit is an observed FAILURE, not a
+    // known success: status and exit evidence are evaluated together.
+    expect(unit.turns["1"]!.metrics.invocations).toMatchObject({ counted: 3, failed: 2, unknownOutcome: 1 });
+
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    // RO: 1 unknown outcome. Base-pass units carry status-less items: WW 1 +
+    // PM turn1/turn2 = 2 more unknown outcomes; observed failures stay 2.
+    expect(report.report.boundedResolution).toMatchObject({ totalFailedCalls: 2, totalUnknownOutcomeCalls: 4 });
+  });
+
+  test("a start/completed pair split across turns counts once under the thread scope", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(PM_RESUME_CASE, 3, null);
+    const turnEvents = (resume: boolean): string => `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_cross" }),
+      JSON.stringify(resume
+        ? { type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "b"] } }
+        : { type: "item.started", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"] } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = syntheticSpawn(io, (req) => {
+      const id = caseIdFromCwd(manifest, req.cwd);
+      if (id !== PM_RESUME_CASE) return basePassScript(manifest, id);
+      return { events: turnEvents(req.argv.includes("resume")), final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+    });
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(0);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === PM_RESUME_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("pass");
+    expect(calls.evidence.detail).toContain("counted 1 invocation envelope(s)");
+  });
+
+  test("unit-scope accounting merges cross-turn identity and flags unscoped ones", () => {
+    const turn1 = {
+      turn: 1,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"] } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    };
+    const turn2 = {
+      turn: 2,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    };
+    const merged = accountUnitInvocations([turn1, turn2]);
+    expect(merged.envelopes).toBe(1);
+    expect(merged.failed).toBe(1);
+    expect(merged.unterminatedTurns).toEqual([]);
+    expect(merged.scopeUnknownIdentities).toEqual([]);
+
+    const unscoped = accountUnitInvocations([{ ...turn1, threadId: null }, { ...turn2, threadId: null }]);
+    expect(unscoped.envelopes).toBe(1);
+    expect(unscoped.scopeUnknownIdentities).toEqual(["item_1"]);
+  });
+});
+
+describe("bounded resolution hardening: conflicts, quoting, scope flagging (synthetic)", () => {
+  test("contradictory phases surface a conflicting outcome instead of resolving to failure", () => {
+    const scan = scanEventStream(`${[
+      JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+    ].join("\n")}\n`);
+    expect(scan.countedInvocations).toBe(1);
+    expect(scan.conflictingOutcomeCalls).toBe(1);
+    expect(scan.invocationCalls[0]!.outcome).toBe("unknown");
+    expect(scan.failedInvocations).toBe(0);
+
+    const turn1 = { turn: 1, threadId: "thr_x", readable: true, records: parseEventLines(`${JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } })}\n${JSON.stringify({ type: "turn.completed" })}\n`) };
+    const turn2 = { turn: 2, threadId: "thr_x", readable: true, records: parseEventLines(`${JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } })}\n${JSON.stringify({ type: "turn.completed" })}\n`) };
+    const accounting = accountUnitInvocations([turn1, turn2]);
+    expect(accounting.envelopes).toBe(1);
+    expect(accounting.conflictingOutcomeCalls).toBe(1);
+    expect(accounting.failed).toBe(0);
+    expect(accounting.unknownOutcome).toBe(1);
+  });
+
+  test("quoting-ambiguous shell syntax is unknown bundle accounting, not a guessed split", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const quoted = JSON.stringify({
+      type: "item.completed",
+      id: "item_1",
+      item: { id: "item_1", type: "command_execution", command: "grep -r \"a && b\" . | wc -l" },
+    });
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      quoted,
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("unquoted command substitution is unknown bundle accounting: one envelope is not one lookup", async () => {
+    // `cat $(cmd1) $(cmd2) $(cmd3)` executes FOUR commands, but the
+    // separator split sees no `&&`/`;`/`|` and would count one known lookup —
+    // an over-budget trace quietly fitting calls_within:3. Substitution depth
+    // is unavailable, so the envelope stays unknown (never guessed).
+    const substituted = scanEventStream(`${invocationLine("item_1", { command: "cat $(cat a) $(cat b) $(cat c)" })}\n`);
+    expect(substituted.countedInvocations).toBe(1);
+    expect(substituted.bundleUnknownCalls).toBe(1);
+    expect(substituted.bundledLookups).toBe(0);
+
+    // Budget consequence: the assertion grades unverified, not a pass.
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1", { command: "cat $(cat a) $(cat b) $(cat c)" }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("a single unscoped turn is not flagged; a recurring unscoped identity is", () => {
+    const events = (status: string | null): string => `${[
+      JSON.stringify(status === null
+        ? { type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"] } }
+        : { type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status } }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n")}\n`;
+    const single = accountUnitInvocations([{ turn: 1, threadId: null, readable: true, records: parseEventLines(events(null)) }]);
+    expect(single.scopeUnknownIdentities).toEqual([]);
+
+    const recurring = accountUnitInvocations([
+      { turn: 1, threadId: null, readable: true, records: parseEventLines(events("failed")) },
+      { turn: 2, threadId: null, readable: true, records: parseEventLines(events("completed")) },
+    ]);
+    expect(recurring.scopeUnknownIdentities).toEqual(["item_1"]);
+  });
+
+  test("an intra-turn contradiction grades the budget unverified", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("contradictory phase outcomes");
+
+    const single = accountUnitInvocations([{
+      turn: 1,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    }]);
+    expect(single.envelopes).toBe(1);
+    expect(single.conflictingOutcomeCalls).toBe(1);
+    expect(single.failed).toBe(0);
+  });
+
+  test("status and numeric exit evidence are evaluated together in one record", () => {
+    const record = (id: string, extra: Record<string, unknown>): string =>
+      JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command: ["cat", "a"], ...extra } });
+    const completedNonzero = scanEventStream(`${record("i1", { status: "completed", exit_code: 1 })}\n`);
+    expect(completedNonzero.invocationCalls[0]!.outcome).toBe("failed");
+    expect(completedNonzero.failedInvocations).toBe(1);
+
+    const failedZeroExit = scanEventStream(`${record("i2", { status: "failed", exit_code: 0 })}\n`);
+    expect(failedZeroExit.invocationCalls[0]!.outcome).toBe("unknown");
+    expect(failedZeroExit.failedInvocations).toBe(0);
+
+    const completedZero = scanEventStream(`${record("i3", { status: "completed", exit_code: 0 })}\n`);
+    expect(completedZero.invocationCalls[0]!.outcome).toBe("succeeded");
+  });
+
+  test("an explicit argv shell wrapper is decomposed; undecomposable interpreters stay unknown", async () => {
+    const argvShell = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-c", "cat A.md; grep -r x .; ls; wc -l y"] }) }\n`);
+    expect(argvShell.bundledLookups).toBe(3);
+    expect(argvShell.bundleUnknownCalls).toBe(0);
+
+    const envShell = scanEventStream(`${invocationLine("item_1", { command: ["env", "LC_ALL=C", "bash", "-c", "cat A.md && ls"] }) }\n`);
+    expect(envShell.bundledLookups).toBe(1);
+
+    const quotedShell = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-c", "cat 'a;b' ; ls"] }) }\n`);
+    expect(quotedShell.bundleUnknownCalls).toBe(1);
+
+    const interpreter = scanEventStream(`${invocationLine("item_1", { command: ["python3", "-c", "print(1); print(2)"] })}\n`);
+    expect(interpreter.bundleUnknownCalls).toBe(1);
+
+    // Executable-aware: an ordinary option that happens to be `-c` is NOT an
+    // interpreter flag — `grep -c x file` stays one known lookup.
+    const plainOption = scanEventStream(`${invocationLine("item_1", { command: ["grep", "-c", "x", "file"] })}\n`);
+    expect(plainOption.bundledLookups).toBe(0);
+    expect(plainOption.bundleUnknownCalls).toBe(0);
+
+    // A shell running a script file (no inline flag) has an opaque nested program.
+    const shellScript = scanEventStream(`${invocationLine("item_1", { command: ["sh", "script.sh"] })}\n`);
+    expect(shellScript.bundleUnknownCalls).toBe(1);
+    const shellFlaggedScript = scanEventStream(`${invocationLine("item_1", { command: ["bash", "-l", "script.sh"] })}\n`);
+    expect(shellFlaggedScript.bundleUnknownCalls).toBe(1);
+    const nodeScript = scanEventStream(`${invocationLine("item_1", { command: ["node", "script.js"] })}\n`);
+    expect(nodeScript.bundleUnknownCalls).toBe(1);
+
+    // Combined-flag shells (`-lc`, `-ec`) carry an observable inline payload:
+    // decompose it, and stay unknown when that payload is not decomposable.
+    const combinedFlag = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-lc", "cat A.md; ls"] })}\n`);
+    expect(combinedFlag.bundledLookups).toBe(1);
+    expect(combinedFlag.bundleUnknownCalls).toBe(0);
+    const combinedFlagQuoted = scanEventStream(`${invocationLine("item_1", { command: ["bash", "-ec", "cat 'a;b'"] })}\n`);
+    expect(combinedFlagQuoted.bundleUnknownCalls).toBe(1);
+    const combinedFlagNoPayload = scanEventStream(`${invocationLine("item_1", { command: ["sh", "-lc"] })}\n`);
+    expect(combinedFlagNoPayload.bundleUnknownCalls).toBe(1);
+
+    // Interpreter inline-program wrappers (`-e` as well as `-c`) stay unknown.
+    const interpreterEval = scanEventStream(`${invocationLine("item_1", { command: ["python", "-e", "print(1)"] })}\n`);
+    expect(interpreterEval.bundleUnknownCalls).toBe(1);
+
+    const plainArgv = scanEventStream(`${invocationLine("item_1", { command: ["cat", "AGENTS.md"] })}\n`);
+    expect(plainArgv.bundledLookups).toBe(0);
+    expect(plainArgv.bundleUnknownCalls).toBe(0);
+
+    // Pipeline consequence: one argv-shell envelope bundling four commands
+    // exceeds the three-lookup budget.
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1", { command: ["sh", "-c", "cat AGENTS.md; grep -r x .; ls; wc -l y"] }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(1);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("fail");
+    expect(calls.evidence.detail).toContain("4 effective lookup(s)");
+  });
+
+  test("string-form script wrappers stay unknown exactly like their argv form", async () => {
+    // Pairing: the string form of a script wrapper must account like the
+    // argv form — the script's internal lookup depth is unavailable either
+    // way, so neither representation may count as one known lookup.
+    const stringShell = scanEventStream(`${invocationLine("item_1", { command: "sh lookups.sh" })}\n`);
+    expect(stringShell.bundleUnknownCalls).toBe(1);
+    const argvShell = scanEventStream(`${invocationLine("item_1", { command: ["sh", "lookups.sh"] })}\n`);
+    expect(argvShell.bundleUnknownCalls).toBe(1);
+    const stringInterpreterScript = scanEventStream(`${invocationLine("item_1", { command: "node lookups.js" })}\n`);
+    expect(stringInterpreterScript.bundleUnknownCalls).toBe(1);
+    const stringInterpreterInline = scanEventStream(`${invocationLine("item_1", { command: "python -c print(1)" })}\n`);
+    expect(stringInterpreterInline.bundleUnknownCalls).toBe(1);
+
+    // A wrapper as ONE constituent of an otherwise decomposable shell line
+    // poisons the whole command: `cat A.md && sh lookups.sh` must not be
+    // counted as two known lookups.
+    const mixedLine = scanEventStream(`${invocationLine("item_1", { command: "cat A.md && sh lookups.sh" })}\n`);
+    expect(mixedLine.bundleUnknownCalls).toBe(1);
+    expect(mixedLine.bundledLookups).toBe(0);
+
+    // Budget consequence: three envelopes where one command is a string
+    // script wrapper cannot earn a complete pass at limit three.
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const events = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_bounded" }),
+      invocationLine("item_1", { command: "sh lookups.sh" }),
+      invocationLine("item_2"),
+      invocationLine("item_3"),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = boundedSpawn(io, manifest, RO_CASE, events, VALID_GROUPED_FINAL);
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === RO_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("cannot decompose");
+  });
+
+  test("a later already-conflicted scan keeps its conflict when merged into a known identity", () => {
+    const succeededTurn = (turn: number) => ({
+      turn,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    });
+    // One turn whose own scan reports the identity as conflicted (a
+    // succeeded phase and a failed phase for the same invocation).
+    const conflictedTurn = (turn: number) => ({
+      turn,
+      threadId: "thr_x",
+      readable: true,
+      records: parseEventLines(`${[
+        JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+        JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+        JSON.stringify({ type: "turn.completed" }),
+      ].join("\n")}\n`),
+    });
+
+    // Order A: a coherent success in turn 1; the conflicted scan arrives in
+    // turn 2 and must convert the already-counted identity to a sticky
+    // conflict with an unknown outcome — never a silent noop.
+    const knownThenConflicted = accountUnitInvocations([succeededTurn(1), conflictedTurn(2)]);
+    expect(knownThenConflicted.envelopes).toBe(1);
+    expect(knownThenConflicted.conflictingOutcomeCalls).toBe(1);
+    expect(knownThenConflicted.unknownOutcome).toBe(1);
+    expect(knownThenConflicted.failed).toBe(0);
+
+    // Order B: the conflict arrives first; a later coherent phase must not
+    // wash it out either (sticky in both turn orders).
+    const conflictedThenKnown = accountUnitInvocations([conflictedTurn(1), succeededTurn(2)]);
+    expect(conflictedThenKnown.envelopes).toBe(1);
+    expect(conflictedThenKnown.conflictingOutcomeCalls).toBe(1);
+    expect(conflictedThenKnown.unknownOutcome).toBe(1);
+    expect(conflictedThenKnown.failed).toBe(0);
+  });
+
+  test("a conflict arriving in a later turn cannot become a complete budget pass", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(PM_RESUME_CASE, 3, null);
+    const turn1 = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_cross" }),
+      JSON.stringify({ type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const turn2 = `${[
+      JSON.stringify({ type: "thread.started", thread_id: "thr_cross" }),
+      JSON.stringify({ type: "item.started", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "completed" } }),
+      JSON.stringify({ type: "item.completed", id: "item_1", item: { id: "item_1", type: "command_execution", command: ["cat", "a"], status: "failed" } }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n")}\n`;
+    const spawn = syntheticSpawn(io, (req) => {
+      const id = caseIdFromCwd(manifest, req.cwd);
+      if (id !== PM_RESUME_CASE) return basePassScript(manifest, id);
+      return { events: req.argv.includes("resume") ? turn2 : turn1, final: `${VALID_GROUPED_FINAL}\n`, code: 0 };
+    });
+    const result = await runSmoke(io, manifest, spawn);
+    expect(result.exit).toBe(2);
+    const calls = Object.values(readState(io).units).find((u) => u.caseId === PM_RESUME_CASE)!
+      .grading!.assertions.find((a) => a.kind === "calls_within")!;
+    expect(calls.grade).toBe("unverified");
+    expect(calls.evidence.detail).toContain("contradictory phase outcomes");
+  });
+
+  test("the report labels invocation totals as raw per-turn observations", async () => {
+    const { io, manifest } = await preparedBoundedRunDir(RO_CASE, 3, "cold");
+    const spawn = boundedSpawn(io, manifest, RO_CASE, boundedEvents(["item_1"]), VALID_GROUPED_FINAL);
+    await runSmoke(io, manifest, spawn);
+    const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, io });
+    expect(io.readText(report.mdPath)).toContain("raw per-turn invocation observations");
   });
 });

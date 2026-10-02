@@ -8,7 +8,6 @@ import {
   getPayloadSchema,
   validateCommandDefinitions,
 } from "../src/index.js";
-import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { CommandDefinition } from "../src/types.js";
 
 function definition(id: string, cliPath: string[]): CommandDefinition<{ name: string }, { greeting: string }> {
@@ -55,6 +54,6 @@ describe("command definitions", () => {
     const commandSchemas = getCommandSchemas([definition("greet", ["greet"])]);
     expect(commandSchemas).toHaveLength(1);
     expect(commandSchemas[0]!.input).toMatchObject({ type: "object", properties: { name: { type: "string" } } });
-    expect(commandSchemas[0]!.payloadSchemas.CaptureInput).toBe(ISSUE_PAYLOAD_SCHEMAS.CaptureInput);
+    expect(commandSchemas[0]!.payloadSchemas).toEqual({});
   });
 });

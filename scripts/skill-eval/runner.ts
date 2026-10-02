@@ -46,7 +46,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   canonicalJson,
   canonicalRunId,
@@ -61,6 +61,7 @@ import {
   type AssertionKind,
   type CaseSplit,
   type EvalManifest,
+  type GroupedFactsSpec,
   type Io,
   type PreparedManifestCase,
   type RunSplit,
@@ -337,6 +338,26 @@ export interface UsageObservation {
   usage: Record<string, number>;
 }
 
+/** Observed outcome of one invocation call: unsupported encodings stay `unknown`. */
+export type InvocationOutcome = "failed" | "succeeded" | "unknown";
+
+export interface InvocationCallObservation {
+  line: number;
+  /** Invocation identity (item id, then outer event id); null = absent (honest unknown). */
+  identity: string | null;
+  itemType: string;
+  phase: "single" | "started" | "completed";
+  /** Observed failure only; unsupported failure shapes are NOT coerced to success. */
+  failed: boolean;
+  outcome: InvocationOutcome;
+  /** Contradictory phases (one failed, one succeeded) — the outcome is not coherent. */
+  outcomeConflicted: boolean;
+  /** Observable constituent lookups beyond the envelope itself (bundled shell commands). */
+  bundledLookups: number;
+  /** The payload shape could not be decomposed → bundled accounting is unknown. */
+  bundleUnknown: boolean;
+}
+
 export interface EventStreamScan {
   threadId: string | null;
   usageEvents: UsageObservation[];
@@ -345,6 +366,28 @@ export interface EventStreamScan {
   malformedRecords: number;
   unknownRecords: number;
   warnings: string[];
+  /**
+   * Bounded-resolution invocation accounting. A start/completed pair sharing
+   * one invocation identity is ONE call; a record without any identity is an
+   * honest unknown — listed individually, never zero-filled, never deduped.
+   */
+  invocationCalls: InvocationCallObservation[];
+  /** Distinct identities observed (+1 per identity-less record). */
+  countedInvocations: number;
+  /** Observed failures among the counted calls (unsupported shapes excluded). */
+  failedInvocations: number;
+  /** Counted calls whose outcome could not be determined from the record shape. */
+  unknownOutcomeInvocations: number;
+  /** Counted calls whose invocation identity was absent. */
+  unknownIdentityCalls: number;
+  /** Read-shaped invocations among the counted calls (type-based count, not lookup depth). */
+  readShapedInvocations: number;
+  /** Observable constituent lookups bundled inside counted envelopes. */
+  bundledLookups: number;
+  /** Counted calls whose internal bundle could not be decomposed. */
+  bundleUnknownCalls: number;
+  /** Counted calls whose phases reported contradictory outcomes (not coherent). */
+  conflictingOutcomeCalls: number;
 }
 
 export function parseEventLines(raw: string): ParsedEventRecord[] {
@@ -383,6 +426,141 @@ function eventIdOfRecord(record: ParsedEventRecord): string | null {
   return eventIdOf(record.json);
 }
 
+/**
+ * Invocation identity for bounded-resolution dedupe: prefers the item's own
+ * id (the invocation's identity) over the outer event id — the envelope ids
+ * of an invocation's started and completed phases may differ.
+ */
+function invocationIdOfRecord(record: ParsedEventRecord): string | null {
+  if (!record.json) return null;
+  const item = (record.json.item ?? null) as Record<string, unknown> | null;
+  const raw = item !== null && typeof item === "object" ? item.id : null;
+  if (typeof raw === "string" && raw !== "") return raw;
+  return eventIdOfRecord(record);
+}
+
+const SUCCESS_STATUS_ENCODINGS = new Set(["completed", "succeeded", "success", "ok"]);
+
+/**
+ * Observed outcome from status AND numeric exit evidence together. A
+ * completed command with a nonzero exit is an observed failure; a failed
+ * status with a zero exit is contradictory evidence and stays unknown;
+ * unrecognized shapes stay unknown rather than becoming a known success.
+ */
+function invocationOutcomeOf(json: Record<string, unknown>, item: Record<string, unknown> | null): InvocationOutcome {
+  const status = item !== null && typeof item.status === "string" ? item.status : typeof json.status === "string" ? json.status : null;
+  const exit = item !== null ? item.exit_code ?? item.exitCode : json.exit_code ?? json.exitCode;
+  const exitIsNumber = typeof exit === "number";
+  const statusFailed = status === "failed";
+  const statusSucceeded = status !== null && SUCCESS_STATUS_ENCODINGS.has(status);
+  if (statusFailed) return exitIsNumber && exit === 0 ? "unknown" : "failed";
+  if (statusSucceeded) return exitIsNumber && exit !== 0 ? "failed" : "succeeded";
+  if (exitIsNumber) return exit === 0 ? "succeeded" : "failed";
+  return "unknown";
+}
+
+/** Generic tool envelopes whose internal call bundle cannot be decomposed here. */
+const OPAQUE_TOOL_ITEM_TYPES = new Set(["tool_call", "function_call", "mcp_tool_call"]);
+/** Shells whose `-c <string>` payload can be decomposed by separator. */
+const SHELL_EXECUTABLES = new Set(["sh", "bash", "zsh", "dash", "ksh", "ash"]);
+/** Interpreters whose invocation carries a nested program this adapter cannot analyze. */
+const SCRIPT_INTERPRETERS = new Set(["python", "python3", "node", "ruby", "perl", "php", "deno", "bun", "tsx"]);
+
+/**
+ * Decomposes one unquoted shell command string into its constituent
+ * commands. Executable-aware like the argv path: a constituent that itself
+ * invokes a shell or script interpreter (e.g. `sh lookups.sh`) carries an
+ * opaque nested program whose causal depth is unavailable, so the whole
+ * command stays unknown instead of being counted as known lookups.
+ */
+function shellConstituents(script: string): { bundled: number; unknown: boolean } {
+  if (/["'`]/.test(script)) return { bundled: 0, unknown: true };
+  // Unquoted command/process substitution runs nested commands no separator
+  // split can see (`cat $(a) $(b) $(c)` executes four commands): the causal
+  // depth is unavailable, so the line stays unknown instead of one known
+  // lookup that quietly fits the budget.
+  if (/\$\(|<\(/.test(script)) return { bundled: 0, unknown: true };
+  const parts = script.split(/&&|\|\||;|\n|\|/).map((part) => part.trim()).filter((part) => part !== "");
+  if (parts.length === 0) return { bundled: 0, unknown: true };
+  for (const part of parts) {
+    const wrapper = argvShellLookup(part.split(/\s+/).filter((token) => token !== ""));
+    if (wrapper !== null && wrapper.unknown) return { bundled: 0, unknown: true };
+  }
+  return { bundled: Math.max(0, parts.length - 1), unknown: false };
+}
+
+/**
+ * Recognizes argv forms that invoke a shell or interpreter carrying nested
+ * commands. Detection is EXECUTABLE-aware: an ordinary option like
+ * `grep -c x file` is a single known lookup, while a shell/script
+ * invocation whose internal causal depth cannot be established (a quoted
+ * payload, a shell without `-c`, a script interpreter) stays unknown.
+ * Returns null when the argv is an ordinary single command.
+ */
+function argvShellLookup(argv: string[]): { bundled: number; unknown: boolean } | null {
+  let args = argv;
+  if (args.length > 0 && basename(args[0]!) === "env") {
+    args = args.slice(1).filter((arg) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg));
+  }
+  if (args.length === 0) return null;
+  const head = basename(args[0]!);
+  const rest = args.slice(1);
+  if (SHELL_EXECUTABLES.has(head)) {
+    // Inline-command flag: `-c` or a combined cluster containing `c`
+    // (`-lc`, `-ec`, `-xc`) — the payload that follows is an observable
+    // shell line, so it is decomposable.
+    let inlineIndex = -1;
+    for (const [index, arg] of rest.entries()) {
+      if (arg === "-c" || (/^-[A-Za-z]+$/.test(arg) && arg.includes("c"))) {
+        inlineIndex = index;
+        break;
+      }
+    }
+    if (inlineIndex >= 0) {
+      const payload = rest[inlineIndex + 1];
+      if (payload === undefined) return { bundled: 0, unknown: true };
+      return shellConstituents(payload);
+    }
+    // A shell running a script file (or stdin) has an opaque nested program.
+    return { bundled: 0, unknown: true };
+  }
+  if (SCRIPT_INTERPRETERS.has(head)) return { bundled: 0, unknown: true };
+  return null;
+}
+
+/**
+ * Observable constituent lookups inside one counted envelope. A shell line
+ * (`cmd && cmd2`) bundles several causal commands; argv arrays are one
+ * command unless they wrap a shell carrying nested commands. An opaque tool
+ * envelope has an unknown internal bundle, and is reported as such rather
+ * than assumed to be a single lookup.
+ */
+function constituentLookups(itemType: string, item: Record<string, unknown> | null): { bundled: number; unknown: boolean } {
+  if (OPAQUE_TOOL_ITEM_TYPES.has(itemType)) return { bundled: 0, unknown: true };
+  if (item === null) return { bundled: 0, unknown: true };
+  const command = item.command;
+  if (Array.isArray(command)) {
+    const argv = command.filter((part): part is string => typeof part === "string");
+    const shell = argv.length > 0 ? argvShellLookup(argv) : null;
+    return shell ?? { bundled: 0, unknown: false };
+  }
+  if (typeof command === "string" && command.trim() !== "") return shellConstituents(command);
+  // file_read / read_file are single-lookup types; other read-shaped item
+  // types carry payloads this adapter cannot decompose.
+  if (itemType === "file_read" || itemType === "read_file") return { bundled: 0, unknown: false };
+  return { bundled: 0, unknown: true };
+}
+
+/** Applies an incoming outcome to an already-counted call; never coerces a conflict. */
+function mergeOutcomeState(
+  current: { outcome: InvocationOutcome; outcomeConflicted: boolean },
+  incoming: InvocationOutcome,
+): "noop" | "set" | "conflict" {
+  if (incoming === "unknown" || current.outcomeConflicted) return "noop";
+  if (current.outcome === "unknown") return "set";
+  return current.outcome === incoming ? "noop" : "conflict";
+}
+
 export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan {
   const scan: EventStreamScan = {
     threadId: null,
@@ -392,6 +570,70 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
     malformedRecords: 0,
     unknownRecords: 0,
     warnings: [],
+    invocationCalls: [],
+    countedInvocations: 0,
+    failedInvocations: 0,
+    unknownOutcomeInvocations: 0,
+    unknownIdentityCalls: 0,
+    readShapedInvocations: 0,
+    bundledLookups: 0,
+    bundleUnknownCalls: 0,
+    conflictingOutcomeCalls: 0,
+  };
+  const seenIdentities = new Map<string, number>();
+  const setOutcome = (target: InvocationCallObservation, next: InvocationOutcome): void => {
+    if (target.outcome === next) return;
+    if (target.outcome === "failed") scan.failedInvocations -= 1;
+    if (target.outcome === "unknown") scan.unknownOutcomeInvocations -= 1;
+    if (next === "failed") scan.failedInvocations += 1;
+    if (next === "unknown") scan.unknownOutcomeInvocations += 1;
+    target.outcome = next;
+    target.failed = next === "failed";
+  };
+  /** Merges one observation into its already-counted identity (never a second call). */
+  const mergeInto = (existing: InvocationCallObservation, observation: InvocationCallObservation): void => {
+    if (observation.outcomeConflicted) {
+      // The incoming phases were already contradictory: the conflict is
+      // sticky and the outcome stays unknown — an earlier coherent outcome
+      // must not survive it, whichever turn observed the identity first.
+      if (!existing.outcomeConflicted) {
+        existing.outcomeConflicted = true;
+        scan.conflictingOutcomeCalls += 1;
+      }
+      if (existing.outcome !== "unknown") setOutcome(existing, "unknown");
+    } else {
+      const merge = mergeOutcomeState(existing, observation.outcome);
+      if (merge === "conflict") {
+        // Contradictory phases (one failed, one succeeded): the call has no
+        // coherent observed outcome — surfaced as unknown, never resolved.
+        existing.outcomeConflicted = true;
+        setOutcome(existing, "unknown");
+        scan.conflictingOutcomeCalls += 1;
+      } else if (merge === "set") {
+        setOutcome(existing, observation.outcome);
+      }
+    }
+    if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
+      existing.itemType = observation.itemType;
+      scan.readShapedInvocations += 1;
+    }
+    if (observation.bundledLookups > existing.bundledLookups) {
+      scan.bundledLookups += observation.bundledLookups - existing.bundledLookups;
+      existing.bundledLookups = observation.bundledLookups;
+    }
+    if (observation.bundleUnknown && !existing.bundleUnknown) {
+      existing.bundleUnknown = true;
+      scan.bundleUnknownCalls += 1;
+    }
+  };
+  const countNew = (observation: InvocationCallObservation): void => {
+    scan.countedInvocations += 1;
+    if (observation.identity === null) scan.unknownIdentityCalls += 1;
+    if (observation.outcome === "failed") scan.failedInvocations += 1;
+    if (observation.outcome === "unknown") scan.unknownOutcomeInvocations += 1;
+    if (READ_ITEM_TYPES.has(observation.itemType)) scan.readShapedInvocations += 1;
+    scan.bundledLookups += observation.bundledLookups;
+    if (observation.bundleUnknown) scan.bundleUnknownCalls += 1;
   };
   for (const record of records) {
     if (record.parseError !== null) {
@@ -440,6 +682,41 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
     }
     if (TOOL_ACTIVITY_RE.test(type) || TOOL_ACTIVITY_RE.test(itemType)) {
       scan.toolActivityObserved = true;
+ // Bounded-resolution accounting: dedupe start/completed pairs by
+ // invocation identity; identity-less records stay individual unknowns.
+      const identity = invocationIdOfRecord(record);
+      const itemTypeForCall = itemType || type;
+      const phase: InvocationCallObservation["phase"] = /item[._-]?started$/i.test(type)
+        ? "started"
+        : /item[._-]?completed$/i.test(type)
+          ? "completed"
+          : "single";
+      const outcome = invocationOutcomeOf(json, item);
+      const bundle = constituentLookups(itemTypeForCall, item);
+      const observation: InvocationCallObservation = {
+        line: record.line,
+        identity,
+        itemType: itemTypeForCall,
+        phase,
+        failed: outcome === "failed",
+        outcome,
+        outcomeConflicted: false,
+        bundledLookups: bundle.bundled,
+        bundleUnknown: bundle.unknown,
+      };
+      if (identity === null) {
+        scan.invocationCalls.push(observation);
+        countNew(observation);
+      } else {
+        const seenAt = seenIdentities.get(identity);
+        if (seenAt === undefined) {
+          seenIdentities.set(identity, scan.invocationCalls.length);
+          scan.invocationCalls.push(observation);
+          countNew(observation);
+        } else {
+          mergeInto(scan.invocationCalls[seenAt]!, observation);
+        }
+      }
       continue;
     }
     scan.unknownRecords += 1;
@@ -450,6 +727,169 @@ export function scanEventRecords(records: ParsedEventRecord[]): EventStreamScan 
 
 export function scanEventStream(raw: string): EventStreamScan {
   return scanEventRecords(parseEventLines(raw));
+}
+
+const TURN_FAILED_RE = /^turn[._-]?failed$/i;
+
+/** One turn's event stream as read from disk, with readability evidence. */
+export interface UnitTurnStream {
+  turn: number;
+  threadId: string | null;
+  /** false = the event artifact could not be read at all (missing/unreadable). */
+  readable: boolean;
+  records: ParsedEventRecord[];
+}
+
+/**
+ * Unit-scope invocation accounting (Task 2 R1/R5): identity is deduplicated
+ * across the unit's turns under the turn's thread identity, so a start phase
+ * in turn 1 and its completed phase in turn 2 count once. Terminal evidence
+ * (`turn.completed` / `turn.failed`) is tracked per stream: a missing,
+ * empty, unterminated, or unreadable stream cannot establish accounting
+ * completeness, so a zero-call total from such a stream is never a pass.
+ */
+export interface UnitInvocationAccounting {
+  envelopes: number;
+  bundledLookups: number;
+  effectiveLookups: number;
+  failed: number;
+  unknownOutcome: number;
+  unknownIdentity: number;
+  readShaped: number;
+  unrecognizedRecords: number;
+  malformedRecords: number;
+  unreadableTurns: number[];
+  emptyTurns: number[];
+  /** Readable, non-empty streams with no terminal completion/failure marker. */
+  unterminatedTurns: number[];
+  bundleUnknownCalls: number;
+  /** Calls whose phases reported contradictory outcomes (not coherent). */
+  conflictingOutcomeCalls: number;
+  /** Identities observed across turns without a thread scope to bind them. */
+  scopeUnknownIdentities: string[];
+}
+
+export function accountUnitInvocations(streams: UnitTurnStream[]): UnitInvocationAccounting {
+  const accounting: UnitInvocationAccounting = {
+    envelopes: 0,
+    bundledLookups: 0,
+    effectiveLookups: 0,
+    failed: 0,
+    unknownOutcome: 0,
+    unknownIdentity: 0,
+    readShaped: 0,
+    unrecognizedRecords: 0,
+    malformedRecords: 0,
+    unreadableTurns: [],
+    emptyTurns: [],
+    unterminatedTurns: [],
+    bundleUnknownCalls: 0,
+    conflictingOutcomeCalls: 0,
+    scopeUnknownIdentities: [],
+  };
+  interface ScopeEntry { itemType: string; outcome: InvocationOutcome; outcomeConflicted: boolean; bundled: number; bundleUnknown: boolean }
+  const byScope = new Map<string, ScopeEntry>();
+  const unscopedTurnsByIdentity = new Map<string, Set<number>>();
+  const setOutcome = (entry: ScopeEntry, next: InvocationOutcome): void => {
+    if (entry.outcome === next) return;
+    if (entry.outcome === "failed") accounting.failed -= 1;
+    if (entry.outcome === "unknown") accounting.unknownOutcome -= 1;
+    if (next === "failed") accounting.failed += 1;
+    if (next === "unknown") accounting.unknownOutcome += 1;
+    entry.outcome = next;
+  };
+  const countNew = (entry: ScopeEntry, identity: string | null): void => {
+    accounting.envelopes += 1;
+    if (identity === null) accounting.unknownIdentity += 1;
+    if (entry.outcome === "failed") accounting.failed += 1;
+    if (entry.outcome === "unknown") accounting.unknownOutcome += 1;
+    // A conflict detected within a single turn's scan must still reach the
+    // unit-scope counter; otherwise an intra-turn contradiction would grade
+    // as a coherent outcome.
+    if (entry.outcomeConflicted) accounting.conflictingOutcomeCalls += 1;
+    if (READ_ITEM_TYPES.has(entry.itemType)) accounting.readShaped += 1;
+    accounting.bundledLookups += entry.bundled;
+    if (entry.bundleUnknown) accounting.bundleUnknownCalls += 1;
+  };
+  for (const stream of streams) {
+    if (!stream.readable) {
+      accounting.unreadableTurns.push(stream.turn);
+      continue;
+    }
+    if (stream.records.length === 0) {
+      accounting.emptyTurns.push(stream.turn);
+      continue;
+    }
+    const sawTerminal = stream.records.some((record) => {
+      const type = record.json !== null && typeof record.json.type === "string" ? record.json.type : "";
+      return TURN_COMPLETED_RE.test(type) || TURN_FAILED_RE.test(type);
+    });
+    if (!sawTerminal) accounting.unterminatedTurns.push(stream.turn);
+    const scan = scanEventRecords(stream.records);
+    accounting.unrecognizedRecords += scan.unknownRecords;
+    accounting.malformedRecords += scan.malformedRecords;
+    for (const observation of scan.invocationCalls) {
+      if (observation.identity === null) {
+        countNew({ itemType: observation.itemType, outcome: observation.outcome, outcomeConflicted: observation.outcomeConflicted, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown }, null);
+        continue;
+      }
+      if (stream.threadId === null) {
+        const turns = unscopedTurnsByIdentity.get(observation.identity) ?? new Set<number>();
+        turns.add(stream.turn);
+        unscopedTurnsByIdentity.set(observation.identity, turns);
+      }
+      const key = `${stream.threadId ?? "<no-thread>"}::${observation.identity}`;
+      const existing = byScope.get(key);
+      if (existing === undefined) {
+        const entry: ScopeEntry = { itemType: observation.itemType, outcome: observation.outcome, outcomeConflicted: observation.outcomeConflicted, bundled: observation.bundledLookups, bundleUnknown: observation.bundleUnknown };
+        byScope.set(key, entry);
+        countNew(entry, observation.identity);
+        continue;
+      }
+      // Same scoped invocation identity across the unit's turns: one call;
+      // failure and read-shape merge onto the already-counted entry, and
+      // contradictory phase outcomes are surfaced as a conflict, not resolved.
+      // An incoming observation that already carries a per-turn conflict
+      // keeps that conflict sticky: unknown stays unknown even though the
+      // identity was counted by an earlier coherent turn.
+      if (observation.outcomeConflicted) {
+        if (!existing.outcomeConflicted) {
+          existing.outcomeConflicted = true;
+          accounting.conflictingOutcomeCalls += 1;
+        }
+        if (existing.outcome !== "unknown") setOutcome(existing, "unknown");
+      } else {
+        const merge = mergeOutcomeState(existing, observation.outcome);
+        if (merge === "conflict") {
+          existing.outcomeConflicted = true;
+          setOutcome(existing, "unknown");
+          accounting.conflictingOutcomeCalls += 1;
+        } else if (merge === "set") {
+          setOutcome(existing, observation.outcome);
+        }
+      }
+      if (READ_ITEM_TYPES.has(observation.itemType) && !READ_ITEM_TYPES.has(existing.itemType)) {
+        existing.itemType = observation.itemType;
+        accounting.readShaped += 1;
+      }
+      if (observation.bundledLookups > existing.bundled) {
+        accounting.bundledLookups += observation.bundledLookups - existing.bundled;
+        existing.bundled = observation.bundledLookups;
+      }
+      if (observation.bundleUnknown && !existing.bundleUnknown) {
+        existing.bundleUnknown = true;
+        accounting.bundleUnknownCalls += 1;
+      }
+    }
+  }
+  // An identity is scope-ambiguous only when it actually recurs across a turn
+  // boundary that carries no thread scope to bind it; a single unscoped turn
+  // still dedupes locally and is NOT flagged.
+  accounting.scopeUnknownIdentities = [...unscopedTurnsByIdentity.entries()]
+    .filter(([, turns]) => turns.size > 1)
+    .map(([identity]) => identity);
+  accounting.effectiveLookups = accounting.envelopes + accounting.bundledLookups;
+  return accounting;
 }
 
 /**
@@ -536,6 +976,10 @@ export interface TurnMetrics {
   usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null; reason: string | null };
   usageBasis: UsageBasis;
   readEvidence: ReadEvidence;
+ /** Bounded-resolution invocation accounting, straight from this turn's event scan (raw observations, not attribution; unit-scope dedupe is graded by the assertion). */
+  invocations: { counted: number; failed: number; unknownOutcome: number; unknownIdentity: number; readShaped: number; bundled: number; bundleUnknown: number; unrecognized: number; conflictingOutcome: number };
+ /** Declared bootstrap context for this case ("warm"/"cold"); null = the case declares none. */
+  resolutionContext: "warm" | "cold" | null;
  /** Loaded-bytes accounting: labelled bytes, null with reason until verifiable. */
   bytesLoaded: { bytes: number | null; unit: "bytes"; reason: string | null };
  /** Cost only with observed usage AND a recorded price source; otherwise null. */
@@ -553,6 +997,7 @@ function buildTurnMetrics(args: {
   spawn: SpawnResult;
   scan: EventStreamScan;
   finalPresent: boolean;
+  resolutionContext: "warm" | "cold" | null;
 }): TurnMetrics {
   const { runId, turn, elapsedMs, spawn: spawnResult, scan } = args;
   let usageReason: string;
@@ -580,6 +1025,18 @@ function buildTurnMetrics(args: {
     usage: { inputTokens: null, outputTokens: null, totalTokens: null, reason: usageReason },
     usageBasis: "unknown",
     readEvidence,
+    invocations: {
+      counted: scan.countedInvocations,
+      failed: scan.failedInvocations,
+      unknownOutcome: scan.unknownOutcomeInvocations,
+      unknownIdentity: scan.unknownIdentityCalls,
+      readShaped: scan.readShapedInvocations,
+      bundled: scan.bundledLookups,
+      bundleUnknown: scan.bundleUnknownCalls,
+      unrecognized: scan.unknownRecords,
+      conflictingOutcome: scan.conflictingOutcomeCalls,
+    },
+    resolutionContext: args.resolutionContext,
     bytesLoaded: { bytes: null, unit: "bytes", reason: BYTES_UNVERIFIED_REASON },
     costUsd: { amount: null, reason: "no recorded price source; cost stays null (Spec A1)" },
     adapterWarnings: scan.warnings,
@@ -832,6 +1289,22 @@ function collectTurnRecords(unit: UnitRecord, io: RunnerIo): { turn: number; rec
   return out.sort((a, b) => a.turn - b.turn);
 }
 
+/** Turn streams with readability evidence, for unit-scope accounting. */
+function collectTurnStreams(unit: UnitRecord, io: RunnerIo): UnitTurnStream[] {
+  const out: UnitTurnStream[] = [];
+  for (const turnRec of Object.values(unit.turns)) {
+    let records: ParsedEventRecord[] = [];
+    let readable = true;
+    try {
+      records = parseEventLines(io.readText(turnRec.artifacts.events));
+    } catch {
+      readable = false;
+    }
+    out.push({ turn: turnRec.turn, threadId: turnRec.threadId, readable, records });
+  }
+  return out.sort((a, b) => a.turn - b.turn);
+}
+
 function gradeToolReadAssertion(
   ctx: GradingContext,
   assertionId: string,
@@ -881,6 +1354,398 @@ function gradeToolReadAssertion(
         grade: "fail",
         evidence: { turn: hit.turn, line: hit.line, eventId: hit.eventId, detail: `forbidden content ${JSON.stringify(value)} observed in a read-shaped command` },
       };
+}
+
+/**
+ * Bounded-resolution call budget: sum the deduped invocation count across the
+ * unit's turns and compare with the declared limit. Unknown identity calls
+ * and malformed records prevent a COMPLETE compliance claim — the grade is
+ * "unverified" (in the denominator), never a pass.
+ */
+function gradeCallsWithin(ctx: GradingContext, assertionId: string, limit: number): AssertionGrade {
+  const streams = collectTurnStreams(ctx.unit, ctx.io);
+  if (streams.length === 0) {
+    return {
+      assertionId,
+      kind: "calls_within",
+      grade: "unverified",
+      evidence: { detail: "no turns were recorded; invocation accounting unverified" },
+    };
+  }
+  const accounting = accountUnitInvocations(streams);
+  const incomplete: string[] = [];
+  if (accounting.unreadableTurns.length > 0) incomplete.push(`turn(s) ${accounting.unreadableTurns.join(", ")} have no readable event artifact`);
+  if (accounting.emptyTurns.length > 0) incomplete.push(`turn(s) ${accounting.emptyTurns.join(", ")} recorded no events at all`);
+  if (accounting.unterminatedTurns.length > 0) incomplete.push(`turn(s) ${accounting.unterminatedTurns.join(", ")} carry no terminal turn.completed/turn.failed marker (truncation cannot be excluded)`);
+  if (accounting.scopeUnknownIdentities.length > 0) incomplete.push(`${accounting.scopeUnknownIdentities.length} invocation identit(ies) observed without a thread scope (cross-turn identity unknowable)`);
+  if (accounting.bundleUnknownCalls > 0) incomplete.push(`${accounting.bundleUnknownCalls} call(s) carry an internal bundle this adapter cannot decompose`);
+  if (accounting.unknownIdentity > 0) incomplete.push(`${accounting.unknownIdentity} call(s) without identity`);
+  if (accounting.malformedRecords > 0) incomplete.push(`${accounting.malformedRecords} malformed record(s)`);
+  if (accounting.unrecognizedRecords > 0) incomplete.push(`${accounting.unrecognizedRecords} unrecognized record(s)`);
+  if (accounting.conflictingOutcomeCalls > 0) incomplete.push(`${accounting.conflictingOutcomeCalls} call(s) with contradictory phase outcomes`);
+  if (incomplete.length > 0) {
+    return {
+      assertionId,
+      kind: "calls_within",
+      grade: "unverified",
+      evidence: {
+        detail: `incomplete accounting: ${incomplete.join("; ")}; a complete compliance claim is impossible (unknown stays unknown, never zero)`,
+      },
+    };
+  }
+  const pass = accounting.effectiveLookups <= limit;
+  const measured = `counted ${accounting.envelopes} invocation envelope(s) + ${accounting.bundledLookups} bundled constituent lookup(s) = ${accounting.effectiveLookups} effective lookup(s) (observed failures ${accounting.failed}, unknown outcomes ${accounting.unknownOutcome}, conflicting outcomes ${accounting.conflictingOutcomeCalls}, read-shaped invocations ${accounting.readShaped})`;
+  return {
+    assertionId,
+    kind: "calls_within",
+    grade: pass ? "pass" : "fail",
+    evidence: {
+      detail: pass
+        ? `${measured} within the limit ${limit}`
+        : `${measured} exceed the limit ${limit}; the batch envelope count is not the metric`,
+    },
+  };
+}
+
+/**
+ * Withheld-effect boundary: the declared grouped-facts/authorization outcome
+ * must coincide with NO fixture mutation. Any created/modified/deleted file
+ * fails — a withheld mutation that executed is a bypass, not a pass.
+ */
+function gradeMutationWithheld(ctx: GradingContext, assertionId: string): AssertionGrade {
+  const { diff } = ctx;
+  const touched = [...diff.created, ...diff.modified, ...diff.deleted];
+  const pass = touched.length === 0;
+  return {
+    assertionId,
+    kind: "mutation_withheld",
+    grade: pass ? "pass" : "fail",
+    evidence: {
+      file: ctx.unit.fixtureDiff?.diffFile,
+      detail: pass
+        ? "withheld effect honored: fixture diff shows zero created/modified/deleted paths"
+        : `withheld effect was executed anyway; fixture writes observed: ${touched.join(", ")}`,
+    },
+  };
+}
+
+/** Declared request guard on a grouped oracle (authored `requestGuard` block). */
+interface RequestGuardSpec {
+  /** Facts the fixture already supplies: requesting them again must never pass. */
+  availableFacts: string[];
+  /** Declared reference templates; `{fact}` is replaced by the fact name. */
+  referenceForms: string[];
+}
+
+interface RequestVerdict {
+  status: "pass" | "fail" | "unverified";
+  violations: string[];
+  ambiguous: string[];
+}
+
+const REQUEST_DETERMINER_RE = /^(?:the|a|an|our)\s+/;
+const GROUPED_CLAUSE_END_RE = /[.;!\n]/;
+
+/**
+ * Reads a grouped spec's declared request guard. null = absent (nothing to
+ * enforce); "malformed" = declared but uninterpretable, which grades
+ * unverified rather than silently passing a broken guard.
+ */
+function readRequestGuard(spec: GroupedFactsSpec): RequestGuardSpec | "malformed" | null {
+  if (!("requestGuard" in spec)) return null;
+  const guardRaw: unknown = spec.requestGuard;
+  if (guardRaw === null || typeof guardRaw !== "object") return "malformed";
+  const factsRaw = "availableFacts" in guardRaw ? guardRaw.availableFacts : undefined;
+  const formsRaw = "referenceForms" in guardRaw ? guardRaw.referenceForms : undefined;
+  if (!Array.isArray(factsRaw) || !Array.isArray(formsRaw)) return "malformed";
+  const availableFacts = factsRaw.filter((fact): fact is string => typeof fact === "string" && fact.trim() !== "");
+  const referenceForms = formsRaw.filter((form): form is string => typeof form === "string");
+  if (availableFacts.length === 0) return "malformed";
+  return { availableFacts, referenceForms };
+}
+
+/**
+ * Facts requested by the text: a REQUEST is a configured cue whose clause
+ * object carries the fact — `cue` + optional determiner + fact within the
+ * cue's clause (coordinated objects included). A fact named elsewhere in the
+ * sentence is a mention inside prose, never a request: it opens no request
+ * span and is never returned here. Cues match as WHOLE WORDS
+ * (`needed`/`needing` are not `need`).
+ *
+ * The match mode follows the verdict's polarity:
+ * - "object-is" (re-request violations): the clause OBJECT must BE the fact —
+ *   a request clause that merely names an available fact as context ("acting
+ *   on the execution lease held by …") is not a re-request of it;
+ * - "object-list" (required-fact requests): the fact must open a contiguous
+ *   fact-token run from the object's start — a coordinated list ("the target
+ *   issue id and authorization") or a compact one ("provide target issue id
+ *   authorization") requests both facts, while prose after the cue ("help
+ *   because authorization is unavailable") requests nothing.
+ */
+function requestedFactsOf(
+  final: string,
+  cues: string[],
+  facts: string[],
+  match: "object-is" | "object-list",
+): Set<string> {
+  const lower = final.toLowerCase();
+  const wordChar = (at: number): boolean => at >= 0 && at < lower.length && /[a-z0-9]/.test(lower[at]!);
+  const lowerCues = cues.map((cue) => cue.toLowerCase());
+  const lowerFacts = facts.map((fact) => fact.toLowerCase()).filter((fact) => fact !== "");
+  const requested = new Set<string>();
+  for (const cue of lowerCues) {
+    let at = lower.indexOf(cue);
+    while (at >= 0) {
+      const cueEnd = at + cue.length;
+      if (!wordChar(at - 1) && !wordChar(cueEnd)) {
+        const stop = lower.slice(cueEnd).search(GROUPED_CLAUSE_END_RE);
+        const clauseEnd = stop >= 0 ? cueEnd + stop : lower.length;
+        const clause = lower.slice(cueEnd, clauseEnd);
+        const clauseObject = (segment: string): string =>
+          segment.replace(/^[\s,:]+/, "").replace(REQUEST_DETERMINER_RE, "").trim();
+        if (match === "object-is") {
+          for (const segment of clause.split(/ and /)) {
+            const object = clauseObject(segment);
+            for (const fact of lowerFacts) {
+              if (object.startsWith(fact)) requested.add(fact);
+            }
+          }
+        } else {
+          // Request-list rule: the clause's FIRST segment must consume a
+          // fact-object run; only then do later `and` segments continue
+          // the list ("need the workflow id and control root"). A prose
+          // first segment ("need help and authorization is unavailable")
+          // locks the clause — the later fact naming stays unverified.
+          const segments = clause.split(/ and /);
+          const consumeRun = (object: string): string | null => {
+            const tokens = object.split(/\s+/).filter((token) => token !== "");
+            let consumed = 0;
+            let head: string | null = null;
+            for (;;) {
+              const progressed = lowerFacts.find((fact) => {
+                const factTokens = fact.split(/\s+/);
+                return factTokens.every((token, index) => tokens[consumed + index] === token);
+              });
+              if (progressed === undefined) break;
+              requested.add(progressed);
+              if (head === null) head = progressed;
+              consumed += progressed.split(/\s+/).length;
+            }
+            return head;
+          };
+          if (consumeRun(clauseObject(segments[0] ?? "")) !== null) {
+            for (const segment of segments.slice(1)) consumeRun(clauseObject(segment));
+          }
+        }
+      }
+      at = lower.indexOf(cue, cueEnd);
+    }
+  }
+  return requested;
+}
+
+/**
+ * Structured request-fact oracle (QC1-F2). A REQUEST for an available fact is
+ * a configured cue whose clause object IS the fact — `cue` + optional
+ * determiner + fact — never a full-sentence template, so the article is
+ * irrelevant. Every fact occurrence that is neither a detected request object
+ * nor inside a declared reference form is an UNSUPPORTED shape: the oracle
+ * returns `unverified` rather than passing it.
+ */
+function scanRequestVerdict(
+  final: string,
+  spec: { requestCues: string[] } & RequestGuardSpec,
+): RequestVerdict {
+  const lower = final.toLowerCase();
+  const violations = requestedFactsOf(final, spec.requestCues, spec.availableFacts, "object-is");
+  const facts = spec.availableFacts.map((fact) => fact.toLowerCase());
+  const referenceRanges: Array<[number, number]> = [];
+  for (const form of spec.referenceForms) {
+    for (const fact of facts) {
+      const instance = form.replace("{fact}", fact);
+      let at = lower.indexOf(instance);
+      while (at >= 0) {
+        referenceRanges.push([at, at + instance.length]);
+        at = lower.indexOf(instance, at + 1);
+      }
+    }
+  }
+  const inReference = (start: number): boolean => referenceRanges.some(([from, to]) => start >= from && start < to);
+  const ambiguous: string[] = [];
+  for (const fact of facts) {
+    if (violations.has(fact)) continue;
+    let at = lower.indexOf(fact);
+    while (at >= 0) {
+      if (!inReference(at)) {
+        ambiguous.push(fact);
+        break;
+      }
+      at = lower.indexOf(fact, at + 1);
+    }
+  }
+  return {
+    status: violations.size > 0 ? "fail" : ambiguous.length > 0 ? "unverified" : "pass",
+    violations: [...violations],
+    ambiguous,
+  };
+}
+
+/** Grouped-facts outcome: the final message carries the grouped request verbatim. */
+function gradeGroupedFactsFinal(ctx: GradingContext, assertionId: string, spec: GroupedFactsSpec): AssertionGrade {
+  const turn = lastCompletedTurn(ctx.unit);
+  if (!turn) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: { detail: "no completed turn produced a final message; grouped-facts outcome stays unverified until evidence adjudicated" },
+    };
+  }
+  let content: string | null = null;
+  try {
+    content = ctx.io.readText(turn.artifacts.final);
+  } catch {
+    content = null;
+  }
+  if (content === null) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "final.md missing; grouped-facts outcome unverified until evidence adjudicated" },
+    };
+  }
+  const missing = spec.required.filter((fact) => !content.includes(fact));
+  if (missing.length > 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `grouped request omits required unavailable fact(s): ${missing.join(", ")}`,
+      },
+    };
+  }
+  const contradictions = (spec.contradicts ?? []).filter((text) => content.includes(text));
+  if (contradictions.length > 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `final asserts a contradictory outcome despite requested facts: ${contradictions.join(", ")}`,
+      },
+    };
+  }
+  // A bare echo of the required facts and/or the declared marker is not a
+  // request; the evidence is the CONFIGURED request cue, never a text-length
+  // heuristic (a genuine short request like "need target issue id and
+  // authorization" satisfies the oracle).
+  const cues = spec.requestCues;
+  if (cues.length === 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: { turn: turn.turn, file: turn.artifacts.final, detail: "no request cues are configured; the request-shape oracle cannot be evaluated" },
+    };
+  }
+  if (!cues.some((cue) => content.includes(cue))) {
+    let remainder = content;
+    for (const token of [...spec.required, ...(spec.marker === undefined ? [] : [spec.marker])]) remainder = remainder.split(token).join(" ");
+    const hasOtherContent = remainder.replace(/[^A-Za-z0-9]+/g, "").length > 0;
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "fail",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: hasOtherContent
+          ? `final carries none of the required request cues [${cues.join(", ")}]`
+          : "final is a marker echo: the required facts appear with no request content",
+      },
+    };
+  }
+  // Request-object/list oracle: a configured cue requests a required fact
+  // only when the fact IS the cue's clause object or opens the object's
+  // contiguous fact-token run ("provide the target issue id and
+  // authorization", compact "provide target issue id authorization"). A fact
+  // named elsewhere in the sentence ("I need help because authorization is
+  // unavailable") is prose, not a request: naming facts is not requesting
+  // them, and this unsupported shape stays unverified — never a pass.
+  const requested = requestedFactsOf(content, cues, spec.required, "object-list");
+  const unrequested = spec.required.filter((fact) => !requested.has(fact.toLowerCase()));
+  if (unrequested.length > 0) {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: `final mentions required fact(s) ${unrequested.map((fact) => JSON.stringify(fact)).join(", ")} outside any request-object/list position of the configured request cues [${cues.join(", ")}]; naming facts is not requesting them, and unsupported shapes stay unverified`,
+      },
+    };
+  }
+  // Declared request guard (QC1-F2): a final that RE-REQUESTS an
+  // already-available fact fails, and an available-fact mention that is
+  // neither a request nor a declared reference form stays unverified —
+  // unsupported shapes can never earn a pass here.
+  const guard = readRequestGuard(spec);
+  if (guard === "malformed") {
+    return {
+      assertionId,
+      kind: "grouped_facts_final",
+      grade: "unverified",
+      evidence: {
+        turn: turn.turn,
+        file: turn.artifacts.final,
+        detail: "declared requestGuard is malformed (availableFacts/referenceForms); the request-fact oracle cannot be evaluated",
+      },
+    };
+  }
+  if (guard !== null) {
+    const verdict = scanRequestVerdict(content, { requestCues: cues, ...guard });
+    if (verdict.status === "fail") {
+      return {
+        assertionId,
+        kind: "grouped_facts_final",
+        grade: "fail",
+        evidence: {
+          turn: turn.turn,
+          file: turn.artifacts.final,
+          detail: `final re-REQUESTS already-available fact(s) ${verdict.violations.map((fact) => JSON.stringify(fact)).join(", ")} (request-fact oracle)`,
+        },
+      };
+    }
+    if (verdict.status === "unverified") {
+      return {
+        assertionId,
+        kind: "grouped_facts_final",
+        grade: "unverified",
+        evidence: {
+          turn: turn.turn,
+          file: turn.artifacts.final,
+          detail: `final mentions already-available fact(s) ${verdict.ambiguous.map((fact) => JSON.stringify(fact)).join(", ")} outside any request or declared reference form; unsupported shapes stay unverified`,
+        },
+      };
+    }
+  }
+  return {
+    assertionId,
+    kind: "grouped_facts_final",
+    grade: "pass",
+    evidence: {
+      turn: turn.turn,
+      file: turn.artifacts.final,
+      detail: `final requests every unavailable fact [${spec.required.join(", ")}] with no contradictory outcome text and no re-request of the declared available facts`,
+    },
+  };
 }
 
 function gradeDiffAssertion(ctx: GradingContext, assertionId: string, allowed: string[]): AssertionGrade {
@@ -959,6 +1824,15 @@ function gradeUnit(ctx: GradingContext): UnitGrading {
         break;
       case "diff_paths_within":
         assertions.push(gradeDiffAssertion(ctx, assertion.id, assertion.value as string[]));
+        break;
+      case "calls_within":
+        assertions.push(gradeCallsWithin(ctx, assertion.id, assertion.value as number));
+        break;
+      case "mutation_withheld":
+        assertions.push(gradeMutationWithheld(ctx, assertion.id));
+        break;
+      case "grouped_facts_final":
+        assertions.push(gradeGroupedFactsFinal(ctx, assertion.id, assertion.value as GroupedFactsSpec));
         break;
       case "thread_reused":
         assertions.push(gradeThreadReused(ctx, assertion.id));
@@ -1318,7 +2192,7 @@ export async function executeManifest(args: RunArgs): Promise<RunResult> {
       else if (spawnResult.code !== 0) infrastructureReason = scan.authFailure ? "auth_failure" : "nonzero_exit";
       const status: TurnRecord["status"] = infrastructureReason === null ? "completed" : "infrastructure_error";
 
-      const metrics = buildTurnMetrics({ runId, turn, elapsedMs, spawn: spawnResult, scan, finalPresent });
+      const metrics = buildTurnMetrics({ runId, turn, elapsedMs, spawn: spawnResult, scan, finalPresent, resolutionContext: caseRec.boundedResolution?.context ?? null });
       io.writeText(metricsFile, `${JSON.stringify(metrics, null, 2)}\n`);
       const record: TurnRecord = {
         runId,

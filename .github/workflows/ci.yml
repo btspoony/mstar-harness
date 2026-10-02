@@ -400,6 +400,89 @@ jobs:
       - name: Typecheck dsh tests
         run: bun run --cwd packages/dsh typecheck:tests
 
+  test-commands:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # The commands tests import the engine and judgment dist plus the
+      # package's own built index, and spawn the real CLI entry whose graph
+      # needs the generated dashboard module; the CLI build also builds the
+      # commands package, so this chain covers every prerequisite.
+      - name: Build prerequisites (engine, judgment, CLI + commands)
+        run: bun run engine:build && bun run judgment:build && bun run cli:build
+
+      - name: Test commands
+        run: bun run --cwd packages/commands test
+
+  test-judgment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # The judgment specs resolve the engine dist through the workspace
+      # devDependency — build engine + judgment dist before running the suite.
+      - name: Build engine and judgment dist
+        run: bun run engine:build && bun run judgment:build
+
+      # The shadow-supervisor container-only cases bypass Docker via their test
+      # launcher and append the probe denial log to /mnt/output on the runner
+      # host; pre-create it runner-writable so those cases run instead of
+      # skipping. The suite's capability guard fails this job if it is absent.
+      - name: Provide /mnt/output for the container-only judgment cases
+        run: sudo install -d -o "$(id -un)" -g "$(id -gn)" /mnt/output
+
+      - name: Test judgment
+        run: bun run --cwd packages/judgment test
+
   lint-scripts-hooks:
     runs-on: ubuntu-latest
     steps:
