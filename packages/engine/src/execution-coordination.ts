@@ -115,6 +115,7 @@ import {
   writeExecutionInputPin,
   writePlanCoordinationRow,
   writePlanOperationReceipt,
+  requireLiveExecutionCallerSession,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionMutation,
@@ -133,16 +134,25 @@ import {
 import {
   assertCaptureRequest,
   assertClosureAuthority,
+  assertIssueLinkVocabulary,
   assertIssueLinkedToPlanOn,
   assertIssueStoreActive,
+  assertIssueTriageVocabulary,
   assertTerminalDisposition,
   captureIssueOn,
   closeIssueOn,
   issueWriteSeat,
   linkIssueOn,
+  triageIssueOn,
   storeRevisionOn,
   IssueError,
+  type AuthorizedIssueMutation,
   type CaptureInput,
+  type ClosureEvidence,
+  type IssueLink,
+  type IssueReceipt,
+  type IssueTriage,
+  type TerminalDisposition,
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
@@ -160,6 +170,7 @@ import {
 import { findingsCleanupGate } from "./project.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
+  WORKFLOW_TERMINAL_STATUSES,
   consultDeliveryEvidence,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
@@ -3380,5 +3391,74 @@ export async function mutateExecutionPlan(
         operation: kind,
       });
     }
+  }
+}
+
+/** ACTIVE execution-authority issue routes use the store-held caller identity. */
+export async function triageIssueExecution(
+  context: ExecutionContext,
+  issueId: string,
+  patch: IssueTriage,
+  mutation: AuthorizedIssueMutation,
+): Promise<IssueReceipt> {
+  if (typeof patch.reason !== "string" || patch.reason.trim() === "") {
+    throw new IssueError("issue.scope-refused", "reason must be nonblank");
+  }
+  assertIssueTriageVocabulary(patch);
+  assertIssueActor(context, mutation);
+  return withExecutionTransaction(context, (tx) => {
+    requireLiveExecutionCallerSession(tx, context.caller);
+    return triageIssueOn(tx.db, issueId, patch, mutation, undefined, true);
+  });
+}
+
+export async function closeIssueExecution(
+  context: ExecutionContext,
+  issueId: string,
+  disposition: TerminalDisposition,
+  evidence: ClosureEvidence,
+  mutation: AuthorizedIssueMutation,
+): Promise<IssueReceipt> {
+  assertTerminalDisposition(disposition);
+  assertClosureAuthority(disposition, evidence);
+  assertIssueActor(context, mutation);
+  return withExecutionTransaction(context, (tx) => {
+    requireLiveExecutionCallerSession(tx, context.caller);
+    return closeIssueOn(tx.db, issueId, disposition, evidence, mutation);
+  });
+}
+
+export async function linkIssueExecution(
+  context: ExecutionContext,
+  issueId: string,
+  link: IssueLink,
+  mutation: AuthorizedIssueMutation,
+): Promise<IssueReceipt> {
+  assertIssueLinkVocabulary(link);
+  if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
+    const target = link.target.trim();
+    if (target === "") throw new IssueError("issue.scope-refused", "target must be nonblank");
+    if (link.kind === "plan" && (context.caller.role !== "plan-pm" || context.caller.planId !== target)) {
+      throw new IssueError("issue.scope-refused", "New plan provenance must match the plan-pm session plan_id; arbitrary targets are refused until catalog identity exists.");
+    }
+    if (link.kind === "iteration" && context.caller.workflowId !== target) {
+      throw new IssueError("issue.scope-refused", "New iteration provenance must match the session workflow_id; arbitrary targets are refused until catalog identity exists.");
+    }
+  }
+  assertIssueActor(context, mutation);
+  return withExecutionTransaction(context, (tx) => {
+    requireLiveExecutionCallerSession(tx, context.caller);
+    return linkIssueOn(tx.db, issueId, link, mutation);
+  });
+}
+
+function assertIssueActor(context: ExecutionContext, mutation: AuthorizedIssueMutation): void {
+  const seat = issueWriteSeat(context.caller.role);
+  if (mutation.actor.trim() !== seat) {
+    throw new IssueError(
+      "issue.scope-refused",
+      `Actor "${mutation.actor}" is not the "${seat}" seat the store-held coordination session authorizes; a privileged ` +
+        `mutation is authorized by the store-held coordination session, not by the actor label.`,
+    );
   }
 }

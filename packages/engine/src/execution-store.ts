@@ -85,6 +85,7 @@ import {
   type StoreDb,
 } from "./store-db.js";
 import {
+  WORKFLOW_TERMINAL_STATUSES,
   isTerminalSnapshot,
   rowValidationRoute,
   validateWorkflowSnapshot,
@@ -2379,6 +2380,23 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
   return mine;
 }
 
+/**
+ * Require the caller's bound session and a non-terminal lifecycle within the
+ * transaction that will perform an authorized issue write.
+ */
+export function requireLiveExecutionCallerSession(tx: ExecutionTransaction, caller: ExecutionCaller): ExecutionSessionRef {
+  const address = ownSessionAddress(caller);
+  const live = liveSession(tx, address);
+  const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, caller.workflowId);
+  if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(workflow.state.status)) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `workflow ${caller.workflowId} is ${workflow.state.status} \u2014 a live coordination session authorizes issue writes only on a running lifecycle`,
+    );
+  }
+  return live.ref;
+}
+
 /** §2.1: a reference from another store or another epoch fences before anything is read. */
 function assertReferenceAuthority(
   tx: ExecutionTransaction,
@@ -3243,7 +3261,18 @@ export async function bindExecutionSession(
       // §2.3: the FIRST coordinator bind of a newly created workflow is
       // permitted only to the identity that created it, so a foreign trusted
       // identity cannot claim a lifecycle it did not create.
-      if (header.creatorSessionId === null || header.creatorSessionId !== bind.sessionId) {
+      if (header.creatorSessionId === null) {
+        if (readSessionRows(tx.db, store, bind.workflowId, "coordinator").length > 0) {
+          throw new ExecutionError(
+            "execution.session-unavailable",
+            `workflow ${bind.workflowId} already records a coordinator session; first-bind adoption is unavailable after any ` +
+              `coordinator record exists. Use the separate recovery transition after validated stop evidence. Nothing was bound.`,
+          );
+        }
+        tx.db
+          .prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?")
+          .run(bind.sessionId, bind.workflowId);
+      } else if (header.creatorSessionId !== bind.sessionId) {
         throw new ExecutionError(
           "execution.session-unavailable",
           `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted ` +

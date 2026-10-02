@@ -360,6 +360,30 @@ export class IssueError extends Error {
     this.code = code;
   }
 }
+export function assertIssueTriageVocabulary(patch: IssueTriage): void {
+  if (patch.kind !== undefined && (typeof patch.kind !== "string" || !Object.hasOwn(KINDS, patch.kind))) {
+    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
+  }
+  if (
+    patch.severity !== undefined &&
+    (typeof patch.severity !== "string" || !Object.hasOwn(SEVERITIES, patch.severity))
+  ) {
+    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
+  }
+}
+
+export function assertIssueLinkVocabulary(link: IssueLink): void {
+  if ("relation" in link) {
+    if (typeof link.relation !== "string" || !Object.hasOwn(RELATIONS, link.relation)) {
+      throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
+    }
+  } else if (typeof link.kind !== "string" || !Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
+    throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
+  }
+}
+
+
+
 
 const KINDS: Record<IssueKind, true> = {
   bug: true,
@@ -1594,6 +1618,58 @@ function assertMultiPlanAcceptance(db: StoreDb, issueId: string, evidence: Closu
   }
 }
 
+export function triageIssueOn(
+  db: StoreDb,
+  issueId: string,
+  patch: IssueTriage,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+  vocabularyValidated = false,
+): IssueReceipt {
+  requireNonblank("reason", patch.reason);
+  if (!vocabularyValidated) assertIssueTriageVocabulary(patch);
+  const hash = requestHash("triageIssue", {
+    issueId,
+    patch,
+    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+  });
+
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
+
+  const issue = db.prepare("select id, revision, kind, severity, impact, acceptance, owner from issues where id = ?").get(issueId) as
+    | {
+        id: string;
+        revision: number;
+        kind: IssueKind;
+        severity: Severity;
+        impact: string;
+        acceptance: string;
+        owner: string | null;
+      }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  requireExpectedRevision(mutation, issue.revision);
+
+  const at = nowRfc3339();
+  db.prepare(
+    "update issues set kind = ?, severity = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?",
+  ).run(
+    patch.kind ?? issue.kind,
+    patch.severity ?? issue.severity,
+    patch.impact !== undefined ? requireNonblank("impact", patch.impact) : issue.impact,
+    patch.acceptance !== undefined ? requireNonblank("acceptance", patch.acceptance) : issue.acceptance,
+    patch.owner !== undefined ? patch.owner : issue.owner,
+    issue.revision + 1,
+    at,
+    issueId,
+  );
+  const storeRevision = receiptStoreRevision(db, composed);
+  const receipt: IssueReceipt = { issueId, revision: issue.revision + 1, storeRevision, created: false };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
+
 export async function triageIssue(
   context: StoreContext,
   issueId: string,
@@ -1601,61 +1677,9 @@ export async function triageIssue(
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   requireNonblank("reason", patch.reason);
-  if (patch.kind !== undefined && !Object.hasOwn(KINDS, patch.kind)) {
-    throw new IssueError("issue.scope-refused", "kind is not a contract vocabulary value");
-  }
-  if (patch.severity !== undefined && !Object.hasOwn(SEVERITIES, patch.severity)) {
-    throw new IssueError("issue.scope-refused", "severity is not a contract vocabulary value");
-  }
+  assertIssueTriageVocabulary(patch);
   authorizeMutation(context, mutation);
-  const hash = requestHash("triageIssue", {
-    issueId,
-    patch,
-    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
-  });
-
-  return withWrite(context, (handle) => {
-    const db = handle.db;
-    const existingOp = lookupOperation(db, mutation.operationId);
-    if (existingOp) return replayOrConflict(existingOp, hash);
-
-    const issue = db.prepare("select id, revision, kind, severity, impact, acceptance, owner from issues where id = ?").get(issueId) as
-      | {
-          id: string;
-          revision: number;
-          kind: IssueKind;
-          severity: Severity;
-          impact: string;
-          acceptance: string;
-          owner: string | null;
-        }
-      | undefined;
-    if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
-    requireExpectedRevision(mutation, issue.revision);
-
-    const at = nowRfc3339();
-    db.prepare(
-      "update issues set kind = ?, severity = ?, impact = ?, acceptance = ?, owner = ?, revision = ?, updated_at = ? where id = ?",
-    ).run(
-      patch.kind ?? issue.kind,
-      patch.severity ?? issue.severity,
-      patch.impact !== undefined ? requireNonblank("impact", patch.impact) : issue.impact,
-      patch.acceptance !== undefined ? requireNonblank("acceptance", patch.acceptance) : issue.acceptance,
-      patch.owner !== undefined ? patch.owner : issue.owner,
-      issue.revision + 1,
-      at,
-      issueId,
-    );
-    const storeRevision = bumpStoreRevision(db);
-    const receipt: IssueReceipt = {
-      issueId,
-      revision: issue.revision + 1,
-      storeRevision,
-      created: false,
-    };
-    recordOperation(db, mutation.operationId, hash, receipt, at);
-    return receipt;
-  });
+  return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true));
 }
 
 /**
@@ -1941,13 +1965,7 @@ export async function linkIssue(
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   const session = authorizeMutation(context, mutation);
-  if ("relation" in link) {
-    if (!Object.hasOwn(RELATIONS, link.relation)) {
-      throw new IssueError("issue.scope-refused", "relation is not a contract vocabulary value");
-    }
-  } else if (!Object.hasOwn(PROVENANCE_KINDS, link.kind)) {
-    throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
-  }
+  assertIssueLinkVocabulary(link);
   if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
     assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), session);
   }

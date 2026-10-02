@@ -35,6 +35,10 @@ const failureEnvelopeSchema = z.object({
   details: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
+export function usageEnvelope(id: string, message: string): CommandEnvelope<never> {
+  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+}
+
 export const commandEnvelopeSchema = z.discriminatedUnion("status", [
   z.object({
     version: z.literal(1),

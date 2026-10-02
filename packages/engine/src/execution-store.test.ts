@@ -2143,6 +2143,97 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     expect(executionFootprint(context)).toEqual(acceptedFootprint);
     expect(executionFootprint(context).sessions).toBe((footprint.sessions as number) + 1);
   });
+  test("adopts an unowned workflow on the first coordinator bind and keeps the holder fence", async () => {
+    const fixture = await createdWorkflow("session-adopt");
+    const { context, workflowToken } = fixture;
+    const db = rawDb(storePath(context));
+    try {
+      db.prepare("update execution_workflows set creator_session_id = null where workflow_id = 'wf-1'").run();
+    } finally {
+      db.close();
+    }
+
+    const bound = await bindExecutionSession(
+      domainContext(context, sessionCaller("wf-1", "adopter-1")),
+      sessionBind("wf-1", null, workflowToken, "adopt-unowned"),
+    );
+    const creator = rawDb(storePath(context));
+    try {
+      expect(one(creator, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
+        creator_session_id: "adopter-1",
+      });
+    } finally {
+      creator.close();
+    }
+    await expect(
+      bindExecutionSession(
+        domainContext(context, sessionCaller("wf-1", "adopter-2")),
+        sessionBind("wf-1", null, (await readExecutionState(context)).data.workflows[0]!.workflowToken, "adopt-duplicate"),
+      ),
+    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    expect(bound.data.sessionId).toBe("adopter-1");
+  });
+  test("refuses NULL-creator adoption when any prior coordinator record exists", async () => {
+    for (const state of ["suspended", "revoked"] as const) {
+      const fixture = await createdWorkflow(`session-adopt-${state}`);
+      const { context, workflowToken, epoch } = fixture;
+      const db = rawDb(storePath(context));
+      try {
+        db.prepare("update execution_workflows set creator_session_id = null where workflow_id = 'wf-1'").run();
+        session(db, { sessionId: `prior-${state}`, role: "coordinator", planId: null, state, epoch });
+      } finally {
+        db.close();
+      }
+      const before = executionFootprint(context);
+      const beforeWorkflow = rawDb(storePath(context));
+      let workflowBefore: Row;
+      try {
+        workflowBefore = one(
+          beforeWorkflow,
+          "select creator_session_id, revision from execution_workflows where workflow_id = 'wf-1'",
+        );
+      } finally {
+        beforeWorkflow.close();
+      }
+      const beforeSessions = sessionRows(context);
+      expect(beforeSessions).toEqual([
+        {
+          workflow_id: "wf-1",
+          role: "coordinator",
+          session_id: `prior-${state}`,
+          plan_id: null,
+          epoch,
+          revision: 1,
+          state,
+        },
+      ]);
+      await expect(
+        bindExecutionSession(
+          domainContext(context, sessionCaller("wf-1", `fresh-${state}`)),
+          sessionBind("wf-1", null, workflowToken, `adopt-${state}`),
+        ),
+      ).rejects.toMatchObject({ code: "execution.session-unavailable" });
+      expect(executionFootprint(context)).toEqual(before);
+      const afterWorkflow = rawDb(storePath(context));
+      try {
+        expect(
+          one(afterWorkflow, "select creator_session_id, revision from execution_workflows where workflow_id = 'wf-1'"),
+        ).toEqual(workflowBefore);
+      } finally {
+        afterWorkflow.close();
+      }
+      expect(sessionRows(context)).toEqual(beforeSessions);
+      const creator = rawDb(storePath(context));
+      try {
+        expect(one(creator, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
+          creator_session_id: null,
+        });
+      } finally {
+        creator.close();
+      }
+    }
+  });
+
 
   test("refuses a wrong kind, a foreign store, another address and a stale epoch without binding", async () => {
     const fixture = await createdWorkflow("session-cas");
