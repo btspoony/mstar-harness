@@ -226,6 +226,31 @@ type ProjectionSourceTable =
   | "execution_integration_leases"
   | "execution_registry";
 
+const DATABASE_SOURCE_PRIMARY_KEYS: Record<ProjectionSourceTable, readonly string[]> = {
+  execution_registry: [],
+  execution_workflows: ["workflow_id"],
+  execution_plans: ["workflow_id", "plan_id"],
+  execution_leases: ["workflow_id", "plan_id"],
+  execution_integration_leases: ["workflow_id"],
+};
+
+function databaseSourceLocationError(location: unknown): string | null {
+  if (!isPlainObject(location) || typeof location.table !== "string" || !Object.prototype.hasOwnProperty.call(DATABASE_SOURCE_PRIMARY_KEYS, location.table)) {
+    return "unknown database source table";
+  }
+  const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[location.table as ProjectionSourceTable];
+  if (!isPlainObject(location.keys)) return "database source keys do not match the table primary key";
+  const keys = Object.keys(location.keys);
+  if (
+    keys.length !== primaryKeys.length ||
+    primaryKeys.some((key) => !Object.prototype.hasOwnProperty.call(location.keys, key)) ||
+    keys.some((key) => typeof location.keys[key] !== "string" || location.keys[key] === "")
+  ) {
+    return "database source keys do not match the table primary key";
+  }
+  return null;
+}
+
 type SourceSpec =
   | { source: "file"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; absolutePath: string; declared: boolean }
   | { source: "database"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; declared: boolean; table: ProjectionSourceTable; keys: Record<string, string> };
@@ -269,6 +294,8 @@ function churnAfterRead(spec: { relativePath: string; absolutePath: string }): v
  */
 function readSource(spec: SourceSpec | ProjectionSourceLocation, db?: StoreDb): SourceRead {
   if (spec.source === "database") {
+    const sourceError = databaseSourceLocationError(spec);
+    if (sourceError !== null) return { state: "invalid", sha256: null, content: null, diagnostic: sourceError };
     if (db === undefined) {
       return { state: "inaccessible", sha256: null, content: null, diagnostic: "capture arm pending (Task 2)" };
     }
@@ -289,10 +316,10 @@ function readSource(spec: SourceSpec | ProjectionSourceLocation, db?: StoreDb): 
         const content = JSON.stringify(entries);
         return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
       }
-      const predicates = Object.keys(spec.keys);
+      const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[spec.table];
       const row = db
-        .prepare(`select * from ${spec.table} where ${predicates.map((key) => `${key} = ?`).join(" and ")}`)
-        .get(...predicates.map((key) => spec.keys[key])) as Record<string, unknown> | undefined;
+        .prepare(`select * from ${spec.table} where ${primaryKeys.map((key) => `${key} = ?`).join(" and ")}`)
+        .get(...primaryKeys.map((key) => spec.keys[key])) as Record<string, unknown> | undefined;
       if (row === undefined) {
         return { state: "missing", sha256: null, content: null, diagnostic: `missing: no row at ${spec.relativePath}` };
       }
@@ -1230,6 +1257,11 @@ function assertCaptureShape(capture: ProjectionCapture): void {
   }
   if (capture.locations.length !== capture.sources.length) {
     invalid("capture locations must line up with its source digests (both come from the same read)");
+  }
+  for (const location of capture.locations) {
+    if (location.source !== "database") continue;
+    const sourceError = databaseSourceLocationError(location);
+    if (sourceError !== null) invalid(`capture ${sourceError}`);
   }
   if (capture.blocked && capture.diagnostics.length === 0) {
     invalid("a blocked capture must name the diagnostic that blocked it");

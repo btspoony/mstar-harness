@@ -34,8 +34,9 @@ import {
   captureProjectionSources,
   PROJECTION_FORMAT_VERSION,
   publishProjectionCapture,
-  refreshProjections,
+  type ProjectionSourceLocation,
   type ProjectionCapture,
+  refreshProjections,
 } from "./projection.js";
 import { initializeStore, openStore, type StoreContext, type StoreDb } from "./store-db.js";
 
@@ -418,6 +419,41 @@ describe("projection publication and last-good handling", () => {
     expect(report.freshness).toBe("unavailable");
     expect(report.sources).toMatchObject([{ sourceKey: "root:harness:execution/registry", state: "invalid" }]);
   });
+  test("a forged database source table is rejected before publication reads it", async () => {
+    const f = await fixture("forged-source-");
+    const base = await captureProjectionSources(f.context);
+    const sourceKey = "root:harness:execution/registry";
+    const capture: ProjectionCapture = {
+      ...base,
+      sources: [
+        {
+          ...base.sources[0]!,
+          sourceKey,
+          kind: "root",
+          rootKind: "harness",
+          relativePath: "execution/registry",
+        },
+      ],
+      locations: [
+        {
+          source: "database",
+          sourceKey,
+          relativePath: "execution/registry",
+          sha256: null,
+          state: "ok",
+          table: "issues",
+          keys: {},
+        } as unknown as ProjectionSourceLocation,
+      ],
+      diagnostics: [],
+      blocked: false,
+    };
+
+    await expect(publishProjectionCapture(f.context, capture)).rejects.toMatchObject({
+      code: "projection.invalid-capture",
+    });
+  });
+
 
   test("the first refresh publishes generation 1 with the projected rows, and an unchanged refresh publishes nothing", async () => {
     const f = await fixture("publish-");
