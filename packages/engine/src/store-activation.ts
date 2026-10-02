@@ -2149,30 +2149,64 @@ function tableHeaderAt(lines: string[], startLine: number): string | null {
     .join(" | ");
 }
 
-/**
- * Locate the reviewed section's markdown table in the live file by its parsed
- * header, returning the table's ACTUAL line span. Drift above the table shifts
- * its line number, so the reviewed `startLine` is never trusted as the excision
- * range; `null` means the reviewed table is not present at all (its removal has
- * already happened or an equivalent edit landed).
- */
-function locateReviewedSection(live: string, item: LedgerSectionItem): { startLine: number; endLine: number } | null {
-  const lines = live.split(/\r?\n/);
-  for (let start = 1; start < lines.length; start += 1) {
-    if (tableHeaderAt(lines, start) !== item.header) continue;
-    let last = start + 1; // the delimiter row closes the header even with no body rows
-    for (let row = start + 2; row <= lines.length; row += 1) {
-      if (!(lines[row - 1] ?? "").trim().startsWith("|")) break;
-      last = row;
-    }
-    return { startLine: start, endLine: last };
+/** One markdown table in a live index file: its 1-based line span. */
+type TableSpan = { startLine: number; endLine: number };
+
+/** The markdown table span when a table starts at 1-based `startLine`, else null. */
+function tableSpanAt(lines: string[], startLine: number): TableSpan | null {
+  if (tableHeaderAt(lines, startLine) === null) return null;
+  let last = startLine + 1; // the delimiter row closes the header even with no body rows
+  for (let row = startLine + 2; row <= lines.length; row += 1) {
+    if (!(lines[row - 1] ?? "").trim().startsWith("|")) break;
+    last = row;
   }
-  return null;
+  return { startLine, endLine: last };
 }
 
-/** True when the reviewed section's markdown table is no longer present in the live file. */
-function reviewedSectionAbsent(live: string, item: LedgerSectionItem): boolean {
-  return locateReviewedSection(live, item) === null;
+/**
+ * The net line shift already applied to one file by the sections this run has
+ * excised before `item` (they were removed from the live tree). The item's
+ * reviewed span, shifted by this amount, is its expected current position.
+ */
+function linesRemovedBefore(item: LedgerSectionItem, ledger: RetirementLedger): number {
+  return ledger.sections
+    .filter((section) => section.rootKind === item.rootKind && section.relativePath === item.relativePath && section.state === "verified" && section.startLine < item.startLine)
+    .reduce((total, section) => total + (section.endLine - section.startLine + 1), 0);
+}
+
+/**
+ * Locate the CURRENT live table for one reviewed retirement item.
+ *
+ * Identity is the item's reviewed SCOPE — its span, shifted by the lines this
+ * file has already had excised — so a permitted edit to a still-present
+ * target's column labels is still found (position, not labels), and two tables
+ * that share a header are never confused. When no table occupies the expected
+ * span, the item may have been moved by a net upward drift: the item's table is
+ * then the nearest table whose header still matches AND that no OTHER reviewed
+ * section of this file already claims. `null` means the reviewed table is no
+ * longer present (already excised, or an equivalent edit).
+ */
+function locateReviewedSection(live: string, item: LedgerSectionItem, ledger: RetirementLedger): TableSpan | null {
+  const lines = live.split(/\r?\n/);
+  const expected = item.startLine - linesRemovedBefore(item, ledger);
+  const direct = tableSpanAt(lines, expected);
+  if (direct !== null) return direct;
+  const claimed = new Set<number>();
+  for (const other of ledger.sections) {
+    if (other === item) continue;
+    if (other.rootKind !== item.rootKind || other.relativePath !== item.relativePath) continue;
+    claimed.add(other.startLine - linesRemovedBefore(other, ledger));
+  }
+  let best: TableSpan | null = null;
+  for (let start = 1; start < lines.length; start += 1) {
+    const span = tableSpanAt(lines, start);
+    if (span === null) continue;
+    if (tableHeaderAt(lines, start) === item.header && !claimed.has(span.startLine)) {
+      if (best === null || Math.abs(span.startLine - expected) < Math.abs(best.startLine - expected)) best = span;
+    }
+    start = span.endLine;
+  }
+  return best;
 }
 
 /**
@@ -2180,9 +2214,10 @@ function reviewedSectionAbsent(live: string, item: LedgerSectionItem): boolean {
  * rewrite the live file without only those lines. Every other byte — narrative,
  * security dispositions, human report content — survives verbatim.
  *
- * The section is located by its parsed table header, so a line-count
- * coincidence never stands in for excision: a table that is still present is
- * always removed, and completion is proven by its absence.
+ * The section is located by its reviewed scope (span-shifted) with a
+ * nearest-header fallback, so a line-count coincidence never stands in for
+ * excision: a table that is still present is always removed, and completion is
+ * proven by the target's absence (not by its total length).
  */
 function retireSection(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerSectionItem): void {
   const livePath = join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
@@ -2194,11 +2229,11 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
         `Nothing was retired.`,
     );
   }
-  const located = locateReviewedSection(live, item);
+  const located = locateReviewedSection(live, item, ledger);
   if (located === null) {
     // The reviewed table is already gone (a crash after the rewrite, before the
     // ledger recorded it, or an equivalent edit): verify and finish.
-    verifyRetiredSection(livePath, item);
+    verifyRetiredSection(livePath, item, ledger);
     item.state = "verified";
     writeLedger(ledgerPath, ledger);
     return;
@@ -2217,13 +2252,15 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
   item.expectedLiveSha256 = sha256Bytes(Buffer.from(excised, "utf8"));
   writeLedger(ledgerPath, ledger);
   writeTextAtomic(livePath, excised);
-  failureHook("section-write", 0);
-  verifyRetiredSection(livePath, item);
+  // The item is now excised from the live tree, so the shift for later sections
+  // of this file accounts for it during this same verification.
   item.state = "verified";
+  failureHook("section-write", 0);
+  verifyRetiredSection(livePath, item, ledger);
   writeLedger(ledgerPath, ledger);
 }
 
-function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
+function verifyRetiredSection(livePath: string, item: LedgerSectionItem, ledger: RetirementLedger): void {
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError(
@@ -2231,7 +2268,7 @@ function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
       `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`,
     );
   }
-  if (!reviewedSectionAbsent(live, item)) {
+  if (locateReviewedSection(live, item, ledger) !== null) {
     throw new StoreActivationError(
       "store.migration-source-changed",
       `catalog source ${item.rootKind}:${item.relativePath} still holds the reviewed section table; refusing to claim retirement.`,
@@ -2395,7 +2432,7 @@ export async function retireStoreSources(context: StoreContext, activationReceip
     }
     for (const item of ledger.sections) {
       if (item.state === "verified") {
-        verifyRetiredSection(join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath)), item);
+        verifyRetiredSection(join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath)), item, ledger);
         continue;
       }
       retireSection(context, ledgerPath, ledger, item);

@@ -172,6 +172,38 @@ async function activatedFixture(name: string): Promise<Fixture & { manifest: Mig
   return { ...staged, activation };
 }
 
+/** Two recognized iteration tables sharing a header, separated by narrative. */
+function writeDuplicateHeaderIndex(harness: string): void {
+  const tableFor = (id: string): string[] => [
+    "| Iteration | Path | Description | Status |",
+    "|-----------|------|-------------|--------|",
+    `| \`${id}\` | \`${id}/\` | ${id} iteration | \`active\` |`,
+  ];
+  write(
+    harness,
+    join("iterations", "README.md"),
+    [...INDEX_HEAD, ...tableFor("iter-one"), "Separating narrative between the two tables.", ...tableFor("iter-two"), ...INDEX_TAIL].join("\n"),
+  );
+  write(harness, join("iterations", "iter-one", "delivery-compass.md"), "# iter-one compass\n");
+  write(harness, join("iterations", "iter-two", "delivery-compass.md"), "# iter-two compass\n");
+}
+
+/** The duplicate-header index staged and activated, so BOTH tables are reviewed retirement sections. */
+async function duplicateHeaderFixture(
+  name: string,
+): Promise<Fixture & { manifest: MigrationManifest; activation: ActivationReceipt }> {
+  const fixture = freshWorkspace(name);
+  writeRegister(fixture.harness, "_default", { entries: { "plan-alpha": [entry({ id: "R1", severity: "critical" })] } });
+  writeRegister(fixture.harness, "engine", { entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" })] } });
+  writeRegister(fixture.harness, "dsh-integration", { entries: { "plan-beta": [entry({ id: "R1", severity: "warning" })] } });
+  writeRegister(fixture.harness, "omp-integration", { entries: { backlog: [entry({ id: "R7", lifecycle: "wont-fix" })] } });
+  writeDuplicateHeaderIndex(fixture.harness);
+  const manifest = await planStoreMigration(fixture.context);
+  const apply = await applyStoreMigration(fixture.context, manifest);
+  const activation = await activateStore(fixture.context, apply, attestation());
+  return { ...fixture, manifest, activation };
+}
+
 /** Run an operation that must refuse with a stable activation code. */
 async function refusalOf(code: StoreActivationErrorCode, run: () => Promise<unknown>): Promise<StoreActivationError> {
   try {
@@ -611,24 +643,71 @@ describe("store retirement", () => {
     );
     expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
 
+    const ledger = JSON.parse(readFileSync(ledgerPathOf(fixture, fixture.activation), "utf8")) as {
+      sections: { state: string; startLine: number; endLine: number; preservedLines: number }[];
+    };
+    const item = ledger.sections[0]!;
+
     // A permitted edit that keeps the target table but replaces the unrelated
-    // narrative with the same number of lines: the total line count equals the
-    // reviewed file's, so a line-count surrogate would falsely declare the
-    // section already retired. The target table is still present.
-    const narrativeLines = lineCount(reviewed) - INDEX_TABLE.length;
+    // narrative so the file's TOTAL line count equals the recorded
+    // `preservedLines` (the reviewed file's count MINUS the target's size) —
+    // the exact count that made the removed surrogate take its completion
+    // branch. The target table is still present.
+    const narrativeLines = Math.max(0, item.preservedLines - INDEX_TABLE.length);
     const filler = Array.from({ length: narrativeLines }, (_, index) => `Narrative replaced after the crash ${index + 1}`);
     const editedContent = [...filler, ...INDEX_TABLE].join("\n");
-    expect(lineCount(editedContent)).toBe(lineCount(reviewed));
+    expect(lineCount(editedContent)).toBe(item.preservedLines);
+    expect(editedContent).toContain("| `iter-one` |");
     writeFileSync(readmePath, editedContent);
 
     // Retry: the reviewed table is still present, so the retry must actually
-    // excise it (never take a completion branch on the line-count coincidence).
+    // excise it (never take a completion branch on the recorded line count).
     const receipt = await retireStoreSources(fixture.context, fixture.activation);
     expect(receipt.resumed).toBe(true);
     const live = readFileSync(readmePath, "utf8");
     expect(live).not.toContain("| `iter-one` |");
     expect(live).not.toContain("| Iteration |");
-    expect(receipt.sections[0]!.sha256).toBe(sha256Of(reviewed));
+    expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
+  });
+
+  test("retirement excises both reviewed sections when two valid tables share a header", async () => {
+    const { context, harness, activation } = await duplicateHeaderFixture("retirement-duplicate-header-");
+    const readmePath = join(harness, "iterations", "README.md");
+    const receipt = await retireStoreSources(context, activation);
+    expect(receipt.sections.length).toBe(2);
+    const live = readFileSync(readmePath, "utf8");
+    expect(live).not.toContain("| `iter-one` |");
+    expect(live).not.toContain("| `iter-two` |");
+    expect(live).not.toContain("| Iteration |");
+    expect((await receiptRows(context, "retired")).length).toBe(1);
+  });
+
+  test("retirement does not accept completion from an archive while an edited target section remains", async () => {
+    const fixture = await activatedFixture("retirement-archive-target-present-");
+    const readmePath = join(fixture.harness, "iterations", "README.md");
+
+    // Crash BEFORE the live rewrite: the archive exists and the ledger holds the
+    // item as pending, but the target table is still live.
+    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
+      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
+    );
+    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+
+    // A permitted edit to the still-present target's column labels (an extra
+    // recognized column) plus a rebuilt table with the same row count: the
+    // target is still present though its header no longer matches the reviewed
+    // one. A header-equality locator would read it as absent and accept
+    // completion from the archive alone.
+    const editedTarget = [
+      "| Iteration | Path | Description | Status | Owner |",
+      "|-----------|------|-------------|--------|-------|",
+      "| `iter-one` | `iter-one/` | First iteration | `active` | pm |",
+    ];
+    writeFileSync(readmePath, [...INDEX_HEAD, ...editedTarget, ...INDEX_TAIL].join("\n"));
+
+    const receipt = await retireStoreSources(fixture.context, fixture.activation);
+    expect(receipt.resumed).toBe(true);
+    expect(readFileSync(readmePath, "utf8")).not.toContain("| `iter-one` |");
     expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
   });
 
