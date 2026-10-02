@@ -37,13 +37,14 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
 import { validateExecutionLease, validateIntegrationMergeLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
+import { readExecutionState, type ExecutionState } from "./execution-store.js";
 import { rowPlanId, validatePlanRow, validateWorkflowEntry, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
-import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
   LEGACY_WORKTREE_PATH_CODE,
@@ -739,10 +740,23 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
 
 async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const inputs = await readCatalogInputs(context);
+  const revisionHandle = await openStore(context, "read");
+  let capturedStoreRevision: number;
+  try {
+    capturedStoreRevision = (revisionHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+  } finally {
+    revisionHandle.close();
+  }
+  let servedGraph: ExecutionState | null = null;
+  let servedGraphError = false;
+  try {
+    servedGraph = (await readExecutionState(context)).data;
+  } catch {
+    servedGraphError = true;
+  }
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
-    const storeMeta = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
     const sources: ProjectionSourceDigest[] = [];
     const locations: ProjectionSourceLocation[] = [];
     const diagnostics: SourceDiagnostic[] = [];
@@ -782,8 +796,14 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     if (malformedRegistryJson) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed entry JSON", "invalid");
     else if (invalidRegistryEntry) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains mismatched or domain-invalid entry JSON");
     else record(registrySpec, JSON.stringify(registry));
-    const registryIds = new Set(registry.map((item) => item.workflow_id));
-    const workflows = db.prepare("select workflow_id, state_json from execution_workflows order by workflow_id").all() as Array<{ workflow_id: string; state_json: string }>;
+    const graphWorkflows = servedGraph?.workflows ?? [];
+    const servedWorkflowIds = servedGraph ? graphWorkflows.map((workflow) => workflow.state.id) : registry.map((item) => item.workflow_id);
+    const registryIds = new Set(servedWorkflowIds);
+    const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
+    const workflows = servedWorkflowIds.length === 0
+      ? []
+      : db.prepare(`select workflow_id, state_json from execution_workflows where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id`)
+          .all(...servedWorkflowIds) as Array<{ workflow_id: string; state_json: string }>;
     const workflowIds = new Set(workflows.map((item) => item.workflow_id));
     for (const item of registry) {
       if (!workflowIds.has(item.workflow_id)) {
@@ -803,25 +823,33 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         recordInvalid(workflowSpec, item.state_json, "invalid: workflow state has an invalid object, type, or status");
         continue;
       }
-      workflowStateById.set(item.workflow_id, state);
-      const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+      const projectionState = servedWorkflowById.get(item.workflow_id)?.state ?? state;
+      workflowStateById.set(item.workflow_id, projectionState);
+      const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
       const workflowErrors = workflowValidation.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
       if (workflowErrors.length > 0) {
         recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation) => violation.code).join(", ")})`);
         continue;
       }
       record(workflowSpec, item.state_json);
-      const branch = isPlainObject(state.branch) ? state.branch : {};
+      const branch = isPlainObject(projectionState.branch) ? projectionState.branch : {};
       rows.workflows.push({
-        id: item.workflow_id, type: state.type as ProjectedWorkflow["type"], status: state.status as string,
-        phase: text(state.phase), startedAt: text(state.started_at), endedAt: text(state.ended_at), updatedAt: text(state.updated_at),
+        id: item.workflow_id, type: projectionState.type as ProjectedWorkflow["type"], status: projectionState.status as string,
+        phase: text(projectionState.phase), startedAt: text(projectionState.started_at), endedAt: text(projectionState.ended_at), updatedAt: text(projectionState.updated_at),
         branchBase: text(branch.base), branchSource: text(branch.source), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
         activeRegistration: registryIds.has(item.workflow_id),
       });
     }
     const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
-    const plans = db.prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans order by workflow_id, plan_id").all() as Array<{ workflow_id: string; plan_id: string; state_json: string; coordination_json: string }>;
+    const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
+    const servedLeaseIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.filter((plan) => plan.executionLease !== null).map((plan) => plan.plan.id))]));
+    const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
+    const plans = servedWorkflowIds.length === 0
+      ? []
+      : db.prepare(`select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id, plan_id`)
+          .all(...servedWorkflowIds) as Array<{ workflow_id: string; plan_id: string; revision: number; state_json: string; coordination_json: string }>;
     for (const row of plans) {
+      if (servedGraph && !servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id)) continue;
       const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
       let state: unknown;
       let coordination: unknown;
@@ -847,12 +875,13 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         continue;
       }
       const workflowState = workflowStateById.get(row.workflow_id);
+      const authorityPlanView = servedWorkflowById.get(row.workflow_id)?.plans.find((view) => view.plan.id === row.plan_id);
       const leaseRow = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id) as { lease_json: string } | undefined;
       let snapshotLease: unknown;
       if (leaseRow) {
         try { snapshotLease = JSON.parse(leaseRow.lease_json); } catch { /* reported on the lease source below */ }
       }
-      const snapshotPlanBase = Object.keys(coordinationState).length === 0 ? planState : plan;
+      const snapshotPlanBase = { ...planState, coordination: { revision: row.revision, ...coordinationState } };
       const snapshotPlan = snapshotLease === undefined ? snapshotPlanBase : { ...snapshotPlanBase, execution_lease: snapshotLease };
       if (workflowState) {
         const workflowGate = validateWorkflowSnapshot({ ...workflowState, plans: [snapshotPlan] });
@@ -862,12 +891,19 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
           continue;
         }
       }
-      const pin = isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin : {};
+      const pinRevision = authorityPlanView?.frozenInput?.entity_revision ?? (isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin.entity_revision : null);
       record(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
-      const progress = isPlainObject(coordinationState.progress) ? coordinationState.progress : {};
-      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(planState.status), progress: text(progress.summary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(planState.done_at), catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null });
+      const mappedPlan = authorityPlanView?.plan ?? planState;
+      const mappedCoordination = authorityPlanView ? authorityPlanView.coordination : coordinationState;
+      const progress = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress : {};
+      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(mappedPlan.status), progress: text(progress.summary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(mappedPlan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
     }
-    for (const lease of db.prepare("select workflow_id, plan_id, lease_json from execution_leases order by workflow_id, plan_id").all() as Array<{ workflow_id: string; plan_id: string; lease_json: string }>) {
+    const leases = servedWorkflowIds.length === 0
+      ? []
+      : db.prepare(`select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id, plan_id`)
+          .all(...servedWorkflowIds) as Array<{ workflow_id: string; plan_id: string; lease_json: string }>;
+    for (const lease of leases) {
+      if (servedGraph && !servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id)) continue;
       const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
       let value: unknown;
       try { value = JSON.parse(lease.lease_json); } catch {
@@ -879,8 +915,11 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         recordInvalid(leaseSpec, lease.lease_json, `invalid: execution lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
         continue;
       }
+      const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
+      const mappedLease = servedGraph ? servedLease : value;
+      if (!mappedLease) continue;
       record(leaseSpec, lease.lease_json);
-      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(value.holder), worktreePath: text(value.worktree_path), expiresAt: text(value.expires_at) });
+      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(mappedLease.holder), worktreePath: text(mappedLease.worktree_path), expiresAt: text(mappedLease.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
       const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
@@ -902,7 +941,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
       locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
     }
-    for (const row of db.prepare("select workflow_id, lease_json from execution_integration_leases order by workflow_id").all() as Array<{ workflow_id: string; lease_json: string }>) {
+    const integrationLeases = servedWorkflowIds.length === 0
+      ? []
+      : db.prepare(`select workflow_id, lease_json from execution_integration_leases where workflow_id in (${servedWorkflowIds.map(() => "?").join(",")}) order by workflow_id`)
+          .all(...servedWorkflowIds) as Array<{ workflow_id: string; lease_json: string }>;
+    for (const row of integrationLeases) {
+      if (servedGraph && !servedIntegrationLeaseIds.has(row.workflow_id)) continue;
       const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
       let value: unknown;
       try { value = JSON.parse(row.lease_json); } catch {
@@ -914,13 +958,25 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         recordInvalid(leaseSpec, row.lease_json, `invalid: integration lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
         continue;
       }
+      const servedLease = servedWorkflowById.get(row.workflow_id)?.integrationLease;
+      const mappedLease = servedGraph ? servedLease : value;
+      if (!mappedLease) continue;
       record(leaseSpec, row.lease_json);
-      rows.leases.push({ workflowId: row.workflow_id, planId: text(value.plan_id) ?? "", kind: "integration-merge", holder: text(value.holder), worktreePath: null, expiresAt: text(value.expires_at) });
+      rows.leases.push({ workflowId: row.workflow_id, planId: text(mappedLease.plan_id) ?? "", kind: "integration-merge", holder: text(mappedLease.holder), worktreePath: null, expiresAt: text(mappedLease.expires_at) });
+    }
+    if (servedGraphError && diagnostics.length === 0) {
+      const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
+      const registrySource = sources.find((source) => source.sourceKey === sourceKey);
+      if (registrySource) {
+        registrySource.state = "invalid";
+        registrySource.diagnostic = "invalid: the execution authority rejected its served graph";
+      }
+      diagnostics.push({ sourceKey, reason: "invalid", message: "invalid: the execution authority rejected its served graph" });
     }
     sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     locations.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
-    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: storeMeta.revision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
+    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: capturedStoreRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
   } finally {
     handle.close();
   }
