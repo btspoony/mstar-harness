@@ -25,7 +25,7 @@ export function correctiveMessage(name: string, catalog: Iterable<string>): stri
     .map((tool) => ({ tool, distance: distance(normalized, normalize(tool)) }))
     .filter(({ distance: score }) => score <= 2)
     .sort((left, right) => left.distance - right.distance || (left.tool < right.tool ? -1 : left.tool > right.tool ? 1 : 0))[0]?.tool;
-  const prefix = tools.find((tool) => normalize(tool).startsWith(normalized) && normalize(tool).length - normalized.length <= 3);
+  const prefix = normalized.length > 0 ? tools.find((tool) => normalize(tool).startsWith(normalized) && normalize(tool).length - normalized.length <= 3) : undefined;
   const nearest = exact ?? editDistanceMatch ?? prefix;
   return nearest === undefined
     ? `Tool ${name} not found. Call tools/list for the full catalog.`
@@ -47,7 +47,10 @@ export function withToolCorrection(transport: Transport, catalog: () => Iterable
       if (!("method" in message) && "id" in message && message.id !== null && message.id !== undefined) requests.delete(message.id);
       await transport.send(message, options);
     },
-    close: () => transport.close(),
+    async close() {
+      requests.clear();
+      await transport.close();
+    },
     get onclose() { return transport.onclose; },
     set onclose(handler) { transport.onclose = handler; },
     get onerror() { return transport.onerror; },
@@ -55,6 +58,11 @@ export function withToolCorrection(transport: Transport, catalog: () => Iterable
     get onmessage() { return transport.onmessage; },
     set onmessage(handler) {
       transport.onmessage = (message, extra) => {
+        if ("method" in message && message.method === "notifications/cancelled" && "params" in message
+          && message.params !== null && typeof message.params === "object" && "requestId" in message.params
+          && (typeof message.params.requestId === "string" || typeof message.params.requestId === "number")) {
+          requests.delete(message.params.requestId);
+        }
         if ("method" in message && message.method === "tools/call" && "id" in message) requests.add(message.id);
         handler?.(message, extra);
       };

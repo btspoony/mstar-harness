@@ -92,6 +92,16 @@ describe("MCP tool correction", () => {
     const response = await request("tools/call", { name: "mstar_version", arguments: {} });
     expect(response).toMatchObject({ result: { content: [{ text: "registered-handler-ran" }] } });
   });
+  test("corrects the SDK's real unknown-tool refusal end to end", async () => {
+    const { request } = await startTestServer(true);
+    const response = await request("tools/call", { name: "mstar_missing", arguments: {} });
+    expect(response).toMatchObject({
+      error: {
+        code: -32602,
+        message: expect.stringContaining("Call tools/list for the full catalog."),
+      },
+    });
+  });
 
   test("tools/list through the decorated transport matches the undecorated SDK catalog", async () => {
     const decorated = await startTestServer(true);
@@ -125,5 +135,37 @@ describe("MCP tool correction", () => {
     emit(missingCall);
     await wrapped.send({ jsonrpc: "2.0", id: "same-id", error: { code: -32602, message: "Tool mstar_plan_issue not found" } });
     expect(sent[4]).toMatchObject({ error: { message: expect.stringContaining("mstar_plan_issue_add") } });
+  });
+  test("cancellation clears a pending id without producing a settlement", async () => {
+    const sent: Message[] = [];
+    const received: Message[] = [];
+    let inbound: Transport["onmessage"];
+    const transport: Transport = {
+      start: async () => {}, close: async () => {}, send: async (message) => { sent.push(message); },
+      get onmessage() { return inbound; }, set onmessage(handler) { inbound = handler; },
+    };
+    const wrapped = withToolCorrection(transport, () => ["mstar_plan_issue_add"]);
+    wrapped.onmessage = (message) => received.push(message);
+    const emit = (message: Message) => inbound?.(message);
+    emit({ jsonrpc: "2.0", id: "cancelled-id", method: "tools/call", params: { name: "mstar_plan_issue" } });
+    const cancellation = { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "cancelled-id" } } as const;
+    emit(cancellation);
+    expect(received[1]).toEqual(cancellation);
+    expect(sent).toHaveLength(0);
+
+    const lateError = { jsonrpc: "2.0", id: "cancelled-id", error: { code: -32602, message: "Tool mstar_plan_issue not found" } } as const;
+    await wrapped.send(lateError);
+    expect(sent[0]).toEqual(lateError);
+    emit({ jsonrpc: "2.0", id: "cancelled-id", method: "tools/call", params: { name: "mstar_plan_issue" } });
+    await wrapped.send(lateError);
+    expect(sent[1]).toMatchObject({ error: { message: expect.stringContaining("mstar_plan_issue_add") } });
+    emit({ jsonrpc: "2.0", id: "closed-id", method: "tools/call", params: { name: "mstar_plan_issue" } });
+    const closeHandler = () => {};
+    wrapped.onclose = closeHandler;
+    await wrapped.close();
+    expect(wrapped.onclose).toBe(closeHandler);
+    const closedError = { ...lateError, id: "closed-id" };
+    await wrapped.send(closedError);
+    expect(sent[2]).toEqual(closedError);
   });
 });
