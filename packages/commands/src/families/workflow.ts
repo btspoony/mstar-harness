@@ -20,6 +20,22 @@ const transitions = [
 ];
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 function usage(id: string, message: string): CommandEnvelope<never> { return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message }; }
+function activeRegistrationRefusal(
+  id: string,
+  missing: readonly string[],
+  hasSessionIdentity: boolean,
+): CommandEnvelope<never> {
+  const details = missing.join(", ");
+  const recovery = [
+    "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID.",
+    "MCP: the host must pass sessionId per call.",
+    "expect comes from mstar status validate; operation is your own replay id.",
+    ...(missing.includes("sessionRef") ? ["sessionRef is the active workflow session reference."] : []),
+    ...(!hasSessionIdentity ? ["A session.run child carries a minted local identity; run the command in the main session or pass an explicit --session-id."] : []),
+  ].join(" ");
+  return usage(id, `Active registration is missing ${details}. ${recovery}`);
+}
+
 class WorkflowInputError extends Error {}
 function refused(id: string, error: unknown): CommandEnvelope<never> {
   if (error instanceof WorkflowInputError) return usage(id, error.message);
@@ -128,7 +144,13 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
         setArtifactStore(createFsStore(harnessDir));
         if (input.expect !== undefined || input.operation !== undefined) {
-          if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("workflow.register", "active registration requires main session identity, expect and operation");
+          if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) {
+            return activeRegistrationRefusal("workflow.register", [
+              ...(context.sessionId === undefined ? ["session identity"] : []),
+              ...(input.expect === undefined ? ["expect"] : []),
+              ...(input.operation === undefined ? ["operation"] : []),
+            ], context.sessionId !== undefined);
+          }
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow!, role: "coordinator", planId: null };
           const { catalogRevision } = await readCatalogRevisions({ harnessDir });
           const canonicalPlanAbs = path.isAbsolute(input.planFile!) ? path.resolve(input.planFile!) : path.join(harnessDir, input.planFile!);
@@ -159,7 +181,14 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         }
         const evidence = JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) as Record<string, unknown>;
         if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined) {
-          if (input.sessionRef === undefined || input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("workflow.evidence", "active evidence requires main session identity, sessionRef, expect and operation");
+          if (input.sessionRef === undefined || input.expect === undefined || input.operation === undefined || context.sessionId === undefined) {
+            return activeRegistrationRefusal("workflow.evidence", [
+              ...(context.sessionId === undefined ? ["session identity"] : []),
+              ...(input.sessionRef === undefined ? ["sessionRef"] : []),
+              ...(input.expect === undefined ? ["expect"] : []),
+              ...(input.operation === undefined ? ["operation"] : []),
+            ], context.sessionId !== undefined);
+          }
           if (input.at !== undefined || input.session !== undefined) return usage("workflow.evidence", "active evidence cannot use legacy session or at fields");
           const ref = decodeExecutionSessionRef(input.sessionRef);
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
@@ -245,7 +274,13 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       setArtifactStore(createFsStore(harnessDir));
       if (input.expect !== undefined || input.operation !== undefined) {
-        if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage("iteration.register", "active registration requires main session identity, expect and operation");
+        if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) {
+          return activeRegistrationRefusal("iteration.register", [
+            ...(context.sessionId === undefined ? ["session identity"] : []),
+            ...(input.expect === undefined ? ["expect"] : []),
+            ...(input.operation === undefined ? ["operation"] : []),
+          ], context.sessionId !== undefined);
+        }
         const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator", planId: null };
         const { catalogRevision } = await readCatalogRevisions({ harnessDir });
         return ok("iteration.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:iteration-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "iteration", id: input.workflow, title: input.workflow, rootKind: "iterations", relativePath: input.workflow }], binding: { catalogKind: "iteration", catalogId: input.workflow } }, expected: input.expect as never }));
