@@ -42,12 +42,13 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 - On `Done`: ensure the plan's findings state is consistent — every confirmed finding captured as an issue linked to it, closures carrying their disposition and evidence (capture contract → `mstar-project-governance`「Issue capture」).
 - At plan commitment: register the workflow through the authorized producer (create-only snapshot + root `workflows[]` entry under one lock) and declare its delivery kind — `development`, or `verification/report-only` with its recorded completion policy:
   ```text
-  mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path>
+  mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file plans/<id>.md
     --delivery-kind <development|verification/report-only> [--project <id>]
     [--branch-source <branch> --branch-target <branch> | --completion-policy <text>]
     [--started-at <ts>] [--harness <dir>]                                   # pre-activation file route
     --expect <the store's root execution token> --operation <id>            # active: the root-token creation form
   ```
+  Known issue I-000295: the catalog entity currently stores the harness-relative path duplicated (`plans/plans/<id>.md`); the execution lifecycle is unaffected, and the fix is tracked.
   The active form runs under an independently acquired identity and takes no `--session-ref` (no session row exists before the workflow does); on a harness whose execution authority is active it is the only form that writes. The kind is declared here, never inferred (§1): `development` requires `--branch-source` + `--branch-target`, `verification/report-only` requires `--completion-policy`. The same `--delivery-kind` input is required by the specialized producers `audit promote` and (for the ACTIVE plan snapshots it lifts) `migrate` — and it is ONE delivery identity, so a `migrate` run whose lift creates 2+ ACTIVE standalone plans is refused (ids listed) and the tree migrates in batches of one declared plan. An **ACTIVE** `type: plan` snapshot that predates this (no registered kind — e.g. an old audit promotion or v1 lift) is repaired ONCE, before its close, on the **pre-activation** route (the DB creation route declares its kind at registration, so no active form exists and the declaration is never disguised as one):
   ```text
   mstar workflow evidence --workflow <id> --declare-kind <development|verification/report-only>

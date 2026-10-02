@@ -63,9 +63,16 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {
-  return existsSync(path.join(harnessDir, "store.db"))
-    ? `a store already exists at ${path.join(harnessDir, "store.db")} — migrate or activate instead of initializing`
-    : null;
+  const storePath = path.join(harnessDir, "store.db");
+  if (existsSync(storePath)) return `a store already exists at ${storePath} — migrate or activate instead of initializing`;
+  const projectsDir = path.join(harnessDir, "projects");
+  if (existsSync(projectsDir) && readdirSync(projectsDir).some((name) => existsSync(path.join(projectsDir, name, "residuals.json")))) {
+    return "legacy project residual registers require the staged catalog migration; use the staged migration, not store init";
+  }
+  if (existsSync(path.join(harnessDir, "iterations", "README.md"))) {
+    return "the maintained iterations catalog index requires the staged catalog migration; use the staged migration, not store init";
+  }
+  return null;
 }
 function contextOf(input: StoreInput, invocation: InvocationContext): StoreContext {
   const resolved = resolveProcessHarnessDir(invocation.cwd, input.harness);

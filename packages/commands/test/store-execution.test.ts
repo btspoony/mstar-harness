@@ -100,6 +100,25 @@ describe("store and execution command surface", () => {
     expect(existsSync(join(root, "recovery.db"))).toBe(true);
     expect(typeof dataOf(backup).storeId).toBe("string");
   });
+  test("store init refuses catalog migration inputs", async () => {
+    for (const [label, legacyPath, contents] of [
+      ["project residuals", join("projects", "alpha", "residuals.json"), "{}\n"],
+      ["iterations catalog index", join("iterations", "README.md"), "# Iterations\n"],
+    ] as const) {
+      const root = fixture(`store-init-${label.replaceAll(" ", "-")}`);
+      const harness = join(root, ".mstar");
+      const legacyFile = join(harness, legacyPath);
+      mkdirSync(dirname(legacyFile), { recursive: true });
+      writeFileSync(legacyFile, contents);
+
+      const result = await invoke(definition("store.init"), { harness }, root);
+      expect(result.status).toBe("refused");
+      expect(result.code).toBe("store.already-exists");
+      expect(result.message).toContain("staged catalog migration");
+      expect(result.message).toContain("not store init");
+      expect(existsSync(join(harness, "store.db"))).toBe(false);
+    }
+  });
 
   test("a control-root-only manifest without --coverage is a usage refusal naming the flag", async () => {
     const root = fixture("execution-control-root-only");
