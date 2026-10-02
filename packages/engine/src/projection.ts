@@ -42,7 +42,7 @@ import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
 import { validateExecutionLease, validateIntegrationMergeLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
-import { rowPlanId, validatePlanRow, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
+import { rowPlanId, validatePlanRow, validateWorkflowEntry, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
 import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
@@ -766,7 +766,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     const invalidRegistryEntry = registry.find((item) => {
       try {
         const entry: unknown = JSON.parse(item.entry_json);
-        return !isPlainObject(entry) || entry.id !== item.workflow_id;
+        return !isPlainObject(entry) || entry.id !== item.workflow_id || !validateWorkflowEntry(entry).ok;
       } catch {
         return true;
       }
@@ -790,7 +790,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         recordInvalid(workflowSpec, item.state_json, "invalid: workflow state is not valid JSON");
         continue;
       }
-      if (!isPlainObject(state) || !WORKFLOW_LIFECYCLE_TYPES.includes(state.type as never) || !WORKFLOW_LIFECYCLE_STATUSES.includes(state.status as never)) {
+      if (!isPlainObject(state) || state.id !== item.workflow_id || !WORKFLOW_LIFECYCLE_TYPES.includes(state.type as never) || !WORKFLOW_LIFECYCLE_STATUSES.includes(state.status as never)) {
         recordInvalid(workflowSpec, item.state_json, "invalid: workflow state has an invalid object, type, or status");
         continue;
       }
@@ -833,8 +833,8 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const planState = state as Record<string, unknown>;
       const coordinationState = coordination as Record<string, unknown>;
       const planId = rowPlanId(planState);
-      if (!planId) {
-        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan row has no canonical id");
+      if (!planId || planId !== row.plan_id) {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state id does not match its execution_plans key");
         continue;
       }
       const workflowState = workflowStateById.get(row.workflow_id);

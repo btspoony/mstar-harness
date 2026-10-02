@@ -485,6 +485,39 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect(stale.diagnostics).toContainEqual(expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, reason: "invalid" }));
     expect(await projectedRows(f)).toEqual(lastGood);
   });
+  test("ACTIVE registry shape and SQL-key identity corruption retain last-good rows", async () => {
+    const workflowId = "wf-identity-check";
+    const planId = "plan-identity-check";
+    const f = await activeWorkflowFixture("active-identity-check-", workflowId, planId);
+    const initial = await refreshProjections(f.context);
+    const lastGood = await projectedRows(f);
+    const handle = await openStore(f.context, "write");
+    try {
+      const registryRow = handle.db.prepare("select entry_json from execution_registry where workflow_id = ?").get(workflowId) as { entry_json: string };
+      const entry = JSON.parse(registryRow.entry_json) as Record<string, unknown>;
+      entry.type = "not-a-workflow-type";
+      entry.started_at = 42;
+      delete entry.dir;
+      handle.db.prepare("update execution_registry set entry_json = ? where workflow_id = ?").run(JSON.stringify(entry), workflowId);
+      const workflowRow = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
+      const workflowState = JSON.parse(workflowRow.state_json) as Record<string, unknown>;
+      workflowState.id = "different-workflow";
+      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(workflowState), workflowId);
+      const planRow = handle.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string };
+      const planState = JSON.parse(planRow.state_json) as Record<string, unknown>;
+      planState.id = "different-plan";
+      handle.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?").run(JSON.stringify(planState), workflowId, planId);
+      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { handle.close(); }
+    const stale = await refreshProjections(f.context);
+    expect(stale).toMatchObject({ freshness: "stale", published: false, generation: initial.generation });
+    expect(stale.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceKey: "root:harness:execution/registry", reason: "invalid" }),
+      expect.objectContaining({ sourceKey: `workflow:harness:execution/workflows/${workflowId}`, reason: "invalid" }),
+      expect.objectContaining({ sourceKey: `workflow:harness:execution/plans/${workflowId}/${planId}`, reason: "invalid" }),
+    ]));
+    expect(await projectedRows(f)).toEqual(lastGood);
+  });
   test("ACTIVE movement regression: plan insertion and captured-row update", async () => {
     // Subcase A: plan membership changes after capture.
     await (async () => {
