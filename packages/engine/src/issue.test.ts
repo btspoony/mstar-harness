@@ -2,13 +2,12 @@
  * issue.test.ts — C2/C3 proof: capture, occurrences, reads, disposition.
  */
 import { spawn, spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, test } from "bun:test";
-import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from "./coordination.js";
-import { createFsStore, setArtifactStore } from "./store.js";
+import { initializeExecutionAuthority } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import {
   assertIssueTriageVocabulary,
@@ -463,14 +462,9 @@ describe("failed capture leaves no partial finding", () => {
 });
 
 /* -------------------------------------------------------------------------
- * Live-workflow authority fixtures (contract §4)
- *
- * A privileged mutation is authorized only by the engine-issued session
- * envelope of a live workflow, so these fixtures build a real control root (a
- * Git repository, a running root register entry, a valid snapshot) and let the
- * engine itself issue every envelope through `bindPlanSession`. Nothing here
- * hand-writes a session file: a hand-written one is exactly what the refusal
- * cases below must reject.
+ * Workflow-backed fixtures used by provenance and closure behavior tests.
+ * Issue write authorization is actor-only and does not consult workflow
+ * snapshots or session envelopes.
  * ---------------------------------------------------------------------- */
 
 const LIVE_WORKFLOW_ID = "wf-issue";
@@ -478,15 +472,9 @@ const LIVE_PLAN_ID = "20260918-a";
 const LIVE_PEER_PLAN_ID = "20260918-b";
 
 type LiveAuthority = {
-  /** The harness dir that owns the fixture's store. */
   harness: string;
-  workflowId: string;
   planId: string;
   peerPlanId: string;
-  /** The engine-issued lifecycle (`coordinator`) envelope. */
-  coordinatorSession: string;
-  /** Engine-issued `plan-pm` envelopes by plan id (`{}` unless `bindPlans`). */
-  planSessions: Record<string, string>;
 };
 
 function git(args: string[], cwd: string): void {
@@ -498,66 +486,9 @@ function writeJsonFile(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function writeTextFile(path: string, text: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, text, "utf8");
-}
 
-/** Fixture JSON read (a JSON document written by the fixture or the engine). */
-function readJsonFile(path: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-}
-
-/** The session id an envelope file records. */
-function sessionIdOf(path: string): string {
-  const sessionId = readJsonFile(path).session_id;
-  if (typeof sessionId !== "string" || sessionId === "") throw new Error(`fixture: no session_id in ${path}`);
-  return sessionId;
-}
-
-/** Fixture snapshot path of one authority. */
-function snapshotPathOf(authority: LiveAuthority): string {
-  return join(authority.harness, "workflows", authority.workflowId, "snapshot.json");
-}
-
-/** The pinned Assignment header block `parseAssignmentFile` accepts. */
-function assignmentText(input: {
-  harness: string;
-  workflowId: string;
-  planId: string;
-  planPath: string;
-  worktreePath: string;
-  sddDir: string;
-}): string {
-  return [
-    `# Assignment \u2014 ${input.planId}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: feature/fixture-plan`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Fixture plan.",
-    "",
-  ].join("\n");
-}
-
-/**
- * A live workflow in its own control root, with the envelopes the engine
- * issues for it: the lifecycle `coordinator` seat, plus each plan row's
- * `plan-pm` seat when `bindPlans` is set (a plan bind requires a prepared
- * plan). The store is initialized, so callers mutate it directly.
- */
-async function liveAuthority(name: string, options: { bindPlans?: boolean } = {}): Promise<LiveAuthority> {
+/** A real workflow snapshot fixture for issue-store behavior tests. */
+async function liveAuthority(name: string): Promise<LiveAuthority> {
   const root = realpathSync(mkdtempSync(join(ROOT, name)));
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
@@ -594,139 +525,16 @@ async function liveAuthority(name: string, options: { bindPlans?: boolean } = {}
     })),
   });
 
-  const planSessions: Record<string, string> = {};
-  let coordinatorSession = "";
-  setArtifactStore(createFsStore(harness));
-  try {
-    coordinatorSession = (
-      await bindPlanSession({ coordinator: true, workflowId, harnessDir: harness, cwd: root, sessionId: "fixture-coordinator" })
-    ).session_file;
-    if (options.bindPlans === true) {
-      for (const planId of planIds) {
-        const sddDir = join(harness, "sdd", planId);
-        const assignmentPath = join(sddDir, "assignment.md");
-        writeTextFile(
-          assignmentPath,
-          assignmentText({
-            harness,
-            workflowId,
-            planId,
-            planPath: join(harness, "plans", `${planId}.md`),
-            worktreePath: join(root, `wt-${planId}`),
-            sddDir,
-          }),
-        );
-        const view = await readPlanCoordination(coordinatorSession, planId, root);
-        await mutatePlanCoordination({
-          sessionPath: coordinatorSession,
-          planId,
-          expectedRevision: view.revision,
-          operation: { kind: "prepare", assignmentPath },
-        });
-        planSessions[planId] = (
-          await bindPlanSession({ scope: { workflowId, planId, harnessDir: harness }, cwd: root })
-        ).session_file;
-      }
-    }
-  } finally {
-    setArtifactStore(undefined);
-  }
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
-  return {
-    harness,
-    workflowId,
-    planId: LIVE_PLAN_ID,
-    peerPlanId: LIVE_PEER_PLAN_ID,
-    coordinatorSession,
-    planSessions,
-  };
+  return { harness, planId: LIVE_PLAN_ID, peerPlanId: LIVE_PEER_PLAN_ID };
 }
 
-/** Finish the fixture's lifecycle: a terminal workflow holds no live authority. */
-function retireWorkflow(authority: LiveAuthority): void {
-  const path = snapshotPathOf(authority);
-  writeJsonFile(path, {
-    ...readJsonFile(path),
-    status: "completed",
-    ended_at: "2026-09-18T23:00:00Z",
-    updated_at: "2026-09-18T23:00:00Z",
-  });
+function pmMut(_authority: LiveAuthority, operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
+  return { operationId, actor: "project-manager", ...extra };
 }
 
-/** Point the workflow's own coordinator record at another file (a tampered binding). */
-function rebindCoordinatorRecord(authority: LiveAuthority, sessionFile: string): void {
-  const path = snapshotPathOf(authority);
-  const snapshot = readJsonFile(path);
-  const coordination = snapshot.coordination;
-  if (typeof coordination !== "object" || coordination === null || !("coordinator" in coordination)) {
-    throw new Error(`fixture: ${path} carries no coordinator binding`);
-  }
-  const coordinator = coordination.coordinator;
-  if (typeof coordinator !== "object" || coordinator === null) {
-    throw new Error(`fixture: ${path} carries no coordinator binding`);
-  }
-  writeJsonFile(path, {
-    ...snapshot,
-    coordination: { ...coordination, coordinator: Object.assign({}, coordinator, { session_file: sessionFile }) },
-  });
-}
 
-/**
- * Point one plan row's recorded session binding at another file. Used to
- * reproduce a released-3.11.0 workflow: its plan row records the pre-#264
- * bare envelope name `sessions/<session-id>.json`.
- */
-function rebindPlanSessionRecord(authority: LiveAuthority, planId: string, sessionFile: string): void {
-  const path = snapshotPathOf(authority);
-  const snapshot = readJsonFile(path);
-  const plans = snapshot.plans;
-  if (!Array.isArray(plans)) throw new Error(`fixture: ${path} carries no plan rows`);
-  const row = plans.find(
-    (candidate) => (candidate as Record<string, unknown>).id === planId || (candidate as Record<string, unknown>).plan_id === planId,
-  );
-  if (row === undefined) throw new Error(`fixture: ${path} has no row for plan ${planId}`);
-  const source = row as Record<string, unknown>;
-  const coordination = source.coordination;
-  if (typeof coordination !== "object" || coordination === null || !("session" in coordination)) {
-    throw new Error(`fixture: plan ${planId} of ${path} carries no session binding`);
-  }
-  const session = (coordination as Record<string, unknown>).session;
-  if (typeof session !== "object" || session === null) {
-    throw new Error(`fixture: plan ${planId} of ${path} carries no session binding`);
-  }
-  const rebound = plans.map((candidate) =>
-    candidate === source
-      ? { ...source, coordination: { ...(coordination as Record<string, unknown>), session: Object.assign({}, session, { session_file: sessionFile }) } }
-      : candidate,
-  );
-  writeJsonFile(path, { ...snapshot, plans: rebound });
-}
-
-/**
- * A `project-manager` mutation authorized by one of the fixture's
- * engine-issued envelopes: the lifecycle coordinator seat by default, a plan
- * seat when `sessionFile` overrides it (plan provenance must match that seat's
- * plan id).
- */
-function pmMut(authority: LiveAuthority, operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
-  return { operationId, actor: "project-manager", sessionFile: authority.coordinatorSession, ...extra };
-}
-
-/** A caller-written envelope, byte-shaped like the engine's, at any path. */
-function forgedEnvelope(dir: string, name: string, fields: Record<string, unknown>): string {
-  const path = join(dir, name);
-  writeJsonFile(path, {
-    schema_version: 1,
-    role: "plan-pm",
-    session_id: "11111111-1111-1111-1111-111111111111",
-    workflow_id: LIVE_WORKFLOW_ID,
-    plan_id: LIVE_PLAN_ID,
-    ...fields,
-  });
-  return path;
-}
-
-describe("capture authorization", () => {
+describe("capture actor auditing", () => {
   test("leaf seats cannot capture or append, and the PM seat captures without a plan", async () => {
     const context = ctx("capture-seat-");
     await initializeStore(context).then((h) => h.close());
@@ -745,7 +553,7 @@ describe("capture authorization", () => {
     expect((await getIssue(context, created.issueId)).occurrences).toHaveLength(1);
   });
 
-  test("the envelope proves the seat; the actor label is audited, never trusted", async () => {
+  test("only the PM actor can mutate; accepted mutations record that actor", async () => {
     const authority = await liveAuthority("authorization-seat-");
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-seat"));
@@ -755,7 +563,7 @@ describe("capture authorization", () => {
         context,
         created.issueId,
         { relation: "related", issueId: other.issueId },
-        { operationId: "link-wrong-seat", actor: "qa-engineer", sessionFile: authority.coordinatorSession, expectedRevision: created.revision },
+        { operationId: "link-wrong-seat", actor: "qa-engineer", expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(
@@ -763,7 +571,7 @@ describe("capture authorization", () => {
         context,
         created.issueId,
         { severity: "low", reason: "downgrade" },
-        { operationId: "triage-inherited", actor: "toString", sessionFile: authority.coordinatorSession, expectedRevision: created.revision },
+        { operationId: "triage-inherited", actor: "toString", expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const after = await getIssue(context, created.issueId);
@@ -774,7 +582,7 @@ describe("capture authorization", () => {
       context,
       created.issueId,
       { severity: "low", reason: "downgrade" },
-      pmMut(authority, "triage-envelope", { expectedRevision: created.revision }),
+      pmMut(authority, "triage-actor-only", { expectedRevision: created.revision }),
     );
     expect(triaged.revision).toBe(created.revision + 1);
   });
@@ -801,7 +609,7 @@ describe("capture authorization", () => {
   });
 });
 
-describe("disposition revision relation authorization", () => {
+describe("issue dispositions, revisions, and relations", () => {
   test("stale revision leaves issue and history unchanged", async () => {
     const authority = await liveAuthority("revision-stale-");
     const context: StoreContext = { harnessDir: authority.harness };
@@ -821,23 +629,39 @@ describe("disposition revision relation authorization", () => {
     expect(detail.transitions).toEqual([]);
   });
 
-  test("terminal, triage, and link writes need only the audited actor on an ACTIVE store with no workflow", async () => {
+  test("ACTIVE execution authority accepts actor-only issue writes without workflow or sessions", async () => {
     const context = ctx("actor-only-active-");
     await initializeStore(context).then((handle) => handle.close());
-    const issue = await captureIssue(context, baseInput(), mut("actor-only-capture"));
-    const canonical = await captureIssue(context, baseInput({ occurrenceKey: "canonical", rootCauseKey: "canonical" }), mut("actor-only-canonical"));
+    const activated = await initializeExecutionAuthority(context);
+    expect(activated.data.workflows).toEqual([]);
+    const store = await openStore(context, "read");
+    try {
+      expect(store.execution?.authorityState).toBe("active");
+      expect(store.db.prepare("select count(*) as count from execution_workflows").get()).toEqual({ count: 0 });
+      expect(store.db.prepare("select count(*) as count from execution_sessions").get()).toEqual({ count: 0 });
+    } finally {
+      store.close();
+    }
 
+    const resolvedIssue = await captureIssue(context, baseInput(), mut("actor-only-resolved"));
+    const resolved = await closeIssue(context, resolvedIssue.issueId, "resolved", {
+      reason: "acceptance verified", references: ["qa/run.md"], alignmentRef: "QA gate: Approve",
+    }, { operationId: "actor-only-close-resolved", actor: "project-manager", expectedRevision: resolvedIssue.revision });
+    expect((await getIssue(context, resolved.issueId)).disposition).toBe("resolved");
+
+    const target = await captureIssue(context, baseInput({ occurrenceKey: "target", rootCauseKey: "target" }), mut("actor-only-target"));
+    const issue = await captureIssue(context, baseInput({ occurrenceKey: "triage", rootCauseKey: "triage" }), mut("actor-only-triage-seed"));
     const triaged = await triageIssue(context, issue.issueId, { severity: "medium", reason: "reclassified" }, {
       operationId: "actor-only-triage", actor: "project-manager", expectedRevision: issue.revision,
     });
     const linked = await linkIssue(context, issue.issueId, { kind: "plan", target: "unregistered-plan-label" }, {
       operationId: "actor-only-link", actor: "project-manager", expectedRevision: triaged.revision,
     });
-    const closed = await closeIssue(context, issue.issueId, "superseded", {
-      reason: "replaced", references: [], canonicalIssueId: canonical.issueId,
+    const superseded = await closeIssue(context, issue.issueId, "superseded", {
+      reason: "replaced", references: [], canonicalIssueId: target.issueId,
     }, { operationId: "actor-only-supersede", actor: "project-manager", expectedRevision: linked.revision });
 
-    expect(closed.revision).toBe(issue.revision + 3);
+    expect(superseded.revision).toBe(issue.revision + 3);
     const detail = await getIssue(context, issue.issueId);
     expect(detail.disposition).toBe("superseded");
     expect(detail.provenance).toContainEqual(expect.objectContaining({ kind: "plan", target: "unregistered-plan-label" }));
@@ -991,22 +815,20 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("multi-plan obligation cannot be resolved from one linked plan alone", async () => {
-    const authority = await liveAuthority("relation-multiplan-", { bindPlans: true });
+    const authority = await liveAuthority("relation-multiplan-");
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-mp"));
-    const sessionA = authority.planSessions[authority.planId]!;
-    const sessionB = authority.planSessions[authority.peerPlanId]!;
     const afterPlan1 = await linkIssue(
       context,
       created.issueId,
       { kind: "plan", target: authority.planId },
-      pmMut(authority, "link-a", { expectedRevision: created.revision, sessionFile: sessionA }),
+      pmMut(authority, "link-a", { expectedRevision: created.revision }),
     );
     const afterPlan2 = await linkIssue(
       context,
       created.issueId,
       { kind: "plan", target: authority.peerPlanId },
-      pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision, sessionFile: sessionB }),
+      pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision }),
     );
     await expect(
       closeIssue(
@@ -1163,9 +985,8 @@ describe("disposition revision relation authorization", () => {
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
     expect((await getIssue(context, created.issueId)).disposition).toBe("open");
 
-    // The QA gate's acceptance (§4's `qa-engineer` authority, supplied as
-    // evidence per §6) is expressible: the envelope-proven seat writes the
-    // closure and the QA acceptance is recorded verbatim in the history.
+    // Acceptance provenance is recorded in the closure evidence; writing it
+    // does not establish or verify an execution-authority session.
     const qaAcceptance = "QA gate: Approve \u2014 .mstar/sdd/20260918-a/review/qa.md";
     await closeIssue(
       context,
