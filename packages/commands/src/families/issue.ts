@@ -30,7 +30,7 @@ import {
 import type { PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
-import { commandEnvelopeSchema } from "../definitions.js";
+import { commandEnvelopeSchema, usageEnvelope } from "../definitions.js";
 
 const inputSchema = z.object({
   id: z.string().optional(),
@@ -66,9 +66,6 @@ const readVerbs: Record<string, true> = { list: true, show: true, export: true }
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
-}
-function usage(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
 }
 function refused(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
@@ -148,15 +145,15 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
     if (input.execution === true) {
       const verb = id.slice("issue.".length);
       if (!["triage", "close", "waive", "duplicate", "supersede", "link"].includes(verb)) {
-        return usage(id, "--execution is supported only for privileged issue mutations");
+        return usageEnvelope(id, "--execution is supported only for privileged issue mutations");
       }
-      if (input.session !== undefined) return usage(id, "pre-activation and active transports are disjoint");
-      if (input.file !== undefined) return usage(id, "--execution and --file transports are disjoint");
+      if (input.session !== undefined) return usageEnvelope(id, "pre-activation and active transports are disjoint");
+      if (input.file !== undefined) return usageEnvelope(id, "--execution and --file transports are disjoint");
       if (invocation.sessionId === undefined || input.workflow === undefined || (input.coordinator === true) === (input.plan !== undefined)) {
-        return usage(id, "active issue mutation requires runtime session identity, workflow, and exactly one of coordinator or plan");
+        return usageEnvelope(id, "active issue mutation requires runtime session identity, workflow, and exactly one of coordinator or plan");
       }
       const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
-      if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+      if (root === null) return usageEnvelope(id, "no control harness resolved; supply an absolute harness");
       setArtifactStore(createFsStore(root));
       const identity: ExecutionIdentity = {
         source: invocation.host === undefined ? "local" : "host",
