@@ -741,6 +741,7 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
+    const storeMeta = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
     const sources: ProjectionSourceDigest[] = [];
     const locations: ProjectionSourceLocation[] = [];
     const diagnostics: SourceDiagnostic[] = [];
@@ -803,7 +804,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     locations.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
     const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
-    const storeMeta = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
     return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: storeMeta.revision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
   } finally {
     handle.close();
