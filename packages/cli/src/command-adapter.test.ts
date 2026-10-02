@@ -46,7 +46,7 @@ test("CLI contract declares session resolution and legacy-route exceptions", () 
   expect(contract).toContain("requires an explicit --session-id and rejects the environment value");
   expect(contract).toContain("Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity");
 });
-test("MCP contract requires caller-supplied session identity per call", () => {
+test("MCP contract retains caller-supplied identity requirement", () => {
   const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.bind");
   expect(definition).toBeDefined();
   const contract = renderCommandContract(definition!, "mcp");

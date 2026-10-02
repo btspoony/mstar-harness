@@ -81,7 +81,7 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "must be supplied by the caller on each MCP call" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "must be supplied by the caller on each MCP call, except `plan bind --resume`, which refuses a declared identity and ignores ambient environment identity" });
     }
   }
   return requirements;
