@@ -55,6 +55,8 @@ A harness has two separate authority records: `store_meta.authority_state` gover
 
 On `active`, writes use the independently acquired caller identity, the addressed scope's full execution token, and an operation id. The session reference names a stored session row; it is not a bearer credential.
 
+For CLI commands, `--session-id` takes precedence over `MSTAR_HOST_SESSION_ID`; the environment value is also an accepted identity input for active-registration commands and plan/assignment binds. Coordinator bootstrap (`plan bind --coordinator`) remains explicit-only: its session identity must come from `--session-id`, not the environment. MCP session identity is supplied per call by the host.
+
 - On `active`, writes use the independently acquired caller identity, the addressed scope's full execution token, and an operation id. The session reference names a stored session row; it is not a bearer credential.
 - The root registration token is read from `mstar status validate`'s `.token`; a workflow token is read from its `.workflows[]` entry there (or an authoritative workflow read); a plan token is read from `mstar plan show` for that plan. These are distinct token kinds (`root`, `workflow`, `plan`) and cannot be substituted for one another (`execution.token-kind`).
 - A session reference is produced by the active bind or recovery verb, encoded as `exec-session-v1:` plus base64url canonical JSON containing `storeId`, `epoch`, `workflowId`, `role`, `sessionId`, and `planId`.

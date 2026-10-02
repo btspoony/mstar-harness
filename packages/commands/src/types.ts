@@ -76,6 +76,7 @@ export interface InvocationContext {
   readonly controlRoot: string | null;
   readonly host?: string;
   readonly sessionId?: string;
+  readonly sessionIdSource?: "flag" | "env";
   readonly versions: SurfaceVersions;
   readonly signal: AbortSignal;
   readonly effects: CommandEffects;

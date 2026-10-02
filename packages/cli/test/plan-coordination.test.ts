@@ -21,6 +21,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { encodeExecutionSessionRef, serializeExecutionValue } from "@mstar-harness/engine";
+import { executeCommand } from "@mstar-harness/commands";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -525,6 +526,39 @@ describe("mstar plan — session identity", () => {
     expect(readJson(String(planPayload.session_file)).session_id).toBe("host-session-plan-a");
   });
 
+
+  test("environment identity satisfies the plan-session bind identity gate", () => {
+    const fixture = makeFixture();
+    const coordinator = bindCoordinator(fixture);
+    preparePlan(fixture, coordinator, PLAN_ID);
+    const bound = runCli(
+      ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--json"],
+      fixture.root,
+      { MSTAR_HOST_SESSION_ID: "host-session-env-plan" },
+    );
+    expect(bound.exitCode).toBe(0);
+    expect(jsonOf(bound).session_id).toBe("host-session-env-plan");
+  });
+
+  test("host-supplied coordinator identity without CLI source attribution is accepted", async () => {
+    const fixture = makeFixture();
+    const result = await executeCommand(
+      "plan.bind",
+      { coordinator: true, workflow: WORKFLOW_ID, harness: fixture.harness },
+      {
+        cwd: fixture.root,
+        controlRoot: null,
+        sessionId: "host-session-mcp",
+        versions: { engine: null, cli: "test", plugin: null, host: null, platform: "test" },
+        signal: new AbortController().signal,
+        effects: {},
+      },
+    );
+    expect(result.status).toBe("ok");
+    expect(readJson(fixture.snapshotPath).coordination).toMatchObject({
+      coordinator: { session_id: "host-session-mcp" },
+    });
+  });
   test("--session-id reaches the pinned-Assignment address form too", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);

@@ -112,6 +112,9 @@ function cliOptionFlags(definition: CommandDefinition, option: CommandDefinition
 export function renderCommandContract(definition: CommandDefinition, route: "cli" | "mcp"): string {
   const descriptor = getCommandSchemas([definition])[0]!;
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
+  if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
+    lines.push("Session identity: --session-id takes precedence over MSTAR_HOST_SESSION_ID; otherwise it is unset. Coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and does not accept the environment value.");
+  }
   if (route === "mcp") {
     // The CLI route prints this same syntax as commander's Usage line, built
     // from the same `cli` table; MCP descriptions carry it explicitly.
@@ -283,6 +286,14 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
   return input;
 }
 
+export function resolveCliSessionIdentity(sessionId: unknown): Pick<InvocationContext, "sessionId" | "sessionIdSource"> {
+  if (typeof sessionId === "string") return { sessionId, sessionIdSource: "flag" };
+  const environmentSessionId = process.env.MSTAR_HOST_SESSION_ID;
+  return typeof environmentSessionId === "string"
+    ? { sessionId: environmentSessionId, sessionIdSource: "env" }
+    : {};
+}
+
 function ensureCommand(program: Command, pathParts: readonly string[]): Command {
   let current = program;
   for (const part of pathParts) {
@@ -409,10 +420,12 @@ export function registerCliCommands(
           return;
         }
         const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
-        const sessionId = sessionOption === undefined ? undefined : collected[sessionOption.key];
+        const sessionIdentity = resolveCliSessionIdentity(
+          sessionOption === undefined ? undefined : collected[sessionOption.key],
+        );
         const envelope = await executeCommand(definition.id, input ?? payload.input, {
           ...baseContext,
-          ...(typeof sessionId === "string" ? { sessionId } : {}),
+          ...sessionIdentity,
           signal: controller.signal,
           effects: cliEffects(services),
         });
