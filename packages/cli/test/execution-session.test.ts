@@ -787,20 +787,23 @@ describe("mstar status validate — disclosed authority state", () => {
     expect(activeData.token).toBe((await tokensOf(active)).root);
     expect((activeData.workflows as Array<{ token: string }>)[0]?.token).toBe((await tokensOf(active)).workflow);
   });
-  test("reports an actionable self-check when the authority store is unreadable", async () => {
+  test("refuses an unreadable authority store with its typed cause and actionable self-check", async () => {
     const fixture = await legacyFixture("mstar-session-unreadable-state");
     rmSync(join(fixture.harnessDir, "store.db"));
     mkdirSync(join(fixture.harnessDir, "store.db"));
     const result = runCli(["status", "validate"], fixture);
-    expect(result.exitCode).toBe(0);
-    expect(dataOf(result)).toMatchObject({
-      state: "unreadable",
+    const envelope = jsonOf(result);
+    expect(result.exitCode).toBe(1);
+    expect(envelope.status).toBe("refused");
+    expect(envelope.code).toBe("store.corrupt");
+    expect(envelope.message).toContain("Self-check recovery:");
+    expect(envelope.message).toContain("not a readable regular store file");
+    expect(envelope.details).toMatchObject({
       selfCheck: {
-        couldNotRead: expect.any(String),
-        recovery: expect.any(String),
+        couldNotRead: expect.stringContaining("not a readable regular store file"),
+        recovery: expect.stringContaining("Preserve the corrupt database and legacy sources"),
       },
     });
-    expect((dataOf(result).selfCheck as { recovery: string }).recovery).toContain("retry status validate");
   });
 });
 

@@ -58,6 +58,15 @@ function engineCode(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+function authorityRecoveryHint(code: string): string {
+  if (code === "store.busy") return "Wait for the competing store writer to finish, then retry `status validate`.";
+  if (code === "store.corrupt") return "Preserve the corrupt database and legacy sources; restore through a supported recovery process or provide the full refusal to the store recovery owner. An unreadable live store cannot be recovered by online restore-preview.";
+  if (code === "store.runtime-unsupported") return "Run with a supported Bun or Node runtime with native SQLite support, then retry `status validate`.";
+  if (code === "store.schema-unsupported") return "Use a harness build that supports this store schema, then retry `status validate`.";
+  if (code === "store.schema-drift") return "Use the harness build that owns the applied schema and retry `status validate`.";
+  if (code === "execution.not-active") return "Complete the supported `store safe-upgrade` workflow, then retry `status validate`.";
+  return "Restore the store file, schema, or runtime capability indicated by the cause, then retry `status validate`.";
+}
 
 /**
  * The typed details a refusal carries (`error.details`: the field facts and the
@@ -108,12 +117,16 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 return ok("status.validate", { authority: read.data, token: read.token, workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [], state: "active" });
               }
             } catch (error) {
-              return ok("status.validate", {
-                state: "unreadable",
-                selfCheck: {
-                  couldNotRead: messageOf(error),
-                  recovery: "Make the reported store readable (restore its file, schema, or runtime capability as applicable), then retry status validate.",
-                },
+              const code = engineCode(error, "status.authority-unreadable");
+              const cause = messageOf(error);
+              const recovery = authorityRecoveryHint(code);
+              const originalDetails =
+                error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
+                  ? error.details
+                  : {};
+              return refused("status.validate", code, `${cause} Self-check recovery: ${recovery}`, {
+                ...originalDetails,
+                selfCheck: { couldNotRead: cause, recovery },
               });
             }
             target = path.join(harnessDir, "status.json");
