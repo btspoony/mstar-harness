@@ -776,6 +776,22 @@ describe("mstar status validate — disclosed authority state", () => {
         },
       },
     });
+    const empty = await legacyFixture("mstar-session-empty-harness");
+    rmSync(join(empty.harnessDir, "status.json"));
+    rmSync(join(empty.harnessDir, "store.db"));
+    const emptyResult = runCli(["status", "validate"], empty);
+    expect(emptyResult.exitCode).toBe(1);
+    expect(jsonOf(emptyResult)).toMatchObject({
+      code: "status.file-not-found",
+      details: {
+        state: "legacy",
+        upgrade: { entry: "mstar harness scaffold" },
+        selfCheck: { recovery: expect.stringContaining("run mstar harness scaffold") },
+      },
+    });
+    const scaffoldResult = runCli(["harness", "scaffold"], empty);
+    expect(scaffoldResult.exitCode).toBe(0);
+    expect(jsonOf(scaffoldResult).code).toBe("harness.scaffold.ok");
 
     const active = await activeFixture("mstar-session-active-state");
     const initial = await readExecutionAuthority(active.context);
@@ -799,6 +815,7 @@ describe("mstar status validate — disclosed authority state", () => {
     expect(envelope.message).toContain("Self-check recovery:");
     expect(envelope.message).toContain("not a readable regular store file");
     expect(envelope.details).toMatchObject({
+      state: "unreadable",
       selfCheck: {
         couldNotRead: expect.stringContaining("not a readable regular store file"),
         recovery: expect.stringContaining("Preserve the corrupt database and legacy sources"),

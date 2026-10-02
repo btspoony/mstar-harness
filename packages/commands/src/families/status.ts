@@ -107,9 +107,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         try {
           const defaultTarget = parsed.data.path === undefined;
           let target = parsed.data.path;
+          let legacyUpgradeEntry = "mstar store safe-upgrade";
           if (defaultTarget) {
             const harnessDir = executionHarness(context);
             if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
+            const hasIssueStore = existsSync(path.join(harnessDir, "store.db"));
+            legacyUpgradeEntry = hasIssueStore ? "mstar store safe-upgrade" : "mstar harness scaffold";
             try {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {
@@ -126,6 +129,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                   : {};
               return refused("status.validate", code, `${cause} Self-check recovery: ${recovery}`, {
                 ...originalDetails,
+                state: "unreadable",
                 selfCheck: { couldNotRead: cause, recovery },
               });
             }
@@ -141,8 +145,13 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
               return refused("status.validate", "status.file-not-found", `status file not found: ${target}`, {
                 path: target,
                 state: "legacy",
-                upgrade: { entry: "mstar store safe-upgrade" },
-                selfCheck: { couldNotRead: "legacy status register is missing", recovery: "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs." },
+                upgrade: { entry: legacyUpgradeEntry },
+                selfCheck: {
+                  couldNotRead: "legacy status register is missing",
+                  recovery: legacyUpgradeEntry === "mstar harness scaffold"
+                    ? "No issue store exists; run mstar harness scaffold to initialize this empty harness before proceeding."
+                    : "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs.",
+                },
               });
             }
             return refused("status.validate", "status.file-not-found", `status file not found: ${target}`);
@@ -153,7 +162,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           }
           const gate = validateStatusV2(target);
           const data = defaultTarget
-            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: { entry: "mstar store safe-upgrade" } }
+            ? { path: target, violations: gate.ok ? [] : gate.violations, state: "legacy", upgrade: { entry: legacyUpgradeEntry } }
             : { path: target, violations: gate.ok ? [] : gate.violations };
           return gate.ok
             ? ok("status.validate", data)
