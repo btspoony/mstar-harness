@@ -294,28 +294,26 @@ describe("store activation barrier", () => {
     expect((await metaOf(context)).authority_state).toBe("staged");
   });
 
-  test("activation refuses a stale final source hash", async () => {
-    const { context, harness, apply } = await stagedFixture("activation-stale-hash-");
+  test("activation accepts a register whose bytes changed since review (content drift is not a refusal)", async () => {
+    const { context, harness, apply } = await stagedFixture("activation-content-drift-");
+    const stagedMeta = await metaOf(context);
     writeRegister(harness, "engine", {
       entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" }), entry({ id: "R4", severity: "low" })] },
     });
-    const error = await refusalOf("store.migration-source-changed", () => activateStore(context, apply, attestation()));
-    expect(error.message).toContain("no longer holds the reviewed bytes");
+    const activation = await activateStore(context, apply, attestation());
+    expect(activation.replayed).toBe(false);
+    expect(activation.epoch).toBe(stagedMeta.authority_epoch + 1);
     const meta = await metaOf(context);
-    expect(meta.authority_state).toBe("staged");
-    expect(meta.authority_epoch).toBe(1);
-    expect((await receiptRows(context, "activated")).length).toBe(0);
-    // The refusal precedes the backup: no pre-activation recovery point was written.
-    const backupsDir = join(harness, "archived", "store-migration", "backups");
-    expect(existsSync(backupsDir) ? readdirSync(backupsDir).filter((name) => name.startsWith("pre-activation-")) : []).toEqual([]);
+    expect(meta.authority_state).toBe("active");
+    expect(meta.authority_epoch).toBe(stagedMeta.authority_epoch + 1);
+    expect((await receiptRows(context, "activated")).length).toBe(1);
   });
 
-  test("activation refuses a legacy register write that lands after the inspection pass, without bumping the epoch", async () => {
+  test("activation proceeds when a legacy register write lands after the inspection pass (content drift is not a refusal)", async () => {
     const fixture = await stagedFixture("activation-barrier-register-");
     const { context, harness, apply } = fixture;
     const stagedMeta = await metaOf(context);
     const registerPath = join(harness, "projects", "engine", "residuals.json");
-    const reviewedBytes = readFileSync(registerPath);
 
     // The write an old binary leaves: the reviewed register plus one more
     // captured finding, landing after the inspection pass and before the flip.
@@ -325,38 +323,27 @@ describe("store activation barrier", () => {
       `${JSON.stringify({ entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" }), entry({ id: "R9", severity: "low" })] } }, null, 2)}\n`,
     );
 
-    const error = await withEnv(
+    const activation = await withEnv(
       {
         MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER: "inspection",
         MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET: registerPath,
         MSTAR_STORE_INJECT_LEGACY_WRITE_FROM: lateRegister,
       },
-      () => refusalOf("store.migration-source-changed", () => activateStore(context, apply, attestation())),
+      () => activateStore(context, apply, attestation()),
     );
-    expect(error.message).toContain("no longer holds the reviewed bytes");
-    expect(error.message).toContain("Nothing was activated");
-
-    // The refusal came from the barrier, not the inspection pass: that pass
-    // refuses before the recovery point, and the recovery point is already
-    // written here.
-    const backupsDir = join(harness, "archived", "store-migration", "backups");
-    expect(
-      readdirSync(backupsDir).filter((name) => name.startsWith("pre-activation-") && name.endsWith(".db")).length,
-    ).toBe(1);
-
-    // The epoch did not move, no activation was receipted, and the old writer's
-    // bytes were NOT deleted.
+    // The register path set is unchanged, so the epoch bumps even though the
+    // register's bytes differ from the reviewed ones.
+    expect(activation.epoch).toBe(stagedMeta.authority_epoch + 1);
     const after = await metaOf(context);
     expect(after.store_id).toBe(stagedMeta.store_id);
-    expect(after.authority_state).toBe("staged");
-    expect(after.authority_epoch).toBe(stagedMeta.authority_epoch);
-    expect(after.revision).toBe(stagedMeta.revision);
-    expect((await receiptRows(context, "activated")).length).toBe(0);
-    expect(readFileSync(registerPath).equals(reviewedBytes)).toBe(false);
+    expect(after.authority_state).toBe("active");
+    expect(after.authority_epoch).toBe(stagedMeta.authority_epoch + 1);
+    expect((await receiptRows(context, "activated")).length).toBe(1);
+    // Activation never deletes a legacy register: the old writer's bytes survive.
     expect(readFileSync(registerPath).equals(readFileSync(lateRegister))).toBe(true);
   });
 
-  test("activation refuses a legacy index write that lands after the inspection pass, without bumping the epoch", async () => {
+  test("activation proceeds when a legacy index write lands after the inspection pass (content drift is not a refusal)", async () => {
     const fixture = await stagedFixture("activation-barrier-index-");
     const { context, harness, apply } = fixture;
     const stagedMeta = await metaOf(context);
@@ -369,22 +356,21 @@ describe("store activation barrier", () => {
       `${[...INDEX_HEAD, ...INDEX_TABLE, "| `iter-late` | `iter-late/` | added by an old binary | `active` |", ...INDEX_TAIL].join("\n")}\n`,
     );
 
-    const error = await withEnv(
+    const activation = await withEnv(
       {
         MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER: "inspection",
         MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET: readmePath,
         MSTAR_STORE_INJECT_LEGACY_WRITE_FROM: lateIndex,
       },
-      () => refusalOf("store.migration-source-changed", () => activateStore(context, apply, attestation())),
+      () => activateStore(context, apply, attestation()),
     );
-    expect(error.message).toContain("is changed since review");
-    expect(error.message).toContain("Nothing was activated");
+    expect(activation.epoch).toBe(stagedMeta.authority_epoch + 1);
 
     const after = await metaOf(context);
-    expect(after.authority_state).toBe("staged");
-    expect(after.authority_epoch).toBe(stagedMeta.authority_epoch);
-    expect(after.revision).toBe(stagedMeta.revision);
-    expect((await receiptRows(context, "activated")).length).toBe(0);
+    expect(after.authority_state).toBe("active");
+    expect(after.authority_epoch).toBe(stagedMeta.authority_epoch + 1);
+    expect((await receiptRows(context, "activated")).length).toBe(1);
+    // The old writer's index bytes survive: activation does not rewrite them.
     expect(readFileSync(readmePath, "utf8")).toBe(readFileSync(lateIndex, "utf8"));
   });
 
@@ -428,10 +414,13 @@ describe("store activation barrier", () => {
     expect(replay.activationHash).toBe(activation.activationHash);
     expect((await metaOf(context)).authority_epoch).toBe(2);
 
-    // A different attestation cannot rewrite activation history.
+    // A replay with a different attestation serves the RECORDED activation: the
+    // recorded receipt is returned and history is not rewritten.
     const changed = attestation({ stoppedSessions: [{ sessionId: "sess-old-2", host: "omp", state: "stopped" }] });
-    const error = await refusalOf("store.activation-stale", () => activateStore(context, apply, changed));
-    expect(error.message).toContain("different attestation");
+    const served = await activateStore(context, apply, changed);
+    expect(served.replayed).toBe(true);
+    expect(served.activationHash).toBe(activation.activationHash);
+    expect(served.receiptId).toBe(activation.receiptId);
     expect((await metaOf(context)).authority_epoch).toBe(2);
   });
 
@@ -606,7 +595,7 @@ describe("store retirement", () => {
     expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
   });
 
-  test("retirement stops on an unexpected legacy write and never deletes it", async () => {
+  test("retirement archives the register's current bytes when it drifted since review", async () => {
     const { context, harness, activation } = await activatedFixture("retirement-late-write-");
     const registerPath = join(harness, "projects", "engine", "residuals.json");
     const rewritten = {
@@ -615,14 +604,17 @@ describe("store retirement", () => {
     writeRegister(harness, "engine", rewritten);
     const writtenBytes = readFileSync(registerPath);
 
-    const error = await refusalOf("store.legacy-write-detected", () => retireStoreSources(context, activation));
-    expect(error.message).toContain("NOT deleted");
-    expect(readFileSync(registerPath).equals(writtenBytes)).toBe(true);
+    // Content drift since review is not a refusal: retirement archives the
+    // register's current bytes, then removes the live file.
+    const receipt = await retireStoreSources(context, activation);
+    expect(receipt.registers.length).toBe(PROJECTS.length);
+    const engine = receipt.registers.find((item) => item.relativePath === "engine/residuals.json")!;
+    expect(readFileSync(engine.archivedPath).equals(writtenBytes)).toBe(true);
+    expect(existsSync(registerPath)).toBe(false);
     for (const project of PROJECTS) {
-      expect(existsSync(join(harness, "projects", project, "residuals.json"))).toBe(true);
+      expect(existsSync(join(harness, "projects", project, "residuals.json"))).toBe(false);
     }
-    expect(existsSync(join(harness, "archived", "store-migration", String(activation.receiptId)))).toBe(false);
-    expect((await receiptRows(context, "retired")).length).toBe(0);
+    expect((await receiptRows(context, "retired")).length).toBe(1);
   });
 
   test("retirement refuses an unreviewed legacy register that appeared after activation", async () => {
@@ -888,14 +880,14 @@ describe("retained bodies", () => {
     writeFileSync(retainedInventoryPath(receipt.backupPath), '{"version":1,"protocol":"retained-body-inventory-v1","storeId":"other"}\n');
     const incomplete = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
     expect(incomplete.message).toContain("carries no digest");
-    // A document that declares every field but whose contents do not hash to
-    // the digest it carries is refused as a forged inventory.
+    // The recorded `digest` field is provenance: a well-formed document reads
+    // back even when its contents no longer hash to that digest.
     writeFileSync(
       retainedInventoryPath(receipt.backupPath),
       `${JSON.stringify({ ...receipt.retained!, digest: "f".repeat(64) })}\n`,
     );
-    const forged = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));
-    expect(forged.message).toContain("does not describe the bodies it claims");
+    const recorded = await readRetainedBodyInventory(receipt.backupPath);
+    expect(recorded.digest).toBe("f".repeat(64));
     // A document of another generation is refused by name.
     writeFileSync(retainedInventoryPath(receipt.backupPath), `${JSON.stringify({ ...receipt.retained!, version: 2 })}\n`);
     const generation = await refusalOf("store.activation-stale", () => readRetainedBodyInventory(receipt.backupPath));

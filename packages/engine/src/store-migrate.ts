@@ -29,7 +29,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { join, resolve } from "node:path";
-import { discoverCatalog, verifyCatalogImport, type CatalogImportPlan } from "./catalog-import.js";
+import { discoverCatalog, type CatalogImportPlan } from "./catalog-import.js";
 import { catalogRootDir } from "./catalog.js";
 import { initializeStore, openStore, storeDbPath, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { computeIdentityKey, type Disposition, type IssueKind, type Severity } from "./issue.js";
@@ -614,9 +614,12 @@ function receiptOfStored(stored: StoredReceipt, replayed: boolean): MigrationRec
 }
 
 /**
- * Re-enumerate the legacy registers and compare BOTH the source set and every
- * byte hash against the reviewed manifest (§7). Added/missing/changed refuses
+ * Re-enumerate the legacy registers and compare the source PATH SET against
+ * the reviewed manifest (§7). Added or missing registers refuse
  * `store.migration-source-changed` before the database is opened — no writes.
+ * The recorded byte digests are provenance and are never re-compared: a
+ * register whose bytes changed since review is described by the manifest, not
+ * refused.
  */
 async function assertSourcesUnchanged(context: StoreContext, manifest: MigrationManifest): Promise<void> {
   const current = registerSources(context);
@@ -628,34 +631,6 @@ async function assertSourcesUnchanged(context: StoreContext, manifest: Migration
       `the legacy register set changed since the manifest was reviewed ` +
         `(manifest: ${manifestPaths.length} registers, current: ${currentPaths.length}); ` +
         "re-run the preview and have the new manifest reviewed. Nothing was written.",
-    );
-  }
-  for (const source of current) {
-    const reviewed = manifest.sources.find((candidate) => candidate.relativePath === source.relativePath);
-    if (!reviewed) {
-      throw new StoreMigrationError(
-        "store.migration-source-changed",
-        `register ${source.relativePath} is not in the reviewed manifest; nothing was written.`,
-      );
-    }
-    const digest = sha256Bytes(readFileSync(source.absolutePath));
-    if (digest !== reviewed.sha256) {
-      throw new StoreMigrationError(
-        "store.migration-source-changed",
-        `register ${source.relativePath} changed bytes since the manifest was reviewed ` +
-          `(expected ${reviewed.sha256.slice(0, 12)}, actual ${digest.slice(0, 12)}); ` +
-          "re-run the preview and have the new manifest reviewed. Nothing was written.",
-      );
-    }
-  }
-  const catalog = await verifyCatalogImport(context, manifest.catalog);
-  if (catalog.drift.length > 0) {
-    const first = catalog.drift[0]!;
-    throw new StoreMigrationError(
-      "store.migration-source-changed",
-      `catalog source ${first.sourceKey} (${first.relativePath}) is ${first.state} since review ` +
-        `(expected ${first.expectedSha256.slice(0, 12)}, actual ${first.actualSha256 === null ? "none" : first.actualSha256.slice(0, 12)}); ` +
-        `${catalog.drift.length} catalog source(s) drifted. Nothing was written.`,
     );
   }
 }

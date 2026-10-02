@@ -410,11 +410,13 @@ describe("store-migrate apply", () => {
     void harness;
   });
 
-  test("apply refuses source set and byte drift with no writes", async () => {
+  test("apply accepts register byte drift but still refuses a changed source set", async () => {
     const { context, harness, manifest } = await createStagedApplyFixture("drift-");
     const before = registerBytes(harness, "_default");
 
-    // Byte drift: one register changes after review.
+    // Byte drift: one register changes after review. Content drift is not a
+    // refusal (A3) — the reviewed manifest is applied and the changed bytes are
+    // simply the current source.
     writeRegister(harness, "_default", {
       entries: {
         "plan-alpha": [
@@ -424,15 +426,13 @@ describe("store-migrate apply", () => {
         ],
       },
     });
-    try {
-      await applyStoreMigration(context, manifest);
-      throw new Error("expected byte drift to refuse the apply");
-    } catch (error) {
-      expect(error).toBeInstanceOf(MigrationError);
-      expect((error as MigrationError).code).toBe("store.migration-source-changed");
-    }
-    // Source-set drift: a NEW register appears after review; the stale
-    // manifest no longer matches the source set.
+    const receipt = await applyStoreMigration(context, manifest);
+    expect(receipt.phase).toBe("applied");
+    expect(receipt.issueIds.length).toBe(3);
+    expect(readFileSync(join(harness, "projects", "_default", "residuals.json")).equals(before)).toBe(false);
+
+    // Source-set drift: a NEW register appears after review; the stale manifest
+    // no longer matches the source set, and it refuses with no further writes.
     writeRegister(harness, "omp-integration", { entries: { "plan-beta": [entry({ id: "R9" })] } });
     try {
       await applyStoreMigration(context, manifest);
@@ -441,10 +441,17 @@ describe("store-migrate apply", () => {
       expect(error).toBeInstanceOf(MigrationError);
       expect((error as MigrationError).code).toBe("store.migration-source-changed");
     }
+  });
 
-    // Nothing was written: no database file exists after either refusal.
-    expect(dbFilesUnder(harness)).toEqual([]);
-    expect(readFileSync(join(harness, "projects", "_default", "residuals.json")).equals(before)).toBe(false);
+  test("apply accepts the reviewed register path set regardless of enumeration order (reversed)", async () => {
+    const { context, harness, manifest } = await createStagedApplyFixture("reversed-");
+    // The reviewed register path set is compared by sorted keys, so re-writing
+    // every reviewed register (in reverse project order) is not drift.
+    for (const project of manifest.sources.map((source) => source.project).reverse()) {
+      writeRegister(harness, project, { entries: { "plan-alpha": [entry({ id: "R1", severity: "medium" })] } });
+    }
+    const receipt = await applyStoreMigration(context, manifest);
+    expect(receipt.phase).toBe("applied");
   });
 
   test("apply refuses an unresolved manifest and a live active store", async () => {

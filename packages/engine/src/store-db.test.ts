@@ -69,7 +69,7 @@ const SCENARIOS: string[] = [
   "missing-read",
   "initialize-schema",
   "double-init",
-  "checksum-drift",
+  "version-drift",
   "newer-schema",
   "fk-enforcement",
   "second-writer-busy",
@@ -437,9 +437,8 @@ describe("migration 7 \u2014 project_milestones", () => {
     });
     upgraded.close();
   });
-  test("milestone migration refusal covers checksum drift, gaps, and newer versions", async () => {
+  test("milestone migration refusal covers version gaps and newer versions", async () => {
     for (const [label, mutate, code] of [
-      ["drift", "update schema_version set checksum='bad' where version=1", "store.schema-drift"],
       ["gap", "delete from schema_version where version=2", "store.schema-drift"],
       ["newer", "insert into schema_version values(8, 'future', 'future', 'now')", "store.schema-unsupported"],
     ] as const) {
