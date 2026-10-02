@@ -17,7 +17,8 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/index.js && bun build scripts/shadow.ts --target node --outfile dist/shadow.js && bunx tsc"
+    "build": "rm -rf dist && bun build src/index.ts --target node --outfile dist/index.js && bun build scripts/shadow.ts --target node --outfile dist/shadow.js && bunx tsc",
+    "test": "bun test"
   },
   "devDependencies": {
     "@mstar-harness/engine": "workspace:*",

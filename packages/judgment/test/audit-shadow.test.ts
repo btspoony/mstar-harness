@@ -78,7 +78,8 @@ describe("deterministic shadow candidate and synthesis pack adapter", () => {
     expect(pack.state.subjects.map(({ text }) => text)).toEqual(["Finding left\nLiteral left claim", "Finding right\nLiteral right claim"]);
     expect(pack.tasks).toHaveLength(1);
     expect(pack.tasks[0].workUnit).toEqual(unit);
-    expect(validatePack(pack)).toBe(pack);
+    // validatePack returns a normalized derived copy, not the same reference.
+    expect(validatePack(pack)).toEqual(pack);
     expect(canonicalJsonBytes(findings)).toEqual(originalFindings);
   });
 
@@ -100,7 +101,8 @@ describe("deterministic shadow candidate and synthesis pack adapter", () => {
       ["finding_left", "finding_right"],
       ["finding_left", "finding_right"],
     ]);
-    expect(validatePack(pack)).toBe(pack);
+    // validatePack returns a normalized derived copy, not the same reference.
+    expect(validatePack(pack)).toEqual(pack);
   });
 
   test("pack identity changes when scope or explicit source closure changes", () => {
