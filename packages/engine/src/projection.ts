@@ -144,15 +144,18 @@ export type ProjectionRows = {
   leases: ProjectedLease[];
   compasses: ProjectedCompass[];
 };
-
-/** Resolved location of one captured source (internal re-verification handle). */
-export type ProjectionSourceLocation = {
-  sourceKey: string;
-  relativePath: string;
-  absolutePath: string;
-  sha256: string | null;
-  state: ProjectionSourceState;
-};
+/** Resolved file or database row used to re-verify one captured source. */
+export type ProjectionSourceLocation =
+  | { source: "file"; sourceKey: string; relativePath: string; absolutePath: string; sha256: string | null; state: ProjectionSourceState }
+  | {
+      source: "database";
+      sourceKey: string;
+      relativePath: string;
+      sha256: string | null;
+      state: ProjectionSourceState;
+      table: "execution_workflows" | "execution_plans" | "execution_leases" | "execution_integration_leases" | "execution_registry";
+      keys: Record<string, string>;
+    };
 
 /**
  * A validated read of the whole source set, taken outside any transaction.
@@ -216,14 +219,16 @@ export class ProjectionError extends Error {
 // Source discovery and reads
 // ---------------------------------------------------------------------------
 
-type SourceSpec = {
-  sourceKey: string;
-  kind: ProjectionSourceKind;
-  rootKind: CatalogRootKind;
-  relativePath: string;
-  absolutePath: string;
-  declared: boolean;
-};
+type ProjectionSourceTable =
+  | "execution_workflows"
+  | "execution_plans"
+  | "execution_leases"
+  | "execution_integration_leases"
+  | "execution_registry";
+
+type SourceSpec =
+  | { source: "file"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; absolutePath: string; declared: boolean }
+  | { source: "database"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; declared: boolean; table: ProjectionSourceTable; keys: Record<string, string> };
 
 type SourceRead = { state: ProjectionSourceState; sha256: string | null; content: string | null; diagnostic: string | null };
 
@@ -262,7 +267,42 @@ function churnAfterRead(spec: { relativePath: string; absolutePath: string }): v
  * used: the digest of the raw bytes is the only correctness token, so a
  * same-size/same-mtime rewrite is visible here.
  */
-function readSource(spec: { relativePath: string; absolutePath: string }): SourceRead {
+function readSource(spec: SourceSpec | ProjectionSourceLocation, db?: StoreDb): SourceRead {
+  if (spec.source === "database") {
+    if (db === undefined) {
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: `inaccessible: execution row read refused at ${spec.relativePath}` };
+    }
+    try {
+      if (spec.table === "execution_registry") {
+        const entries = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id asc").all();
+        const content = JSON.stringify(entries);
+        return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+      }
+      const predicates = Object.keys(spec.keys);
+      const row = db
+        .prepare(`select * from ${spec.table} where ${predicates.map((key) => `${key} = ?`).join(" and ")}`)
+        .get(...predicates.map((key) => spec.keys[key])) as Record<string, unknown> | undefined;
+      if (row === undefined) {
+        return { state: "missing", sha256: null, content: null, diagnostic: `missing: no row at ${spec.relativePath}` };
+      }
+      const columns =
+        spec.table === "execution_plans"
+          ? [row.state_json, row.coordination_json]
+          : [spec.table === "execution_workflows" ? row.state_json : row.lease_json];
+      if (columns.some((value) => typeof value !== "string")) {
+        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+      }
+      try {
+        for (const column of columns as string[]) JSON.parse(column);
+      } catch {
+        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+      }
+      const content = columns.join("\u0000");
+      return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+    } catch {
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: `inaccessible: execution row read refused at ${spec.relativePath}` };
+    }
+  }
   let content: string;
   try {
     content = readFileSync(spec.absolutePath, "utf8");
@@ -673,13 +713,11 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
       diagnostic,
       declared: spec.declared,
     });
-    locations.push({
-      sourceKey: spec.sourceKey,
-      relativePath: spec.relativePath,
-      absolutePath: spec.absolutePath,
-      sha256: read.sha256,
-      state,
-    });
+    locations.push(
+      spec.source === "file"
+        ? { source: "file", sourceKey: spec.sourceKey, relativePath: spec.relativePath, absolutePath: spec.absolutePath, sha256: read.sha256, state }
+        : { source: "database", sourceKey: spec.sourceKey, relativePath: spec.relativePath, sha256: read.sha256, state, table: spec.table, keys: spec.keys },
+    );
     if (options.tolerate === true) return;
     if (state === "ok" && diagnostic === null) return;
     diagnostics.push({
@@ -693,6 +731,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
 
   // --- root execution source ------------------------------------------------
   const rootSpec: SourceSpec = {
+    source: "file",
     sourceKey: sourceKeyOf("root", "harness", PROJECTION_ROOT_FILE),
     kind: "root",
     rootKind: "harness",
@@ -719,6 +758,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
   const workflowSpecs: SourceSpec[] = declaredEntries.map((entry) => {
     const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
     return {
+      source: "file",
       sourceKey: sourceKeyOf("workflow", "harness", relativePath),
       kind: "workflow",
       rootKind: "harness",
@@ -732,6 +772,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
     const root = catalogRootDir(context, binding.rootKind);
     const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
     workflowSpecs.push({
+      source: "file",
       sourceKey: sourceKeyOf("workflow", binding.rootKind, relativePath),
       kind: "workflow",
       rootKind: binding.rootKind,
@@ -767,6 +808,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
   // --- catalog-linked compass documents ------------------------------------
   for (const doc of inputs.compassDocs) {
     const spec: SourceSpec = {
+      source: "file",
       sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath),
       kind: "compass",
       rootKind: doc.rootKind,
@@ -779,7 +821,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
       record(spec, read, read.state, read.diagnostic);
       continue;
     }
-    const derived = deriveCompass(doc.iterationId, read.content, spec.absolutePath);
+    const derived = deriveCompass(doc.iterationId, read.content, doc.relativePath);
     if ("diagnostic" in derived) {
       record(spec, read, "invalid", derived.diagnostic);
       continue;
@@ -854,11 +896,24 @@ const PROJECTION_TABLES: readonly string[] = [
  * inside the publication transaction), so re-reading the captured locations
  * plus that revision comparison covers the whole source set.
  */
-function verifyCaptureStable(capture: ProjectionCapture): string[] {
+async function verifyCaptureStable(context: StoreContext, capture: ProjectionCapture): Promise<string[]> {
   const mismatched: string[] = [];
-  for (const location of capture.locations) {
-    const observed = readSource(location);
-    if (observed.state !== location.state || observed.sha256 !== location.sha256) mismatched.push(location.sourceKey);
+  const databaseLocations = capture.locations.filter((location) => location.source === "database");
+  let handle: StoreHandle | undefined;
+  if (databaseLocations.length > 0) {
+    try {
+      handle = await openStore(context, "read");
+    } catch {
+      return databaseLocations.map((location) => location.sourceKey).sort();
+    }
+  }
+  try {
+    for (const location of capture.locations) {
+      const observed = readSource(location, handle?.db);
+      if (observed.state !== location.state || observed.sha256 !== location.sha256) mismatched.push(location.sourceKey);
+    }
+  } finally {
+    handle?.close();
   }
   return mismatched.sort();
 }
@@ -1171,7 +1226,7 @@ function assertCaptureShape(capture: ProjectionCapture): void {
 }
 
 async function attemptPublication(context: StoreContext, capture: ProjectionCapture, attempts: number): Promise<PublishAttempt> {
-  const mismatched = verifyCaptureStable(capture);
+  const mismatched = await verifyCaptureStable(context, capture);
   if (mismatched.length > 0) return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
 
   const handle = await openStore(context, "write");
