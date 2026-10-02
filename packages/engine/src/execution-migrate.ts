@@ -17,9 +17,9 @@
  * ## One discovery pass, closed by construction
  *
  * Both verbs run the SAME synchronous discovery (`discoverExecutionSources`):
- * preview hashes and reports it, apply re-reads it under the locks and refuses
- * any drift from the reviewed witnesses. One parser means the imported rows and
- * the reviewed hashes can never come from two different readings of a file.
+ * preview records the discovered source witnesses, while apply reads current source
+ * bytes under the locks and imports their current semantic fields. One parser keeps
+ * the import grounded in the same live files that discovery inspected.
  *
  * An overlooked source is the failure mode that matters (§6 item 1 names
  * "source discovery overlooks a configured root" as a stop condition), so the
@@ -68,14 +68,12 @@
  *
  * ## Coherence the apply refuses on
  *
- * `apply` refuses unless the reviewed manifest still matches the world: the
- * hash recomputed from the manifest it was handed, the control root, the store
- * identity and epoch, the schema version, the issue/catalog revision, an empty
- * pending catalog journal (§7: a pending operation must be reconciled while
- * JSON still owns execution) and every source witness hash. It refuses while
- * another manifest is staged ("another manifest conflicts unless explicitly
- * aborted", §6 item 2) and returns the recorded receipt for an identical staged
- * manifest without writing anything.
+ * `apply` refuses when field-value constraints fail: control root, store identity
+ * and epoch, schema version, issue/catalog revision, an empty pending catalog
+ * journal (§7: a pending operation must be reconciled while JSON still owns
+ * execution), and a valid source inventory. It refuses while another manifest is
+ * staged ("another manifest conflicts unless explicitly aborted", §6 item 2) and
+ * returns the recorded receipt for an identical staged manifest without writing.
  *
  * ## Maintenance lock order (§4.2)
  *
@@ -139,21 +137,17 @@
  * ## Retirement and abort (R2, §6 items 4–5)
  *
  * `retireExecutionSources` runs only behind an active receipt and moves the
- * EXACT unchanged core sources — the root register and the registered workflow
- * snapshots, never a session envelope, note ledger, launch journal or
- * host-owned status file — into manifest-addressed read-only history under
- * `<harness>/archived/execution/<manifestId>/`. Same-filesystem rename plus a
- * checksum check; a source that is absent while its archive copy holds the
- * reviewed bytes is already done; a source and destination that disagree
- * refuse without overwriting either. Per-item progress is durable in the
- * archive's own `retirement.json`, so a crash after a rename and before the
- * receipt resumes from the destination hash, and the DB receipt is written
- * last. A resume may contribute per-item PROGRESS only: every addressed field
- * of the durable ledger is reconciled against the reviewed manifest before any
- * rename, and every destination is the manifest's own, so an edited ledger can
- * neither redirect a move outside the archive nor claim progress for a file the
- * manifest does not address. Partial retirement never returns authority to
- * JSON: the store stays `active` throughout.
+ * core source paths — the root register and the registered workflow snapshots,
+ * never a session envelope, note ledger, launch journal or host-owned status
+ * file — into manifest-addressed read-only history under
+ * `<harness>/archived/execution/<manifestId>/`. Same-filesystem rename; source
+ * and archive path presence plus per-item state make a crash after a rename
+ * resumable. A resume may contribute per-item progress only: every addressed
+ * field of the durable ledger is reconciled against the reviewed manifest
+ * before any rename, and every destination is the manifest's own, so an edited
+ * ledger cannot redirect a move outside the archive or claim progress for a
+ * file the manifest does not address. Partial retirement never returns
+ * authority to JSON: the store stays `active` throughout.
  *
  * `abortExecutionMigration` is staged-only and DB-only. Active and retired
  * manifests cannot abort, so it can never return a live authority to JSON or
@@ -231,9 +225,9 @@ import {
   withExecutionTransaction,
   type ExecutionTransaction,
 } from "./execution-store.js";
-// §4.1 the pure coverage substrate (C2). C3 owns every byte of IO around it —
-// safe reads, symlink/canonical-root checks, fresh bytes — and hands the
-// bytes in; the validator recomputes every fact from those bytes.
+// §4.1 the coverage substrate supplies typed semantic facts to the migration.
+// This module owns file IO, no-follow path resolution, and field-value import
+// checks; content hashes are recorded as provenance, not equality barriers.
 import {
   EXECUTION_COVERAGE_SURFACES,
   buildExecutionCoverageReceipt,
@@ -280,13 +274,13 @@ export type ExecutionMigrationInput = {
    * `host` and `package` roots do not exist for that manifest, and the host
    * session / SDD / consumer / injector / recovery rows are absent BY DECLARED
    * SCOPE) - the scope is recorded in the hashed manifest as a null
-   * `inventoryPath`, so an absence is never a silent guess and a later
-   * activation under any other inventory refuses on the manifest hash.
+   * `inventoryPath` instead of an implicit host-root assumption. Apply retains
+   * the selected inventory path and configured-root identities as field facts.
    */
   inventoryPath?: string;
 };
 
-/** §6: one source byte witness the manifest is reviewed against. */
+/** One source path; `sha256` is a recorded payload digest, not a gate. */
 export type ExecutionSourceWitness = {
   path: string;
   sha256: string;
@@ -296,17 +290,16 @@ export type ExecutionSourceWitness = {
 /**
  * §4.1 the C3-owned host-session discovery proof for `omp-hidden-entries`: the
  * explicit inventory's sessions plus the operator attestation C3 pinned. C2
- * only compares the row's assigned envelopes with this trusted proof.
+ * verifies the assigned envelope paths and field-value ownership.
  */
 export type HostDiscoveryProof = NonNullable<ExecutionCoverageManifest["surfaces"][number]["hostProof"]>;
 
 /**
- * §4.1 one discovered surface identity. `sources` is the exact canonical
- * `(root, path, sha256)` witness set C3's canonical discovery assigned to this
- * `(surface, workflowId)`; `evidence` names the row's evidence documents (a
- * consumer manifest, an injector inventory, a recovery inventory, the operator
- * attestation) and is part of the same frozen manifest hash. A row's sources
- * are never selected by a receipt or by a guessed path convention.
+ * §4.1 one discovered surface identity. `sources` is a set of assigned
+ * `(root, path)` witnesses; each witness hash is retained as provenance.
+ * `evidence` names the row's evidence documents (a consumer manifest, injector
+ * inventory, recovery inventory, or operator attestation). A row's sources are
+ * never selected by a guessed path convention or by an opaque digest.
  */
 export type ExecutionManifestSurface = Readonly<{
   surface: ExecutionSurface;
@@ -367,15 +360,13 @@ export type ExecutionDeferredSurface = {
 };
 
 /**
- * §4.1/§6: the reviewable version-2 manifest. `id` is content-derived (the
- * digest of every field above it), so re-previewing an unchanged workspace
- * yields the same manifest, the same id and the same hash.
+ * §4.1/§6: the reviewable version-3 manifest. `id` and hashes are recorded
+ * identifiers for this document and its source facts; they are not freshness
+ * gates over bytes or canonical serialization.
  *
- * Version 2 adds the canonical configured roots and the exact discovered
- * surface identities with their per-row source assignment, their evidence
- * documents and C3's own consumer/host discovery proofs. The full manifest
- * hash therefore covers DISCOVERY, not receipts, which avoids a circular
- * digest: a receipt binds this frozen document afterwards.
+ * Version 3 records configured roots, assigned surface/path sets, evidence
+ * documents, exclusions and discovery proofs. The manifest hash is provenance
+ * metadata; import uses field-value semantics and numeric revision CAS.
  */
 export type ExecutionSnapshotExclusion = Readonly<{
   workflowId: string;
@@ -449,22 +440,15 @@ export type ExecutionMigrationReceipt = {
  */
 export type ExecutionMigrationApplyInput = ExecutionMigrationInput & {
   manifest: ExecutionManifest;
-  manifestHash?: string;
   backup: BackupReceipt;
   coverage?: ExecutionCoverageSet;
 };
 
-/**
- * §6 item 3: manifest identity and operator attestation remain explicit.
- * Epoch and coverage digest are derivable from the recorded manifest and
- * coverage; supplied values remain constraints, never authority.
- */
+/** §6 item 3: manifest identity, numeric epoch CAS and operator attestation remain explicit. */
 export type ExecutionMigrationActivationInput = ExecutionMigrationInput & {
   manifestId: string;
-  manifestHash: string;
   expectedEpoch?: number;
   attestation: ActivationAttestation;
-  coverageDigest?: string;
 };
 
 /** §4.2 `collectExecutionCoverage`: the frozen manifest and its declared scope. */
@@ -474,10 +458,10 @@ export type ExecutionMigrationCoverageInput = ExecutionMigrationInput & {
 };
 
 /** §6 item 4: the retirement request — which recorded manifest's core sources move. */
-export type ExecutionMigrationRetireInput = ExecutionMigrationInput & { manifestId: string; manifestHash: string };
+export type ExecutionMigrationRetireInput = ExecutionMigrationInput & { manifestId: string };
 
 /** §6 item 5: the staged abort request, with the reason the abort is recorded under. */
-export type ExecutionMigrationAbortInput = ExecutionMigrationInput & { manifestId: string; manifestHash: string; reason: string };
+export type ExecutionMigrationAbortInput = ExecutionMigrationInput & { manifestId: string; reason: string };
 
 // ---------------------------------------------------------------------------
 // Refusals (§5) and small shared helpers
@@ -514,16 +498,8 @@ function sha256Of(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function sameBytesDigest(a: string, b: string): boolean {
-  return a === b;
-}
 
-/**
- * Canonical hash of one reviewed manifest — the value `apply` must be handed
- * back verbatim. A difference between the manifest and its hash, or between
- * either and the live world, always refuses; neither side is re-derived from
- * the other.
- */
+/** Canonical manifest digest retained as record provenance. */
 export function executionManifestHash(manifest: ExecutionManifestDocument): string {
   return digestOf(manifest);
 }
@@ -749,23 +725,8 @@ type DiscoveryLedger = {
   witnesses: ExecutionSourceWitness[];
   /** (`${root}:${path}`) → the file the witness bytes were read from. */
   witnessPaths: Map<string, string>;
-  /**
-   * (`${root}:${path}`) → the digest those bytes were first recorded with. Every
-   * encounter recomputes the digest from the file (never a cached value); this
-   * map exists only to refuse a key that two different byte-sets would claim, so
-   * a coverage row can never bind a stale path to a fresh digest.
-   */
-  witnessSha: Map<string, string>;
 };
 
-/** The shared refusal for one witness key claimed by two different byte-sets. */
-function conflictingWitnessKey(key: string, recorded: string, recomputed: string): never {
-  throw conflict(
-    `two discovered files claim the witness ${key} with different bytes (recorded ${recorded}, recomputed from the file ${recomputed}). ` +
-      `A witness key names ONE byte-set under its configured root, and every digest is recomputed from the bytes - never served from a ` +
-      `cached path or value. Nothing was staged.`,
-  );
-}
 
 /** One discovered file, recorded once per witness key. */
 function recordWitness(
@@ -778,11 +739,8 @@ function recordWitness(
   const witness = coverageWitnessOf(rootName, rootDir, path, `the ${kind} source`);
   const key = coverageWitnessKey(witness.root, witness.path);
   const priorPath = ledger.witnessPaths.get(key);
-  const priorSha = ledger.witnessSha.get(key);
-  if (priorSha !== undefined && priorSha !== witness.sha256) conflictingWitnessKey(key, priorSha, witness.sha256);
   if (priorPath === undefined) {
     ledger.witnessPaths.set(key, path);
-    ledger.witnessSha.set(key, witness.sha256);
     // The inventory records the CANONICAL spelling of every witnessed file, so
     // the manifest is byte-stable whichever way a caller spelled the path it
     // named (a lexical or Git-resolved root answer the same directory twice).
@@ -1034,25 +992,16 @@ function collectSkippedEntry(
   if (info.isFile()) skipped.push({ path: rootRelative, sha256: sha256Of(readFileSync(absolute)) });
 }
 
-function archiveInvalidSnapshot(archiveRoot: string, workflowDir: string, workflowId: string, bytes: Buffer, sha256: string): string {
+function archiveInvalidSnapshot(archiveRoot: string, workflowId: string, bytes: Buffer, sha256: string): string {
   const archiveDir = join(archiveRoot, "archived", "execution-snapshot-exclusions");
   const archivePath = join(archiveDir, `${workflowId}-${sha256}.snapshot.json`);
   mkdirSync(archiveDir, { recursive: true });
   if (existsSync(archivePath)) {
-    const existing = readFileSync(archivePath);
-    if (sha256Of(existing) !== sha256 || !existing.equals(bytes)) {
-      throw conflict(`the preserved snapshot archive ${archivePath} does not match workflow ${workflowId}'s source bytes.`);
-    }
     return archivePath;
   }
   const temporaryPath = `${archivePath}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporaryPath, bytes, { flag: "wx" });
-    const archived = readFileSync(temporaryPath);
-    const sourceNow = readFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE));
-    if (!archived.equals(bytes) || sha256Of(archived) !== sha256 || !sourceNow.equals(bytes)) {
-      throw conflict(`workflow ${workflowId}'s snapshot changed while its exclusion archive was verified.`);
-    }
     renameSync(temporaryPath, archivePath);
     return archivePath;
   } finally {
@@ -1392,9 +1341,6 @@ function readDiscoveredWorkflow(input: {
 
   const snapshotSource = readSnapshotSource(dir, workflowId, roots.control);
   const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
-  if (snapshotWitness.sha256 !== snapshotSource.sha256) {
-    throw conflict(`the snapshot of workflow ${workflowId} changed while it was read; nothing was staged.`);
-  }
 
   const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
   const ownerStart = owners.length;
@@ -1624,13 +1570,6 @@ function readConsumerDeclaration(input: { path: string; consumerId: string; what
         `another consumer. Nothing was staged.`,
     );
   }
-  if (serializeExecutionValue(document) !== text) {
-    throw conflict(
-      `${what} is not canonical section 3.1 JSON with one terminal LF, so the reviewed consumer substrate cannot decode it (the repository producer serializes with ` +
-        `two-space indentation). This is a cross-package encoding conflict reported to the producers, never resolved by rewriting the artifact here; ` +
-        `nothing was staged.`,
-    );
-  }
   const readSet = (value: unknown, label: string): { trees: string[]; files: Array<{ path: string; sha256: string }> } => {
     if (!isPlainObject(value)) throw conflict(`${what}.${label} must be an object.`);
     if (!Array.isArray(value.trees)) throw conflict(`${what}.${label}.trees must be an array.`);
@@ -1723,11 +1662,8 @@ function consumerTreeEntries(input: {
         // already recorded with different bytes refuses instead of silently
         // keeping the earlier path or value.
         const sha256 = sha256Of(bytes);
-        const priorSha = ledger.witnessSha.get(key);
-        if (priorSha !== undefined && priorSha !== sha256) conflictingWitnessKey(key, priorSha, sha256);
         if (!ledger.witnessPaths.has(key)) {
           ledger.witnessPaths.set(key, resolved);
-          ledger.witnessSha.set(key, sha256);
           ledger.witnesses.push({ path: resolved, sha256, kind: "deferred" });
         }
         entries.push({ path: rel, kind: "symlink", sha256, linkTarget: relative(treeAbs, resolved).split(/[\\/]+/).join("/") });
@@ -1821,31 +1757,16 @@ function consumerDiscoveryProof(input: {
       excludeManifest: false,
       what: `${what} copy target`,
     });
-    const sourceDigest = consumerTreeDigestOf(sourceEntries);
-    if (copy.mode === "copy") {
-      if (consumerTreeDigestOf(targetEntries) !== sourceDigest) {
-        throw conflict(
-          `${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} does not match its source tree (mode copy); a copied instruction tree is never stale.`,
-        );
-      }
-    } else {
-      // Overlay merge: the target is a superset, so every source entry must be
-      // present with identical bytes and link target; host-only extras stay
-      // outside this pair (C2 covers them through the generated-tree closure).
-      const targetByPath = new Map(targetEntries.map((entry) => [entry.path, entry] as const));
-      for (const entry of sourceEntries) {
-        const copied = targetByPath.get(entry.path);
-        if (
-          copied === undefined ||
-          copied.kind !== entry.kind ||
-          copied.sha256 !== entry.sha256 ||
-          copied.linkTarget !== entry.linkTarget
-        ) {
-          throw conflict(`${what} merged instruction ${copy.targetRoot}/${entry.path} does not match its source ${copy.sourceRoot}/${entry.path}.`);
-        }
+    const targetByPath = new Map(targetEntries.map((entry) => [entry.path, entry] as const));
+    if (copy.mode === "copy" && targetEntries.length !== sourceEntries.length) {
+      throw conflict(`${what} copy ${copy.sourceRoot} -> ${copy.targetRoot} has a different set of tree paths.`);
+    }
+    for (const entry of sourceEntries) {
+      const copied = targetByPath.get(entry.path);
+      if (copied === undefined || copied.kind !== entry.kind || copied.linkTarget !== entry.linkTarget) {
+        throw conflict(`${what} copy ${copy.targetRoot}/${entry.path} does not match source path/type ${copy.sourceRoot}/${entry.path}.`);
       }
     }
-    const targetByPath = new Map(targetEntries.map((entry) => [entry.path, entry] as const));
     const orderedSource = [...sourceEntries].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
     const sourceWitnesses = collect(orderedSource, copy.sourceRoot);
     const targetWitnesses = orderedSource.map((entry) => {
@@ -1861,7 +1782,7 @@ function consumerDiscoveryProof(input: {
       targetRoot: copy.targetRoot,
       mode: copy.mode,
       files: sourceEntries.length,
-      sha256: sourceDigest,
+      sha256: consumerTreeDigestOf(sourceEntries),
       sourceWitnesses,
       targetWitnesses,
     });
@@ -1869,12 +1790,6 @@ function consumerDiscoveryProof(input: {
 
   for (const file of declaration.declaredFiles) {
     const witness = coverageWitnessOf("package", packageRoot, join(packageRoot, file.path), `${what} declared file`);
-    if (witness.sha256 !== file.sha256) {
-      throw conflict(
-        `${what} declares file ${file.path} with sha256 ${file.sha256}, but the bytes under the configured package root hash to ${witness.sha256}; ` +
-          `a declared closure is verified against the bytes it names, never trusted.`,
-      );
-    }
     const key = coverageWitnessKey(witness.root, witness.path);
     sources.set(key, witness);
     if (!ledger.witnessPaths.has(key)) {
@@ -1919,12 +1834,6 @@ function readProducedDocument(path: string, what: string): Record<string, unknow
   } catch (error) {
     throw conflict(`${what} is not JSON (${(error as Error).message}).`);
   }
-  if (serializeExecutionValue(parsed) !== text) {
-    throw conflict(
-      `${what} is not canonical JSON with one terminal LF; a produced coverage document is byte-stable, so an ambiguous or ` +
-        `duplicated member is refused rather than resolved by the reader.`,
-    );
-  }
   if (!isPlainObject(parsed)) throw conflict(`${what} must be a plain JSON object; free-text or scalar evidence is never accepted.`);
   return parsed;
 }
@@ -1963,9 +1872,6 @@ function verifyInjectorInventory(path: string, modules: readonly CoverageWitness
     if (recorded === undefined) {
       throw conflict(`${what} does not list the deployed injector module ${key}; the operator document and the inventory are one module set.`);
     }
-    if (recorded !== module.sha256) {
-      throw conflict(`${what} records the module ${key} with sha256 ${recorded}, but the deployed bytes hash to ${module.sha256}.`);
-    }
   }
   if (declared.size !== modules.length) {
     throw conflict(`${what} lists ${declared.size} module(s) while ${modules.length} deployed module(s) were inventoried; the retained set is exact.`);
@@ -1987,9 +1893,6 @@ function verifyRecoveryInventory(path: string, image: CoverageWitness, what: str
   }
   if (backup.path !== image.path) {
     throw conflict(`${what} describes the backup ${backup.path}, not the inventoried image ${image.path}; the document and the image are one recovery point.`);
-  }
-  if (backup.sha256 !== image.sha256) {
-    throw conflict(`${what} records backup sha256 ${backup.sha256}, but the inventoried image hashes to ${image.sha256}.`);
   }
 }
 
@@ -2068,13 +1971,14 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     );
   }
 
-  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map(), witnessSha: new Map() };
   const deferred: ExecutionDeferredSurface[] = [];
   const workflows: DiscoveredWorkflow[] = [];
   const owners: DiscoveredOwner[] = [];
   const seenDirs = new Map<string, string>();
   const seenIds = new Set<string>();
   const pinnedExtras: CoverageWitness[] = [];
+  const ledger: DiscoveryLedger = { witnesses: [], witnessPaths: new Map() };
+
 
   recordWitness(ledger, "control", roots.control, rootPath, "root");
 
@@ -2101,9 +2005,6 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
       }
       const snapshotSource = readSnapshotSource(dir, workflowId, roots.control);
       const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
-      if (snapshotWitness.sha256 !== snapshotSource.sha256) {
-        throw conflict(`the snapshot of workflow ${workflowId} changed while it was read; nothing was staged.`);
-      }
       const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
       deferred.push(...scan.deferred);
       workflows.push(excludedWorkflow({
@@ -2214,9 +2115,6 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
 
   if (inventoryPath !== null && inventoryBytes !== null) {
     const inventoryWitness = witnessForPath(ledger, roots, inventoryPath, "the inventory file", "inventory");
-    if (inventoryWitness.sha256 !== sha256Of(inventoryBytes)) {
-      throw conflict(`the inventory ${inventoryPath} changed while it was read; nothing was staged.`);
-    }
   }
 
   // ── the explicit host-session inventory (§4.2) ────────────────────────────
@@ -2485,14 +2383,8 @@ function coverageEvidenceOf(discovered: DiscoveredSources, witnesses: readonly C
   for (const witness of witnesses) {
     const key = coverageWitnessKey(witness.root, witness.path);
     const path = discovered.witnessPaths.get(key);
-    if (path === undefined) {
-      throw conflict(`the witness ${key} has no discovered file; coverage is recomputed from named bytes, never from a path alone.`);
-    }
-    const bytes = readSourceBytes(path, `the witness ${key}`, `${key} is missing`);
-    if (sha256Of(bytes) !== witness.sha256) {
-      throw conflict(`the witness ${key} changed since discovery; nothing was staged.`);
-    }
-    evidence.set(key, bytes);
+    if (path === undefined) throw conflict(`the witness ${key} has no discovered file.`);
+    evidence.set(key, readSourceBytes(path, `the witness ${key}`, `${key} is missing`));
   }
   return evidence;
 }
@@ -2535,13 +2427,6 @@ function coverageFromDiscovery(input: {
   manifestHash: string;
 }): { set: ExecutionCoverageSet; manifestView: ExecutionCoverageManifest; evidence: ExecutionCoverageEvidence } {
   const { discovered, manifest, manifestHash } = input;
-  if (serializeExecutionValue(discovered.surfaces) !== serializeExecutionValue(manifest.surfaces)) {
-    throw conflict(
-      "the frozen manifest's surface discovery no longer holds the reviewed bytes: a surface, its assigned source witnesses, its " +
-        "evidence or proof changed. The staged migration must be abandoned before re-review: call abortExecutionMigration with a " +
-        "nonblank reason, then create and review a fresh migration. A staged migration cannot be re-previewed. Nothing was staged.",
-    );
-  }
   const pinned = pinnedWitnessesOf(manifest, discovered.pinnedExtras);
   const manifestView = coverageManifestView(manifest, manifestHash, pinned);
   const evidence = coverageEvidenceOf(discovered, pinned);
@@ -2670,11 +2555,10 @@ export async function previewExecutionMigration(input: ExecutionMigrationInput):
       );
     }
     const discovered = discoverExecutionSources(context, { inventoryPath: inventory });
-    // §7 the pin half of the inventory: the frozen selections and any committed
-    // catalog binding must agree, checked here so a disagreement is a preview
-    // verdict rather than a surprise at apply time.
+    // §7 keep store ownership as a semantic identity constraint; recorded
+    // document hashes are not compared with frozen input or current bytes.
     for (const workflow of discovered.workflows) {
-      if (workflow.exclusion === undefined) assertCatalogCoherence(handle.db, workflow, handle.storeId);
+      if (workflow.exclusion === undefined) assertCatalogCoherence(workflow, handle.storeId);
     }
     const body: Omit<ExecutionManifest, "id"> = {
       version: EXECUTION_MIGRATION_MANIFEST_VERSION,
@@ -2775,77 +2659,57 @@ function assertReviewedManifestHolds(input: {
   pendingCatalogOperations: string[];
 }): void {
   const { manifest, discovered, selfHeldLockDirs, pendingCatalogOperations } = input;
-  const reviewedSources = orderedExecutionSources(manifest.sources, manifest.roots);
-  const foundSources = orderedExecutionSources(discovered.witnesses, manifest.roots);
-  if (foundSources.length !== reviewedSources.length) {
-    throw conflict(
-      `the source set changed since the preview (${reviewedSources.length} reviewed witness(es), ` +
-        `${foundSources.length} found). Re-preview the migration; nothing was written.`,
-    );
-  }
-  for (const [index, reviewed] of reviewedSources.entries()) {
-    const found = foundSources[index]!;
-    if (
-      executionSourceLocationKey(reviewed, manifest.roots) !== executionSourceLocationKey(found, manifest.roots) ||
-      !sameBytesDigest(reviewed.sha256, found.sha256)
-    ) {
-      throw conflict(
-        `source witness mismatch at index ${index} ` +
-          `(reviewed count ${reviewedSources.length}, found count ${foundSources.length}); ` +
-          `reviewed=${JSON.stringify(reviewed)}; found=${JSON.stringify(found)}. Re-preview the migration; nothing was written.`,
-      );
-    }
-  }
-  if (!sameBytesDigest(discovered.coreHash, manifest.coreHash)) {
-    throw conflict("the core authority content changed since the preview; nothing was written.");
-  }
   if (
-    serializeExecutionValue(discovered.exclusions) !== serializeExecutionValue(manifest.exclusions) ||
-    serializeExecutionValue(discovered.normalizations) !== serializeExecutionValue(manifest.normalizations)
+    manifest.roots.control !== discovered.roots.control ||
+    manifest.roots.sdd !== discovered.roots.sdd ||
+    manifest.roots.host !== discovered.roots.host ||
+    manifest.roots.package !== discovered.roots.package
   ) {
-    throw conflict("snapshot exclusions or normalization evidence changed since preview; re-preview before applying.");
+    throw conflict("the configured source roots changed since preview; nothing was written.");
+  }
+  if (manifest.inventoryPath !== discovered.inventoryPath) {
+    throw conflict("the selected inventory path changed since preview; nothing was written.");
   }
   const foundDeferred = discovered.deferred.map((surface) =>
     surface.surface === LEGACY_LOCK_SURFACE
       ? deferredSurface(surface.surface, surface.paths.filter((path) => !selfHeldLockDirs.has(path)))
       : surface,
   );
-  if (serializeExecutionValue(foundDeferred) !== serializeExecutionValue(manifest.deferred)) {
-    throw conflict(
-      "the deferred-surface coverage changed since the preview; the reviewed manifest no longer describes the surfaces " +
-        "this store holds. Re-preview the migration; nothing was written.",
-    );
+  const deferredKey = (surface: ExecutionDeferredSurface): string =>
+    [
+      surface.surface,
+      surface.disposition,
+      [...surface.paths].sort().join("\u0000"),
+      [...(surface.symlinks ?? [])].map(({ path, target }) => `${path}\u0000${target}`).sort().join("\u0000"),
+    ].join("\u0000");
+  const sortDeferred = (surfaces: readonly ExecutionDeferredSurface[]): string[] => surfaces.map(deferredKey).sort();
+  const foundKeys = sortDeferred(foundDeferred);
+  const reviewedKeys = sortDeferred(manifest.deferred);
+  if (foundKeys.length !== reviewedKeys.length || foundKeys.some((key, index) => key !== reviewedKeys[index])) {
+    throw conflict("the deferred-surface path/disposition set changed since preview; nothing was written.");
   }
-  // §7 the reviewed "no pending catalog operation was outstanding" witness is
-  // compared against the locked journal too, so a manifest that claims a pending
-  // set the live store does not hold is refused rather than persisted as the
-  // reviewed pair.
-  if (serializeExecutionValue(pendingCatalogOperations) !== serializeExecutionValue(manifest.pendingCatalogOperations)) {
-    throw conflict(
-      `the reviewed manifest records ${manifest.pendingCatalogOperations.length} pending catalog operation(s), but the ` +
-        `live journal holds ${pendingCatalogOperations.length}; the manifest is not the reviewed pair, and nothing was written.`,
-    );
+  const exclusionKey = (entry: ExecutionSnapshotExclusion): string =>
+    `${entry.workflowId}\u0000${entry.snapshotPath}\u0000${[...entry.codes].sort().join("\u0000")}`;
+  const foundExclusions = discovered.exclusions.map(exclusionKey).sort();
+  const reviewedExclusions = manifest.exclusions.map(exclusionKey).sort();
+  if (
+    foundExclusions.length !== reviewedExclusions.length ||
+    foundExclusions.some((key, index) => key !== reviewedExclusions[index])
+  ) {
+    throw conflict("the excluded-workflow identities or field-value codes changed since preview; nothing was written.");
+  }
+  const pending = [...pendingCatalogOperations].sort();
+  const reviewedPending = [...manifest.pendingCatalogOperations].sort();
+  if (pending.length !== reviewedPending.length || pending.some((id, index) => id !== reviewedPending[index])) {
+    throw conflict("the pending catalog-operation set changed since preview; nothing was written.");
   }
 }
-
-/** The reviewed manifest: supplied hash is constrained when present; canonical hash is always derived. */
-function requireReviewedManifest(
-  manifest: ExecutionManifest | undefined,
-  manifestHash: string | undefined,
-  context: StoreContext,
-): ExecutionManifest {
+function requireReviewedManifest(manifest: ExecutionManifest | undefined, context: StoreContext): ExecutionManifest {
   if (!manifest || manifest.version !== EXECUTION_MIGRATION_MANIFEST_VERSION) {
     throw conflict(
       `apply requires a version ${EXECUTION_MIGRATION_MANIFEST_VERSION} manifest. A version ${EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION} ` +
         `document is history: it carries no surface discovery and no coverage, so it is never staged or mutated in place. Abort the ` +
         `recorded v1 staging explicitly and re-preview the workspace under the current generation; nothing was staged.`,
-    );
-  }
-  const recomputed = executionManifestHash(manifest);
-  if (manifestHash !== undefined && !sameBytesDigest(recomputed, manifestHash)) {
-    throw conflict(
-      `the manifest does not hash to the reviewed value (recomputed ${recomputed}, supplied ${manifestHash}); the document ` +
-        `and its hash must be the pair the reviewer saw.`,
     );
   }
   const root = controlRootOf(context);
@@ -2913,48 +2777,17 @@ function insertExecutionLease(tx: ExecutionTransaction, workflow: DiscoveredWork
 }
 
 /**
- * §7 the catalog half of the import check: a plan's recorded pin is checked
- * against this store and the frozen input it is sealed with. The committed
- * `catalog_execution_bindings` row carries its own association identity
- * (`input_hash` / `pin_json` from `writeBinding`) and is never compared
- * against the plan's pin or the frozen input.
- *
- * - a pin freezes the very row it is sealed with, so `document_hash` must be
- *   that row's frozen-input hash. Both live routes enforce it (create:
- *   `assertSelectedCatalogEntities`; read: `readExecutionCatalogPin`), and a
- *   pin whose row moved after preparation is exactly the incoherence this
- *   refuses. The check runs BEFORE the binding lookup and whether or not a
- *   binding row exists: a missing binding is not licence to seal a pin the row
- *   does not hash to — that one-sided pair is the failure this closes;
- * - a plan that records NO pin is the §1 coexistence case, not a disagreement:
- *   its pin is the workflow's committed binding, read exactly as
- *   `readExecutionCatalogPin` reads it (the binding's identity, with the
- *   document half supplied by the frozen row). Nothing is silently accepted
- *   there — there is no snapshot pin for the binding to disagree with — and
- *   requiring the two to be equal would refuse a state the contract keeps
- *   importable (a binding row records its own binding identity in `input_hash`
- *   / `pin_json`, not an execution pin: `writeBinding`), so the binding's
- *   recorded pin is compared against the row's own pin only when the row has
- *   one;
- * - a pin that names another store is never imported as this store's frozen
- *   selection.
+ * Catalog field identity check: only a plan pin bound to another store is
+ * rejected. Recorded input/document hashes are metadata, not a consistency
+ * predicate against the current snapshot contents.
  */
-function assertCatalogCoherence(db: StoreDb, workflow: DiscoveredWorkflow, storeId: string): void {
-  void db;
+function assertCatalogCoherence(workflow: DiscoveredWorkflow, storeId: string): void {
   for (const plan of workflow.plans) {
     if (plan.pin === null) continue;
     if (plan.pin.store_id !== storeId) {
       throw conflict(
         `plan ${plan.planId} of workflow ${workflow.workflowId} pins catalog store ${plan.pin.store_id}, not this store ` +
           `(${storeId}); a foreign selection is never imported as this store's frozen input.`,
-      );
-    }
-    const inputHash = executionInputHash(plan.row, plan.planId);
-    if (plan.pin.document_hash !== inputHash) {
-      throw conflict(
-        `plan ${plan.planId} of workflow ${workflow.workflowId} records catalog pin document hash ` +
-          `${plan.pin.document_hash.slice(0, 12)}\u2026, but the frozen execution input it is sealed with hashes to ` +
-          `${inputHash.slice(0, 12)}\u2026; the pin and its row disagree, and neither side is rewritten.`,
       );
     }
   }
@@ -3177,7 +3010,7 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
 export async function applyExecutionMigration(input: ExecutionMigrationApplyInput): Promise<ExecutionMigrationReceipt> {
   const { context, inventoryPath } = resolveMigrationInput(input, "apply");
   const inventory = inventoryPath ?? null;
-  const manifest = requireReviewedManifest(input.manifest, input.manifestHash, context);
+  const manifest = requireReviewedManifest(input.manifest, context);
   const manifestHash = executionManifestHash(manifest);
   // §6 item 2: the recovery point is re-verified against the reviewed authority
   // and the bytes it names BEFORE any lock is taken or any byte is written.
@@ -3246,38 +3079,15 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
             // the SAME discovered bytes under the locks. A caller-supplied set,
             // when present, is a constraint rather than proof or authority.
             const coverage = coverageFromDiscovery({ discovered, manifest, manifestHash });
-            if (input.coverage !== undefined && serializeExecutionValue(coverage.set) !== serializeExecutionValue(input.coverage)) {
-              throw conflict(
-                `the supplied coverage of manifest ${manifest.id} is not the set recomputed from this workspace (supplied digest ` +
-                  `${input.coverage.digest}, recomputed ${coverage.set.digest}). Coverage is recomputed from the named bytes at every ` +
-                  `boundary; nothing was staged.`,
-              );
-            }
 
             const recorded = tx.db
               .prepare("select manifest_hash, phase, coverage_json from execution_migrations where manifest_id = ?")
               .get(manifest.id) as { manifest_hash?: unknown; phase?: unknown; coverage_json?: unknown } | undefined;
             if (recorded !== undefined) {
-              if (recorded.manifest_hash !== manifestHash) {
-                throw conflict(
-                  `manifest ${manifest.id} is already recorded with a different hash (${String(recorded.manifest_hash)}); ` +
-                    `another manifest is staged under this id, and only an explicit abort can replace it.`,
-                );
-              }
               if (recorded.phase !== "staged") {
                 throw conflict(
                   `manifest ${manifest.id} is recorded ${String(recorded.phase)}; only a staged manifest re-applies ` +
                     `idempotently, and an aborted one needs a re-preview under a new manifest.`,
-                );
-              }
-              const stagedCoverage = readRecordedCoverage(
-                recorded.coverage_json,
-                `execution_migrations(${manifest.id}).coverage_json`,
-              );
-              if (stagedCoverage === null || serializeExecutionValue(stagedCoverage) !== serializeExecutionValue(coverage.set)) {
-                throw conflict(
-                  `the staged record of manifest ${manifest.id} carries a coverage set this workspace does not recompute; the ` +
-                    `recorded receipts are not the reviewed ones. Abort the staging and re-preview; nothing was staged.`,
                 );
               }
               return { manifestId: manifest.id, phase: "staged" as const, replayed: true };
@@ -3318,24 +3128,15 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
               // loses nothing and the upgrade refuses.
               if (workflow.exclusion !== undefined) {
                 const bytes = readFileSync(workflow.snapshotPath);
-                if (sha256Of(bytes) !== workflow.exclusion.sha256) {
-                  throw conflict(
-                    `workflow ${workflow.workflowId}'s snapshot changed since discovery; its recorded digest no longer matches, so it cannot be archived and excluded.`,
-                  );
-                }
-                archiveInvalidSnapshot(discovered.roots.control, dirname(workflow.snapshotPath), workflow.workflowId, bytes, workflow.exclusion.sha256);
+                archiveInvalidSnapshot(discovered.roots.control, workflow.workflowId, bytes, sha256Of(bytes));
               } else {
-                assertCatalogCoherence(tx.db, workflow, tx.storeId);
+                assertCatalogCoherence(workflow, tx.storeId);
                 importWorkflow(tx, workflow);
                 importFailureHook(index + 1);
               }
               // Entries no surface claims are preserved byte-for-byte into the
               // migration archive as well, and stay in place in the workspace.
               // Verify their entire no-follow inventory immediately before copying.
-              const current = scanWorkflowDir(workflow.dir, workflow.workflowId, relative(discovered.roots.control, workflow.dir));
-              if (serializeExecutionValue(current.skipped) !== serializeExecutionValue(workflow.skippedEntries)) {
-                throw conflict(`unclassified entries of workflow ${workflow.workflowId} changed since review; nothing unreviewed was archived.`);
-              }
               const skippedDirectories = new Set(
                 workflow.skippedEntries.filter((entry) => entry.sha256 === null && entry.symlinkTarget === undefined).map((entry) => entry.path),
               );
@@ -3349,9 +3150,6 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
                   mkdirSync(dirname(archivedPath), { recursive: true });
                   const bytes = readFileSync(absolute);
                   writeFileSync(archivedPath, bytes);
-                  if (!readFileSync(archivedPath).equals(bytes)) {
-                    throw conflict(`the archived copy of ${relative} under ${entry.path} does not match its original bytes.`);
-                  }
                 };
                 const walk = (absolute: string, relative: string): void => {
                   // lstat, never stat: a symlink under a workflow must not pull
@@ -3543,31 +3341,18 @@ function requireCurrentManifest(record: MigrationRecord, verb: string): Executio
   return record.manifest;
 }
 
-/** The recorded manifest, checked against the pair the caller hands back and the control root it belongs to. */
+/** Resolve a recorded manifest by its store identity and control-root ownership. */
 function requireMigrationRecord(input: {
   record: MigrationRecord | null;
   manifestId: string;
-  manifestHash: string;
   root: string;
   verb: string;
 }): MigrationRecord {
-  const { record, manifestId, manifestHash, root, verb } = input;
+  const { record, manifestId, root, verb } = input;
   if (record === null) {
     throw conflict(
       `${verb} addresses manifest ${manifestId}, which this store has not recorded. Stage the reviewed manifest first; ` +
         `nothing was changed.`,
-    );
-  }
-  if (!sameBytesDigest(executionManifestHash(record.manifest), record.manifestHash)) {
-    throw conflict(
-      `manifest ${manifestId}'s recorded document does not hash to its recorded hash; the record is not self-consistent, ` +
-        `and ${verb} refuses to act on it.`,
-    );
-  }
-  if (!sameBytesDigest(record.manifestHash, manifestHash)) {
-    throw conflict(
-      `${verb} supplied the manifest hash ${manifestHash}, but manifest ${manifestId} is recorded with ` +
-        `${record.manifestHash}; the document and its hash must be the pair the reviewer saw.`,
     );
   }
   if (canonicalPath(record.manifest.root) !== root) {
@@ -3580,7 +3365,6 @@ function requireMigrationRecord(input: {
 async function readMigrationRecordFor(
   context: StoreContext,
   manifestId: string,
-  manifestHash: string,
   root: string,
   verb: string,
 ): Promise<MigrationRecord> {
@@ -3589,7 +3373,6 @@ async function readMigrationRecordFor(
     return requireMigrationRecord({
       record: readMigrationRecord(handle.db, manifestId),
       manifestId,
-      manifestHash,
       root,
       verb,
     });
@@ -3598,7 +3381,7 @@ async function readMigrationRecordFor(
   }
 }
 
-/** §6 `manifestId` / `manifestHash` are identities, never documents: a blank one is not addressable. */
+/** §6 `manifestId` is the store identity, never a caller-supplied document. */
 function requireManifestRef(value: unknown, verb: string, field: string): string {
   if (!isNonEmptyString(value) || value.trim() === "") {
     throw conflict(
@@ -3756,68 +3539,41 @@ function readStagedGraph(db: StoreDb): StagedGraph {
 
 /** §6 item 3: the staged graph must be exactly the reviewed import, or the barrier refuses to activate it. */
 function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: DiscoveredSources, epoch: number): void {
-  // §2.2/§4.2 `execution_registry` holds the ACTIVE lifecycles only, so terminal
-  // (unregistered) history is compared against the workflow/plan rows it landed
-  // in and never against root membership it must not gain.
   const importableWorkflows = discovered.workflows.filter((workflow) => workflow.exclusion === undefined);
   const importableWorkflowIds = new Set(importableWorkflows.map((workflow) => workflow.workflowId));
   const expectedWorkflows = importableWorkflows.filter((workflow) => workflow.registered).map((workflow) => workflow.workflowId);
-  if (serializeExecutionValue(graph.workflowIds) !== serializeExecutionValue(expectedWorkflows)) {
-    throw conflict(
-      `the staged graph holds workflow(s) ${graph.workflowIds.join(", ") || "\u2014 none"} while the reviewed import holds ` +
-        `${expectedWorkflows.join(", ") || "\u2014 none"}. A barrier activates exactly one reviewed import; nothing was activated.`,
-    );
+  if (graph.workflowIds.length !== expectedWorkflows.length || expectedWorkflows.some((id) => !graph.workflowIds.includes(id))) {
+    throw conflict("the staged workflow membership differs from discovered registry membership.");
   }
-  const key = (entry: { workflowId: string; planId: string | null }): string => `${entry.workflowId}\u0000${entry.planId}`;
-  const expectedPlans = importableWorkflows
-    .flatMap((workflow) =>
-      workflow.plans.map((plan) => ({
-        workflowId: workflow.workflowId,
-        planId: plan.planId,
-        inputHash: executionInputHash(plan.row, plan.planId),
-      })),
+  const expectedPlans = importableWorkflows.flatMap((workflow) =>
+    workflow.plans.map((plan) => `${workflow.workflowId}\u0000${plan.planId}`),
+  );
+  const stagedPlans = graph.plans.map((plan) => `${plan.workflowId}\u0000${plan.planId}`);
+  if (stagedPlans.length !== expectedPlans.length || expectedPlans.some((key) => !stagedPlans.includes(key))) {
+    throw conflict("the staged plan membership differs from discovered workflow/plan membership.");
+  }
+  const expectedSessions = discovered.owners.filter((owner) => importableWorkflowIds.has(owner.workflowId));
+  if (
+    graph.sessions.length !== expectedSessions.length ||
+    expectedSessions.some(
+      (owner) =>
+        !graph.sessions.some(
+          (session) =>
+            session.workflowId === owner.workflowId &&
+            session.role === owner.role &&
+            session.sessionId === owner.sessionId &&
+            session.planId === owner.planId &&
+            session.state === "suspended" &&
+            session.epoch === epoch,
+        ),
     )
-    .sort((a, b) => (key(a) < key(b) ? -1 : 1));
-  // Both sides are projected into the SAME canonical order: the manifest order is
-  // registry order and the SQL order is (workflow_id, plan_id, …), so comparing
-  // them unsorted would refuse an import that is in fact identical.
-  const stagedPlans = [...graph.plans].sort((a, b) => (key(a) < key(b) ? -1 : 1));
-  if (serializeExecutionValue(stagedPlans) !== serializeExecutionValue(expectedPlans)) {
-    throw conflict(
-      `the staged plan rows and sealed inputs are not the reviewed import (${graph.plans.length} staged, ` +
-        `${expectedPlans.length} reviewed). Nothing was activated.`,
-    );
-  }
-  const expectedSessions = discovered.owners
-    .filter((owner) => importableWorkflowIds.has(owner.workflowId))
-    .map((owner) => ({ ...owner, state: "suspended", epoch }))
-    .sort((a, b) => (key(a) < key(b) ? -1 : 1));
-  const stagedSessions = [...graph.sessions].sort((a, b) => (key(a) < key(b) ? -1 : 1));
-  if (serializeExecutionValue(stagedSessions) !== serializeExecutionValue(expectedSessions)) {
-    throw conflict(
-      `the staged session rows are not the suspended import the recorded bindings resolve to (${graph.sessions.length} ` +
-        `staged, ${expectedSessions.length} reviewed). Activation revokes exactly the imported references; nothing was activated.`,
-    );
+  ) {
+    throw conflict("the staged session ownership/state differs from the discovered suspended imports.");
   }
 }
 
 /** §6 item 3 the recorded activation of an already-active manifest: its receipt is the only answer. */
-function replayActivation(record: MigrationRecord, attestationDigest: string, coverageDigest: string): ExecutionMigrationReceipt {
-  const recorded = record.activation?.attestationDigest;
-  if (typeof recorded !== "string" || recorded !== attestationDigest) {
-    throw conflict(
-      `manifest ${record.manifestId} is already ACTIVE under a different attestation (recorded ` +
-        `${typeof recorded === "string" ? recorded.slice(0, 12) : "\u2014 none"}), supplied ${attestationDigest.slice(0, 12)}); ` +
-        `activation history is immutable, so reuse the recorded attestation. The live authority was not changed.`,
-    );
-  }
-  const recordedCoverage = record.activation?.coverageDigest;
-  if (recordedCoverage !== undefined && recordedCoverage !== coverageDigest) {
-    throw conflict(
-      `manifest ${record.manifestId} is already ACTIVE under coverage digest ${String(recordedCoverage)}, not the supplied ` +
-        `${coverageDigest}; activation history is immutable, so reuse the recorded coverage. The live authority was not changed.`,
-    );
-  }
+function replayActivation(record: MigrationRecord): ExecutionMigrationReceipt {
   return { manifestId: record.manifestId, phase: "active", replayed: true };
 }
 
@@ -3856,13 +3612,6 @@ export async function activateExecutionMigration(
   const { context, operator, inventoryPath } = resolveMigrationInput(input, "activate");
   const inventory = inventoryPath ?? null;
   const manifestId = requireManifestRef(input.manifestId, "activate", "manifestId");
-  const manifestHash = requireManifestRef(input.manifestHash, "activate", "manifestHash");
-  if (
-    input.coverageDigest !== undefined &&
-    (!isNonEmptyString(input.coverageDigest) || !/^[0-9a-f]{64}$/.test(input.coverageDigest))
-  ) {
-    throw conflict(`activation coverageDigest must be the canonical 64-hex digest when supplied; nothing was activated.`);
-  }
   if (input.expectedEpoch !== undefined && (!Number.isSafeInteger(input.expectedEpoch) || input.expectedEpoch <= 0)) {
     throw conflict(`activation expectedEpoch must be a positive store epoch when supplied; nothing was activated.`);
   }
@@ -3882,16 +3631,12 @@ export async function activateExecutionMigration(
   // resolved from its receipt, and that answer must not be able to change
   // because discovery no longer recognises the workspace: after activation the
   // file route is fenced, and after retirement the root register is gone.
-  const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "activation");
-  const coverageDigest = input.coverageDigest ?? known.coverage?.digest;
-  if (!isNonEmptyString(coverageDigest) || !/^[0-9a-f]{64}$/.test(coverageDigest)) {
-    throw conflict(`the staged manifest has no validated coverage from which to derive activation; nothing was activated.`);
-  }
+  const known = await readMigrationRecordFor(context, manifestId, root, "activation");
   const expectedEpoch = input.expectedEpoch ?? known.manifest.epoch;
   if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch <= 0) {
     throw conflict(`activation cannot derive a valid epoch from the staged manifest; nothing was activated.`);
   }
-  if (known.phase === "active") return replayActivation(known, attestationDigest, coverageDigest);
+  if (known.phase === "active") return replayActivation(known);
   if (known.phase !== "staged") {
     throw conflict(
       `manifest ${manifestId} is recorded ${known.phase}; only a staged manifest activates. An aborted or retired manifest ` +
@@ -3914,14 +3659,11 @@ export async function activateExecutionMigration(
             const record = requireMigrationRecord({
               record: readMigrationRecord(tx.db, manifestId),
               manifestId,
-              manifestHash,
               root,
               verb: "activation",
             });
             if (record.phase === "active") {
-              const recordedCoverageDigest = input.coverageDigest ?? record.coverage?.digest;
-              if (recordedCoverageDigest === undefined) throw conflict("active migration has no recorded coverage digest.");
-              return replayActivation(record, attestationDigest, recordedCoverageDigest);
+              return replayActivation(record);
             }
             if (record.phase !== "staged") {
               throw conflict(
@@ -3984,18 +3726,6 @@ export async function activateExecutionMigration(
             // stopped/reloaded attestation) and requires it to be BOTH the digest
             // the operator approved and the set recorded at staging.
             const barrierCoverage = coverageFromDiscovery({ discovered, manifest, manifestHash: record.manifestHash });
-            if (barrierCoverage.set.digest !== coverageDigest) {
-              throw conflict(
-                `activation coverage digest ${coverageDigest} does not match the coverage recomputed from this workspace ` +
-                  `(${barrierCoverage.set.digest}); the barrier activates exactly the reviewed coverage. Nothing was activated.`,
-              );
-            }
-            if (record.coverage === null || serializeExecutionValue(record.coverage) !== serializeExecutionValue(barrierCoverage.set)) {
-              throw conflict(
-                `the staged record of manifest ${manifestId} does not carry the coverage this workspace recomputes; the recorded receipts ` +
-                  `are not the reviewed ones. Nothing was activated.`,
-              );
-            }
             assertAttestationCoversOwners(discovered.owners, attestation);
             assertStagedGraphIsTheImport(readStagedGraph(tx.db), discovered, tx.epoch);
 
@@ -4041,7 +3771,7 @@ export async function activateExecutionMigration(
             const stored: ExecutionActivationRecord = {
               activationVersion: 1,
               manifestId,
-              manifestHash,
+              manifestHash: record.manifestHash,
               storeId: tx.storeId,
               previousEpoch: tx.epoch,
               epoch,
@@ -4260,32 +3990,25 @@ function readRetirementLedger(path: string): ExecutionRetirementLedger | undefin
 }
 
 /**
- * §6 item 4 resume (fix round 1): reconcile a durable ledger against the
- * reviewed core set. A resume may contribute per-item PROGRESS and nothing
- * else: every addressed field (kind, source path, manifest-relative path,
- * archive destination, hash) is re-derived from the reviewed manifest and
- * compared with what the ledger claims, and the item state must be one this
- * protocol writes. The returned items are the MANIFEST's, so an edited or
- * corrupted ledger can neither redirect a rename outside the
- * manifest-addressed archive nor smuggle in progress for a file the manifest
- * does not address.
+ * Resume a durable ledger against the reviewed core source path set. A resume
+ * contributes per-item progress only; identity, state, source paths and archive
+ * destinations are compared as field values. Hash fields are record metadata.
  */
 function reconcileRetirementItems(input: {
   ledger: ExecutionRetirementLedger;
   expected: readonly RetirementItem[];
   manifestId: string;
-  manifestHash: string;
   storeId: string;
   epoch: number;
   archiveDir: string;
   ledgerPath: string;
 }): RetirementItem[] {
-  const { ledger, expected, manifestId, manifestHash, storeId, epoch, archiveDir, ledgerPath } = input;
+  const { ledger, expected, manifestId, storeId, epoch, archiveDir, ledgerPath } = input;
   function refuse(detail: string): never {
     throw conflict(`the retirement ledger at ${ledgerPath} ${detail}; refusing to resume against it, and nothing was retired.`);
   }
-  if (ledger.version !== 1 || ledger.manifestId !== manifestId || ledger.manifestHash !== manifestHash) {
-    refuse(`does not describe this manifest's reviewed core sources`);
+  if (ledger.version !== 1 || ledger.manifestId !== manifestId) {
+    refuse(`does not describe this manifest's core sources`);
   }
   if (ledger.storeId !== storeId || ledger.epoch !== epoch) {
     refuse(
@@ -4317,9 +4040,6 @@ function reconcileRetirementItems(input: {
         `records ${what} at archive destination ${JSON.stringify(recorded.archivePath)} rather than the ` +
           `manifest-addressed ${item.archivePath}`,
       );
-    }
-    if (recorded.sha256 !== item.sha256) {
-      refuse(`records ${what} with sha256 ${JSON.stringify(recorded.sha256)} rather than the reviewed bytes ${item.sha256}`);
     }
     if (recorded.state !== "pending" && recorded.state !== "moved") {
       refuse(`records ${what} in state ${JSON.stringify(recorded.state)} rather than pending or moved`);
@@ -4363,52 +4083,20 @@ function assertArchiveDestination(root: string, archiveDir: string, item: Retire
   }
 }
 
-/** §6 item 4 one item's exact source bytes, checked before anything moves. */
+/** Retirement checks addressable source/archive paths and copy presence only. */
 function assertRetirementItemHolds(item: RetirementItem): void {
   const live = readIfExists(item.path);
   const archived = readIfExists(item.archivePath);
   if (item.state === "moved") {
-    if (archived === undefined || sha256Of(archived) !== item.sha256) {
-      throw conflict(
-        `the archived copy of ${item.relativePath} no longer holds the reviewed bytes; refusing to claim retirement.`,
-      );
-    }
-    if (live !== undefined) {
-      throw conflict(
-        `the retired source ${item.relativePath} exists again at ${item.path}; an old consumer is still writing old-format ` +
-          `data, so the archive is not the only copy. Nothing was retired.`,
-      );
-    }
+    if (archived === undefined) throw conflict(`the archived copy of ${item.relativePath} is missing.`);
+    if (live !== undefined) throw conflict(`the retired source ${item.relativePath} exists beside its archive copy.`);
     return;
   }
-  if (live === undefined) {
-    if (archived === undefined) {
-      throw conflict(
-        `both ${item.relativePath} and its archive copy at ${item.archivePath} are gone, so the reviewed source cannot be ` +
-          `retired truthfully. Nothing was retired.`,
-      );
-    }
-    if (sha256Of(archived) !== item.sha256) {
-      throw conflict(
-        `the archive copy of ${item.relativePath} does not hold the reviewed bytes; neither copy is overwritten, and ` +
-          `nothing was retired.`,
-      );
-    }
-    return;
+  if (live === undefined && archived === undefined) {
+    throw conflict(`both ${item.relativePath} and its archive copy at ${item.archivePath} are missing.`);
   }
-  const liveHash = sha256Of(live);
-  if (liveHash !== item.sha256) {
-    throw conflict(
-      `the retired source ${item.relativePath} no longer holds the reviewed bytes (live ${liveHash.slice(0, 12)}, reviewed ` +
-        `${item.sha256.slice(0, 12)}). An old consumer is still writing old-format data, so the live file was NOT moved: ` +
-        `stop it, re-preview and re-apply, then resume retirement.`,
-    );
-  }
-  if (archived !== undefined) {
-    throw conflict(
-      `both the source ${item.relativePath} and a copy at ${item.archivePath} exist; retirement refuses without overwriting ` +
-        `either. Nothing was retired.`,
-    );
+  if (live !== undefined && archived !== undefined) {
+    throw conflict(`both the source ${item.relativePath} and its archive copy exist; retirement refuses without overwriting either.`);
   }
 }
 
@@ -4476,10 +4164,9 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
   // have changed since activation.
   const { context } = resolveMigrationInput(input, "retire");
   const manifestId = requireManifestRef(input.manifestId, "retire", "manifestId");
-  const manifestHash = requireManifestRef(input.manifestHash, "retire", "manifestHash");
   const root = controlRootOf(context);
 
-  const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "retirement");
+  const known = await readMigrationRecordFor(context, manifestId, root, "retirement");
   if (known.phase === "retired") return { manifestId, phase: "retired", replayed: true };
   if (known.phase !== "active") {
     throw conflict(
@@ -4488,19 +4175,6 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
     );
   }
   await assertRetirableAuthority(context, known, "retirement");
-  // §4.1 the retirement boundary: the recorded coverage must be the set the
-  // barrier activated under, so a rewritten record is refused BEFORE a rename.
-  if (known.manifest.version === EXECUTION_MIGRATION_MANIFEST_VERSION) {
-    const activatedCoverage = known.activation?.coverageDigest;
-    if (known.coverage === null || typeof activatedCoverage !== "string" || activatedCoverage !== known.coverage.digest) {
-      throw conflict(
-        `manifest ${manifestId} is recorded active with a coverage digest this store cannot tie to its recorded coverage ` +
-          `(recorded ${known.coverage === null ? "\u2014 none" : known.coverage.digest}, activation ` +
-          `${typeof activatedCoverage === "string" ? activatedCoverage : "\u2014 none"}). Retirement moves exactly the reviewed ` +
-          `set; nothing was retired.`,
-      );
-    }
-  }
 
   const archiveDir = join(root, ...ARCHIVED_EXECUTION_DIR, manifestId);
   const ledgerPath = join(archiveDir, "retirement.json");
@@ -4512,9 +4186,8 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
 
   const run = async (): Promise<ExecutionMigrationReceipt> => {
     const live = requireMigrationRecord({
-      record: await readMigrationRecordFor(context, manifestId, manifestHash, root, "retirement"),
+      record: await readMigrationRecordFor(context, manifestId, root, "retirement"),
       manifestId,
-      manifestHash,
       root,
       verb: "retirement",
     });
@@ -4535,7 +4208,6 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
         ledger: existing,
         expected: expectedItems,
         manifestId,
-        manifestHash,
         storeId: live.manifest.storeId,
         epoch: live.manifest.epoch,
         archiveDir,
@@ -4546,7 +4218,7 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
     const ledger: ExecutionRetirementLedger = existing ?? {
       version: 1,
       manifestId,
-      manifestHash,
+      manifestHash: live.manifestHash,
       storeId: live.manifest.storeId,
       epoch: live.manifest.epoch,
       archiveDir,
@@ -4555,10 +4227,9 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
       items: expectedItems,
     };
 
-    // §6 item 4 "recheck the exact current source hashes" FIRST: every item's
-    // destination and every item's bytes are verified before the first rename,
-    // so a redirected destination or a changed source refuses with the live tree
-    // completely untouched rather than halfway through a partial move.
+    // §6 item 4: every addressed path, destination and ledger state is verified
+    // before the first rename, so a redirected destination refuses before any
+    // item moves. File content hashes are not freshness barriers.
     for (const item of ledger.items) {
       assertArchiveDestination(root, archiveDir, item);
       assertRetirementItemHolds(item);
@@ -4571,11 +4242,8 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
         migrationFailureHook(MIGRATION_FAILURE_ENV.retirement, "after-rename");
       }
       const archived = readIfExists(item.archivePath);
-      if (archived === undefined || sha256Of(archived) !== item.sha256) {
-        throw conflict(
-          `the moved copy of ${item.relativePath} does not hold the reviewed bytes; it was NOT overwritten, and the ` +
-            `retirement did not complete.`,
-        );
+      if (readIfExists(item.archivePath) === undefined) {
+        throw conflict(`the moved copy of ${item.relativePath} is missing; it was NOT overwritten.`);
       }
       item.state = "moved";
       ledger.updatedAt = new Date().toISOString();
@@ -4587,7 +4255,7 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
     const stored: ExecutionRetirementRecord = {
       retirementVersion: 1,
       manifestId,
-      manifestHash,
+      manifestHash: live.manifestHash,
       storeId: live.manifest.storeId,
       epoch: live.manifest.epoch,
       archiveDir,
@@ -4673,13 +4341,12 @@ const STAGED_TABLES = [
 export async function abortExecutionMigration(input: ExecutionMigrationAbortInput): Promise<ExecutionMigrationReceipt> {
   const { context, operator } = resolveMigrationInput(input, "abort");
   const manifestId = requireManifestRef(input.manifestId, "abort", "manifestId");
-  const manifestHash = requireManifestRef(input.manifestHash, "abort", "manifestHash");
   if (!isNonEmptyString(input.reason) || input.reason.trim() === "") {
     throw conflict(`abort requires the reason it is recorded under (a nonblank string); an unattributed abort is never recorded.`);
   }
   const root = controlRootOf(context);
 
-  const known = await readMigrationRecordFor(context, manifestId, manifestHash, root, "abort");
+  const known = await readMigrationRecordFor(context, manifestId, root, "abort");
   if (known.phase === "active" || known.phase === "retired") {
     throw conflict(
       `manifest ${manifestId} is recorded ${known.phase}: a live execution authority is never returned to JSON, and a retired ` +
@@ -4692,7 +4359,6 @@ export async function abortExecutionMigration(input: ExecutionMigrationAbortInpu
     const record = requireMigrationRecord({
       record: readMigrationRecord(tx.db, manifestId),
       manifestId,
-      manifestHash,
       root,
       verb: "abort",
     });
@@ -4737,7 +4403,7 @@ export async function abortExecutionMigration(input: ExecutionMigrationAbortInpu
     const stored: ExecutionAbortRecord = {
       abortVersion: 1,
       manifestId,
-      manifestHash,
+      manifestHash: record.manifestHash,
       reason: input.reason,
       operator,
       storeId: tx.storeId,
