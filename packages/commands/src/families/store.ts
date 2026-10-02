@@ -66,8 +66,12 @@ function findLegacyWorkspaceFact(harnessDir: string): string | null {
   const storePath = path.join(harnessDir, "store.db");
   if (existsSync(storePath)) return `a store already exists at ${storePath} — migrate or activate instead of initializing`;
   const projectsDir = path.join(harnessDir, "projects");
-  if (existsSync(projectsDir) && readdirSync(projectsDir).some((name) => existsSync(path.join(projectsDir, name, "residuals.json")))) {
-    return "legacy project residual registers require the staged catalog migration; use the staged migration, not store init";
+  if (existsSync(projectsDir)) {
+    for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.isSymbolicLink() && existsSync(path.join(projectsDir, entry.name, "residuals.json"))) {
+        return "legacy project residual registers require the staged catalog migration; use the staged migration, not store init";
+      }
+    }
   }
   if (existsSync(path.join(harnessDir, "iterations", "README.md"))) {
     return "the maintained iterations catalog index requires the staged catalog migration; use the staged migration, not store init";

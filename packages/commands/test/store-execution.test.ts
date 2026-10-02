@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { captureIssue, openStore } from "@mstar-harness/engine";
@@ -77,10 +77,16 @@ describe("store and execution command surface", () => {
     ]);
   });
 
-  test("initializes, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
+  test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
     const root = fixture("store-lifecycle");
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
+    const linkedProject = join(root, "linked-project");
+    mkdirSync(linkedProject);
+    writeFileSync(join(linkedProject, "residuals.json"), "{}\n");
+    const projectsDir = join(harness, "projects");
+    mkdirSync(projectsDir);
+    symlinkSync(linkedProject, join(projectsDir, "linked"));
     const initialized = await invoke(definition("store.init"), { harness }, root);
     if (initialized.status !== "ok") throw new Error(JSON.stringify(initialized));
     expect(dataOf(initialized).authorityState).toBe("active");
