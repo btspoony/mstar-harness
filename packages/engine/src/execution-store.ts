@@ -3262,6 +3262,13 @@ export async function bindExecutionSession(
       // permitted only to the identity that created it, so a foreign trusted
       // identity cannot claim a lifecycle it did not create.
       if (header.creatorSessionId === null) {
+        if (readSessionRows(tx.db, store, bind.workflowId, "coordinator").length > 0) {
+          throw new ExecutionError(
+            "execution.session-unavailable",
+            `workflow ${bind.workflowId} already records a coordinator session; first-bind adoption is unavailable after any ` +
+              `coordinator record exists. Use the separate recovery transition after validated stop evidence. Nothing was bound.`,
+          );
+        }
         tx.db
           .prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?")
           .run(bind.sessionId, bind.workflowId);
