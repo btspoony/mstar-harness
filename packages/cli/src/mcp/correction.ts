@@ -21,11 +21,12 @@ export function correctiveMessage(name: string, catalog: Iterable<string>): stri
   const tools = [...catalog].sort();
   const normalized = normalize(name);
   const exact = tools.find((tool) => normalize(tool) === normalized);
-  const prefix = tools.find((tool) => normalize(tool).startsWith(normalized) && normalize(tool).length - normalized.length <= 3);
-  const nearest = exact ?? prefix ?? tools
+  const editDistanceMatch = tools
     .map((tool) => ({ tool, distance: distance(normalized, normalize(tool)) }))
     .filter(({ distance: score }) => score <= 2)
     .sort((left, right) => left.distance - right.distance || (left.tool < right.tool ? -1 : left.tool > right.tool ? 1 : 0))[0]?.tool;
+  const prefix = tools.find((tool) => normalize(tool).startsWith(normalized) && normalize(tool).length - normalized.length <= 3);
+  const nearest = exact ?? editDistanceMatch ?? prefix;
   return nearest === undefined
     ? `Tool ${name} not found. Call tools/list for the full catalog.`
     : `Tool ${name} not found. Did you mean ${nearest}? Call tools/list for the full catalog.`;
@@ -43,7 +44,7 @@ export function withToolCorrection(transport: Transport, catalog: () => Iterable
         await transport.send({ ...message, error: { ...message.error, message: correctiveMessage(name, catalog()) } }, options);
         return;
       }
-      if ("id" in message && message.id !== null && message.id !== undefined) requests.delete(message.id);
+      if (!("method" in message) && "id" in message && message.id !== null && message.id !== undefined) requests.delete(message.id);
       await transport.send(message, options);
     },
     close: () => transport.close(),
