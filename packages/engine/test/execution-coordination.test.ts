@@ -4521,4 +4521,120 @@ describe("execution-close-composition: §R5/§R10 the close composes what the ro
     expect(storedWorkflow(context).status).toBe("completed");
     expect(Number(closeFootprint(context).registered)).toBe(0);
   }, 30000);
+  test("released-claim: foreign and accepted handoffs remain protected and missing input has a truthful stopped route", async () => {
+    const fixture = await lifecycleFixture("released-claim-protections", "development");
+    const { context, seat } = fixture;
+    await expect(
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "release-foreign", { kind: "release" }),
+    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    const handoffId = await acceptedAttempt(fixture, "release-accepted");
+    await expect(
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "release-accepted-handoff", { kind: "release" }),
+    ).rejects.toMatchObject({ code: "coordination.handoff-state" });
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "return-release-handoff", {
+      kind: "return", handoffId, reason: "restore plan ownership",
+    });
+    rmSync(fixture.documents[OWN_PLAN]!.assignmentPath);
+    const released = await planMutation(fixture, seat, OWN_PLAN, "release-for-stop", { kind: "release" });
+    expect(released.data.plan.status).toBe("Blocked");
+    const stopped = await workflowMutationOn(fixture, "stop-after-release", {
+      kind: "lifecycle", status: "stopped", reason: "holder released after missing Prepare content",
+    });
+    expect(stopped.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    expect(storedWorkflow(context).status).toBe("stopped");
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "released", released_by: seat.caller.sessionId, release_operation_id: "release-for-stop",
+    });
+  }, 30000);
+  test("holder-release: own release is reversible through the same active binding without Assignment bytes", async () => {
+    const fixture = await lifecycleFixture("holder-release-rebind", "development");
+    const { context, seat } = fixture;
+    const assignmentPath = fixture.documents[OWN_PLAN]!.assignmentPath;
+    const assignmentBytes = readFileSync(assignmentPath);
+    rmSync(assignmentPath);
+
+    const released = await planMutation(fixture, seat, OWN_PLAN, "release-holder", { kind: "release" });
+    expect(released.data.plan.status).toBe("Blocked");
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "released",
+      released_by: seat.caller.sessionId,
+      release_reason: "holder-requested release",
+      release_operation_id: "release-holder",
+    });
+
+    const rebound = await bindExecutionSession(domainContext(context, seat.caller), {
+      workflowId: WORKFLOW_ID,
+      planId: OWN_PLAN,
+      role: "plan-pm",
+      expected: await planTokenOf(fixture, OWN_PLAN),
+      operationId: "rebind-holder",
+    });
+    expect(rebound.data.sessionId).toBe(seat.session.sessionId);
+    writeFileSync(assignmentPath, assignmentBytes);
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      status: "held",
+      holder_session_id: seat.caller.sessionId,
+      claim_operation_id: "rebind-holder",
+      prior_claim: { release_operation_id: "release-holder" },
+    });
+    const progressed = await lifecycleProgress(
+      fixture,
+      seat,
+      OWN_PLAN,
+      "progress-after-rebind",
+      "InProgress",
+      await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(progressed.data.plan.status).toBe("InProgress");
+    const releasedAgain = await planMutation(fixture, seat, OWN_PLAN, "release-holder-cycle-2", {
+      kind: "release", reason: "second cycle",
+    });
+    expect(releasedAgain.data.plan.status).toBe("Blocked");
+    const replay = await planMutation(fixture, seat, OWN_PLAN, "release-holder-cycle-2", {
+      kind: "release", reason: "second cycle",
+    });
+    expect(replay.replayed).toBe(true);
+    await expect(
+      planMutation(fixture, seat, OWN_PLAN, "release-holder-cycle-2", { kind: "release", reason: "conflicting intent" }),
+    ).rejects.toMatchObject({ code: "execution.operation-conflict" });
+    const reboundAgain = await bindExecutionSession(domainContext(context, seat.caller), {
+      workflowId: WORKFLOW_ID, planId: OWN_PLAN, role: "plan-pm",
+      expected: await planTokenOf(fixture, OWN_PLAN), operationId: "rebind-holder-cycle-2",
+    });
+    expect(reboundAgain.data.sessionId).toBe(seat.session.sessionId);
+    expect(parsedJson(planFootprint(context, OWN_PLAN).own_lease)).toMatchObject({
+      claim_operation_id: "rebind-holder-cycle-2",
+      prior_claim: { release_operation_id: "release-holder-cycle-2" },
+    });
+    withRaw(context, (db) => {
+      db.prepare("update execution_leases set owner_epoch = ? where workflow_id = ? and plan_id = ?")
+        .run(fixture.epoch - 1, WORKFLOW_ID, OWN_PLAN);
+    });
+    const oldEpochClaim = planFootprint(context, OWN_PLAN);
+    await expect(
+      planMutation(fixture, seat, OWN_PLAN, "release-old-epoch", { kind: "release" }),
+    ).rejects.toMatchObject({ code: "execution.stale-token" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(oldEpochClaim);
+    withRaw(context, (db) => {
+      db.prepare("update execution_leases set owner_epoch = ? where workflow_id = ? and plan_id = ?")
+        .run(fixture.epoch, WORKFLOW_ID, OWN_PLAN);
+    });
+    plantRowStatus(context, OWN_PLAN, "Done");
+    const terminal = planFootprint(context, OWN_PLAN);
+    await expect(
+      planMutation(fixture, seat, OWN_PLAN, "release-terminal-row", { kind: "release" }),
+    ).rejects.toMatchObject({ code: "coordination.plan-status" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(terminal);
+  }, 30000);
+  test("released-claim: holder-only progress refuses without changing a released row when Assignment is readable", async () => {
+    const fixture = await lifecycleFixture("released-claim-progress-refusal", "development");
+    const { context, seat } = fixture;
+    const released = await planMutation(fixture, seat, OWN_PLAN, "release-readable-assignment", { kind: "release" });
+    expect(released.data.plan.status).toBe("Blocked");
+    const afterRelease = planFootprint(context, OWN_PLAN);
+    await expect(
+      lifecycleProgress(fixture, seat, OWN_PLAN, "progress-without-claim", "InProgress", await planTokenOf(fixture, OWN_PLAN)),
+    ).rejects.toMatchObject({ code: "coordination.execution-lease-required" });
+    expect(planFootprint(context, OWN_PLAN)).toEqual(afterRelease);
+  }, 30000);
 });

@@ -130,6 +130,7 @@ export const PLAN_OPERATION_SEMANTICS: Readonly<Record<PlanCoordinationOperation
   complete: ["planId", "operation.kind", "operation.handoffId"],
   "repair-delivery-source": ["planId", "operation.kind", "operation.handoffId"],
   reconcile: ["planId", "operation.kind", "operation.handoffId"],
+  release: ["planId", "operation.kind", "operation.reason"],
 };
 
 /**
