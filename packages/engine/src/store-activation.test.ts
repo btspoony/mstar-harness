@@ -599,6 +599,129 @@ describe("store retirement", () => {
     }
   });
 
+  test("retirement removes the moved reviewed table and keeps an unrelated recognized table at its old slot", async () => {
+    const fixture = await activatedFixture("retirement-old-slot-unrelated-");
+    const readmePath = join(fixture.harness, "iterations", "README.md");
+
+    // Crash after the reviewed table's rewrite, before its verification.
+    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
+      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
+    );
+    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+
+    // Permitted prose drift below the reviewed slot moves the reviewed
+    // `iter-one` table down, and an unrelated recognized iteration table that
+    // was NEVER reviewed now occupies the old slot. A line-coordinate locator
+    // would delete the unrelated table instead of the reviewed one.
+    const table = (id: string, description: string): string[] => [
+      "| Iteration | Path | Description | Status |",
+      "|-----------|------|-------------|--------|",
+      `| \`${id}\` | \`${id}/\` | ${description} | \`active\` |`,
+    ];
+    writeFileSync(
+      readmePath,
+      [
+        "# Iterations",
+        "",
+        ...table("iter-two", "Unreviewed iteration"),
+        "",
+        "Narrative inserted after review that moved the reviewed table down.",
+        "",
+        ...table("iter-one", "First iteration"),
+        "",
+        "Security disposition: this sentence is not bookkeeping and stays.",
+        "",
+      ].join("\n"),
+    );
+
+    const receipt = await retireStoreSources(fixture.context, fixture.activation);
+    expect(receipt.resumed).toBe(true);
+    const live = readFileSync(readmePath, "utf8");
+    // The reviewed table is gone; the unrelated table and the prose survive.
+    expect(live).not.toContain("| `iter-one` |");
+    expect(live).toContain("| `iter-two` |");
+    expect(live).toContain("Unreviewed iteration");
+    expect(live).toContain("Security disposition: this sentence is not bookkeeping and stays.");
+    const archived = readFileSync(receipt.sections[0]!.archivedPath, "utf8");
+    expect(archived).toContain("| `iter-one` |");
+    expect(archived).toContain("| `iter-two` |");
+    expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
+  });
+
+  test("retirement resumes a moved target whose header was also edited, with an archive pending", async () => {
+    const fixture = await activatedFixture("retirement-moved-edited-header-");
+    const readmePath = join(fixture.harness, "iterations", "README.md");
+
+    // Crash after the archive copy and the live rewrite, before verification:
+    // the archive exists and the ledger still holds the item as pending.
+    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE: "1" }, () =>
+      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
+    );
+    expect((induced as Error).message).toContain("induced retirement failure after the section rewrite");
+
+    // A permitted edit both moves the still-present target and adds a
+    // recognized column to its header, so a header-equality locator would read
+    // it as absent and accept completion from the archive alone.
+    writeFileSync(
+      readmePath,
+      [
+        "# Iterations",
+        "",
+        "Narrative inserted after review moved the still-present target down.",
+        "",
+        "| Iteration | Path | Description | Status | Owner |",
+        "|-----------|------|-------------|--------|-------|",
+        "| `iter-one` | `iter-one/` | First iteration | `active` | pm |",
+        "",
+        "Security disposition stays.",
+        "",
+      ].join("\n"),
+    );
+
+    const receipt = await retireStoreSources(fixture.context, fixture.activation);
+    expect(receipt.resumed).toBe(true);
+    const live = readFileSync(readmePath, "utf8");
+    expect(live).not.toContain("| `iter-one` |");
+    expect(live).toContain("Narrative inserted after review moved the still-present target down.");
+    expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
+  });
+
+  test("retirement finishes a second duplicate-reviewed table whose row count changed after review", async () => {
+    const fixture = await duplicateHeaderFixture("retirement-duplicate-size-drift-");
+    const readmePath = join(fixture.harness, "iterations", "README.md");
+
+    // Crash right after the FIRST reviewed table (`iter-one`) was rewritten; the
+    // second reviewed table is still pending.
+    const induced = await withEnv({ MSTAR_STORE_FAIL_RETIREMENT_AFTER: "5" }, () =>
+      retireStoreSources(fixture.context, fixture.activation).catch((error: unknown) => error),
+    );
+    expect((induced as Error).message).toContain("induced retirement failure after 5 item(s)");
+    const liveAfterCrash = readFileSync(readmePath, "utf8");
+    expect(liveAfterCrash).not.toContain("| `iter-one` |");
+    expect(liveAfterCrash).toContain("| `iter-two` |");
+
+    // A permitted edit adds a row to the still-pending second table, so its
+    // actual span no longer matches the reviewed one. Resume must retire the
+    // table by identity and record the lines it ACTUALLY removed.
+    const editedSecond = [
+      "| Iteration | Path | Description | Status |",
+      "|-----------|------|-------------|--------|",
+      "| `iter-two` | `iter-two/` | iter-two iteration | `active` |",
+      "| `iter-two-extra` | `iter-two-extra/` | added after review | `active` |",
+    ];
+    writeFileSync(readmePath, ["# Iterations", "", "Separating narrative between the two tables.", ...editedSecond, "", "Security disposition stays.", ""].join("\n"));
+
+    const receipt = await retireStoreSources(fixture.context, fixture.activation);
+    expect(receipt.resumed).toBe(true);
+    const live = readFileSync(readmePath, "utf8");
+    expect(live).not.toContain("| `iter-two` |");
+    expect(live).toContain("Separating narrative between the two tables.");
+    expect(live).toContain("Security disposition stays.");
+    // The receipt records the actual removed span, not the reviewed arithmetic.
+    expect(receipt.sections[1]!.removedLines).toBe(4);
+    expect((await receiptRows(fixture.context, "retired")).length).toBe(1);
+  });
+
   test("retirement resumes a crash between the section rewrite and its verification", async () => {
     const fixture = await activatedFixture("retirement-section-resume-");
     const readmePath = join(fixture.harness, "iterations", "README.md");

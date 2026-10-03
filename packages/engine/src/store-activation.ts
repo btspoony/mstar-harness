@@ -23,8 +23,9 @@
  * - `retireStoreSources` moves the reviewed registers into
  *   `<resolved root>/archived/store-migration/<activation-receipt-id>/` under
  *   a resumable per-item ledger, preserving copy-before-remove ordering and
- *   path containment. Mixed-content index files lose only their reviewed
- *   section lines; every other byte stays.
+ *   path containment. A mixed-content index file loses only the lines of the
+ *   table that still carries one of its reviewed row identities; every other
+ *   byte — narrative, unrelated tables, rows added after review — stays.
  * - The archived registers are historical migration input, never a rollback
  *   path: recovery after activation is the quiesced SQLite-consistent backup
  *   plus reconciliation (§7), and the marker says so explicitly.
@@ -52,6 +53,14 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
+import {
+  cellBacktickToken,
+  cellReference,
+  detectIndexFamily,
+  readTables,
+  type CatalogImportPlan,
+  type IndexFamily,
+} from "./catalog-import.js";
 import { writeJson } from "./core.js";
 import { withStatusWriteLock } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
@@ -1972,6 +1981,23 @@ type LedgerSectionItem = {
   endLine: number;
   sha256: string;
   preservedLines: number;
+  /**
+   * The declared identities of the index rows this FILE was reviewed to
+   * retire, read from the reviewed plan's own evidence (`index.id` /
+   * `index.path`). Identity is row-level: a live table is retired when it still
+   * carries one of these rows, whatever its line number, column labels or added
+   * rows.
+   */
+  declaredKeys: string[];
+  /**
+   * The declared identities of the table this item actually excised, recorded
+   * when the rewrite happened. A verified item resumes against exactly these,
+   * so a later re-derivation from the reviewed span can never select another
+   * table.
+   */
+  retiredKeys: string[] | null;
+  /** Lines actually removed from the live file, as observed on the rewrite. */
+  removedLines: number | null;
   archivePath: string;
   expectedLiveSha256: string | null;
   state: "pending" | "verified";
@@ -2127,97 +2153,90 @@ function verifyArchivedRegister(item: LedgerRegisterItem): void {
   }
 }
 
-/** The cell labels of one markdown header line, rendered the way catalog-import records `header`. */
-function tableHeaderAt(lines: string[], startLine: number): string | null {
-  const header = lines[startLine - 1];
-  const delimiter = lines[startLine];
-  if (header === undefined || delimiter === undefined) return null;
-  if (!header.trim().startsWith("|") || !delimiter.trim().startsWith("|")) return null;
-  const cells = delimiter
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim().replace(/\s/g, ""));
-  if (cells.length === 0 || !cells.every((cell) => /^:?-{2,}:?$/.test(cell))) return null;
-  return header
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim())
-    .join(" | ");
+/** A located live table: its 1-based line span and the declared row locations it holds. */
+type TableSpan = { startLine: number; endLine: number; keys: string[] };
+
+/**
+ * The declared catalog location of one legacy index data row, resolved exactly
+ * as `catalog-import` resolves the same row in the same recognized family: an
+ * iteration row's backticked id, or a document/package row's link reference
+ * joined to the index's own directory (`owner`) for a package index.
+ */
+function rowLocationOf(family: IndexFamily, cells: string[], owner: string | null): string | null {
+  const first = cells[0] ?? "";
+  if (family === "iteration-rows") return cellBacktickToken(first);
+  const reference = cellReference(first);
+  if (reference === null) return null;
+  const normalized = reference.replace(/^\.\//, "").replace(/\/+$/, "");
+  return family === "package-documents" && owner !== null ? `${owner}/${normalized}` : normalized;
 }
 
-/** One markdown table in a live index file: its 1-based line span. */
-type TableSpan = { startLine: number; endLine: number };
-
-/** The markdown table span when a table starts at 1-based `startLine`, else null. */
-function tableSpanAt(lines: string[], startLine: number): TableSpan | null {
-  if (tableHeaderAt(lines, startLine) === null) return null;
-  let last = startLine + 1; // the delimiter row closes the header even with no body rows
-  for (let row = startLine + 2; row <= lines.length; row += 1) {
-    if (!(lines[row - 1] ?? "").trim().startsWith("|")) break;
-    last = row;
-  }
-  return { startLine, endLine: last };
+function ownerOfIndex(relativePath: string): string | null {
+  const slash = relativePath.indexOf("/");
+  return slash === -1 ? null : relativePath.slice(0, slash);
 }
 
 /**
- * The net line shift already applied to one file by the sections this run has
- * excised before `item` (they were removed from the live tree). The item's
- * reviewed span, shifted by this amount, is its expected current position.
+ * The declared catalog identities this index file's reviewed rows carry, read
+ * from the reviewed plan's own evidence (`catalog-import` records an
+ * `index.id` / `index.path` evidence entry per index row, keyed by the source
+ * file). This is reviewed row-level identity, never a line coordinate: the
+ * reviewed plan is the only place the reviewed row set survives after the file
+ * drifts.
  */
-function linesRemovedBefore(item: LedgerSectionItem, ledger: RetirementLedger): number {
-  return ledger.sections
-    .filter((section) => section.rootKind === item.rootKind && section.relativePath === item.relativePath && section.state === "verified" && section.startLine < item.startLine)
-    .reduce((total, section) => total + (section.endLine - section.startLine + 1), 0);
-}
-
-/**
- * Locate the CURRENT live table for one reviewed retirement item.
- *
- * Identity is the item's reviewed SCOPE — its span, shifted by the lines this
- * file has already had excised — so a permitted edit to a still-present
- * target's column labels is still found (position, not labels), and two tables
- * that share a header are never confused. When no table occupies the expected
- * span, the item may have been moved by a net upward drift: the item's table is
- * then the nearest table whose header still matches AND that no OTHER reviewed
- * section of this file already claims. `null` means the reviewed table is no
- * longer present (already excised, or an equivalent edit).
- */
-function locateReviewedSection(live: string, item: LedgerSectionItem, ledger: RetirementLedger): TableSpan | null {
-  const lines = live.split(/\r?\n/);
-  const expected = item.startLine - linesRemovedBefore(item, ledger);
-  const direct = tableSpanAt(lines, expected);
-  if (direct !== null) return direct;
-  const claimed = new Set<number>();
-  for (const other of ledger.sections) {
-    if (other === item) continue;
-    if (other.rootKind !== item.rootKind || other.relativePath !== item.relativePath) continue;
-    claimed.add(other.startLine - linesRemovedBefore(other, ledger));
-  }
-  let best: TableSpan | null = null;
-  for (let start = 1; start < lines.length; start += 1) {
-    const span = tableSpanAt(lines, start);
-    if (span === null) continue;
-    if (tableHeaderAt(lines, start) === item.header && !claimed.has(span.startLine)) {
-      if (best === null || Math.abs(span.startLine - expected) < Math.abs(best.startLine - expected)) best = span;
+function declaredKeysFor(catalog: CatalogImportPlan, rootKind: CatalogRootKind, relativePath: string): string[] {
+  const sourceKey = `${rootKind}:${relativePath}`;
+  const keys = new Set<string>();
+  for (const entity of catalog.entities) {
+    for (const entry of entity.evidence) {
+      if (entry.sourceKey !== sourceKey) continue;
+      if (entry.field === "index.id" || entry.field === "index.path") keys.add(entry.value);
     }
-    start = span.endLine;
   }
-  return best;
+  return [...keys].sort();
+}
+
+/**
+ * The live table a reviewed retirement item targets, associated by ROW
+ * IDENTITY: a recognized table that still holds one of the item's reviewed
+ * identities. A table occupying an old line slot, carrying a matching header,
+ * or making the file's total length match is never evidence of identity — only
+ * a declared reviewed row is returned.
+ *
+ * A never-excised item looks up the file's declared reviewed identities; an
+ * item whose rewrite already happened uses the identities of the table it
+ * actually excised. Either way the item re-reads the live file, so duplicate
+ * headers and duplicate rows are never confused and no other table is touched.
+ * `null` means none of the target's reviewed rows remains in a recognized
+ * table.
+ */
+function locateReviewedSection(live: string, item: LedgerSectionItem): TableSpan | null {
+  const wanted = new Set<string>(item.retiredKeys ?? item.declaredKeys);
+  if (wanted.size === 0) return null;
+  const owner = ownerOfIndex(item.relativePath);
+  for (const table of readTables(live)) {
+    const family = detectIndexFamily(table.header);
+    if (family === null) continue;
+    const keys: string[] = [];
+    for (const row of table.rows) {
+      const location = rowLocationOf(family, row.cells, owner);
+      if (location !== null && wanted.has(location)) keys.push(location);
+    }
+    if (keys.length > 0) return { startLine: table.firstLine, endLine: table.lastLine, keys: [...new Set(keys)].sort() };
+  }
+  return null;
 }
 
 /**
  * Excise one reviewed index section: archive the whole original file, then
- * rewrite the live file without only those lines. Every other byte — narrative,
- * security dispositions, human report content — survives verbatim.
+ * rewrite the live file without only the target table's lines. Every other byte
+ * — narrative, security dispositions, unrelated tables, human report content,
+ * rows added after review — survives verbatim.
  *
- * The section is located by its reviewed scope (span-shifted) with a
- * nearest-header fallback, so a line-count coincidence never stands in for
- * excision: a table that is still present is always removed, and completion is
- * proven by the target's absence (not by its total length).
+ * The target is associated by the reviewed row identities, never by a line
+ * coordinate or header. The lines actually removed are recorded as observed, so
+ * no resume path ever re-derives them from the reviewed span. Completion is
+ * proven by the target rows' absence, not by a total length or an archive.
  */
 function retireSection(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerSectionItem): void {
   const livePath = join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
@@ -2229,38 +2248,31 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
         `Nothing was retired.`,
     );
   }
-  const located = locateReviewedSection(live, item, ledger);
+  const located = locateReviewedSection(live, item);
   if (located === null) {
-    // The reviewed table is already gone (a crash after the rewrite, before the
-    // ledger recorded it, or an equivalent edit): verify and finish.
-    verifyRetiredSection(livePath, item, ledger);
+    // None of the target's reviewed rows remains (an earlier attempt's rewrite,
+    // or the rows were already excised): finish from the archive witness.
+    verifyRetiredSection(livePath, item);
     item.state = "verified";
     writeLedger(ledgerPath, ledger);
     return;
   }
   const excised = removeSectionLines(live, located.startLine, located.endLine, `catalog source ${item.relativePath}`);
-  const removedLines = located.endLine - located.startLine + 1;
-  if (lineCountOf(excised) !== lineCountOf(live) - removedLines) {
-    throw new StoreActivationError(
-      "store.migration-source-changed",
-      `removing the reviewed section from ${item.relativePath} did not remove exactly ${removedLines} line(s); nothing was rewritten.`,
-    );
-  }
   mkdirSync(dirname(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
+  item.retiredKeys = located.keys;
+  item.removedLines = located.endLine - located.startLine + 1;
   item.expectedLiveSha256 = sha256Bytes(Buffer.from(excised, "utf8"));
   writeLedger(ledgerPath, ledger);
   writeTextAtomic(livePath, excised);
-  // The item is now excised from the live tree, so the shift for later sections
-  // of this file accounts for it during this same verification.
   item.state = "verified";
   failureHook("section-write", 0);
-  verifyRetiredSection(livePath, item, ledger);
+  verifyRetiredSection(livePath, item);
   writeLedger(ledgerPath, ledger);
 }
 
-function verifyRetiredSection(livePath: string, item: LedgerSectionItem, ledger: RetirementLedger): void {
+function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError(
@@ -2268,10 +2280,10 @@ function verifyRetiredSection(livePath: string, item: LedgerSectionItem, ledger:
       `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`,
     );
   }
-  if (locateReviewedSection(live, item, ledger) !== null) {
+  if (locateReviewedSection(live, item) !== null) {
     throw new StoreActivationError(
       "store.migration-source-changed",
-      `catalog source ${item.rootKind}:${item.relativePath} still holds the reviewed section table; refusing to claim retirement.`,
+      `catalog source ${item.rootKind}:${item.relativePath} still holds a reviewed row of the retired section; refusing to claim retirement.`,
     );
   }
   if (readIfExists(item.archivePath) === undefined) {
@@ -2411,15 +2423,23 @@ export async function retireStoreSources(context: StoreContext, activationReceip
           endLine: section.endLine,
           sha256: section.sha256,
           preservedLines: section.preservedLines,
+          declaredKeys: declaredKeysFor(manifest.catalog, section.rootKind, section.relativePath),
+          retiredKeys: null,
+          removedLines: null,
           archivePath: join(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
           expectedLiveSha256: null,
           state: "pending" as const,
         }))
         .sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine),
     };
+    // The reviewed row identities are always current: they are read from the
+    // reviewed plan in hand (the same manifest the generation/epoch already
+    // binds this run to), never from a stale recorded copy.
+    for (const item of ledger.sections) {
+      item.declaredKeys = declaredKeysFor(manifest.catalog, item.rootKind, item.relativePath);
+    }
     mkdirSync(archiveDir, { recursive: true });
     writeLedger(ledgerPath, ledger);
-
     let completed = 0;
     for (const item of ledger.registers) {
       if (item.state === "verified") {
@@ -2431,10 +2451,6 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       failureHook("retirement", completed);
     }
     for (const item of ledger.sections) {
-      if (item.state === "verified") {
-        verifyRetiredSection(join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath)), item, ledger);
-        continue;
-      }
       retireSection(context, ledgerPath, ledger, item);
       completed += 1;
       failureHook("retirement", completed);
@@ -2458,7 +2474,7 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       archivedPath: item.archivePath,
       liveSha256: item.expectedLiveSha256!,
       preservedLines: item.preservedLines,
-      removedLines: item.endLine - item.startLine + 1,
+      removedLines: item.removedLines ?? item.endLine - item.startLine + 1,
     }));
 
     handle.db.exec("begin immediate");
