@@ -1482,7 +1482,7 @@
     },
     {
       "id": "recovery-policy-sparse-intent",
-      "prompt": "Coordinator has a normal plan progress intent after a partial recovery; authoritative scope and own binding are available, but one independent component remains ambiguous.",
+      "prompt": "A scoped primary plan PM has a normal plan progress intent after a partial recovery; authoritative scope and its own current plan-pm binding are available, but one independent component remains ambiguous. Invoke the supported progress route without changing unrelated scopes. Negative control: a coordinator identity, rather than the plan-pm identity, attempts the same plan-session progress verb.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["invoke public intent without universal repair chain", "retain applied components from partial receipt", "name only remaining conflict and continue independent work"],
       "hard_fail_if": ["forces rebind and copied tokens as preflight", "treats partial receipt as no mutation", "sends session credentials to leaf"]

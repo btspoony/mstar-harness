@@ -64,6 +64,7 @@ mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reaso
 | Session | Verbs |
 |---|---|
 | plan session | `mstar plan show`, `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close`, `mstar plan handoff` |
+| plan session, **ACTIVE holder only** | `mstar plan release` — releases only the caller's own held execution claim (either seat may release a claim it genuinely holds); continue through an explicit same-holder `plan bind` |
 | coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow evidence` |
 | either (active bootstrap / read / claim) | `mstar plan bind` |
 
