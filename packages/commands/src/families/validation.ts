@@ -26,8 +26,6 @@ import {
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   planQualityBar,
-  readExecutionState,
-  resolveExecutionReadRoute,
   scanActiveLifecycleBranches,
   scopeGuard,
   SddScriptError,
@@ -245,6 +243,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
         if (!harness) throw new Error("harness directory not found");
+        const { readExecutionState, resolveExecutionReadRoute } = await import("@mstar-harness/engine");
         if (await resolveExecutionReadRoute({ harnessDir: harness }) === "execution") {
           const graph = (await readExecutionState({ harnessDir: harness })).data;
           const registered = graph.workflows.find(({ state }) => state.id === workflow);
