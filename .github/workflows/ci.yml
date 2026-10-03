@@ -29,15 +29,22 @@ permissions:
 # engine dist (packages/engine/dist, gitignored) is what the
 # `@mstar-harness/engine` package export resolves to, every consumer build
 # inlines it and every consumer test imports it. That duplication is
-# deliberate — it is what buys the parallelism. No check was dropped, weakened
-# or given a different command: each `run:` line below is byte-identical to the
-# pre-split step it replaces; only the job it lives in changed.
+# deliberate — it is what buys the parallelism. No check was dropped or
+# weakened: every non-CLI job keeps its pre-split `run:` line byte-identical,
+# and the CLI suite's former single `bun run --cwd packages/cli test` step is
+# replaced by four plain `bun test` shard steps (see the CLI test shard block
+# below) that together run the same files.
 #
 # Push and pull-request workflows run for every path so Markdown-only edits
 # and linked-target deletions are checked by the drift-lint job.
 # Why there is no `needs:` edge (a DAG was evaluated): wall clock = the slowest
-# job, and the slowest job is the CLI suite (~243s of tests). Its own share of
-# the duplicated setup is ~9s of bun builds (engine 4s, dsh 3s, opencode/omp
+# job. Measured on CI run 37018503961 (main): job `test-cli` was 594s total —
+# ~49s of setup/build preamble plus a 544.8s `bun test` phase (1065 tests
+# across 62 files) — while the next-slowest job, `test-engine`, was 249s. The
+# CLI suite now runs as four independent shards (test-cli-coordination,
+# test-cli-ops, test-cli-suite, test-cli-web) so wall clock is the slowest
+# shard, not the sum; no shard declares `needs:`. Its own share of the
+# duplicated setup is ~9s of bun builds (engine 4s, dsh 3s, opencode/omp
 # 1s each), while a shared `prepare` job would add ITS whole duration — ~40s of
 # preamble+builds, plus artifact upload/download — in front of every test job.
 # Modelled from the first run's measured job durations: independent jobs = 250s
@@ -50,6 +57,43 @@ permissions:
 # Keeping every job independent also preserves the property this change exists
 # for: one failing surface never skips another (first run: 9 pass / 1 fail from
 # a single run, instead of 1 fail + 10 skipped steps).
+#
+# ── CLI test shards (4 jobs, no `needs:`) ──────────────────────────────────
+# Measured per-file durations from run 37018503961 (log-timestamp diffing of
+# the `bun test` phase, 544.8s across 62 files):
+#   • test-cli-coordination — `test/plan-coordination.test.ts` alone, 163.6s,
+#     the single largest file.
+#   • test-cli-ops — the 8 next-heaviest files, ~190.4s combined:
+#     sdd-evidence 57.7, prreview-execution-cli 26.7, worktree-cleanup 24.3,
+#     persist 19.6, audit-cli 18.0, issue 16.4, execution-session 14.0,
+#     sdd-cli 13.7.
+#   • test-cli-suite — the dynamic remainder: every other discovered suite minus
+#     the 9 files listed explicitly above, 52 files.
+#   • test-cli-web — the `web/` batch, carved out per owner decision.
+# The remainder is computed in the job itself (see the `Test CLI (suite shard —
+# dynamic remainder)` step), so a newly added test file lands in test-cli-suite
+# automatically, with no shard-list registry to maintain. That list is
+# fail-closed: an empty selection is routed to an explicit guard that exits 1
+# with a self-explaining error, rather than degrading to a bare `bun test` that
+# would re-discover and double-run every other shard; any real discovery error
+# is re-raised as-is. Worst case for a file left in the remainder is a slower
+# suite job, never a silently skipped test.
+# Rebalancing = move a path between the explicit lists (the coordination job's
+# single path or the ops job's 8 paths); the remainder follows automatically.
+# Discovery note (head 13c231df): `bun test` discovers 62 files — 60 under
+# `test/`, one under `src/`, and `web/view-model.test.ts`. Both CLI discovery
+# steps mirror that: `find` from the package root over bun's four documented
+# filename classes — `*.test.*`, `*_test.*`, `*.spec.*`, `*_spec.*`, any
+# extension — pruning `node_modules` (bun skips it), `dist` and `.git`
+# (generated / metadata, defensive), and `web` in the suite shard (the `web/`
+# batch owns those files, so pruning prevents a double run). A nested or
+# spec/underscore-named suite therefore reaches exactly one shard instead of
+# being skipped by all of them. `find` does not error on a pattern that matches
+# nothing, so a missing pattern class is harmless; only an overall-empty suite
+# remainder is refused (an empty `web/` batch is legitimate and passes with a
+# notice).
+# Coverage = coordination (1) + ops (8) + remainder (52) + web (1) = 62.
+# Evidence source: CI run 37018503961 on `main`.
 jobs:
   # ── Delivery-form gate (ordered, cheap) ───────────────────────────────────
   # Steps here depend on each other's output and cannot be parallelized; the
@@ -172,7 +216,11 @@ jobs:
       - name: Test engine
         run: bun run --cwd packages/engine test
 
-  test-cli:
+  # ── CLI suite, shard 1/4: the single heaviest file ────────────────────────
+  # `test/plan-coordination.test.ts` alone was 163.6s on run 37018503961 — the
+  # largest file in the suite. Giving it its own job keeps it off the other
+  # shards' critical path instead of dominating one combined run.
+  test-cli-coordination:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -210,7 +258,8 @@ jobs:
       # mirror matches the bytes on disk. A fresh checkout has none of those
       # artifacts, so every consumer the guard digests must be built here —
       # engine first (each consumer build inlines the engine dist), then the
-      # consumers. The CLI's own dist is built by the "Test CLI" package script.
+      # consumers. A suite shard that runs the guard needs them built; every
+      # shard keeps this identical chain so the jobs stay interchangeable.
       - name: Build engine (dist for the CLI suite's consumer-manifest guard)
         run: bun run engine:build && bun run judgment:build
       # The CLI suite's execution-consumer guard verifies built consumer artifacts.
@@ -226,12 +275,275 @@ jobs:
       - name: Build omp
         run: bun run omp:build
 
-      # The cli test script is `bun run --cwd ../engine build && bun run build &&
-      # bun test` — the engine dist and CLI build are performed by the package
-      # script itself (tests import @mstar-harness/engine dist) — so this job
-      # needs no separate CLI build step, exactly as before the split.
-      - name: Test CLI
-        run: bun run --cwd packages/cli test
+      # The retired `test-cli` job ran the package script
+      # (`bun run --cwd packages/cli test` = `bun run --cwd ../engine build &&
+      # bun run build && bun test`), which built the CLI itself; the shard steps
+      # below are plain `bun test`, so each job builds the CLI explicitly.
+      # `bun run cli:build` is the equivalent command: root `cli:build` is
+      # `bun run --cwd packages/cli build`, and packages/cli `build` is exactly
+      # the package script's `bun run build` (build-web + commands build +
+      # `rm -rf dist` + `bun build src/index.ts` + escape-dist-literals).
+      # Same command in all four shards.
+      - name: Build CLI
+        run: bun run cli:build
+
+      # Shard 1/4 — a file moved between shards? See the CLI test shard
+      # block in the header for the remainder semantics; rebalancing is moving
+      # a path between the explicit lists.
+      - name: Test CLI (coordination shard)
+        working-directory: packages/cli
+        run: bun test test/plan-coordination.test.ts
+
+  # ── CLI suite, shard 2/4: the 8 next-heaviest files (~190.4s combined) ────
+  test-cli-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # Same setup chain as every other CLI shard — see test-cli-coordination
+      # for why the consumer builds exist and why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+        run: bun run engine:build && bun run judgment:build
+
+      - name: Build commands package (for the CLI build)
+        run: bun run --cwd packages/commands build
+
+      - name: Build OpenCode
+        run: bun run opencode:build
+
+      - name: Build dsh
+        run: bun run dsh:build
+
+      - name: Build omp
+        run: bun run omp:build
+
+      - name: Build CLI
+        run: bun run cli:build
+
+      # Shard 2/4 — the 8 heaviest files after plan-coordination, listed
+      # explicitly (measured seconds on run 37018503961 in the header block).
+      - name: Test CLI (ops shard)
+        working-directory: packages/cli
+        run: |
+          bun test \
+            test/sdd-evidence.test.ts \
+            test/prreview-execution-cli.test.ts \
+            test/worktree-cleanup.test.ts \
+            test/persist.test.ts \
+            test/audit-cli.test.ts \
+            test/issue.test.ts \
+            test/execution-session.test.ts \
+            test/sdd-cli.test.ts
+
+  # ── CLI suite, shard 3/4: the dynamic remainder ───────────────────────────
+  # Every other test file under packages/cli, computed here rather than listed,
+  # so a newly added test file is picked up automatically and full-suite
+  # coverage is preserved by construction. Worst case: an unlisted file makes
+  # this job slower, never silently skipped. The globs cover `test/` (the
+  # cross-module suites, including the `.node.test.mjs` consumer guard) and
+  # `src/` (colocated module suites) — `packages/cli/web/` has its own batch
+  # (test-cli-web) per owner decision.
+  test-cli-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # Same setup chain as every other CLI shard — see test-cli-coordination
+      # for why the consumer builds exist and why the CLI build is explicit.
+      # This shard runs `test/execution-package.node.test.mjs`, so the consumer
+      # artifacts it guards are genuinely required here.
+      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+        run: bun run engine:build && bun run judgment:build
+
+      - name: Build commands package (for the CLI build)
+        run: bun run --cwd packages/commands build
+
+      - name: Build OpenCode
+        run: bun run opencode:build
+
+      - name: Build dsh
+        run: bun run dsh:build
+
+      - name: Build omp
+        run: bun run omp:build
+
+      - name: Build CLI
+        run: bun run cli:build
+
+      # Shard 3/4 — the package's suites minus the 9 explicit paths above.
+      # Discovery mirrors bare `bun test`: `find .` from the package root over
+      # bun's four documented filename classes — `*.test.*`, `*_test.*`,
+      # `*.spec.*`, `*_spec.*`, any extension — so a nested or spec/underscore-
+      # named suite is picked up here instead of being skipped by every shard
+      # while CI stays green. Pruned: `node_modules` (bun skips it), `dist` and
+      # `.git` (generated / metadata, defensive), and `web` — the `web/` batch
+      # is owned exclusively by test-cli-web, so pruning it here keeps web files
+      # from being run twice. `sed 's|^\./||'` strips find's `./` prefix so the
+      # paths match the exclusion-list format below. Word splitting on the
+      # unquoted `$remainder` is safe because no repo path contains whitespace.
+      # Failure semantics are deliberate, not incidental:
+      #   • `grep -vxFf` removes exact whole-line matches of the exclusion list.
+      #   • `find` does not error on a pattern that matches nothing, so an
+      #     absent pattern class is harmless — unlike a `ls` glob miss.
+      #   • `grep` status 1 (nothing selected → empty remainder) is caught and
+      #     routed to the explicit empty guard, which is the ONLY path to an
+      #     empty remainder and always prints the self-explaining error;
+      #     without this `set -e` would abort on a bare `grep` status silently.
+      #   • any other non-zero pipeline status is re-raised as-is.
+      # The empty case must never degrade to a bare `bun test`: that would
+      # silently re-discover and re-run every file, double-running the other
+      # three shards instead of failing.
+      - name: Test CLI (suite shard — dynamic remainder)
+        working-directory: packages/cli
+        run: |
+          set -euo pipefail
+          remainder=$(find . \
+              \( -path ./node_modules -o -path ./dist -o -path ./.git -o -path ./web \) -prune \
+              -o -type f \( -name '*.test.*' -o -name '*_test.*' -o -name '*.spec.*' -o -name '*_spec.*' \) -print \
+              | sed 's|^\./||' \
+              | grep -vxFf <(printf '%s\n' \
+                test/plan-coordination.test.ts \
+                test/sdd-evidence.test.ts \
+                test/prreview-execution-cli.test.ts \
+                test/worktree-cleanup.test.ts \
+                test/persist.test.ts \
+                test/audit-cli.test.ts \
+                test/issue.test.ts \
+                test/execution-session.test.ts \
+                test/sdd-cli.test.ts)) || {
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              remainder=""   # nothing selected — handled by the explicit guard below
+            else
+              exit "$status" # real find/grep failure propagates loudly
+            fi
+          }
+          if [ -z "$remainder" ]; then
+            echo "::error::suite shard discovered zero files — refusing to fall back to bare 'bun test' (would double-run the explicit and web shards)"
+            exit 1
+          fi
+          bun test $remainder
+
+  # ── CLI suite, shard 4/4: the `web/` view-model batch ─────────────────────
+  # `packages/cli/web/` suites run as their own batch per owner decision, and
+  # the suite shard prunes `web` so these files never run twice. Discovery is
+  # the same recursive set of bun filename classes, so a future
+  # `web/e2e/x.spec.ts` joins this batch automatically. An empty web batch is a
+  # legitimate state and passes with a notice (unlike an empty suite remainder,
+  # which is a structural anomaly and fails).
+  test-cli-web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18"
+
+      - name: Cache bun install cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-install-${{ hashFiles('bun.lock', 'bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-install-
+
+      - name: Install dependencies
+        run: bun install
+
+      # Same setup chain as every other CLI shard — see test-cli-coordination
+      # for why the consumer builds exist and why the CLI build is explicit.
+      - name: Build engine (dist for the CLI suite's consumer-manifest guard)
+        run: bun run engine:build && bun run judgment:build
+
+      - name: Build commands package (for the CLI build)
+        run: bun run --cwd packages/commands build
+
+      - name: Build OpenCode
+        run: bun run opencode:build
+
+      - name: Build dsh
+        run: bun run dsh:build
+
+      - name: Build omp
+        run: bun run omp:build
+
+      - name: Build CLI
+        run: bun run cli:build
+
+      # Shard 4/4 — the `web/` view-model batch. `web/view-model.test.ts`
+      # imports the web view modules, which pull `preact` and `htm/preact` (both
+      # packages/cli devDependencies) and take engine types only; it needs no
+      # generated artifact, so the shared setup chain above already covers it.
+      # An empty batch is by design: notice and pass. Word splitting on the
+      # unquoted `$web_files` is safe — no repo path contains whitespace.
+      - name: Test CLI (web shard)
+        working-directory: packages/cli
+        run: |
+          set -euo pipefail
+          web_files=$(find web -type f \( -name '*.test.*' -o -name '*_test.*' -o -name '*.spec.*' -o -name '*_spec.*' \))
+          if [ -z "$web_files" ]; then
+            echo "No web test files — web batch is empty by design; passing."
+            exit 0
+          fi
+          bun test $web_files
 
   test-opencode:
     runs-on: ubuntu-latest

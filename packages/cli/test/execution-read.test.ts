@@ -441,18 +441,25 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(jsonOf(noStoreStatus).code).toBe("status.file-not-found");
   });
 
-  test("dashboard views refuse the projection route while the authority is active", async () => {
+  test("dashboard views answer from the ACTIVE projection instead of refusing", async () => {
     const fixture = await activeFixture("cli-read-dashboard");
     plantLeftoverSnapshot(fixture);
 
-    // A projection-derived view would present the retired root/snapshot bytes as
-    // current execution state: not-ready instead.
-    const projected = await readDashboardView({ context: fixture.context, view: "workflows" }).catch(
-      (error: unknown) => error,
-    );
-    expect((projected as { code?: string }).code).toBe("execution.consumer-not-ready");
+    // The projection serves ACTIVE-authority rows through the read boundary;
+    // the retired root/snapshot bytes are never consulted. (The refusal this
+    // view once raised was removed with the ACTIVE projection capture.)
+    const projected = await readDashboardView({ context: fixture.context, view: "workflows" });
+    expect(projected.projection.freshness).toBe("current");
+    // The served row is the DB truth, not the planted snapshot's lie: the file
+    // claims "completed" with a leased plan; the authority says running, no lease.
+    expect(projected.data.items).toEqual([
+      expect.objectContaining({
+        id: WORKFLOW_ID,
+        plans: [expect.objectContaining({ planId: "20260920-execution-read-plan", leases: [] })],
+      }),
+    ]);
     const issues = await readDashboardView({ context: fixture.context, view: "issues" });
-    expect(Array.isArray((issues.data as { items: unknown[] }).items)).toBe(true);
+    expect(Array.isArray(issues.data.items)).toBe(true);
     expect(issues.storeRevision).toBeGreaterThan(0);
   });
 });
