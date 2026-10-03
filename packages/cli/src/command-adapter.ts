@@ -465,6 +465,10 @@ function addressedMintedScope(
     if (typeof wire !== "string" || wire === "") continue;
     try {
       const ref = decodeExecutionSessionRef(wire);
+      // A stated `--coordinator` seat is a role constraint: the reference still
+      // names the addressed workflow, but the compared seat is the declared
+      // one, never the reference's own role.
+      if (input.coordinator === true) return { workflowId: ref.workflowId, role: "coordinator", planId: null };
       return { workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
     } catch {
       // A malformed reference is the family's own typed refusal; the scope gate
@@ -490,6 +494,10 @@ function addressedMintedScope(
   // the command's own contract, never from the registered plan selector (that
   // names the row being registered, not the caller's seat).
   if (COORDINATOR_SEAT_ROUTES[commandId] === true) return { workflowId, role: "coordinator", planId: null };
+  // A stated `--coordinator` seat is a role constraint on every minted plan
+  // write, including the reference/token variants: the acquired plan-pm tuple
+  // may not be reinterpreted as the coordinator seat it does not declare.
+  if (input.coordinator === true) return { workflowId, role: "coordinator", planId: null };
   return { workflowId };
 }
 

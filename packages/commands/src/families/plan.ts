@@ -343,6 +343,13 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       if (input.workflow !== undefined && input.workflow !== workflowId) {
         return usage(id, "workflow selector does not match the caller's workflow");
       }
+      // A stated `--coordinator` seat is a role constraint, never a hint the
+      // family may reinterpret: when the acquired/declared caller is this
+      // plan's own plan session, the mismatch refuses before any address,
+      // token or ownership fact is read.
+      if (input.coordinator === true && role !== "coordinator") {
+        return usage(id, "--coordinator does not match the caller's acquired plan session seat; a plan-session claim is released by the seat that holds it");
+      }
       if (workflowId === undefined || role === undefined) {
         return usage(id, "sparse active plan operation needs a minted own-scope identity or workflow plus coordinator/plan selector; bind the caller first");
       }

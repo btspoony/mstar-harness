@@ -27,6 +27,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { executeCommand } from "@mstar-harness/commands";
 import {
   encodeExecutionSessionRef,
   getCatalog,
@@ -1504,5 +1505,93 @@ describe("mstar plan — owned release, reacquisition and the delivery tail (ACT
     );
     expect(phase6.exitCode).toBe(0);
     expect(jsonOf(phase6)).toMatchObject({ status: "ok", data: { phase: 6 } });
+  }, 30_000);
+});
+
+
+/**
+ * Explicit seat selector vs the acquired role — the release regressions for the
+ * role-constraint bypass. A request that STATES the coordinator seat while the
+ * acquired/declared caller is the plan's own plan-pm must refuse as usage
+ * before any mutation; the family must never silently reinterpret the declared
+ * seat. Every leg asserts the typed refusal AND the persisted facts (row
+ * unchanged, own lease still held by the plan-pm), never a prose echo.
+ */
+describe("mstar plan release — explicit coordinator selector vs the acquired plan-pm seat", () => {
+  /** One prepared row whose plan-pm seat holds the execution lease. */
+  async function heldSeatFixture(label: string): Promise<Fixture & { planPmWire: string }> {
+    const fixture = await activeFixture(label);
+    const seat = await preparePlanSeat(fixture);
+    return { ...fixture, planPmWire: seat.planPmWire };
+  }
+
+  test("an explicit --coordinator selector with a full plan token refuses and keeps the claim held", async () => {
+    const fixture = await heldSeatFixture("mstar-release-seat-expect");
+    const planPm = planPmIdentity();
+    const tokens = await tokensOf(fixture);
+    const before = await storedRowStatus(fixture);
+
+    const released = spawnCli(
+      ["plan", "release", "--coordinator", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--expect", tokens.plan, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(released.exitCode).toBe(2);
+    expect(jsonOf(released).code).toBe("command.invalid-input");
+    expect(await storedRowStatus(fixture)).toBe(before);
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
+  }, 30_000);
+
+  test("an explicit --coordinator selector with the caller's own session reference refuses and keeps the claim held", async () => {
+    const fixture = await heldSeatFixture("mstar-release-seat-ref");
+    const planPm = planPmIdentity();
+    const before = await storedRowStatus(fixture);
+
+    const released = spawnCli(
+      ["plan", "release", "--coordinator", "--session-ref", fixture.planPmWire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(released.exitCode).toBe(2);
+    expect(jsonOf(released).code).toBe("command.invalid-input");
+    expect(await storedRowStatus(fixture)).toBe(before);
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
+  }, 30_000);
+
+  test("a direct command-context release with an explicit --coordinator selector refuses and keeps the claim held", async () => {
+    const fixture = await heldSeatFixture("mstar-release-seat-direct");
+    const planPm = planPmIdentity();
+    const before = await storedRowStatus(fixture);
+
+    const direct = await executeCommand("plan.release", {
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+      harness: fixture.harnessDir,
+    }, {
+      cwd: fixture.root,
+      controlRoot: null,
+      sessionId: planPm.sessionId,
+      sessionIdSource: "env",
+      executionIdentity: planPm,
+      versions: { engine: null, cli: "direct-context", plugin: null, host: null, platform: "test" },
+      signal: new AbortController().signal,
+      effects: {
+        async readInput() { return ""; },
+        async spawn() { throw new Error("release must not spawn a process"); },
+        async startDashboard() { throw new Error("dashboard is unavailable in this test"); },
+        async openBrowser() { throw new Error("browser is unavailable in this test"); },
+      },
+    });
+    expect(direct.exitCode).toBe(2);
+    expect(direct.code).toBe("command.invalid-input");
+    expect(await storedRowStatus(fixture)).toBe(before);
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
   }, 30_000);
 });
