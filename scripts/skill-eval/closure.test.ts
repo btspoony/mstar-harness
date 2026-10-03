@@ -940,7 +940,12 @@ describe("A5 ablation inventory (frozen)", () => {
     expect(new Set(ruleIds).size).toBe(ruleIds.length);
   });
 
-  test("reviewed re-freeze: beforeSha256 pins the reachable BASE blobs and current anchor states are enforced", () => {
+  test("reviewed re-freeze: BASE ancestry, beforeSha256 blobs, and current anchor states are enforced", () => {
+    expect(() => execFileSync(
+      "git",
+      ["-C", REPO_ROOT, "merge-base", "--is-ancestor", CLOSURE_PIN_BASE_SHA, "origin/main"],
+      { stdio: "ignore" },
+    )).not.toThrow();
     for (const rule of ablations.rules) {
       const abs = join(REPO_ROOT, rule.owner);
       expect(existsSync(abs), `${rule.ruleId} owner ${rule.owner}`).toBe(true);
