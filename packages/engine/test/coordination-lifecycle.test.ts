@@ -107,7 +107,7 @@ describe("handoff-transitions", () => {
     const reports = qc.reports;
     if (!Array.isArray(reports)) throw new Error("qc.reports is not an array");
     expect(reports).toHaveLength(2);
-    expect(reports.map((report) => recordField(report, "path"))).toEqual([
+    expect(reports.map((report) => (report as Record<string, unknown>).path)).toEqual([
       join(fixture.sddDir, "review", "qc1.md"),
       join(fixture.sddDir, "review", "qc2.md"),
     ]);
