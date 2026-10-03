@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { withProtectedWrite } from "./coordination-write.js";
-import { captureIssue, getIssue, listIssues, type CaptureInput } from "./issue.js";
+import { captureIssue, getIssue, listIssues, linkIssue, type CaptureInput } from "./issue.js";
 import { findingsCleanupGate } from "./project.js";
 import { createFsStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
@@ -166,11 +166,9 @@ describe("retired register persist \u2014 the raw store cannot recreate a projec
  * ------------------------------------------------------------------------ */
 
 /**
- * Link an issue to a plan exactly as the scoped writer does. The provenance
- * row is seeded directly because the core verb re-verifies a live engine-issued
- * session envelope (contract §4): this file proves the READ gate's semantics,
- * and the verb's authorization is proven in `test/coordination.test.ts`
- * through a real bound plan session.
+ * Seed a historical scoped plan row by omitting `origin`, as v7 stores did
+ * before the column was added. The current scoped write path is exercised by
+ * `test/coordination.test.ts` through a real bound plan session.
  */
 async function linkPlanRow(context: StoreContext, issueId: string, planId: string): Promise<void> {
   const handle = await openStore(context, "write");
@@ -220,6 +218,35 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
     const nobody = await findingsCleanupGate(context, "plan-b", { mode: "zero-residual" });
     expect(nobody.ok).toBe(true);
     expect(nobody.violations).toEqual([]);
+  });
+
+  test("actor-only plan labels do not become findings, while legacy rows remain plan-scoped", async () => {
+    const context = ctx("gate-origin");
+    await initializeStore(context).then((handle) => handle.close());
+    const captured = await captureIssue(context, finding("unscoped-label"), {
+      operationId: "cap-unscoped-label",
+      actor: "project-manager",
+    });
+    await linkIssue(context, captured.issueId, { kind: "plan", target: "plan-a" }, {
+      operationId: "unscoped-link", actor: "project-manager", expectedRevision: captured.revision,
+    });
+    expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(true);
+
+    const scoped = await captureIssue(context, finding("scoped-link"), {
+      operationId: "cap-scoped-link",
+      actor: "project-manager",
+    });
+    await linkIssue(context, scoped.issueId, { kind: "plan", target: "plan-b" }, {
+      operationId: "scoped-link", actor: "project-manager", expectedRevision: scoped.revision,
+    }, { origin: "scoped" });
+    expect((await findingsCleanupGate(context, "plan-b", { mode: "zero-residual" })).violations).toHaveLength(1);
+
+    const historical = await captureIssue(context, finding("historical-link"), {
+      operationId: "cap-historical-link",
+      actor: "project-manager",
+    });
+    await linkPlanRow(context, historical.issueId, "plan-a");
+    expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).violations).toHaveLength(1);
   });
 
   test("issue authority: only OPEN issues gate, so a closed one leaves the plan clean", async () => {

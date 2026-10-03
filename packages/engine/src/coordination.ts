@@ -391,7 +391,7 @@ export type CoordinationResult = {
  * core issue `CaptureInput` minus `projectId` — the scoped plan supplies the
  * project. Capture records evidence and never a disposition (contract §6);
  * the entry is captured as an issue and linked to the plan through
- * `provenance(kind='plan', target=<plan-id>)`.
+ * `provenance(kind='plan', target=<plan-id>, origin='scoped')`.
  */
 export type ResidualInput = Omit<CaptureInput, "projectId">;
 
@@ -4301,6 +4301,7 @@ async function mutateResidualAdd(
             sessionFile: sessionPath,
             expectedRevision: capture.revision,
           },
+          { origin: "scoped" },
         );
         reportExternalCommit(
           `issue ${capture.issueId} linked to plan ${scope.planId} (occurrence ${entry.occurrenceKey})`,
@@ -4349,7 +4350,7 @@ async function assertIssueLinkedToPlan(context: StoreContext, issueId: string, p
   const handle = await openStore(context, "read");
   try {
     const linked = handle.db
-      .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ?")
+      .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
       .get(issueId, planId) as { ok: number } | undefined;
     if (!linked) {
       throw new IssueError(

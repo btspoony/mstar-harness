@@ -1201,13 +1201,14 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     const provenance = (
       db
         .prepare(
-          "select id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
+          "select id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
         )
         .all(id) as Array<{
         id: number;
         kind: string;
         target: string;
         source_hash: string;
+        origin: "scoped" | "unscoped";
         legacy_project: string | null;
         legacy_bucket: string | null;
         legacy_entry_id: string | null;
@@ -1218,6 +1219,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       id: row.id,
       kind: row.kind,
       target: row.target,
+      origin: row.origin,
       sourceHash: row.source_hash,
       legacyProject: row.legacy_project,
       legacyBucket: row.legacy_bucket,
@@ -1526,7 +1528,7 @@ export function assertClosureAuthority(disposition: TerminalDisposition, evidenc
 
 function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
   const rows = db
-    .prepare("select distinct target from provenance where issue_id = ? and kind = 'plan' order by target")
+    .prepare("select distinct target from provenance where issue_id = ? and kind = 'plan' and origin = 'scoped' order by target")
     .all(issueId) as Array<{ target: string }>;
   return rows.map((row) => row.target);
 }
@@ -1612,14 +1614,15 @@ export async function triageIssue(
 /**
  * §4/§5 the plan-link gate of one closure: a plan may close only a finding
  * linked to ITS plan. Identity is the append-only `provenance` record
- * (`kind='plan'`, `target=<plan id>`, written by `linkIssue`), so a read-side
- * scope check cannot race an unlink — there is no unlink verb. Shared by both
+ * (`kind='plan'`, `target=<plan id>`, origin `scoped` or historical default,
+ * written by a plan-scoped operation), so a read-side scope check cannot
+ * race an unlink — there is no unlink verb. Shared by both
  * transports: the file route opens its own read handle for it, the DB route
  * reads through the transaction it already owns.
  */
 export function assertIssueLinkedToPlanOn(db: StoreDb, issueId: string, planId: string): void {
   const linked = db
-    .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ?")
+    .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
     .get(issueId, planId) as { ok: number } | undefined;
   if (!linked) {
     throw new IssueError(
@@ -1803,10 +1806,13 @@ export function linkIssueOn(
   link: IssueLink,
   mutation: AuthorizedIssueMutation,
   composed?: ComposedTransactionRevision,
+  options: { origin?: "scoped" | "unscoped" } = {},
 ): IssueReceipt {
+  const origin = options.origin ?? "unscoped";
   const hash = requestHash("linkIssue", {
     issueId,
     link,
+    origin,
     mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
   });
 
@@ -1851,25 +1857,27 @@ export function linkIssueOn(
   } else {
     const target = requireNonblank("target", link.target);
     const sourceHash = sha256(lengthDelimited([link.kind, target]));
-    const already = db
-      .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ?")
-      .get(issueId, link.kind, target) as { ok: number } | undefined;
-    if (already) {
-      const receipt: IssueReceipt = {
-        issueId,
-        revision: issue.revision,
-        storeRevision: readMeta(db).revision,
-        created: false,
-      };
-      recordOperation(db, mutation.operationId, hash, receipt, at);
-      return receipt;
+    const prior = db
+      .prepare("select origin from provenance where issue_id = ? and kind = ? and target = ?")
+      .get(issueId, link.kind, target) as { origin: "scoped" | "unscoped" } | undefined;
+    if (prior) {
+      if (origin === "scoped" && prior.origin === "unscoped") {
+        db.prepare("update provenance set origin = 'scoped' where issue_id = ? and kind = ? and target = ?")
+          .run(issueId, link.kind, target);
+      } else {
+        const receipt: IssueReceipt = {
+          issueId,
+          revision: issue.revision,
+          storeRevision: readMeta(db).revision,
+          created: false,
+        };
+        recordOperation(db, mutation.operationId, hash, receipt, at);
+        return receipt;
+      }
+    } else {
+      db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, ?)")
+        .run(issueId, link.kind, target, sourceHash, origin);
     }
-    db.prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, ?, ?, ?)").run(
-      issueId,
-      link.kind,
-      target,
-      sourceHash,
-    );
   }
 
   const revision = issue.revision + 1;
@@ -1885,8 +1893,9 @@ export async function linkIssue(
   issueId: string,
   link: IssueLink,
   mutation: MutationContext,
+  options: { origin?: "scoped" | "unscoped" } = {},
 ): Promise<IssueReceipt> {
   requireCaptureSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
-  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
+  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation, undefined, options));
 }

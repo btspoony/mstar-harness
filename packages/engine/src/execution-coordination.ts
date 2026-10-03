@@ -1478,6 +1478,7 @@ export async function residualAddExecutionPlan(
           expectedRevision: capture.revision,
         },
         composed,
+        { origin: "scoped" },
       );
     }
     advancePlanRowRevision(tx, witness);

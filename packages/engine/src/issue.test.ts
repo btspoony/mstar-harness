@@ -10,6 +10,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { initializeExecutionAuthority } from "./execution-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import {
+  assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
   IssueError,
   assertCaptureRequest,
@@ -823,12 +824,14 @@ describe("issue dispositions, revisions, and relations", () => {
       created.issueId,
       { kind: "plan", target: authority.planId },
       pmMut(authority, "link-a", { expectedRevision: created.revision }),
+      { origin: "scoped" },
     );
     const afterPlan2 = await linkIssue(
       context,
       created.issueId,
       { kind: "plan", target: authority.peerPlanId },
       pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision }),
+      { origin: "scoped" },
     );
     await expect(
       closeIssue(
@@ -839,6 +842,7 @@ describe("issue dispositions, revisions, and relations", () => {
         pmMut(authority, "close-one-plan", { expectedRevision: afterPlan2.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+
     expect((await getIssue(context, created.issueId)).disposition).toBe("open");
 
     await closeIssue(
@@ -852,6 +856,42 @@ describe("issue dispositions, revisions, and relations", () => {
         alignmentRef: "QA gate: Approve",
       },
       pmMut(authority, "close-all-plans", { expectedRevision: afterPlan2.revision }),
+    );
+    expect((await getIssue(context, created.issueId)).disposition).toBe("resolved");
+  });
+  test("unscoped plan label neither satisfies membership nor creates a multi-plan obligation", async () => {
+    const authority = await liveAuthority("relation-unscoped-plan-");
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-unscoped-plan"));
+    const linked = await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "unscoped-primary", { expectedRevision: created.revision }),
+      { origin: "scoped" },
+    );
+    await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.peerPlanId },
+      pmMut(authority, "unscoped-poison", { expectedRevision: linked.revision }),
+    );
+
+    const handle = await openStore(context, "read");
+    try {
+      assertIssueLinkedToPlanOn(handle.db, created.issueId, authority.planId);
+      expect(() => assertIssueLinkedToPlanOn(handle.db, created.issueId, authority.peerPlanId)).toThrow(
+        expect.objectContaining({ code: "issue.scope-refused" }),
+      );
+    } finally {
+      handle.close();
+    }
+    await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      { reason: "single plan complete", references: [authority.planId], alignmentRef: "QA gate: Approve" },
+      pmMut(authority, "close-single-plan", { expectedRevision: linked.revision + 1 }),
     );
     expect((await getIssue(context, created.issueId)).disposition).toBe("resolved");
   });

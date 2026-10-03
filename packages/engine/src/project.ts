@@ -224,7 +224,8 @@ export function validateProjectRegister(doc: unknown): GateResult {
  * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
  * issue-governance cutover G2a): the authoritative input is the issue store
  * (`store.db`) — every OPEN issue linked to the plan through `provenance`
- * (`kind='plan'`, `target=<plan-id>`, written by the core `linkIssue` verb).
+ * (`kind='plan'`, `target=<plan-id>`, `origin='scoped'`; historical rows
+ * retain the scoped default), recorded by a plan-scoped operation.
  * The legacy register is never consulted at runtime; `validateProjectRegister`
  * remains a migration-only validator.
  *
@@ -261,7 +262,7 @@ export async function findingsCleanupGate(
     const rows = db
       .prepare(
         "select issues.id as id, issues.severity as severity from issues " +
-          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
           "where issues.disposition = 'open' order by issues.id asc",
       )
       .all(planId) as Array<{ id: string; severity: string }>;

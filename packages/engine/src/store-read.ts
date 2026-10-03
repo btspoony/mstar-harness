@@ -846,13 +846,14 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   const provenance = (
     db
       .prepare(
-        "select id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
+        "select id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
       )
       .all(id) as Array<{
       id: number;
       kind: string;
       target: string;
       source_hash: string;
+      origin: "scoped" | "unscoped";
       legacy_project: string | null;
       legacy_bucket: string | null;
       legacy_entry_id: string | null;
@@ -863,6 +864,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     id: row.id,
     kind: row.kind,
     target: row.target,
+    origin: row.origin,
     sourceHash: row.source_hash,
     legacyProject: row.legacy_project,
     legacyBucket: row.legacy_bucket,

@@ -561,7 +561,9 @@ describe("mstar issue actor-only mutations", () => {
 
     const linkedId = await capture(fixture, "linked");
     expect(mutate(fixture, "link", linkedId, "actor-link", { kind: "plan", target: "unregistered-plan-label" }).exitCode).toBe(0);
-    expect(jsonOf(runCli(["issue", "show", "--id", linkedId, "--harness", fixture.harness], fixture.root)).provenance).toContainEqual(expect.objectContaining({ kind: "plan", target: "unregistered-plan-label" }));
+    expect(jsonOf(runCli(["issue", "show", "--id", linkedId, "--harness", fixture.harness], fixture.root)).provenance).toContainEqual(
+      expect.objectContaining({ kind: "plan", target: "unregistered-plan-label", origin: "unscoped" }),
+    );
   });
 });
 describe("mstar status — the issue authority is never read as an empty rollup (G2b)", () => {
