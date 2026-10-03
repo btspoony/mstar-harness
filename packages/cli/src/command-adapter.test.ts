@@ -46,11 +46,20 @@ test("CLI contract declares session resolution and legacy-route exceptions", () 
   expect(contract).toContain("requires an explicit --session-id and rejects the environment value");
   expect(contract).toContain("Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity");
 });
-test("MCP contract retains caller-supplied identity requirement", () => {
+test("MCP contract renders the route-conditional identity requirement", () => {
   const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.bind");
   expect(definition).toBeDefined();
-  const contract = renderCommandContract(definition!, "mcp");
-  expect(contract).toContain("must be supplied by the caller on each MCP call");
+  const mcpDefinition = {
+    ...definition!,
+    requirements: [{
+      name: "sessionId",
+      ownership: "caller" as const,
+      route: "mcp" as const,
+      help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity",
+    }],
+  };
+  const contract = renderCommandContract(mcpDefinition, "mcp");
+  expect(contract).toContain("when the selected route requires session identity, it must be supplied by the caller");
   expect(contract).not.toContain("connection context");
   expect(contract).not.toContain("Derived:");
 });
