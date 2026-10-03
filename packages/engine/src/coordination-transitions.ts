@@ -25,19 +25,16 @@ import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
-  evidenceRefOf,
   isNonEmptyString,
   isPlainObject,
   validatePlanHandoff,
   validateRowCoordination,
   type CoordinatorBinding,
-  type EvidenceRef,
   type HandoffIntegration,
   type PlanHandoff,
   type RowCoordination,
   type RowValidationRoute,
 } from "./coordination-write.js";
-import { validateExecutionLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
 import { unresolvedRecovery, type RecoveryProblem } from "./recovery-intent.js";
 import type { ValidationResult } from "./core.js";
 import { assertSafePathComponent } from "./path.js";
@@ -349,18 +346,9 @@ export function assertPrepareAdmission(input: {
    * ordered rule every other seat obeys — preparation precedes the bind.
    */
   rowClaimant?: boolean;
-  /**
-   * The reviewed-amendment seat: the caller is the workflow coordinator and
-   * the row is an unbound, unleased, handed-off-free Todo row, so an existing
-   * changed seal may be replaced through the ordinary mutate path (full intent
-   * validation still runs). The transport computes this from its own session
-   * and row state; every protected row leaves it false and keeps the
-   * already-prepared refusal it has always answered.
-   */
-  coordinatorReseal?: boolean;
 }): void {
   const { planId, row, coordination } = input;
-  if (coordination?.prepared !== undefined && input.coordinatorReseal !== true) {
+  if (coordination?.prepared !== undefined) {
     throw new CoordinationError(
       "coordination.prepare-already-prepared",
       `plan ${planId} is already prepared from ${coordination.prepared.assignment_path}`,
@@ -645,53 +633,6 @@ export function readHandoffEvidence(value: unknown): HandoffEvidenceInput {
   };
 }
 
-/**
- * Revalidate the hash pins of a sealed handoff (spec §D/§E): accept,
- * integration-start, integration-accept and complete all re-check that the QC
- * and QA reports still are the bytes their verdicts were recorded against.
- */
-export function assertEvidenceDigests(handoff: PlanHandoff): void {
-  for (const ref of [...handoff.qc.reports, handoff.qc.consolidated, handoff.qa.report]) {
-    let actual: string | undefined;
-    try {
-      actual = evidenceRefOf(ref.path).sha256;
-    } catch {
-      actual = undefined;
-    }
-    if (actual !== ref.sha256) {
-      throw new CoordinationError(
-        "coordination.evidence-stale",
-        `handoff evidence ${ref.path} no longer matches its recorded digest`,
-        { path: ref.path, expected: ref.sha256, actual },
-      );
-    }
-  }
-}
-
-/**
- * The commit-time recheck of the evidence a `handoff` is about to seal (§4.1):
- * the bytes the pre-transaction read hashed, re-read immediately before the
- * transaction commits. An edit in that window refuses instead of being sealed
- * as if it were the reviewed report.
- */
-export function assertHandoffEvidenceUnchanged(input: HandoffEvidenceInput, what: string): void {
-  const refs: EvidenceRef[] = [...input.qc_reports, input.qc_consolidated, input.qa_report];
-  for (const ref of refs) {
-    let actual: string | undefined;
-    try {
-      actual = evidenceRefOf(ref.path).sha256;
-    } catch {
-      actual = undefined;
-    }
-    if (actual !== ref.sha256) {
-      throw new CoordinationError(
-        "coordination.evidence-stale",
-        `${what} evidence ${ref.path} changed while the handoff was being sealed (${ref.sha256} \u2192 ${actual ?? "unreadable"})`,
-        { path: ref.path, expected: ref.sha256, actual },
-      );
-    }
-  }
-}
 
 /** The row status one coordinator transition requires (spec §D/§E). */
 export function requireRowStatus(

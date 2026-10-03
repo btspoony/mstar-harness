@@ -47,7 +47,6 @@
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -63,7 +62,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
 import { assertEvidenceInsidePlanArea, planAreaRoots, type HandoffEvidence } from "./coordination.js";
-import { assertHandoffEvidenceUnchanged, readHandoffEvidence } from "./coordination-transitions.js";
+import { readHandoffEvidence } from "./coordination-transitions.js";
 import {
   acceptExecutionPlan,
   handoffExecutionPlan,
@@ -593,11 +592,9 @@ function retainedBodies(harnessDir: string): { qc: string; consolidated: string;
   return { qc: join(sddDir, "qc1.md"), consolidated: join(sddDir, "qc.md"), qa: join(sddDir, "qa.md") };
 }
 
-/** Write one evidence body and return its BYTE digest — what a handoff record
- * pins. */
-function writeBody(path: string, text: string): string {
+/** Write one evidence body. */
+function writeBody(path: string, text: string): void {
   writeFileSync(path, text, "utf8");
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 /** The plan session's handoff evidence request: paths and decisions only.
@@ -635,17 +632,12 @@ function refusalCodeOf(action: () => unknown): string {
  * gates (containment, existence, digest) are the ones that decide whether that
  * evidence can be an accepted approval.
  */
-describe("retained evidence \u2014 SDD bodies and byte hashes across the authority switch", () => {
-  test("retained evidence bodies stay files whose byte hashes survive fixture activation", async () => {
+describe("retained evidence path checks across the authority switch", () => {
+  test("handoff evidence stays in files and path containment remains enforced", async () => {
     // A store that holds an issue/catalog authority and no execution authority
-    // yet: the bodies are written and hashed BEFORE the switch.
+    // yet: the evidence bodies are created before activation.
     const context = await legacyStore("retained-evidence-switch");
     const bodies = retainedBodies(context.harnessDir);
-    const digests = {
-      qc: writeBody(bodies.qc, QC_BODY),
-      consolidated: writeBody(bodies.consolidated, CONSOLIDATED_BODY),
-      qa: writeBody(bodies.qa, QA_BODY),
-    };
 
     // The switch: the fixture's execution authority becomes ACTIVE.
     await initializeExecutionAuthority(context);
@@ -656,14 +648,7 @@ describe("retained evidence \u2014 SDD bodies and byte hashes across the authori
     const input = readHandoffEvidence(handoffRequest(bodies));
     expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_paths)).not.toThrow();
 
-    // The record pins BYTE hashes, and they still describe the files.
-    expect([input.qc_reports[0]!.sha256, input.qc_consolidated.sha256, input.qa_report.sha256]).toEqual([
-      digests.qc,
-      digests.consolidated,
-      digests.qa,
-    ]);
     expect(readFileSync(bodies.qc, "utf8")).toEqual(QC_BODY);
-    expect(() => assertHandoffEvidenceUnchanged(input, "handoff")).not.toThrow();
 
     // No blanket blob conversion: the bodies are files, and the active store —
     // main file and, when present, its write-ahead log — holds no copy of them.
@@ -681,34 +666,24 @@ describe("retained evidence \u2014 SDD bodies and byte hashes across the authori
     writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
     writeBody(bodies.qa, QA_BODY);
-    const input = readHandoffEvidence(handoffRequest(bodies));
     const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
 
     rmSync(bodies.qc);
 
-    // Gone is unavailable: the containment boundary refuses the absent body,
-    // and the sealed digest pin cannot be satisfied by it either.
-    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [bodies.qc]))).toBe("coordination.evidence-stale");
-    expect(refusalCodeOf(() => assertHandoffEvidenceUnchanged(input, "handoff"))).toBe("coordination.evidence-stale");
+    // Evidence must exist when it is submitted.
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [bodies.qc]))).toBe("coordination.invalid-input");
     // The request itself refuses a path with nothing behind it, so a missing
     // report never reaches an accepted approval.
     expect(refusalCodeOf(() => readHandoffEvidence(handoffRequest(bodies)))).toBe("coordination.invalid-input");
   });
 
-  test("retained evidence: changed bytes and a symlink escape cannot count as accepted approval", async () => {
-    const context = await activeGraph("retained-evidence-mutation");
+  test("retained evidence path containment refuses a symlink escape", async () => {
+    const context = await activeGraph("retained-evidence-path-escape");
     const bodies = retainedBodies(context.harnessDir);
-    const qcDigest = writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
     writeBody(bodies.qa, QA_BODY);
-    const input = readHandoffEvidence(handoffRequest(bodies));
     const roots = planAreaRoots(context.harnessDir, RETAINED_PLAN);
-    expect(input.qc_reports[0]!.sha256).toEqual(qcDigest);
-
-    // An edited report is a different body: the pinned byte digest refuses it.
-    writeBody(bodies.qc, `${QC_BODY}edited\n`);
-    expect(refusalCodeOf(() => assertHandoffEvidenceUnchanged(input, "handoff"))).toBe("coordination.evidence-stale");
-
     // A symlink that resolves outside the plan's own areas is refused by the
     // containment boundary. The escape is real — the bytes read through the
     // link are the outside file's — so containment, not the caller's path
@@ -941,41 +916,29 @@ async function retainedAccept(fixture: RetainedHandoffFixture, handoffId: string
  * what they REFUSE.
  */
 describe("retained evidence at the acceptance consumer", () => {
-  test("retained evidence: the handoff records the configured SDD bodies with their byte digests", async () => {
+  test("retained evidence: handoff records configured SDD paths and accepts after report edits", async () => {
     const fixture = await retainedHandoffFixture("retained-evidence-consumer-ok");
     try {
       const bodies = retainedHandoffBodies(fixture.harnessRoot);
-      const digests = {
-        qc: writeBody(bodies.qc, QC_BODY),
-        consolidated: writeBody(bodies.consolidated, CONSOLIDATED_BODY),
-        qa: writeBody(bodies.qa, QA_BODY),
-      };
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
 
       const handed = await retainedHandoff(fixture, bodies, "handoff-retained-ok");
       const handoff = handed.data.coordination!.handoff!;
-      // The consumer recorded the FILES at the configured SDD paths with the
-      // byte hashes it read from them — not a copy, not a digest of anything
-      // else.
       expect(handoff.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
-      expect([handoff.qc.reports[0]!.sha256, handoff.qc.consolidated.sha256, handoff.qa.report.sha256]).toEqual([
-        digests.qc,
-        digests.consolidated,
-        digests.qa,
-      ]);
       expect(handoff.state).toBe("submitted");
 
-      // The acceptance transition verifies exactly those digests, and the
-      // bodies are still the files it verified.
+      writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited\n`);
       const accepted = await retainedAccept(fixture, handoff.id, "accept-retained-ok");
       expect(accepted.data.coordination!.handoff!.state).toBe("accepted");
       expect(readFileSync(bodies.qc, "utf8")).toEqual(QC_BODY);
-      expect(createHash("sha256").update(readFileSync(bodies.consolidated)).digest("hex")).toEqual(digests.consolidated);
     } finally {
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }
   });
 
-  test("retained evidence: missing, escaped and edited bodies cannot be accepted by the consumer", async () => {
+  test("retained evidence: missing and escaped bodies cannot be handed off", async () => {
     const fixture = await retainedHandoffFixture("retained-evidence-consumer-refusals");
     try {
       const bodies = retainedHandoffBodies(fixture.harnessRoot);
@@ -1003,35 +966,6 @@ describe("retained evidence at the acceptance consumer", () => {
       expect(missingRefusal.code).toBe("coordination.invalid-input");
       writeBody(bodies.qa, QA_BODY);
 
-      // (3) The unchanged bodies hand off, and the attempt is recorded.
-      const handed = await retainedHandoff(fixture, bodies, "handoff-retained-sealed");
-      const handoffId = handed.data.coordination!.handoff!.id;
-
-      // (4) Bytes edited AFTER the seal cannot be accepted: `accept` re-reads
-      // the pinned paths and refuses — the attempt stays `submitted`.
-      writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited\n`);
-      const editedRefusal = await refusalOf(() => retainedAccept(fixture, handoffId, "accept-retained-edited"));
-      expect(editedRefusal.code).toBe("coordination.evidence-stale");
-      const afterEdit = await readExecutionPlan(
-        domainContext(fixture.context, fixture.coordinator.caller),
-        fixture.coordinator.session,
-        RETAINED_PLAN,
-      );
-      expect(afterEdit.data.coordination!.handoff!.state).toBe("submitted");
-
-      // (5) A body that vanished after the seal is unavailable too — the same
-      // refusal, never a phantom approval.
-      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
-      rmSync(bodies.qc);
-      const removedRefusal = await refusalOf(() => retainedAccept(fixture, handoffId, "accept-retained-removed"));
-      expect(removedRefusal.code).toBe("coordination.evidence-stale");
-
-      // (6) Restoring the bodies lets the SAME attempt through: the refusals
-      // above are the acceptance path's verdict on the evidence, not a stuck
-      // record.
-      writeBody(bodies.qc, QC_BODY);
-      const accepted = await retainedAccept(fixture, handoffId, "accept-retained-restored");
-      expect(accepted.data.coordination!.handoff!.state).toBe("accepted");
     } finally {
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }

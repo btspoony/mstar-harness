@@ -2,13 +2,12 @@
  * Protected-writers CAS and catalog/store registration-gate families.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXECUTION_PIN_CONFLICT_CODE, bindPlanSession, executionInputHash, mutatePlanCoordination, readCoordinatedArtifact, readPlanCoordination, replaceCoordinatedArtifact, type CatalogExecutionPin } from "../src/coordination.js";
 import { updateCatalogEntity } from "../src/catalog.js";
 import { openStore, type StoreContext } from "../src/store-db.js";
-import { CoordinationError, artifactVersion, withProtectedWrite } from "../src/coordination-write.js";
 import { createFsStore } from "../src/store.js";
 import {
   FIXTURE_COORDINATOR_ID,
@@ -34,36 +33,21 @@ afterEach(() => afterEachCleanup());
 describe("protected-writers", () => {
   const STATUS_REF = { kind: "status", key: "root" } as const;
 
-  test("the root status is replaced under an exact byte-version precondition", async () => {
+  test("the root status is replaced under the write lock without a byte-version precondition", async () => {
     const fixture = makeFixture();
     const harnessRoot = realpathSync(fixture.harness);
     const statusPath = join(harnessRoot, "status.json");
-    const original = readFileSync(statusPath);
     const empty = { version: 2, updated_at: "2026-09-16", workflows: [] };
 
-    // An uncoordinated root is a legitimate target, and the returned version is
-    // the version of the bytes just written.
+    // An intervening prose/formatting edit is not a refusal condition.
+    writeFileSync(statusPath, `${readFileSync(statusPath, "utf8")}\n`);
     const replaced = await replaceCoordinatedArtifact({
       harnessRoot,
       ref: STATUS_REF,
       payload: empty,
-      expectedVersion: artifactVersion(original),
     });
     expect(replaced.payload).toEqual(empty);
-    expect(replaced.version).toBe(artifactVersion(readFileSync(statusPath)));
-    expect(await readCoordinatedArtifact(harnessRoot, STATUS_REF)).toEqual({
-      payload: empty,
-      version: replaced.version,
-    });
-
-    // The superseded version is refused, and a failed CAS leaves the file alone.
-    const before = readFileSync(statusPath);
-    expect(
-      await errorCodeOf(() =>
-        replaceCoordinatedArtifact({ harnessRoot, ref: STATUS_REF, payload: empty, expectedVersion: artifactVersion(original) }),
-      ),
-    ).toBe("coordination.version-conflict");
-    expect(readFileSync(statusPath).equals(before)).toBe(true);
+    expect((await readCoordinatedArtifact(harnessRoot, STATUS_REF)).payload).toEqual(empty);
   });
 
   test("a root that registers a coordinated workflow is refused on either side", async () => {
@@ -81,7 +65,7 @@ describe("protected-writers", () => {
           harnessRoot,
           ref: STATUS_REF,
           payload: readJson(statusPath),
-          expectedVersion: artifactVersion(coordinated),
+          
         }),
       ),
     ).toBe("coordination.scoped-writer-required");
@@ -98,7 +82,7 @@ describe("protected-writers", () => {
           harnessRoot,
           ref: STATUS_REF,
           payload: { ...plain, workflows: registered },
-          expectedVersion: artifactVersion(uncoordinated),
+          
         }),
       ),
     ).toBe("coordination.scoped-writer-required");
@@ -120,7 +104,7 @@ describe("protected-writers", () => {
           harnessRoot,
           ref: { kind: "residuals", key: PROJECT_ID } as never,
           payload: { entries: {} },
-          expectedVersion: "absent",
+          
         }),
       ),
     ).toBe("coordination.store");
@@ -150,7 +134,7 @@ describe("protected-writers", () => {
     // Kinds that keep their own writer are refused, never silently no-oped.
     for (const ref of [{ kind: "review", key: PLAN_ID } as const, { kind: "json", key: join(harnessRoot, "loose.json") } as const]) {
       expect(
-        await errorCodeOf(() => replaceCoordinatedArtifact({ harnessRoot, ref, payload: {}, expectedVersion: "absent" })),
+        await errorCodeOf(() => replaceCoordinatedArtifact({ harnessRoot, ref, payload: {} })),
       ).toBe("coordination.scoped-writer-required");
     }
 
@@ -159,12 +143,12 @@ describe("protected-writers", () => {
     const snapshotRef = { kind: "snapshot", key: WORKFLOW_ID } as const;
     const snapshotPath = join(harnessRoot, "workflows", WORKFLOW_ID, "snapshot.json");
     const snapshot = readJson(snapshotPath);
-    const version = artifactVersion(readFileSync(snapshotPath));
+    
     const planSession = (await bindPlan(fixture, PLAN_ID)).session_file;
     for (const sessionPath of [undefined, planSession]) {
       expect(
         await errorCodeOf(() =>
-          replaceCoordinatedArtifact({ harnessRoot, ref: snapshotRef, payload: snapshot, expectedVersion: version, sessionPath }),
+          replaceCoordinatedArtifact({ harnessRoot, ref: snapshotRef, payload: snapshot, sessionPath }),
         ),
       ).toBe("coordination.session-role");
     }

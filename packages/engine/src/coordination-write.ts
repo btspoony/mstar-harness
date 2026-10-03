@@ -61,7 +61,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.identity-missing",
   "coordination.identity-mismatch",
   "coordination.version-conflict",
-  "coordination.expected-version-required",
   "coordination.invalid-transition",
   "coordination.handoff-state",
   "coordination.handoff-missing",
@@ -84,7 +83,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.not-in-git",
   "coordination.git-unavailable",
   "coordination.git-proof",
-  "coordination.evidence-stale",
   "coordination.integration-unresolved",
   "coordination.integration-diverged",
   "coordination.local-store-required",
@@ -367,14 +365,8 @@ export const ASSIGNMENT_INTENT_FIELDS = [
 ] as const;
 
 /**
- * §4.2 the SEMANTIC projection of one sealed Assignment: the values
- * `parseAssignmentFile` reads out of the document's header block, in the stored
- * snake_case shape. A seal records it so a later re-read compares the reviewed
- * input's MEANING — a formatting, prose, ordering or duplicate-marker change
- * leaves the projection untouched — while a scope or approval change is
- * disclosed with the exact header(s) that moved (A29). The document's bytes are
- * never the projection: a whole-document hash cannot tell a reflowed paragraph
- * from a changed `QA gate`.
+ * Semantic Assignment fields captured at Prepare time. Later checks compare
+ * these field values directly; document digests are not freshness gates.
  */
 export type AssignmentIntent = Readonly<Record<(typeof ASSIGNMENT_INTENT_FIELDS)[number], string>>;
 
@@ -385,12 +377,7 @@ export type PreparedCoordination = {
   plan_sha256: string;
   qa_gate: string;
   findings_cleanup: string;
-  /**
-   * The sealed Assignment's semantic projection. Optional on the stored block
-   * because the projection is written by the route that seals the row: the file
-   * route's `prepare` always records it, and a seal that does not (the DB
-   * transport's own receipt) is compared by the whole-byte rule instead.
-   */
+  /** Semantic Assignment projection when recorded by the Prepare producer. */
   assignment_intent?: AssignmentIntent;
   prepared_by: string;
   prepared_at: string;
@@ -429,56 +416,11 @@ export type CoordinationIdentityRecovery = {
   recovered_at: string;
 };
 
-/**
- * One recorded self-amendment of a prepared pin (spec §D2, fixes #308): a
- * `bind` that found the row's prepared Assignment bytes stale, while the row
- * was one nobody held (no `coordination.session`, no `coordination.handoff`),
- * refreshed the pin to the bytes it actually bound and recorded who adopted it.
- *
- * Append-only PROVENANCE, never authority: nothing in the engine reads it to
- * decide anything. `at`/`session_id` name the adoption; `old_sha256` is the
- * pinned digest that moved and `new_sha256` the digest recorded in its place;
- * `operation_id` is the record's own identifier on a transport that carries no
- * caller-supplied operation id; `prepared_by_matches` is a NON-GATING
- * annotation — the file route's `--session-id` is caller-asserted and
- * authenticates nobody, so the annotation is evidence for the coordinator's
- * post-hoc read, not a gate.
- *
- * Both halves of the sealed pair are amendable by one adoption (spec §D2): a
- * plan document revised while the iteration runs moves with the Assignment, so
- * the record carries a SECOND optional pair — `plan_old_sha256` /
- * `plan_new_sha256`, the plan document's digests before and after the refresh —
- * present exactly when that half moved. An entry that records only the
- * Assignment half is a complete record of a plan half that still matched.
- */
-export type CoordinationSelfAmendment = {
-  at: string;
-  session_id: string;
-  /** The Assignment pin the prepared block carried before the amendment (bare sha256 hex). */
-  old_sha256: string;
-  /** The digest of the Assignment bytes the adopting bind pinned (bare sha256 hex). */
-  new_sha256: string;
-  /** The plan document's pinned digest before the amendment, when that half moved too. */
-  plan_old_sha256?: string;
-  /** The digest of the plan bytes the adopting bind re-pinned, when that half moved too. */
-  plan_new_sha256?: string;
-  /** The record's own id; sha256 hex over the amendment's canonical facts. */
-  operation_id: string;
-  /** Whether the adopting session is the one the prepared block recorded. */
-  prepared_by_matches?: boolean;
-};
 
-/**
- * Snapshot-level coordination block (the workflow's coordinator). The
- * coordinator binding is the single live owner; `identity_recoveries` is the
- * append-only audit history of how that owner changed (`recoverPrepareCoordinator`),
- * and `self_amendments` is the append-only audit of prepared pins adopted by a
- * bind (`coordination.assignment-stale` drift on a row nobody held).
- */
+/** Snapshot-level coordination block. */
 export type SnapshotCoordination = {
   coordinator: CoordinatorBinding;
   identity_recoveries?: CoordinationIdentityRecovery[];
-  self_amendments?: CoordinationSelfAmendment[];
 };
 
 /** Row-level coordination block (one plan). */
@@ -780,15 +722,12 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
-    // The semantic projection is optional (see `PreparedCoordination`); every
-    // other field of the seal is required at its stored shape.
-    if (key === "assignment_intent") continue;
-    if (!isNonEmptyString(value[key])) {
+    if (key !== "assignment_intent" && !isNonEmptyString(value[key])) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
     }
   }
-  if (value.assignment_intent !== undefined) {
-    const intent = value.assignment_intent;
+  const intent = value.assignment_intent;
+  if (intent !== undefined) {
     if (!isPlainObject(intent)) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
     } else {
@@ -907,103 +846,13 @@ export function validateCoordinationIdentityRecovery(
 }
 
 /**
- * Validate one stored self-amendment record (spec §D2). Strict in the same way
- * the rest of this module is: the key set is exact (the optional
- * `prepared_by_matches` annotation and the optional plan-half pair aside),
- * both digests are bare sha256 hex and the record's own id must be present — an
- * audit entry that cannot be read exactly is a malformed document, never a
- * record with optional halves.
- *
- * The plan-half pair is optional as a PAIR: present together when the adopted
- * move carried both halves of the sealed pair, absent together when only the
- * Assignment moved. A half-written pair describes a move the writer can never
- * produce, so it is a malformed document like any other.
- */
-export function validateCoordinationSelfAmendment(
-  value: unknown,
-  what = "coordination.self_amendments[]",
-): ValidationResult[] {
-  if (!isPlainObject(value)) return [invalid("coordination.amendment.shape", `${what} must be an object`)];
-  const allowed = [
-    "at",
-    "session_id",
-    "old_sha256",
-    "new_sha256",
-    "plan_old_sha256",
-    "plan_new_sha256",
-    "operation_id",
-    "prepared_by_matches",
-  ];
-  const violations: ValidationResult[] = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.amendment.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  for (const key of ["at", "session_id", "operation_id"]) {
-    if (!isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.amendment.field", `${what}.${key} must be a non-empty string`));
-    }
-  }
-  for (const key of ["old_sha256", "new_sha256"]) {
-    if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
-      violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
-    }
-  }
-  // An amendment that records the same digest twice describes no move at all:
-  // the writer only ever appends a measured drift, so a record claiming
-  // otherwise is malformed, never a harmless no-op entry.
-  if (value.old_sha256 === value.new_sha256 && typeof value.old_sha256 === "string") {
-    violations.push(
-      invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ \u2014 an amendment records a move`),
-    );
-  }
-  // The plan-half pair: both keys or neither, each a bare sha256 hex, and — like
-  // the Assignment half — a pair that records no move is malformed.
-  const planHalves = ["plan_old_sha256", "plan_new_sha256"].filter((key) => value[key] !== undefined);
-  if (planHalves.length === 1) {
-    violations.push(
-      invalid(
-        "coordination.amendment.hash",
-        `${what}.plan_old_sha256 and .plan_new_sha256 are recorded together or not at all`,
-      ),
-    );
-  }
-  if (planHalves.length > 0) {
-    for (const key of planHalves) {
-      if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
-        violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
-      }
-    }
-    if (value.plan_old_sha256 === value.plan_new_sha256 && typeof value.plan_old_sha256 === "string") {
-      violations.push(
-        invalid(
-          "coordination.amendment.hash",
-          `${what}.plan_old_sha256 and .plan_new_sha256 must differ \u2014 an amendment records a move`,
-        ),
-      );
-    }
-  }
-  if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
-    violations.push(
-      invalid("coordination.amendment.annotation", `${what}.prepared_by_matches must be a boolean when present`),
-    );
-  }
-  return violations;
-}
-
-/**
- * Validate a snapshot's top `coordination` block (spec §C2) plus the
- * append-only audits it carries: the recovery history the JSON Prepare
- * recovery appends (§3.3) and the self-amendment history a bind appends to a
- * prepared pin it adopted (§D2). The validator is the schema OWNER
- * (`workflow.ts` consumes it), so a malformed audit entry can never be
- * persisted or read as a valid snapshot.
+ * Validate a snapshot's top `coordination` block (spec §C2) plus its
+ * coordinator-identity recovery history.
  */
 export function validateSnapshotCoordination(value: unknown, what = "coordination"): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations: ValidationResult[] = [];
   const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
@@ -1011,15 +860,6 @@ export function validateSnapshotCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
   } else {
     violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
-  }
-  if (value.self_amendments !== undefined) {
-    if (!Array.isArray(value.self_amendments)) {
-      violations.push(invalid("coordination.snapshot.field", `${what}.self_amendments must be an array`));
-    } else {
-      value.self_amendments.forEach((entry, index) => {
-        violations.push(...validateCoordinationSelfAmendment(entry, `${what}.self_amendments[${String(index)}]`));
-      });
-    }
   }
   if (value.identity_recoveries !== undefined) {
     if (!Array.isArray(value.identity_recoveries)) {
@@ -1038,10 +878,6 @@ export function evidenceRefOf(filePath: string): EvidenceRef {
   return { path: canonicalTarget(filePath), sha256: sha256Bytes(readFileSync(filePath)) };
 }
 
-/** Whether `value` is a well-formed `sha256:<64 hex>` artifact version. */
-export function isArtifactVersion(value: unknown): value is string {
-  return typeof value === "string" && (value === "absent" || HASH_RE.test(value));
-}
 
 /* ------------------------------------------------------------------------ *
  * §R11/A21 file-authority claim ownership — the holder identity one held
