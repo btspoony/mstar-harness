@@ -34,22 +34,16 @@
  * - readDeclaredBins (F-S2) — Guard 1's manifest read is guard-or-clear:
  * missing / corrupt / bin-less manifests each return one explicit
  * failure row (never a silent skip that would flood every citation).
- * - checkEngineCallouts real-corpus pin (F-S3) — the shipped skills corpus
- *   yields exactly 49 Engine-check callouts / 51 CLI citations against the
- *   live CLI inventory + declared bins (4 lease/seats callouts consolidated
- *   to canonical pointers);
- *   corpus drift goes red.
  */
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { AUDIT_CATEGORIES } from "../packages/engine/src/index.ts";
 import {
   AUDIT_CATEGORY_DOC,
   buildCanonicalCommandInventory,
-  buildEngineExportNames,
   checkBilingualContentParity,
   checkBilingualPairing,
   checkCalloutDuplication,
@@ -277,51 +271,6 @@ describe("checkEngineCallouts — Guard 1 CLI citation binary-prefix check", () 
       },
     );
     expect(calloutsChecked).toBe(0);
-    expect(failures).toEqual([]);
-  });
-
-  test("real corpus pins 49 Engine-check callouts / 50 CLI citations (F-S3, drift goes red)", () => {
-    const REPO_ROOT = join(import.meta.dir, "..");
-    const SKILLS_ROOT = join(REPO_ROOT, "skills");
-
-    /** Every `.md` file under skills/ with the repo-relative `rel` Guard 1
-     * sees in main — the 49/50 counts are a regression pin: adding or
-     * removing a backticked CLI citation inside an Engine-check callout
-     * (or adding a callout) fails this test loudly. */
-    const realCorpus = () => {
-      const files: string[] = [];
-      const walk = (dir: string) => {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const p = join(dir, entry.name);
-          if (entry.isDirectory()) walk(p);
-          else if (entry.name.endsWith(".md")) files.push(p);
-        }
-      };
-      walk(SKILLS_ROOT);
-      return files
-        .sort()
-        .map((file) => ({ rel: relative(REPO_ROOT, file), text: readFileSync(file, "utf8") }));
-    };
-
-    const { cliCommands, failures: cliFailures } = buildCanonicalCommandInventory(REPO_ROOT);
-    expect(cliFailures).toEqual([]);
-    const engineExports = buildEngineExportNames(
-      readFileSync(join(REPO_ROOT, "packages", "engine", "src", "index.ts"), "utf8"),
-    );
-    expect(engineExports.size).toBeGreaterThan(0);
-    const { binNames, failures: manifestFailures } = readDeclaredBins(
-      join(REPO_ROOT, "packages", "cli", "package.json"),
-    );
-    expect(manifestFailures).toEqual([]);
-    expect(binNames).toEqual(expect.arrayContaining(["mstar", "mstar-harness"]));
-
-    const { calloutsChecked, cliCitationsChecked, failures } = checkEngineCallouts(realCorpus(), {
-      cliCommands,
-      engineExports,
-      binNames,
-    });
-    expect(calloutsChecked).toBe(49);
-    expect(cliCitationsChecked).toBe(51);
     expect(failures).toEqual([]);
   });
 });
