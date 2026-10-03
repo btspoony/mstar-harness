@@ -759,7 +759,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
           violation(
             "high",
             "PHASE6_ROOT_ENTRY_PRESENT",
-            `Workflow '${workflowId}' is still registered in the root register — post-merge close unregisters it (removal-at-terminal)`,
+            `Workflow '${workflowId}' is still registered in the root register \u2014 post-merge close unregisters it (removal-at-terminal)`,
             "Run 'mstar status workflow-close --workflow <id>' to finish the unregister",
           ),
         );
@@ -802,7 +802,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
             violation(
               "high",
               "PHASE6_INVALID_SNAPSHOT",
-              `Workflow state failed v3 snapshot validation — the Phase-6 close state cannot be verified (${blocking.map((entry) => entry.message).join("; ")}${planRowsReadable ? "" : "; plan state is not valid JSON"})`,
+              `Workflow state failed v3 snapshot validation \u2014 the Phase-6 close state cannot be verified (${blocking.map((entry) => entry.message).join("; ")}${planRowsReadable ? "" : "; plan state is not valid JSON"})`,
             ),
           );
         }
@@ -813,7 +813,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
           violation(
             "high",
             "PHASE6_NOT_TERMINAL",
-            `Workflow status is ${JSON.stringify(snapshot.status)} — post-merge close requires a terminal state (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`,
+            `Workflow status is ${JSON.stringify(snapshot.status)} \u2014 post-merge close requires a terminal state (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`,
           ),
         );
       }
@@ -832,7 +832,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
               violation(
                 "high",
                 "PHASE6_DANGLING_LEASE",
-                `Plan '${lease.plan_id}' still carries a ${JSON.stringify(status)} lease — close never releases leases`,
+                `Plan '${lease.plan_id}' still carries a ${JSON.stringify(status)} lease \u2014 close never releases leases`,
                 "Release the lease(s) with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
               ),
             );
@@ -852,7 +852,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
               violation(
                 "high",
                 "PHASE6_DANGLING_LEASE",
-                "The workflow still carries a held integration merge lease — close never releases leases",
+                "The workflow still carries a held integration merge lease \u2014 close never releases leases",
                 "Release the integration merge lease with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
               ),
             );
@@ -867,7 +867,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
               violation(
                 "high",
                 "PHASE6_PLAN_ROW_NOT_DONE",
-                `Workflow '${workflowId}' is completed but owned plan row '${String(plan.id)}' is ${JSON.stringify(plan.status)} — a completed close requires every plan row Done`,
+                `Workflow '${workflowId}' is completed but owned plan row '${String(plan.id)}' is ${JSON.stringify(plan.status)} \u2014 a completed close requires every plan row Done`,
                 "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
               ),
             );
