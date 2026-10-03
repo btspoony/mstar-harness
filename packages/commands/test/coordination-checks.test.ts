@@ -6,6 +6,7 @@ import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 import {
   createExecutionWorkflow,
+  openStore,
   initializeExecutionAuthority,
   initializeStore,
   registerCatalogEntity,
@@ -69,6 +70,58 @@ async function activeWorkflow(cwd: string, workflowId: string, status: "running"
   return { harness, storeContext, planId };
 }
 
+async function completeAndUnregister(context: { harnessDir: string }, workflowId: string, planId: string, releasedLease: boolean) {
+  const store = await openStore(context, "write");
+  try {
+    store.db.exec("begin immediate");
+    const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
+    const state = JSON.parse(row.state_json) as Record<string, unknown>;
+    state.type = "iteration";
+    state.status = "completed";
+    state.ended_at = "2026-09-02T00:00:00.000Z";
+    state.updated_at = "2026-09-02T00:00:00.000Z";
+    store.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+    store.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
+    if (releasedLease) {
+      store.db.prepare(
+        "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
+      ).run(workflowId, planId, JSON.stringify({ status: "released" }));
+    }
+    store.db.exec("commit");
+  } catch (error) {
+    try { store.db.exec("rollback"); } catch {}
+    throw error;
+  } finally {
+    store.close();
+  }
+}
+
+
+  test("completed unregistered workflow remains addressable in execution history", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-closed");
+    await completeAndUnregister(storeContext, "wf-active-closed", planId, false);
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-active-closed", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
+  });
+
+  test("released lease tombstone does not count as a dangling lease", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-released");
+    await completeAndUnregister(storeContext, "wf-active-released", planId, true);
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-active-released", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect((result.data as { gate: { violations: Array<{ code: string }> } }).gate.violations)
+        .not.toContainEqual(expect.objectContaining({ code: "PHASE6_DANGLING_LEASE" }));
+    }
+  });
 
   test("ACTIVE phase-six gate reads workflow and served root state", async () => {
     const cwd = tempRoot();
