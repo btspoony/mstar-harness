@@ -1198,16 +1198,11 @@ function compareRetainedBodies(
   return differences;
 }
 
-/**
- * Verify the recovery point and inventory the whole store against it. Both
- * sides are read under the SAME rule, so a row that only one of them holds is
- * as visible as a row whose content changed.
- */
-async function buildLossInventory(context: StoreContext, backupPath: string, imagePath?: string): Promise<LossInventory> {
+/** Validate the recovery point location before staging any private image. */
+function recoveryPointPath(context: StoreContext, root: string, backupPath: string): string {
   if (!isNonEmptyString(backupPath)) {
     throw conflict("a restore preview needs the recovery point path it is previewed against");
   }
-  const root = controlRootOf(context);
   const point = canonicalPath(resolve(backupPath));
   if (!isPathWithin(root, point)) {
     throw new StoreActivationError(
@@ -1225,8 +1220,22 @@ async function buildLossInventory(context: StoreContext, backupPath: string, ima
     );
   }
   if (!existsSync(point)) {
-    throw new StoreActivationError("store.activation-stale", `no recovery point exists at ${point}.`);
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `no recovery point exists at ${point}. Select an existing recovery point or create one with store backup --out <path> inside ${root}; run store execution restore-preview against that point before retrying restore.`,
+    );
   }
+  return point;
+}
+
+/**
+ * Verify the recovery point and inventory the whole store against it. Both
+ * sides are read under the SAME rule, so a row that only one of them holds is
+ * as visible as a row whose content changed.
+ */
+async function buildLossInventory(context: StoreContext, backupPath: string, imagePath?: string): Promise<LossInventory> {
+  const root = controlRootOf(context);
+  const point = recoveryPointPath(context, root, backupPath);
   let description: BackupInspection;
   try {
     description = await inspectBackupCopy(imagePath ?? point);
@@ -1762,10 +1771,18 @@ async function checkpointLiveStore(context: StoreContext): Promise<void> {
 async function runRestore(context: StoreContext, root: string, input: ResolvedRestoreInput): Promise<ExecutionRestoreReceipt> {
   // Inventory and install one private image; the selected path may be replaced
   // by another process after this copy without changing this attempt.
+  const point = recoveryPointPath(context, root, input.preview.backupPath);
   const attemptId = randomUUID();
   const imagePath = join(root, `.store-restore-${attemptId}.db`);
   try {
-    copyFileSync(input.preview.backupPath, imagePath);
+    try {
+      copyFileSync(point, imagePath);
+    } catch (error) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the selected recovery point could not be staged: ${error instanceof Error ? error.message : String(error)}. Select a readable recovery point and run store execution restore-preview before retrying restore.`,
+      );
+    }
     return await runRestoreImage(context, root, input, imagePath, attemptId);
   } finally {
     rmSync(`${imagePath}-wal`, { force: true });
