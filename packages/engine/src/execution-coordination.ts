@@ -1174,9 +1174,35 @@ export async function releaseExecutionPlan(
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
   }, (witness, tx) => {
     const lease = witness.view.executionLease;
-    return lease?.status === "released" && lease.holder_session_id === witness.session.sessionId
-      ? { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch }
-      : undefined;
+    if (lease?.status !== "released" || lease.holder_session_id !== witness.session.sessionId) return undefined;
+    if (lease.holder_role !== witness.session.role) {
+      throw new CoordinationError("coordination.session-mismatch", `released claim for plan ${planId} belongs to a different role`, {
+        plan_id: planId,
+      });
+    }
+    if (executionLeaseOwnerEpoch(tx, witness.workflowId, planId) !== tx.epoch) {
+      throw new ExecutionError(
+        "execution.stale-token",
+        `plan ${planId}'s released execution claim belongs to an earlier authority epoch`,
+        { workflow_id: witness.workflowId, plan_id: planId },
+      );
+    }
+    if (witness.session.role === "plan-pm" && witness.view.session?.sessionId !== witness.session.sessionId) {
+      throw new CoordinationError("coordination.session-mismatch", `release requires the caller's acquired plan binding`, {
+        plan_id: planId,
+      });
+    }
+    const coordination = witness.view.coordination ?? undefined;
+    if (coordination?.handoff !== undefined && coordination.handoff.state !== "returned") {
+      assertNoHandoffTransition(coordination, planId);
+    }
+    if (!["Todo", "Blocked"].includes(rowStatusOf(witness.view.plan as PlanRow))) {
+      throw new CoordinationError("coordination.plan-status", `plan ${planId} has no claimable released status`, {
+        plan_id: planId,
+        status: witness.view.plan.status,
+      });
+    }
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
   });
 }
 
