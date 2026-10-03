@@ -710,36 +710,59 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
       // Read the root register and addressed workflow under the same SQLite
       // snapshot. Do not assemble the whole graph: unrelated workflow state
       // corruption must not block this addressed check.
-      const meta = handle.db.prepare("select root_updated_at from execution_meta where id = 1").get() as
-        { root_updated_at: string } | undefined;
+      const authority = handle.db.prepare("select authority_state, root_updated_at from execution_meta where id = 1").get() as
+        { authority_state: string; root_updated_at: string } | undefined;
+      if (authority?.authority_state !== "active") {
+        throw new StoreError(
+          "execution.consumer-not-ready",
+          "the execution authority is not ACTIVE; this gate cannot answer from non-authoritative execution data",
+        );
+      }
       const registrations = handle.db.prepare(
         "select workflow_id, entry_json from execution_registry order by rowid",
       ).all() as Array<{ workflow_id: string; entry_json: string }>;
+      const entries: Record<string, unknown>[] = [];
+      let rootMalformed = false;
+      let targetRegistered = false;
+      for (const registration of registrations) {
+        let entry: unknown;
+        try {
+          entry = JSON.parse(registration.entry_json);
+        } catch {
+          rootMalformed = true;
+          continue;
+        }
+        if (!isPlainObject(entry) || typeof entry.id !== "string") {
+          rootMalformed = true;
+          continue;
+        }
+        if (entry.id !== registration.workflow_id) rootMalformed = true;
+        if (entry.id === workflowId || registration.workflow_id === workflowId) targetRegistered = true;
+        entries.push(entry);
+      }
       let rootDoc: Record<string, unknown> | null = null;
       try {
-        if (meta === undefined) throw new Error("execution root metadata is missing");
+        if (authority === undefined) throw new Error("execution root metadata is missing");
         rootDoc = {
           version: 2,
-          updated_at: meta.root_updated_at.slice(0, 10),
-          workflows: registrations.map((entry) => JSON.parse(entry.entry_json)),
+          updated_at: authority.root_updated_at.slice(0, 10),
+          workflows: entries,
         };
       } catch {
+        rootMalformed = true;
+      }
+      if (rootDoc === null || rootMalformed || !validateStatusV2(rootDoc as StatusV2Doc).ok) {
         violations.push(violation("high", "PHASE6_INVALID_ROOT", "The served root register is not a readable v2 workflow registry"));
       }
-      if (rootDoc !== null) {
-        const rootGate = validateStatusV2(rootDoc as StatusV2Doc);
-        if (!rootGate.ok) {
-          violations.push(violation("high", "PHASE6_INVALID_ROOT", "The served root register is not a readable v2 workflow registry"));
-        } else if (registrations.some((entry) => entry.workflow_id === workflowId)) {
-          violations.push(
-            violation(
-              "high",
-              "PHASE6_ROOT_ENTRY_PRESENT",
-              `Workflow '${workflowId}' is still registered in the root register — post-merge close unregisters it (removal-at-terminal)`,
-              "Run 'mstar status workflow-close --workflow <id>' to finish the unregister",
-            ),
-          );
-        }
+      if (targetRegistered) {
+        violations.push(
+          violation(
+            "high",
+            "PHASE6_ROOT_ENTRY_PRESENT",
+            `Workflow '${workflowId}' is still registered in the root register — post-merge close unregisters it (removal-at-terminal)`,
+            "Run 'mstar status workflow-close --workflow <id>' to finish the unregister",
+          ),
+        );
       }
 
       const row = handle.db.prepare(
@@ -751,10 +774,13 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
       }
       let snapshot: WorkflowSnapshot | null = null;
       try {
-        snapshot = JSON.parse(row.state_json) as WorkflowSnapshot;
+        const parsed: unknown = JSON.parse(row.state_json);
+        if (isPlainObject(parsed)) snapshot = parsed as unknown as WorkflowSnapshot;
+        else violations.push(violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not an object`));
       } catch {
         violations.push(violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not valid JSON`));
       }
+
       let planRowsReadable = true;
       if (snapshot !== null) {
         const planRows = handle.db.prepare(

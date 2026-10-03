@@ -9,6 +9,7 @@ import {
   openStore,
   initializeExecutionAuthority,
   initializeStore,
+  evaluatePostMergeCloseFromExecutionAuthority,
   registerCatalogEntity,
   type CatalogOperation,
   type ExecutionCaller,
@@ -171,6 +172,57 @@ async function completeAndUnregister(
       ]) });
     }
   });
+  test("null workflow state is an invalid snapshot", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext } = await activeWorkflow(cwd, "wf-null-state");
+    const store = await openStore(storeContext, "write");
+    try {
+      store.db.prepare("update execution_workflows set state_json = 'null' where workflow_id = ?").run("wf-null-state");
+    } finally {
+      store.close();
+    }
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-null-state", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result.status).toBe("refused");
+    if (result.status === "refused") {
+      expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
+        expect.objectContaining({ code: "PHASE6_INVALID_SNAPSHOT" }),
+      ]) });
+    }
+  });
+
+  test("registry identity mismatch fails root closed and still reports target registration", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext } = await activeWorkflow(cwd, "wf-registry-mismatch");
+    const store = await openStore(storeContext, "write");
+    try {
+      store.db.prepare("update execution_registry set entry_json = ? where workflow_id = ?")
+        .run(JSON.stringify({ id: "wf-other", type: "plan", started_at: "2026-09-01T00:00:00.000Z", dir: "workflows/wf-other" }), "wf-registry-mismatch");
+    } finally {
+      store.close();
+    }
+    const gate = await evaluatePostMergeCloseFromExecutionAuthority(storeContext, "wf-registry-mismatch");
+    expect(gate.violations.map((entry) => entry.code)).toEqual(expect.arrayContaining([
+      "PHASE6_INVALID_ROOT",
+      "PHASE6_ROOT_ENTRY_PRESENT",
+    ]));
+  });
+
+  test("non-active execution authority is refused by the evaluator", async () => {
+    const cwd = tempRoot();
+    const { storeContext } = await activeWorkflow(cwd, "wf-staged-authority");
+    const store = await openStore(storeContext, "write");
+    try {
+      store.db.prepare("update execution_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      store.close();
+    }
+    await expect(evaluatePostMergeCloseFromExecutionAuthority(storeContext, "wf-staged-authority"))
+      .rejects.toMatchObject({ code: "execution.consumer-not-ready" });
+  });
+
   test("ACTIVE phase-six gate reads workflow and served root state", async () => {
     const cwd = tempRoot();
     const { harness } = await activeWorkflow(cwd, "wf-active-running");
