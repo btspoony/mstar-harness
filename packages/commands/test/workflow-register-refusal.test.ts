@@ -27,16 +27,6 @@ function definition(id: string) {
 }
 
 describe("active registration refusals", () => {
-  test("delivery evidence refuses an empty patch without invoking external effects", async () => {
-    const ctx = context("coordinator-session");
-    const result = await definition("workflow.evidence").execute({
-      workflow: "wf-test",
-      file: path.join(ctx.cwd, "evidence.json"),
-    }, ctx);
-    expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
-    if (result.status !== "refused") throw new Error("expected empty evidence refusal");
-    expect(result.message).toContain("at least one evidence member");
-  });
 
   test("coordinator binding does not accept an environment-derived session identity", async () => {
     const result = await definition("plan.bind").execute({

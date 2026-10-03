@@ -439,7 +439,7 @@ export function releaseStatus(row: PlanRow, planId: string): string {
   if (status === "InProgress" || status === "InReview") return "Blocked";
   throw new CoordinationError(
     "coordination.plan-status",
-    `plan ${planId} is ${status || "unstatused"} — release requires a claimable or executing row`,
+    `plan ${planId} is ${status || "unstatused"} \u2014 release requires a claimable or executing row`,
     { plan_id: planId, status: row.status },
   );
 }
