@@ -45,7 +45,8 @@ export type StoreErrorCode =
   // route (primary spec §4.3), and that refusal is a store-authority verdict —
   // not a `coordination.*` scoped-writer refusal and not a payload error.
   | "execution.direct-write-refused"
-  | "execution.consumer-not-ready";
+  | "execution.consumer-not-ready"
+  | "execution.workflow-identity-mismatch";
 
 /** Typed refusal with an actionable, stable code. */
 export class StoreError extends Error {

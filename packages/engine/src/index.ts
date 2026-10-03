@@ -311,6 +311,8 @@ export {
   assertCatalogCompleteness,
   evaluatePhaseGate,
   evaluatePostMergeClose,
+  evaluatePostMergeCloseFromExecutionAuthority,
+  readRegisteredWorkflowFromExecutionAuthority,
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
   pushCadenceProbe,

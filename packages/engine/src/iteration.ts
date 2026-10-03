@@ -685,6 +685,282 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
 }
 
 /**
+ * The ACTIVE-authority form of the Phase-6 post-merge close gate: the same
+ * checks and violation codes as `evaluatePostMergeClose`, evaluated from the
+ * execution DB authority instead of the retired snapshot/status documents
+ * (I-000309). Facts and sources:
+ *
+ * - root register + registration  → the served graph's root (`readExecutionState`)
+ * - terminal status, delivery evidence, plan rows Done → the workflow's own
+ *   authoritative state row (addressed read by exact id — registration-
+ *   independent, so a completed-and-unregistered workflow stays verifiable)
+ * - dangling leases → held/claimed lease rows only; a `released` tombstone is
+ *   the authority's retained history, not a carried lease
+ *
+ * A workflow with no authority record at all is `PHASE6_INVALID_SNAPSHOT` —
+ * the gate answers for workflows the store knows about, never inventing a
+ * verdict for an unknown id.
+ */
+/** Read just the registered workflow and its plan rows for ACTIVE phase gates. */
+export async function readRegisteredWorkflowFromExecutionAuthority(
+  context: StoreContext,
+  workflowId: string,
+): Promise<WorkflowSnapshot | null> {
+  const handle = await openStore(context, "read");
+  try {
+    handle.db.exec("begin deferred");
+    try {
+      const authority = handle.db.prepare(
+        "select authority_state from execution_meta where id = 1",
+      ).get() as { authority_state: string } | undefined;
+      if (authority?.authority_state !== "active") {
+        throw new StoreError(
+          "execution.consumer-not-ready",
+          "the execution authority is not ACTIVE; this gate cannot answer from non-authoritative execution data",
+        );
+      }
+      const registration = handle.db.prepare(
+        "select entry_json from execution_registry where workflow_id = ?",
+      ).get(workflowId) as { entry_json: string } | undefined;
+      if (registration === undefined) return null;
+      let entry: unknown;
+      try {
+        entry = JSON.parse(registration.entry_json);
+      } catch {
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' has malformed root registration JSON`);
+      }
+      if (!isPlainObject(entry) || entry.id !== workflowId) {
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' root registration identity is invalid`);
+      }
+      const row = handle.db.prepare(
+        "select state_json from execution_workflows where workflow_id = ?",
+      ).get(workflowId) as { state_json: string } | undefined;
+      if (row === undefined) return null;
+      let snapshot: WorkflowSnapshot;
+      try {
+        const parsed: unknown = JSON.parse(row.state_json);
+        if (!isPlainObject(parsed)) throw new Error("workflow state is not an object");
+        if (parsed.id !== workflowId) {
+          throw new StoreError(
+            "execution.workflow-identity-mismatch",
+            `workflow identity mismatch: requested '${workflowId}', stored state identifies '${String(parsed.id)}'`,
+          );
+        }
+        snapshot = parsed as unknown as WorkflowSnapshot;
+      } catch (error) {
+        if (error instanceof StoreError) throw error;
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' state is not a valid object`);
+      }
+      const planRows = handle.db.prepare(
+        "select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal",
+      ).all(workflowId) as Array<{ plan_id: string; state_json: string }>;
+      try {
+        snapshot.plans = planRows.map(({ plan_id, state_json }) => {
+          const plan: unknown = JSON.parse(state_json);
+          if (!isPlainObject(plan) || plan.id !== plan_id) {
+            throw new StoreError(
+              "execution.workflow-identity-mismatch",
+              `plan identity mismatch in workflow '${workflowId}': row key '${plan_id}', stored state identifies '${String(isPlainObject(plan) ? plan.id : undefined)}'`,
+            );
+          }
+          return plan;
+        });
+      } catch (error) {
+        if (error instanceof StoreError) throw error;
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' plan state is not valid JSON`);
+      }
+      return snapshot;
+    } finally {
+      try { handle.db.exec("commit"); } catch { /* read-only deferred txn */ }
+    }
+  } finally {
+    handle.close();
+  }
+}
+
+export async function evaluatePostMergeCloseFromExecutionAuthority(context: StoreContext, workflowId: string): Promise<GateResult> {
+  const violations: ValidationResult[] = [];
+  const handle = await openStore(context, "read");
+  try {
+    handle.db.exec("begin deferred");
+    try {
+      // Read the root register and addressed workflow under the same SQLite
+      // snapshot. Do not assemble the whole graph: unrelated workflow state
+      // corruption must not block this addressed check.
+      const authority = handle.db.prepare("select authority_state, root_updated_at from execution_meta where id = 1").get() as
+        { authority_state: string; root_updated_at: string } | undefined;
+      if (authority?.authority_state !== "active") {
+        throw new StoreError(
+          "execution.consumer-not-ready",
+          "the execution authority is not ACTIVE; this gate cannot answer from non-authoritative execution data",
+        );
+      }
+      const registrations = handle.db.prepare(
+        "select workflow_id, entry_json from execution_registry order by rowid",
+      ).all() as Array<{ workflow_id: string; entry_json: string }>;
+      const entries: Record<string, unknown>[] = [];
+      let rootMalformed = false;
+      let targetRegistered = false;
+      for (const registration of registrations) {
+        let entry: unknown;
+        try {
+          entry = JSON.parse(registration.entry_json);
+        } catch {
+          rootMalformed = true;
+          continue;
+        }
+        if (!isPlainObject(entry) || typeof entry.id !== "string") {
+          rootMalformed = true;
+          continue;
+        }
+        if (entry.id !== registration.workflow_id) rootMalformed = true;
+        if (entry.id === workflowId || registration.workflow_id === workflowId) targetRegistered = true;
+        entries.push(entry);
+      }
+      let rootDoc: Record<string, unknown> | null = null;
+      try {
+        if (authority === undefined) throw new Error("execution root metadata is missing");
+        rootDoc = {
+          version: 2,
+          updated_at: authority.root_updated_at.slice(0, 10),
+          workflows: entries,
+        };
+      } catch {
+        rootMalformed = true;
+      }
+      if (rootDoc === null || rootMalformed || !validateStatusV2(rootDoc as StatusV2Doc).ok) {
+        violations.push(violation("high", "PHASE6_INVALID_ROOT", "The served root register is not a readable v2 workflow registry"));
+      }
+      if (targetRegistered) {
+        violations.push(
+          violation(
+            "high",
+            "PHASE6_ROOT_ENTRY_PRESENT",
+            `Workflow '${workflowId}' is still registered in the root register \u2014 post-merge close unregisters it (removal-at-terminal)`,
+            "Run 'mstar status workflow-close --workflow <id>' to finish the unregister",
+          ),
+        );
+      }
+
+      const row = handle.db.prepare(
+        "select state_json from execution_workflows where workflow_id = ?",
+      ).get(workflowId) as { state_json: string } | undefined;
+      if (row === undefined) {
+        violations.push(violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' has no execution authority record`));
+        return { ok: false, violations };
+      }
+      let snapshot: WorkflowSnapshot | null = null;
+      try {
+        const parsed: unknown = JSON.parse(row.state_json);
+        if (isPlainObject(parsed)) snapshot = parsed as unknown as WorkflowSnapshot;
+        else violations.push(violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not an object`));
+      } catch {
+        violations.push(violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not valid JSON`));
+      }
+
+      let planRowsReadable = true;
+      if (snapshot !== null) {
+        const planRows = handle.db.prepare(
+          "select state_json from execution_plans where workflow_id = ? order by ordinal",
+        ).all(workflowId) as Array<{ state_json: string }>;
+        try {
+          snapshot.plans = planRows.map((planRow) => JSON.parse(planRow.state_json));
+        } catch {
+          planRowsReadable = false;
+        }
+      }
+      let shapeOk = false;
+      if (snapshot !== null) {
+        const shape = validateWorkflowSnapshot(snapshot);
+        const blocking = shape.violations.filter((entry) => entry.code !== LEGACY_WORKTREE_PATH_CODE);
+        shapeOk = blocking.length === 0 && planRowsReadable;
+        if (!shapeOk) {
+          violations.push(
+            violation(
+              "high",
+              "PHASE6_INVALID_SNAPSHOT",
+              `Workflow state failed v3 snapshot validation \u2014 the Phase-6 close state cannot be verified (${blocking.map((entry) => entry.message).join("; ")}${planRowsReadable ? "" : "; plan state is not valid JSON"})`,
+            ),
+          );
+        }
+      }
+      const terminal = snapshot !== null && isTerminalSnapshot(snapshot);
+      if (shapeOk && snapshot !== null && !terminal) {
+        violations.push(
+          violation(
+            "high",
+            "PHASE6_NOT_TERMINAL",
+            `Workflow status is ${JSON.stringify(snapshot.status)} \u2014 post-merge close requires a terminal state (completed | failed | stopped); run 'mstar status workflow-close --workflow <id>' first`,
+          ),
+        );
+      }
+      if (terminal) {
+        const leases = handle.db.prepare(
+          "select plan_id, lease_json from execution_leases where workflow_id = ? order by plan_id",
+        ).all(workflowId) as Array<{ plan_id: string; lease_json: string }>;
+        for (const lease of leases) {
+          let status: unknown = "held";
+          try {
+            const parsed = JSON.parse(lease.lease_json) as Record<string, unknown>;
+            if (isPlainObject(parsed) && parsed.status !== undefined) status = parsed.status;
+          } catch { /* unparseable lease bytes are carried state — treat as held */ }
+          if (status !== "released") {
+            violations.push(
+              violation(
+                "high",
+                "PHASE6_DANGLING_LEASE",
+                `Plan '${lease.plan_id}' still carries a ${JSON.stringify(status)} lease \u2014 close never releases leases`,
+                "Release the lease(s) with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+              ),
+            );
+          }
+        }
+        const integrationLease = handle.db.prepare(
+          "select lease_json from execution_integration_leases where workflow_id = ?",
+        ).get(workflowId) as { lease_json: string } | undefined;
+        if (integrationLease !== undefined) {
+          let status: unknown = "held";
+          try {
+            const parsed = JSON.parse(integrationLease.lease_json) as Record<string, unknown>;
+            if (isPlainObject(parsed) && parsed.status !== undefined) status = parsed.status;
+          } catch { /* unparseable lease bytes are carried state — treat as held */ }
+          if (status !== "released") {
+            violations.push(
+              violation(
+                "high",
+                "PHASE6_DANGLING_LEASE",
+                "The workflow still carries a held integration merge lease \u2014 close never releases leases",
+                "Release the integration merge lease with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+              ),
+            );
+          }
+        }
+      }
+      if (shapeOk && terminal && snapshot?.type === "plan" && snapshot.status === "completed") {
+        violations.push(...consultDeliveryEvidence(snapshot));
+        for (const plan of snapshot.plans ?? []) {
+          if (isPlainObject(plan) && plan.status !== PLAN_STATUS_DONE) {
+            violations.push(
+              violation(
+                "high",
+                "PHASE6_PLAN_ROW_NOT_DONE",
+                `Workflow '${workflowId}' is completed but owned plan row '${String(plan.id)}' is ${JSON.stringify(plan.status)} \u2014 a completed close requires every plan row Done`,
+                "Bring the owned plan row to Done (or close the lifecycle as failed/stopped with a recorded reason), then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+              ),
+            );
+          }
+        }
+      }
+    } finally {
+      try { handle.db.exec("commit"); } catch { /* read-only deferred txn */ }
+    }
+  } finally {
+    handle.close();
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+/**
  * §5.1a push-cadence probe (HARD): never push the PR head while required CI
  * is still queued/in_progress or an AI/bot review wave is running. Pure
  * function — no external calls; callers probe CI / review state and pass the

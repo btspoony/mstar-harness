@@ -24,12 +24,11 @@
  *   retired file credential reports `execution.consumer-not-ready` (exit 1),
  *   and the DB form never becomes a silent file fallback (exit 2 usage on a
  *   legacy harness, exit 2 for a mixed flag shape).
- * - `-gates-read-their-input-*`: the lease gates take their row/lease from the
- *   authority (the leftover snapshot's claims are NOT the verdict), and the
- *   phase gate — whose input is a whole snapshot document — fails closed with
- *   `execution.consumer-not-ready` instead of reading retired JSON. The gate's
- *   OWN usage shape is decided ahead of that refusal, so a malformed phase-gate
- *   invocation is exit 2 (usage) even on an active authority.
+ * - `-gates-read-their-input-*`: lease gates take row/lease data from the
+ *   authority (leftover snapshot claims are not verdicts). The phase gate
+ *   evaluates the addressed workflow and plan rows: a running workflow with a
+ *   Todo plan stays at phase 2. The gate's usage shape is decided before the
+ *   authority read, so malformed invocations are exit 2 even on ACTIVE stores.
  * - `-status-validates-*`: the root register is validated FROM the authority (a
  *   status.json the file route would reject), while an explicitly named
  *   `status.json` is refused; a legacy harness still validates its own file.
@@ -117,7 +116,7 @@ function runCli(args: string[], fixture: Fixture, extraEnv: Record<string, strin
     stdout: "pipe",
     stderr: "pipe",
   });
-  return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+  return { exitCode: proc.exitCode, stdout: new TextDecoder().decode(proc.stdout), stderr: new TextDecoder().decode(proc.stderr) };
 }
 
 function jsonOf(result: RunResult): Record<string, unknown> {
@@ -336,7 +335,7 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(jsonOf(bare).code).toBe("command.invalid-input");
   });
 
-  test("gates read their input from the authority, and the snapshot-document gate fails closed", async () => {
+  test("gates read authority rows and keep usage plus legacy file-route behavior", async () => {
     const fixture = await activeFixture("cli-read-gates");
     // A snapshot claiming a held lease for the plan and a held merge lease.
     plantLeftoverSnapshot(fixture);
@@ -355,7 +354,12 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
 
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6"], fixture);
     expect(gate.exitCode).toBe(1);
-    expect(jsonOf(gate).code).toBe("execution.consumer-not-ready");
+    const phase6 = jsonOf(gate);
+    expect(phase6.code).toBe("PHASE6_ROOT_ENTRY_PRESENT");
+    expect(phase6.details).toMatchObject({ gate: { violations: expect.arrayContaining([
+      expect.objectContaining({ code: "PHASE6_NOT_TERMINAL" }),
+      expect.objectContaining({ code: "PHASE6_ROOT_ENTRY_PRESENT" }),
+    ]) } });
 
     const badPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], fixture);
     expect(badPhase.exitCode).toBe(2);
@@ -364,18 +368,28 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     const noCompass = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID], fixture);
     expect(noCompass.exitCode).toBe(2);
     expect(jsonOf(noCompass).code).toBe("command.invalid-input");
-
     const transition = runCli(
       ["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(fixture)],
       fixture,
     );
-    expect(transition.exitCode).toBe(1);
-    expect(jsonOf(transition).code).toBe("execution.consumer-not-ready");
+    expect(transition.exitCode).toBe(0);
+    expect(transition.stdout).toContain('"status":"ok"');
+    expect(transition.stdout).toContain('"transition":"phase-2-execute"');
 
     const legacyHarness = await legacyFixture("cli-read-gate-legacy");
     const legacyBadPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], legacyHarness);
     expect(legacyBadPhase.exitCode).toBe(2);
     expect(jsonOf(legacyBadPhase).code).toBe("command.invalid-input");
+    writeJson(
+      join(legacyHarness.harnessDir, "workflows", WORKFLOW_ID, "snapshot.json"),
+      { schema_version: 1, id: WORKFLOW_ID, type: "plan", status: "running", plans: [{ id: PLAN_ID, status: "Todo" }] },
+    );
+    const legacyTransition = runCli(
+      ["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", writeCompass(legacyHarness)],
+      legacyHarness,
+    );
+    expect(legacyTransition.exitCode).toBe(0);
+    expect(jsonOf(legacyTransition)).toMatchObject({ status: "ok", data: { transition: "phase-2-execute" } });
   });
 
   test("status validates the authority register, and refuses the retired file", async () => {

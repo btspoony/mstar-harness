@@ -14,9 +14,8 @@ import {
   resolveProcessHarnessDir,
   resolveWorkflowDir,
   setArtifactStore,
-  StoreError,
-  validateIntegrationMergeLease,
   validateProjectRegister,
+  validateIntegrationMergeLease,
   validateWorkflowSnapshot,
   verifyPlanExecutionLease,
   WORKFLOW_DELIVERY_KINDS,
@@ -184,8 +183,33 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           if (input.phase !== undefined && !phase6) return usage(id, `usage: iteration gate --phase only supports 6 (got ${JSON.stringify(input.phase)})`);
           if (!phase6 && (!input.compass || input.compass.trim() === "")) return usage(id, "usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)");
           const root = harnessDir(context, input.harness);
-          if ((await resolveExecutionReadRoute({ harnessDir: root })) === "execution") {
-            throw new StoreError("execution.consumer-not-ready", `iteration gate: the execution authority of ${root} is ACTIVE, so this gate's snapshot/document input is retired. Nothing was read: this gate consumes a snapshot document whose plan rows carry their session binding (which the DB adapter deliberately does not), so it reports not-ready rather than inventing one. Read the workflow/plan state through the execution DB adapter instead.`);
+          const executionRoute = await resolveExecutionReadRoute({ harnessDir: root });
+          if (executionRoute === "execution") {
+            if (phase6) {
+              // Phase-6 close facts are evaluated by the authority-specific
+              // engine form; it reads the addressed workflow regardless of registration.
+              const { evaluatePostMergeCloseFromExecutionAuthority } = await import("@mstar-harness/engine");
+              const gate = await evaluatePostMergeCloseFromExecutionAuthority({ harnessDir: root }, input.workflow);
+              return gate.ok
+                ? ok(id, { phase: 6, gate })
+                : refused(id, gate.violations[0]?.code ?? "iteration.gate.blocked", "phase 6 post-merge close gate is blocked", { gate });
+            }
+
+            const compassPath = path.resolve(context.cwd, input.compass!);
+            if (!existsSync(compassPath)) return refused(id, "iteration.gate.compass-not-found", `compass file not found: ${compassPath}`);
+            const { readRegisteredWorkflowFromExecutionAuthority } = await import("@mstar-harness/engine");
+            const snapshot = await readRegisteredWorkflowFromExecutionAuthority({ harnessDir: root }, input.workflow);
+            if (snapshot === null) {
+              return refused(id, "iteration.gate.workflow-not-found", `workflow '${input.workflow}' not found in the registered execution authority`);
+            }
+            const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
+              currentBranch: input.branch,
+              specIntegrationBranch: input.integration,
+              prBaseBranch: input.target,
+            });
+            return gate.ok
+              ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit })
+              : refused(id, gate.violations[0]?.code ?? "iteration.gate.blocked", "iteration phase gate is blocked", { gate });
           }
           const file = snapshotPath(context, input.workflow, input.harness);
           if (!existsSync(file)) return refused(id, "iteration.gate.snapshot-not-found", `workflow snapshot not found: ${file}`);
