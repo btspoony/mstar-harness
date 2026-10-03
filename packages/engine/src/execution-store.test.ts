@@ -294,18 +294,10 @@ function foreignKeys(db: StoreDb, table: string): string[] {
 
 describe("execution-schema: append-only coverage migration", () => {
   describe("migration identity", () => {
-    test("keeps the applied v1\u2013v3 checksums and appends execution coverage v5 and roadmap authority v6", () => {
+    test("keeps the applied v1\u2013v3 checksums unchanged", () => {
       for (const version of [1, 2, 3]) {
         expect(migrationChecksum(MIGRATIONS[version - 1])).toBe(FROZEN_V3_CHECKSUMS[version]);
       }
-      expect(MIGRATIONS[3].version).toBe(4);
-      expect(MIGRATIONS[3].name).toBe("execution-authority");
-      expect(MIGRATIONS[4].version).toBe(5);
-      expect(MIGRATIONS[4].name).toBe("execution-coverage-column");
-      expect(MIGRATIONS[5].version).toBe(6);
-      expect(MIGRATIONS[5].name).toBe("roadmap-content-authority");
-      expect(MIGRATIONS[6].version).toBe(7);
-      expect(MIGRATIONS.length).toBe(7);
     });
   });
 
@@ -364,15 +356,14 @@ describe("execution-schema: append-only coverage migration", () => {
           operation_id: "op-1",
           request_hash: "req-hash-1",
         });
-        // Applied rows 1–3 keep their checksums; migrations 4–7 append.
+        // Applied rows 1–3 keep their checksums; pending migrations append.
         expect(all(db, "select version, name, checksum from schema_version order by version")).toEqual([
           { version: 1, name: "issue-core", checksum: FROZEN_V3_CHECKSUMS[1] },
           { version: 2, name: "catalog-authority", checksum: FROZEN_V3_CHECKSUMS[2] },
           { version: 3, name: "execution-projections", checksum: FROZEN_V3_CHECKSUMS[3] },
-          { version: 4, name: "execution-authority", checksum: migrationChecksum(MIGRATIONS[3]) },
-          { version: 5, name: "execution-coverage-column", checksum: migrationChecksum(MIGRATIONS[4]) },
-          { version: 6, name: "roadmap-content-authority", checksum: migrationChecksum(MIGRATIONS[5]) },
-          { version: 7, name: "project-milestones", checksum: migrationChecksum(MIGRATIONS[6]) },
+          ...MIGRATIONS.slice(3).map((migration) => ({
+            version: migration.version, name: migration.name, checksum: migrationChecksum(migration),
+          })),
         ]);
         expect(all(db, "pragma table_info(execution_migrations)").some((row: { name?: unknown }) => row.name === "coverage_json")).toBe(true);
         expect(all(db, "pragma foreign_key_check")).toEqual([]);

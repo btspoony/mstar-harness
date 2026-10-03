@@ -271,6 +271,7 @@ export type IssueProvenance = {
   kind: string;
   target: string;
   sourceHash: string;
+  origin: "scoped" | "unscoped";
   legacyProject: string | null;
   legacyBucket: string | null;
   legacyEntryId: string | null;

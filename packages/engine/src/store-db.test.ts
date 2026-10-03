@@ -377,7 +377,7 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 });
-describe("migration 7 — project_milestones", () => {
+describe("migration 7 - project_milestones", () => {
   test("milestone fresh install and retry retain the current schema", async () => {
     const dir = mkdtempSync(join(ROOT, "milestone-fresh-"));
     const handle = await initializeStore({ harnessDir: dir });

@@ -11133,6 +11133,12 @@ class IssueError extends Error {
     this.code = code2;
   }
 }
+function assertIssueProvenanceSchema(db) {
+  const schema = db.prepare("select max(version) as version from schema_version").get();
+  if ((schema?.version ?? 0) < MIGRATIONS.length) {
+    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store safe-upgrade" first.`);
+  }
+}
 var DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
 function violation7(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
@@ -12103,6 +12109,9 @@ begin
   select raise(abort, 'milestone.identity-immutable');
 end;
 `;
+var MIGRATION_8_SQL = `
+alter table provenance add column origin text not null default 'scoped' check (origin in ('scoped','unscoped'));
+`;
 var MIGRATIONS = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
   { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
@@ -12110,7 +12119,8 @@ var MIGRATIONS = [
   { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
   { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
   { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
-  { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL }
+  { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
+  { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL }
 ];
 var EXECUTION_TABLE_NAMES = [
   "execution_meta",
@@ -14304,6 +14314,7 @@ function parseEvidenceText(json) {
   }
 }
 function readIssueDetail(db, id) {
+  assertIssueProvenanceSchema(db);
   const milestoneColumn = issuesMilestoneColumn(db) ? ", milestone_id" : "";
   const issue = db.prepare(`select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key${milestoneColumn} from issues where id = ?`).get(id);
   if (!issue)
@@ -14335,10 +14346,11 @@ function readIssueDetail(db, id) {
     issueRevision: row.issue_revision
   }));
   const relations = db.prepare("select from_issue as fromIssue, relation, to_issue as toIssue from relations where from_issue = ? or to_issue = ?").all(id, id);
-  const provenance = db.prepare("select id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc").all(id).map((row) => ({
+  const provenance = db.prepare("select id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc").all(id).map((row) => ({
     id: row.id,
     kind: row.kind,
     target: row.target,
+    origin: row.origin,
     sourceHash: row.source_hash,
     legacyProject: row.legacy_project,
     legacyBucket: row.legacy_bucket,
@@ -14762,6 +14774,7 @@ var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text
 var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
 var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
+var PROVENANCE_ORIGIN_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
 
 // hooks/src/mstar-write-gate.ts
 var SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";

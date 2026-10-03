@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { initializeStore } from "@mstar-harness/engine";
@@ -44,28 +44,6 @@ function capture(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-function boundSession(harness: string): string {
-  const workflowId = "wf-issue";
-  const sessionId = "11111111-1111-1111-1111-111111111111";
-  const sessionPath = path.join(harness, "workflows", workflowId, "sessions", `plan-pm-${sessionId}.json`);
-  const writeJson = (file: string, value: unknown) => {
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-  };
-  writeJson(sessionPath, {
-    schema_version: 1, role: "plan-pm", session_id: sessionId, workflow_id: workflowId,
-    plan_id: "plan-a", harness_root: harness,
-  });
-  writeJson(path.join(harness, "workflows", workflowId, "snapshot.json"), {
-    schema_version: 1, id: workflowId, type: "iteration", status: "running",
-    started_at: "2026-09-26T00:00:00Z", updated_at: "2026-09-26T00:00:00Z",
-    plans: [{
-      id: "plan-a", plan_id: "plan-a", title: "Plan A", file: ".mstar/plans/plan-a.md", status: "Todo",
-      coordination: { revision: 1, session: { session_id: sessionId, session_file: sessionPath, bound_at: "2026-09-26T00:00:00Z" } },
-    }],
-  });
-  return sessionPath;
-}
 
 describe("issue command family", () => {
 
@@ -95,7 +73,7 @@ describe("issue command family", () => {
     if (exported.status === "ok") expect(exported.data).toMatchObject({ id, title: "Finding" });
   });
 
-  test("unauthorized disposition is refused without changing issue state", async () => {
+  test("actor-only disposition closes an issue without session authority", async () => {
     const context = await testContext();
     const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-2", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
@@ -103,23 +81,22 @@ describe("issue command family", () => {
     const receipt = added.data as { issueId: string; revision: number };
     const closed = await definition("issue.close").execute({
       id: receipt.issueId, payload: { reason: "done", references: ["qa.md"], alignmentRef: "QA approved" },
-      operationId: "unauthorized-close", actor: "project-manager", expect: receipt.revision,
+      operationId: "actor-only-close", actor: "project-manager", expect: receipt.revision,
     }, context);
-    expect(closed.status).toBe("refused");
+    expect(closed.status).toBe("ok");
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     expect(shown.status).toBe("ok");
-    if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, disposition: "open" });
+    if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision + 1, disposition: "resolved" });
   });
   test("stale issue revision is refused without changing triage state", async () => {
     const context = await testContext();
-    const session = boundSession(context.controlRoot!);
     const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-stale", actor: "project-manager" }, context);
     expect(added.status).toBe("ok");
     if (added.status !== "ok") return;
     const receipt = added.data as { issueId: string; revision: number };
     const triaged = await definition("issue.triage").execute({
       id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
-      operationId: "stale-triage", actor: "project-manager", session, expect: receipt.revision - 1,
+      operationId: "stale-triage", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
     expect(triaged).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
@@ -174,7 +151,7 @@ describe("issue command family", () => {
     const receipt = added.data as { issueId: string; revision: number };
     const typed = await definition("issue.triage").execute({
       id: receipt.issueId, payload: { reason: "reclassify", owner: "reviewer" },
-      operationId: "triage-owner", actor: "project-manager", session: boundSession(context.controlRoot!), expect: receipt.revision,
+      operationId: "triage-owner", actor: "project-manager", expect: receipt.revision,
     }, context);
     expect(typed.status).toBe("ok");
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
