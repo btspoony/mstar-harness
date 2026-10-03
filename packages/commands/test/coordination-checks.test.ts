@@ -77,7 +77,7 @@ async function activeWorkflow(cwd: string, workflowId: string, status: "running"
       { workflow: "wf-active-running", phase: "6", harness } as never,
       context(cwd),
     );
-    expect(result).toMatchObject({ status: "refused", code: "PHASE6_NOT_TERMINAL" });
+    expect(result.status).toBe("refused");
     if (result.status === "refused") {
       expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
         expect.objectContaining({ code: "PHASE6_NOT_TERMINAL" }),

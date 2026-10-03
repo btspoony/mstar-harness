@@ -705,6 +705,8 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
 export async function evaluatePostMergeCloseFromExecutionAuthority(context: StoreContext, workflowId: string): Promise<GateResult> {
   const violations: ValidationResult[] = [];
   const state = (await readExecutionState(context)).data;
+  // Execution roots carry RFC3339 timestamps; the shared file-form validator
+  // accepts the equivalent YYYY-MM-DD root representation.
   const rootGate = validateStatusV2({
     ...state.root,
     updated_at: typeof state.root.updated_at === "string" ? state.root.updated_at.slice(0, 10) : state.root.updated_at,
@@ -750,6 +752,17 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
       } catch {
         violations.push(
           violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' state is not valid JSON`),
+        );
+        return { ok: false, violations };
+      }
+      const planRows = handle.db
+        .prepare("select state_json from execution_plans where workflow_id = ? order by ordinal")
+        .all(workflowId) as Array<{ state_json: string }>;
+      try {
+        snapshot.plans = planRows.map((planRow) => JSON.parse(planRow.state_json));
+      } catch {
+        violations.push(
+          violation("high", "PHASE6_INVALID_SNAPSHOT", `Workflow '${workflowId}' plan state is not valid JSON`),
         );
         return { ok: false, violations };
       }
