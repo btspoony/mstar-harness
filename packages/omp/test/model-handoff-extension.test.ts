@@ -653,13 +653,13 @@ function startParams(workflowId: string): ToolParams {
   return { operation: "start", workflowId };
 }
 
-function completionParams(artifacts: Artifacts): ToolParams {
+function completionParams(artifacts: Artifacts, reviews = artifacts.reviews): ToolParams {
   return {
     operation: "phase1-complete",
     workflowId: artifacts.workflowId,
     coordinatorSessionPath: artifacts.coordinatorSessionPath,
     mainWorktreeBranch: artifacts.mainWorktreeBranch,
-    reviews: artifacts.reviews,
+    reviews,
     plans: artifacts.plans,
   };
 }
@@ -1255,7 +1255,7 @@ describe("fire reads current preference", () => {
 
     // Saved destination changed after the arm: fire re-reads it.
     writePluginOverrides(repo.main, { modelHandoff: true, handoffTarget: "@smol" });
-    const fired = await harness.runTool(completionParams(artifacts));
+    const fired = await harness.runTool(completionParams(artifacts, [artifacts.reviews[2]!]));
     expect(codeOf(fired)).toBe("handed_off");
     expect(harness.switched).toEqual(["probe/slow-model", "probe/smol-model"]);
     expect(harness.liveSpec()).toBe("probe/smol-model");

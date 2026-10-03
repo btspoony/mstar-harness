@@ -44,11 +44,11 @@ Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepar
 
 Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → optional snapshot sync → `git log -1 --oneline` evidence.
 
-Before **SwitchMode → Agent**: mirror plan exists; snapshot lists `plan_id` + root `workflows[]` entry; bootstrap todos done. **Never** use only the Cursor plan URI as **Plan Path**.
+Before **SwitchMode → Agent for ordinary per-plan implementation**: mirror plan exists, snapshot lists `plan_id`, root `workflows[]` entry exists, bootstrap todos are done. Never use only the Cursor URI as **Plan Path**. Phase 1 restricted-prototype preparation uses the exception below, not premature formal drafts.
 
-After **Build**: treat the run as plan resume, not `/pm` replay. Reload `mstar-harness-core` + this Cursor reference, resume Morning Star plans as `project-manager` orchestration, and dispatch implementation through Task unless the user explicitly overrides the harness.
+After **Build**: reload `mstar-harness-core` + this reference and resume as PM orchestration on the same carrier. Finish any pending Phase 1 design checkpoint before drafting; dispatch implementation only after its own gates, never from Build alone.
 
-**`mstar-iteration` Phase 1 in Plan mode**: CreatePlan **once** (blank scaffold); then **feedback-driven** in-place updates on that same plan file; deferred interview only after user signals feedback-close **and** gaps remain; **do not** run Review & Edit or integration branch until **Build**. Detail → **`cursor-plan-mode-bridge.md`** § `mstar-iteration` Phase 1 in Plan mode.
+**`mstar-iteration` Phase 1 in Plan mode**: CreatePlan once as a blank session carrier; persist/show §1.2.5 package HTML when permitted; feedback → same-prototype revision → re-presentation until current-design approval, then formal drafts. Select product/architect by remaining gaps and reuse, with mandatory writer last. Formal Review / integration still wait for **Build**. Restricted writes/invoke use the bridge's normal Build / SwitchMode recovery for **prototype preparation only**; no second plan or permission bypass. Details → **`cursor-plan-mode-bridge.md`** § `mstar-iteration` Phase 1 in Plan mode.
 
 Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 

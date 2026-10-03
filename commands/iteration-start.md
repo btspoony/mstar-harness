@@ -1,13 +1,13 @@
 ---
 name: iteration-start
-description: "Start a new harness iteration — optional direction hint, research, grill-me, compass/plans, Review & Edit chain ({ITERATION_DIR}/<id>/ package; global {SPECS_DIR} is written at Phase 3 iteration-close promotion), PM lock, integration branch; then auto-continue Phase 2→6 (execute → close → PR → merge-ready → post-merge close) unless `pause` arg given."
+description: "Start a new harness iteration — optional direction hint, research, design prototype confirmation, compass/plans, selected specialist Review & Edit and PM lock, integration branch; then auto-continue Phase 2→6 (execute → close → PR → merge-ready → post-merge close) unless `pause` arg given."
 agent: project-manager
 input: "[direction] [pause]"
 ---
 
 # Start Iteration
 
-Start a new Morning Star harness iteration. **Phase 1 is not complete until the Review & Edit chain runs via dispatched roles and PM lock — not when compass files are first written.** By default, after Phase 1 lock + integration worktree, **auto-continue into Phase 2→6** (execute → close → PR → merge-ready → post-merge close); pass **`pause`** to stop after Phase 1 and resume later with `/iteration-drive`.
+Start a new Morning Star harness iteration. **Phase 1 is not complete until the current prototype design is confirmed, the selected Review & Edit roles return (writing-specialist last), and PM locks the package — not when files are first written.** By default, after Phase 1 lock + integration worktree, **auto-continue into Phase 2→6** (execute → close → PR → merge-ready → post-merge close); pass **`pause`** to stop after Phase 1 and resume later with `/iteration-drive`.
 
 ## Args
 
@@ -24,17 +24,17 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 ## PM invariants（Phase 1 review-chain — 本命令全程有效）
 
-你是 **`project-manager` 编排者**，不是三专业角色的合并替身。
+You are the **`project-manager` orchestrator**, not a substitute for selected specialists.
 
-| 禁止（PM 线程） | 必须（宿主有 Task 时） |
-|-----------------|------------------------|
-| 自己 Edit compass/plans/specs 冒充 product-manager / architect / writing-specialist 的审查编辑 | §5.1 → §5.2 → §5.3 **顺序**各 **1 次 invoke**；上一角色返回后再派发下一角色 |
-| 只写 `## Assignment` 或 checklist 就声称 review chain 完成 | **几条角色 ⇒ 几条 invoke**；零 invoke = `dispatch incomplete`（`mstar-dispatch-gates`） |
-| §5 完成前创建 integration worktree / push `spec_integration_branch` | 5.4 PM lock 在 subagent 返回且磁盘产物已修订之后（`mstar-iteration/references/phase-1-prepare.md` §1.6） |
+| Forbidden in the PM thread | Required when the host permits invoke |
+|----------------------------|--------------------------------------|
+| Performing selected specialists' document edits yourself | Select product-manager / architect by complexity and remaining gaps; record include/skip reasons; invoke selected roles sequentially, then mandatory writing-specialist last |
+| Claiming completion from Assignment prose or checklists alone | **One selected role ⇒ one actual invoke and return**; no fake receipts for skipped roles (`mstar-dispatch-gates`) |
+| Creating integration worktree / pushing `spec_integration_branch` before §5 completes | PM lock follows the final writer return and on-disk revisions (`mstar-iteration/references/phase-1-prepare.md` §1.6) |
 
-派发细则 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch）+ **`mstar-host`**（宿主 invoke 能力）。**不得**在 PM 线程加载其他 role reference 代劳。
+Dispatch details → **`mstar-dispatch-gates`** + active **`mstar-host`** reference. Do not load another role reference in the PM thread to impersonate that role.
 
-**Phase 1 完成定义**：compass `status: locked` + 三角色 invoke 已返回 + pre-integration checklist 全 `[x]` — 不是初稿落盘。**Command Done**（§7 auto-continue）= Phase 6 post-merge close 完成（同 `iteration-drive`：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 §6.1–§6.4 完成）；`pause` 时 = Phase 1 完成。
+**Phase 1 completion**: approved current prototype + compass `status: locked` + all selected invokes returned (writer last) + pre-integration checklist all `[x]`. **Command Done** (§7 auto-continue) remains Phase 6 post-merge close; with `pause`, stop after Phase 1.
 
 **Phase 2–5 共享 invariants / preflight / todos / STOP** → **`mstar-iteration/references/command-shared-invariants.md`**（不在本命令重复）。
 
@@ -42,8 +42,8 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 | 宿主上下文 | 走哪条 |
 |------------|--------|
-| **宿主 Plan mode**（Plan 会话活跃） | §0 Boot → **§P** — **先**空白 session plan，再 **feedback-driven** 自主改同一份 plan；grill-me **仅**在用户明确结束反馈后、仍有阻塞疑问时；**Build 前不执行** Review 链 / integration worktree |
-| **其它**（非 Plan 会话） | §0 Boot → §1–§6（Research → Explore → grill-me → Write → Review → branch） |
+| **Host Plan mode** (active Plan session) | §0 Boot → **§P** — one session-plan carrier; prototype feedback loop before formal drafts; preserve actual host write/dispatch and Build permissions |
+| **Other** (not a Plan session) | §0 Boot → §1–§6 (Research → Explore → direction → prototype confirmation → Write → selected Review → branch) |
 
 **Both paths converge at §6**（integration worktree）。Default → §7 auto-continue Phase 2→6；`pause` → command ends at §6.
 
@@ -53,14 +53,14 @@ Start a new Morning Star harness iteration. **Phase 1 is not complete until the 
 
 **若宿主 Plan mode 活跃 → 进入 §P；否则继续 §1。**
 
-## P. 宿主 Plan mode（Phase 1 scaffold → feedback loop → deferred grill → Build）
+## P. Host Plan mode (single carrier → prototype feedback → approved design → permitted drafting / Build)
 
-Execute **`mstar-host`** → active host 的 **plan-mode bridge**（其 "mstar-iteration Phase 1 in Plan mode" 等价节：Detect / 语义 / single session-plan（HARD，只允许一份）/ Research → early session plan → Feedback loop → Feedback-close deferred grill → Pre-Build / Build 全流程 SSOT）。
+Execute **`mstar-host`** → active host **plan-mode bridge**, especially the shared "mstar-iteration Phase 1 in Plan mode" gate. A session-plan scaffold is UX, not an early compass/guide/plan/spec draft. Feedback is not a mandatory questionnaire, and feedback-close alone is not approval of the current prototype. **Design approval is not Build / implementation authorization.**
 
-Command-unique 补充（bridge 未枚举）：
+Command-only supplements:
 
-- **空白脚手架字段**：Direction / Scope / Decisions / Open Questions / Acceptance Criteria / Non-Goals / Delivery Branch Policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）/ Plans / Feedback log / Deferred grill log
-- **Build 才勾的 todos**（顺序）：`harness-init` → `direction-lock-arm` → `finalize-compass-plans`（同一 session plan 落成 compass + plans + `status.json` 登记 + 索引）→ review-edit-product-manager → review-edit-architect → review-edit-writing-specialist → `pm-lock` → `integration-branch`
+- **Carrier fields**: Direction / prototype path and current revision / Feedback log / design approval disposition / recommended Delivery Branch Policy / pending preparation todos. Formal Scope / Decisions / Acceptance Criteria / Plans derive from the approved design, not before it.
+- **Preparation todos**: `harness-init` → `direction-lock-arm` → `prototype-design` → `prototype-confirmation` → `finalize-compass-plans` → selected review-edit seats → mandatory `review-edit-writing-specialist` → `pm-lock` → `integration-branch`. Complete a todo only when its semantic gate **and** actual host permissions allow it. If Plan mode cannot persist/show the package prototype or invoke a needed role, use the bridge's documented permission-resume path; never bypass restrictions with another tool or silently create a second plan.
 
 ## 非 Plan 路径从这里继续 ↓
 
@@ -84,13 +84,17 @@ Scope **2–4** candidates targeting **product completeness**（default to defer
 
 The `direction-lock` anchor (`mstar-iteration/references/phase-1-prepare.md` §1.2 tail) fires **here**: the direction is locked and the compass/plans draft has **not** been written yet. Execute the active host reference's `## Host hooks` declaration for that anchor; this command declares no host action. Do **not** defer it into §4 — the draft is the context carrier the dispatched review roles read, so the anchor must precede it.
 
+## 3.6 Prototype Design & Confirmation
+
+Execute **`mstar-iteration/references/phase-1-prepare.md` §1.2.5** before §4: persist a plain-language visual **HTML prototype in `{ITERATION_DIR}/<iteration-id>/prototypes/`**, then present the current revision to the user. PM may invoke product-manager / architect for bounded prototype contributions when permitted. Absorb feedback → communicate the decision → update the same prototype → present it again, until the user explicitly approves **that current design**. A direction hint, direction lock, feedback-close, or approval of an earlier revision does not open §4. This checkpoint approves design, not implementation.
+
 ## 4. Write Compass & Plans
 
-Produce harness artifacts per **`mstar-iteration/references/phase-1-prepare.md` §1.3–§1.5**（template: `mstar-iteration/references/iteration-compass-template.md`）：compass（frontmatter **must** include `iteration_base_branch`、`target_branch`、`status: active`）、plans、`status.json` 登记（§1.5）、`{ITERATION_DIR}/README.md` 索引（一行 = 一次迭代）、package dirs（`{ITERATION_DIR}/<iteration-id>/{guides,specs}/`）。
+Only after current-design approval, produce formal artifacts per **`mstar-iteration/references/phase-1-prepare.md` §1.3–§1.5** (template: `references/iteration-compass-template.md`): compass, plans, package guides/specs and workflow registration. Compass `## Prototype baseline` records path/revision and genuine confirmation; plans reference the prototype through existing `metadata.iteration_refs`, without new schema fields. Global `{SPECS_DIR}` promotion remains at iteration-close.
 
 ## 5. Review & Edit Chain（HARD GATE — integration worktree only after this）
 
-Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**（SSOT）：顺序 `product-manager` → `architect` → `writing-specialist` → PM lock（**禁止**并行三 roles；角色名提及写法 → active host reference）；**禁止** `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene（`iteration-artifact-boundaries.md` + `iteration-corpus-hygiene.md`）。Tool rule → **`mstar-dispatch-gates`** specialist review-and-edit（每 role 1 invoke，等磁盘修订返回）。Exception: user explicitly waives subagent dispatch ("PM-only review").
+Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6** (SSOT): PM records include/skip reasons for product-manager and architect, reusing prototype-stage contributions; invoke the selected subset in product-manager → architect order, then **always invoke writing-specialist last**, then PM lock. Shared-file editors remain sequential. Skipped roles leave no role-owned markers or unresolved blocking questions; newly discovered product/technical gaps require reassessment, and material design changes return to §3.6. No `{KNOWLEDGE_DIR}/` additions; writer corpus hygiene remains required. Tool rule → **`mstar-dispatch-gates`** (one selected role = one actual invoke and on-disk return). Exception remains a user's explicit dispatch waiver ("PM-only review").
 
 **Assignment preflight**：每次 invoke 前按 **`mstar-iteration/references/command-shared-invariants.md`** 执行（warn-only + `enforcement: hard` fail-fast；bin 缺失静默跳过）。
 
@@ -106,8 +110,9 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 
 - [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + deferred grill log；非 Plan：grill-me）
 - [ ] `direction-lock` anchor executed **before** the draft was written（§3.5；未登记/无 compass 属预期）
+- [ ] Current HTML prototype persisted in the iteration package, presented, and explicitly approved; feedback revisions and approval disposition retained
 - [ ] Draft compass + plans + `status.json` registered
-- [ ] product-manager / architect / writing-specialist invokes completed — 编辑 compass / plans / **`<iteration-id>/` package（specs/guides）**；**未**向 `{KNOWLEDGE_DIR}/` 新增
+- [ ] product-manager / architect include/skip reasons recorded; every selected invoke returned; mandatory writing-specialist returned last; no skipped-role markers / blocking questions or fake receipts; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
 - [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
 - [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入；never the primary checkout

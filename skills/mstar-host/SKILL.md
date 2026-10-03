@@ -90,7 +90,7 @@ Carrier locations — the four markers in the shared corpus (all four live under
 
 | File | Location | Anchor |
 |------|----------|--------|
-| `mstar-iteration/references/phase-1-prepare.md` | §1.2 tail, after the direction is locked and before `## 1.3` writes the compass/plans draft | `direction-lock` |
+| `mstar-iteration/references/phase-1-prepare.md` | §1.2 tail, after direction lock, before §1.2.5 prototype preparation and §1.3 formal compass/plans drafts | `direction-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | §2.3 「Integration worktree (Phase 2 entry) + control root」 checklist tail, after step 7 (integration-branch push — Phase 1 commits nothing) — the Phase 1 route reaches it through `iteration-start` §6, which carries a pointer only | `phase-1-lock` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | immediately before the `## 2.4 Per-plan loop` heading (the Phase 2 execute/resume entry; §2.3 is the Phase-1-reused step and triggers nothing) | `phase-2-entry` |
 | `mstar-iteration/references/phase-2-worktree-lease.md` | `### Rescheduling checkpoint` | `rescheduling-checkpoint` (the five frozen reason names are handed off verbatim) |
@@ -130,6 +130,8 @@ Authoring convention: **`mstar-skill-authoring`** § Skill-relative script and a
 ## Evidence
 
 正确结果 = 检测输出：`mstar host detect --signals <comma-list>` 打印 `host: <id>`（或 `ambiguous` → 按检测表 + 判断降级）；已加载的是**对应当前宿主工具形状**的 `references/<host>.md`。计划模式按宿主 plan-mode bridge 完成双写 / 对齐。
+
+For iteration Phase 1, use the shared bridge's prototype-first exception to early formal dual-write: preserve one session carrier, separate current-design approval from implementation permission, and use documented host permission recovery for restricted package writes/invoke. Procedure authority → `mstar-iteration/references/phase-1-prepare.md` §1.2.5 / §1.6; host limits/recovery → `references/_shared/plan-mode-bridge-core.md` + active host bridge.
 
 ## References
 

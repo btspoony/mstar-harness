@@ -29,13 +29,24 @@ plans: []
 |---|----------|-----------|--------|
 | D1 | <settled decision> | <why it was settled this way> | user instruction / grill-me / autonomous ranking |
 
+Record product-manager and architect **include/omit rationale** here: complexity, remaining gaps, and prototype contributions reused. Selection/lock obligations → `phase-1-prepare.md` §1.6; writing-specialist is always the final editing round.
+
 ## Open Questions
 
-> Unresolved items, each owned by a Phase 1 chain role. Row disposition before the §1.6 lock → `phase-1-prepare.md` §1.3. Write `None` in place of the table when there are no open questions.
+> Unresolved items owned by PM or a **selected** Phase 1 editing role; do not create questions for an omitted specialist. Row disposition before §1.6 lock → `phase-1-prepare.md` §1.3. Write `None` instead of a table when none remain.
 
 | # | Question | Owner | Blocking? |
 |---|----------|-------|-----------|
 | Q1 | <open question> | product-manager / architect / writing-specialist / PM | Yes / No |
+
+## Prototype baseline
+
+> Filled only after the §1.2.5 checkpoint. Design context, not a frozen spec or runnable acceptance evidence.
+
+- Retained prototype: <package-relative `prototypes/` path and revision>
+- Disposition: <explicit user confirmation of this revision, or autonomous disposition with rationale; link the retained evidence>
+- Feedback/decisions and contributor inputs: <retained record or summary>
+- Formal compass/plans/specs reflect this baseline; material design changes reopen §1.2.5 before authoring/lock continues.
 
 ## Plans
 
@@ -89,13 +100,14 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Iteration package
 
-> Sibling paths under `{ITERATION_DIR}/<iteration-id>/` — not in `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Promoted to knowledge at iteration-close via **`mstar-compound`**.
+> Sibling paths under `{ITERATION_DIR}/<iteration-id>/`, not `{SPECS_DIR}/` or `{KNOWLEDGE_DIR}/`. Prototypes remain iteration design history; eligible formal material is considered at iteration-close under the existing promotion rules.
 
 | Path | Purpose |
 |------|---------|
+| `prototypes/` | Retained design preview/revisions, feedback and confirmation or autonomous disposition; mandatory checkpoint input |
 | `guides/` | Exploration, process notes |
 | `specs/` | Iteration-scoped spec drafts |
-| `README.md` | Package document index (recommended when non-trivial) |
+| `README.md` | Optional package prose/links; document registration belongs to catalog |
 
 ## Quality Gate Summary
 
@@ -143,10 +155,11 @@ Notes:
 | `## Acceptance Criteria` | Yes | Phase 1 |
 | `## Non-Goals` | Yes | Phase 1; each entry carries its rationale |
 | `## Decisions` | Yes | Phase 1 draft (appended in Phase 2); settled items with rationale and source |
-| `## Open Questions` | Yes（`None` allowed） | Phase 1 draft; each item carries an owner from the Phase 1 chain — row disposition before the lock → `phase-1-prepare.md` §1.3 |
+| `## Open Questions` | Yes (`None` allowed) | Phase 1 draft; owners must be PM or selected editing roles; row disposition before lock → `phase-1-prepare.md` §1.3 |
 | `## Roadmap Position` | **Yes** | Phase 1（必填节，非散落于 general context prose）；Phase 3 §3.3（current iteration → `delivered`） |
 | `## Risk Register` | Optional | Phase 1, Phase 2 (update) |
-| Iteration package (`guides/` / `specs/`) | Optional | Phase 1 §1.5.5; root index one row → `{ITERATION_DIR}/README.md` |
+| `## Prototype baseline` | Yes | Phase 1 §1.3, from §1.2.5; retained path/revision and truthful confirmation/autonomous disposition |
+| Iteration package (`prototypes/`, optional `guides/` / `specs/`) | Yes (prototype) | Prototype before formal authoring; README is optional prose, not a required index |
 | `## Quality Gate Summary` | Yes | Phase 3 §3.4 |
 | `## Compound Round Summary` | Yes | Phase 3 §3.4 |
 | `## Iteration Retrospective` | Recommended | Phase 3 §3.4 |

@@ -116,12 +116,14 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 当 PM 派发**文档编辑类**专业角色（如 product-manager、architect、writing-specialist）直接修订 harness 产物时：
 
 - PM 写初稿；各角色通过宿主 invoke **直接编辑**目标文件（**不**另写仅评论式 `reports/` 替代修订）。
-- **`Inputs`（Phase 1 review-and-edit Assignment）**：PM 初稿 = **骨架 + 完整上下文**；深度契约、marker 语法与 owner 词汇 → **`mstar-iteration/references/phase-1-prepare.md`** §1.3（本文件不重述其形态）。该轮 Assignment 的 **`Inputs`** 必须携带：初稿路径（+ compass 路径）；方向决策 —— 或指向 compass `## Decisions` 的指针；带 owner 的 open questions —— 或指向 `## Open Questions` 的指针；非目标理由；**该角色 own 的 marker 清单**（`TODO(owner: …)`；清除义务随清单下发 —— 承接方须在自己的 Completion Report 中报出**清除计数 / 重新归属计数**，义务全文 → **`mstar-iteration/references/phase-1-prepare.md`** §1.6）。承接方看不到 PM 会话：这些字段缺一，角色就只能从零重推它看不见的上下文。
+- **Prototype preparation** (§1.2.5): PM may invoke product-manager / architect for bounded contributions to the iteration-package prototype. These contributions are inputs to formal review selection, not fake formal-review receipts or permission to bypass host Plan restrictions.
+- **Phase 1 role selection** (§1.6): PM selects product-manager / architect by complexity and remaining product/technical gaps, recording include/skip reasons and reusing prototype contributions. The selected subset runs sequentially in product-manager → architect order, followed by **mandatory writing-specialist last**. Each selected role must actually be invoked; skipped roles get no completion receipt and leave no role-owned markers or unresolved blocking questions. Reassess selection if drafting reveals new gaps; material design changes return to prototype review.
+- **`Inputs` (Phase 1 review-and-edit Assignment)**: include approved/current prototype path and disposition, reusable prototype-stage contributions, draft and compass paths, direction decisions (or exact compass `## Decisions` pointer), owned open questions (or exact `## Open Questions` pointer), non-goal reasons and that role's owned marker list (`TODO(owner: …)`). Draft depth and marker vocabulary → **`mstar-iteration/references/phase-1-prepare.md`** §1.3; removal/reassignment counts belong in the role's Completion Report per §1.6. Do not make the recipient reconstruct PM-only context.
 - **1 Assignment ⇒ 1 invoke**。
-- **Phase 1 Review & Edit chain**（`mstar-iteration` §1.6）：主产出 **`{SPECS_DIR}/`** + **`{ITERATION_DIR}/<iteration-id>/`** package；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增。close 时 **`mstar-compound`** 提升 package → knowledge。
+- **Phase 1 Review & Edit** (§1.6) edits the **`{ITERATION_DIR}/<iteration-id>/` package** and linked plans. No start-chain additions to `{KNOWLEDGE_DIR}` or global `{SPECS_DIR}`; close-time promotion remains with `mstar-compound`.
 - 其他彼此独立、无先后依赖的文档编辑任务：可并行（同条消息发满 N），见 **`parallel-dispatch.md`**。
 - PM 线程代做全部专业编辑 = **反模式**（`mstar-iteration` §1.6、`mstar-roles/references/_shared/leaf-executor-core.md`「Shared anti-recursion NEVER」）。
-- PM merge / lock（如 compass `status: locked`）在链末 subagent 返回后于 PM 线程完成。**不得**在 review-and-edit 链完成前 commit integration 分支。
+- PM merge / lock follows the final writer return and revised files. Do not create/push the integration branch before the selected chain completes; Phase 1 commits no package artifacts.
 
 ## 反模式（派发）
 
@@ -132,7 +134,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - SDD 并行 implementer 未隔离 worktree / ownership / session；把任务独立当作跳过 L1/L2 安全闸的理由。
 - 递归同角色 subagent；把 Handoff / 多轨编排措辞当 invoke。
 - Review-and-edit 链未完成即 commit integration 分支；PM 代做专业角色编辑而不 invoke。
-- Phase 1 review-and-edit 链三角色并行派发，或未等上一角色返回即派发下一角色。
+- Dispatching selected Phase 1 shared-document editors in parallel or before the preceding selected role returns; skipping writer, manufacturing skip receipts, or leaving omitted-role markers / blocking questions.
 - 派发 Phase 1 编辑角色时不给方向决策 / open questions（或只写「见 compass」而不给路径）⇒ 承接方被迫重推它看不到的上下文，且其 own 的 marker 无人清除。
 - Assignment 已写、invoke 为零（paste-only）却进入下一 gate。
 - Task/subagent item 漏写角色绑定字段（字段名与静默回退行为以当前宿主的 `mstar-host` reference 为准）⇒ **静默回退 generic worker**，却因 count=N 通过而误判「派发完成」；属 paste-only 同级的 **dispatch-incomplete**。N=1 顺序 Review-&-Edit 链最易在此漏字段。
