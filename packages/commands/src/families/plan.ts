@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   bindPlanSession,
   bindExecutionSession,
@@ -8,6 +9,8 @@ import {
   mutatePlanCoordination,
   readExecutionPlan,
   readPlanCoordination,
+  readExecutionAuthority,
+  resolveExecutionReadRoute,
   resolveProcessHarnessDir,
   readSessionEnvelope,
   resumeExecutionSession,
@@ -135,6 +138,8 @@ function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation 
       };
     case "plan.handoff":
       return { kind: "handoff", evidence: jsonObject(input.evidence ?? payloadFromFile(input.file, "file"), "file") as never };
+    case "plan.release":
+      return { kind: "release", ...(input.reason === undefined ? {} : { reason: input.reason }) };
     case "plan.accept":
     case "plan.return":
     case "plan.integration-start":
@@ -187,30 +192,43 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         return ok(id, await resumeExecutionSession(executionContextFor({ harnessDir: root }, identity), ref));
       }
       if (input.execution === true) {
-        if (context.sessionId === undefined || input.workflow === undefined || input.expect === undefined || input.operation === undefined) {
-          return usage(id, "active bind requires runtime session identity, workflow, full execution token and operation id");
+        if (context.sessionId === undefined || input.workflow === undefined) {
+          return usage(id, "active bind requires runtime session identity and workflow");
         }
+        if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active bind requires a full execution token");
         const coordinator = input.coordinator === true;
         if (coordinator && input.plan !== undefined) return usage(id, "coordinator bind accepts no plan");
         if (!coordinator && input.plan === undefined) return usage(id, "active bind requires coordinator or plan");
         const role = coordinator ? "coordinator" : "plan-pm";
         const planId = coordinator ? null : input.plan!;
+        const acquired = context.executionIdentity;
+        if (acquired !== undefined && (
+          acquired.workflowId !== input.workflow || acquired.role !== role || acquired.planId !== planId
+        )) {
+          return usage(id, "bind selectors do not match the acquired caller identity");
+        }
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
         setArtifactStore(createFsStore(root));
-        const identity: ExecutionIdentity = {
+        const identity: ExecutionIdentity = acquired ?? {
           source: context.host === undefined ? "local" : "host",
           sessionId: context.sessionId,
           workflowId: input.workflow,
           role,
           planId,
         };
+        const beforeBind = input.expect === undefined
+          ? await readExecutionAuthority({ harnessDir: root }, {
+            workflowId: input.workflow,
+            ...(role === "plan-pm" ? { planId: input.plan! } : {}),
+          })
+          : undefined;
         const receipt = await bindExecutionSession(executionContextFor({ harnessDir: root }, identity), {
           workflowId: input.workflow,
           planId,
           role,
-          expected: input.expect as ExecutionToken,
-          operationId: input.operation,
+          expected: (input.expect ?? beforeBind!.token) as ExecutionToken,
+          operationId: input.operation ?? randomUUID(),
         });
         return ok(id, receipt);
       }
@@ -285,49 +303,88 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       const result = await readExecutionPlan(executionContextFor({ harnessDir: root }, identity), ref, input.plan);
       return ok(id, result);
     }
-    if (input.sessionRef !== undefined) {
-      // The ACTIVE route states no transport prerequisites for the derivable
-      // half: the engine's own authority boundary resolves the sparse intent —
-      // it derives the plan token and plan address from the trusted caller's
-      // own binding, and an ambiguous target or foreign holder is refused
-      // there with grouped genuine facts. The runtime caller identity is NOT
-      // derivable: the session reference is a canonical transport projection
-      // (never an authenticated identity), so the caller's own session id must
-      // be supplied independently by the host adapter — a ref for a session
-      // this caller does not hold is never adopted as its identity. The
-      // operation id is the other caller-owned required field (the engine's
-      // own assertOperationId runs only after resolution). This admission
-      // precedes payload materialization: a refused transport never reads
-      // --file.
-      if (input.operation === undefined) return usage(id, "active operation requires an operation id");
-      if (context.sessionId === undefined) return usage(id, "active operation requires runtime session identity");
+    const sparseSelectors = context.executionIdentity !== undefined ||
+      (input.workflow !== undefined && (input.coordinator === true || input.plan !== undefined));
+    // `release` is ACTIVE-only and takes no pre-activation file form, so a
+    // selector-less invocation still routes here: the engine's own authority
+    // check then reports the truthful ACTIVE/upgrade fact instead of a dead end.
+    if (input.sessionRef !== undefined || (input.session === undefined && (sparseSelectors || id === "plan.release"))) {
+      if (context.sessionId === undefined) return usage(id, "active operation requires an acquired runtime session identity");
+      if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
+      // Release is ACTIVE-only: a pre-activation control root has no DB claim to
+      // release, so it reports the supported operator-authorized store upgrade
+      // path rather than a generic unknown-operation. The engine re-reports the
+      // same fact for a request that reaches it.
+      if (id === "plan.release") {
+        const releaseRoot = resolveProcessHarnessDir(context.cwd, input.harness);
+        if (releaseRoot !== null && (await resolveExecutionReadRoute({ harnessDir: releaseRoot })) !== "execution") {
+          return refused(
+            id,
+            "execution.not-active",
+            "plan release requires an ACTIVE execution authority; this control root is pre-activation. An authorized operator may run " +
+              "`mstar store safe-upgrade` with valid operator attestation to activate the store, then bind and release. This call does not authorize that route.",
+          );
+        }
+      }
       // A numeric revision is the file route's CAS transport; the active route
       // takes only a full execution token, so the transports never mix.
-      if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
       const operation = fileOperation(id, input);
-      const operationId = input.operation;
-      const ref = decodeExecutionSessionRef(input.sessionRef);
-      const planId = ref.planId ?? input.plan;
+      const operationId = input.operation ?? randomUUID();
+      const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
       const root = resolveProcessHarnessDir(context.cwd, input.harness);
       if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
       setArtifactStore(createFsStore(root));
+      const acquired = context.executionIdentity;
+      const workflowId = ref?.workflowId ?? acquired?.workflowId ?? input.workflow;
+      const role = ref?.role ?? acquired?.role ?? (input.coordinator === true ? "coordinator" : input.plan !== undefined ? "plan-pm" : undefined);
+      // The plan the caller's own binding names (the seat), distinct from the
+      // plan this operation addresses (which a coordinator states explicitly).
+      const ownPlan = ref !== undefined ? ref.planId : acquired?.planId ?? input.plan ?? null;
+      if (input.workflow !== undefined && input.workflow !== workflowId) {
+        return usage(id, "workflow selector does not match the caller's workflow");
+      }
+      if (workflowId === undefined || role === undefined) {
+        return usage(id, "sparse active plan operation needs a minted own-scope identity or workflow plus coordinator/plan selector; bind the caller first");
+      }
+      // A plan-pm call addresses its own bound plan; a coordinator call must
+      // state the plan it addresses. Neither is guessed from "the only" row.
+      let addressedPlan: string | undefined;
+      if (role === "coordinator") {
+        addressedPlan = input.plan;
+      } else {
+        if (ownPlan === null) {
+          return usage(id, "a plan-pm sparse operation needs its own plan binding or an explicit plan selector");
+        }
+        if (input.plan !== undefined && input.plan !== ownPlan) {
+          return usage(id, "plan selector does not match the caller's plan");
+        }
+        addressedPlan = ownPlan;
+      }
+      if (acquired !== undefined && (
+        workflowId !== acquired.workflowId ||
+        role !== acquired.role ||
+        (role === "plan-pm" && ownPlan !== acquired.planId)
+      )) {
+        return usage(id, "selected workflow, role or plan does not match the acquired caller identity");
+      }
       const identity: ExecutionIdentity = {
-        source: context.host === undefined ? "local" : "host",
+        source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
         sessionId: context.sessionId,
-        workflowId: ref.workflowId,
-        role: ref.role,
-        planId: ref.planId,
+        workflowId,
+        role,
+        planId: role === "coordinator" ? null : ownPlan,
       };
       const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
         operationId,
-        session: ref,
-        // An omitted token is the sparse intent the engine resolves; an
-        // explicit one is passed through untouched as a CAS constraint.
+        ...(ref === undefined ? {} : { session: ref }),
         ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
-        planId,
+        ...(addressedPlan === undefined ? {} : { planId: addressedPlan }),
         operation: operation as never,
       });
       return ok(id, receipt);
+    }
+    if (id === "plan.release") {
+      return refused(id, "execution.not-active", "plan release is available only under ACTIVE execution authority; on a pre-activation control root, use the operator-authorized store safe-upgrade route before binding and releasing");
     }
     const operation = fileOperation(id, input);
     if (input.session === undefined) return usage(id, "operation requires session or active sessionRef");
@@ -358,11 +415,12 @@ const writeCommands: Record<string, true> = {
   "integration-accept": true,
   complete: true,
   "repair-delivery-source": true,
+  release: true,
   reconcile: true,
   "residual-add": true,
   "residual-close": true,
 };
-const commandNames = ["bind", "show", "prepare", "progress", "issue-add", "issue-close", "handoff", ...transitions.map(([verb]) => verb), "residual-add", "residual-close"] as const;
+const commandNames = ["bind", "show", "prepare", "progress", "issue-add", "issue-close", "handoff", "release", ...transitions.map(([verb]) => verb), "residual-add", "residual-close"] as const;
 const payloadFieldsByVerb: Partial<Record<(typeof commandNames)[number], readonly (keyof typeof inputSchema.shape)[]>> = {
   progress: ["progress"],
   "issue-add": ["entries"],
@@ -389,7 +447,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
       ),
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],
-      description: transitions.find(([name]) => name === verb)?.[1] ?? `Scoped plan ${verb} operation; engine enforces ownership, state and concurrency guards.`,
+      description: verb === "release" ? "Release the caller's own held execution claim; explicitly bind to reacquire." : transitions.find(([name]) => name === verb)?.[1] ?? `Scoped plan ${verb} operation; engine enforces ownership, state and concurrency guards.`,
       execute: (input, context) => execute(id, input, context),
     });
   });

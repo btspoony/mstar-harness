@@ -369,11 +369,15 @@ Lives on the snapshot plan row — `{WORKFLOW_DIR}/<id>/snapshot.json` → `plan
   row stays `InReview`; a lease is never dropped at handoff.
 - Normal release: re-read the control snapshot under write lock; confirm stored `holder` matches
   this session — mismatch → **Blocked**; then **delete** `execution_lease`
-  (never `null` or tombstone). **Scoped route:** there is **no standalone
-  release verb** — release happens only inside a state verb: `mstar plan accept`
-  / `return` (ownership transfer) or `mstar plan complete` (deletes
+  (never `null` or tombstone). **Scoped route, two transports:** the ACTIVE DB
+  route releases through the holder's own `mstar plan release`, which records
+  release provenance in the **store** (a retained released claim, never a
+  hand-edited snapshot tombstone) and is reacquired by the same holder through
+  an ordinary explicit `mstar plan bind`; the legacy pre-activation snapshot
+  route deletes the field only inside the ordinary state verbs — `mstar plan
+  accept` / `return` (ownership transfer) or `mstar plan complete` (deletes
   `execution_lease` **and** the coordinator's `integration_merge_lease` in one
-  atomic write).
+  atomic write). `plan release` never promises a legacy snapshot deletion.
 - `Done` authority deletes `execution_lease` in the same update as `status: "Done"`
   — **only after** successful integration merge (when lease gate not waived).
   **Scoped route:** that authority is the coordinator's `mstar plan complete`

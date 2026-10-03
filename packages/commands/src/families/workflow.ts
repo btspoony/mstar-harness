@@ -20,6 +20,9 @@ const transitions = [
 ];
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 function usage(id: string, message: string): CommandEnvelope<never> { return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message }; }
+const IDENTITY_RECOVERY =
+  "launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`";
+
 function activeRegistrationRefusal(
   id: string,
   missing: readonly string[],
@@ -32,7 +35,7 @@ function activeRegistrationRefusal(
     "For workflow.register and iteration.register, expect is the store's root execution token from mstar status validate; for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate; for other workflow-scoped writes, use that addressed scope's own token.",
     "operation is your own replay id.",
     ...(missing.includes("sessionRef") ? ["sessionRef is the active session reference returned by the plan bind receipt; pass it as --session-ref on the CLI or sessionRef in MCP input."] : []),
-    ...(!hasSessionIdentity ? ["A session.run child carries a minted local identity; run the command in the main session or pass an explicit --session-id."] : []),
+    ...(!hasSessionIdentity ? [`An acquired coordinator identity is required: ${IDENTITY_RECOVERY}.`] : []),
   ].join(" ");
   return usage(id, `Active registration is missing ${details}. ${recovery}`);
 }
@@ -181,19 +184,27 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           return ok("workflow.evidence", result);
         }
         const evidence = JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) as Record<string, unknown>;
-        if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined) {
-          if (input.sessionRef === undefined || input.expect === undefined || input.operation === undefined || context.sessionId === undefined) {
-            return activeRegistrationRefusal("workflow.evidence", [
-              ...(context.sessionId === undefined ? ["session identity"] : []),
-              ...(input.sessionRef === undefined ? ["sessionRef"] : []),
-              ...(input.expect === undefined ? ["expect"] : []),
-              ...(input.operation === undefined ? ["operation"] : []),
-            ], context.sessionId !== undefined);
-          }
+        const active = (await resolveExecutionReadRoute({ harnessDir: root })) === "execution";
+        if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined || active) {
+          if (context.sessionId === undefined) return usage("workflow.evidence", `active evidence requires an acquired coordinator identity: ${IDENTITY_RECOVERY}`);
           if (input.at !== undefined || input.session !== undefined) return usage("workflow.evidence", "active evidence cannot use legacy session or at fields");
-          const ref = decodeExecutionSessionRef(input.sessionRef);
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
-          return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), { workflowId: input.workflow, session: ref, expected: input.expect as never, operationId: input.operation, operation: { kind: "delivery", delivery: evidence } }));
+          if (input.expect !== undefined && typeof input.expect !== "string") return usage("workflow.evidence", "active evidence requires a full workflow execution token");
+          const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+          const acquired = context.executionIdentity;
+          if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator" || ref.planId !== null)) {
+            return usage("workflow.evidence", "sessionRef must address the selected workflow's coordinator seat");
+          }
+          if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator" || acquired.planId !== null)) {
+            return usage("workflow.evidence", "acquired identity must address the selected workflow's coordinator seat");
+          }
+          const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator", planId: null };
+          return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+            workflowId: input.workflow,
+            ...(ref === undefined ? {} : { session: ref }),
+            ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+            operationId: input.operation ?? randomUUID(),
+            operation: { kind: "delivery", delivery: evidence },
+          }));
         }
         await assertLegacyRoute(root, "workflow evidence");
         return ok("workflow.evidence", await recordWorkflowDelivery(input.workflow, workflowDir, { evidence, ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) }));
@@ -234,11 +245,19 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
   ];
   for (const transition of transitions) {
     const id = `workflow.${transition.name}`;
-    defs.push(makeDefinition(id, `Apply the existing active workflow ${transition.name} transition under caller identity and full-token CAS.`, transition.effect, ["workflow", "sessionRef", "expect", "operation", "harness", "phase", "compass", "status", "reason", "file", "path"], async (input, context) => {
+    defs.push(makeDefinition(id, `Apply the existing active workflow ${transition.name} transition under coordinator scope.`, transition.effect, ["workflow", "sessionRef", "expect", "operation", "harness", "phase", "compass", "status", "reason", "file", "path"], async (input, context) => {
       try {
-        if (input.workflow === undefined || input.sessionRef === undefined || input.expect === undefined || input.operation === undefined || context.sessionId === undefined) return usage(id, "active workflow transition requires workflow, main session identity, sessionRef, full expect token and operation");
-        const ref = decodeExecutionSessionRef(input.sessionRef);
-        if (ref.workflowId !== input.workflow) return usage(id, "sessionRef workflow does not match workflow selector");
+        if (context.sessionId === undefined) return usage(id, `active workflow transition requires an acquired coordinator identity: ${IDENTITY_RECOVERY}`);
+        const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+        const acquired = context.executionIdentity;
+        const workflowId = input.workflow ?? acquired?.workflowId ?? ref?.workflowId;
+        if (workflowId === undefined) return usage(id, "workflow selector or minted workflow identity is required");
+        if (ref !== undefined && (ref.workflowId !== workflowId || ref.role !== "coordinator" || ref.planId !== null)) {
+          return usage(id, "sessionRef must address the selected workflow's coordinator seat");
+        }
+        if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator" || acquired.planId !== null)) {
+          return usage(id, "acquired caller identity does not address the selected coordinator workflow");
+        }
         const root = resolveProcessHarnessDir(context.cwd, input.harness);
         if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
         const operation: WorkflowExecutionOperation = transition.name === "phase"
@@ -248,9 +267,15 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             : transition.name === "execution-policy"
               ? { kind: "execution-policy", policy: JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) }
               : { kind: "integration-worktree", path: absolute(input.path, "path") };
-        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
+        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator", planId: null };
         setArtifactStore(createFsStore(root));
-        return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), { workflowId: input.workflow, session: ref, expected: input.expect as never, operationId: input.operation, operation }));
+        return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
+          workflowId,
+          ...(ref === undefined ? {} : { session: ref }),
+          ...(input.expect === undefined ? {} : { expected: input.expect as never }),
+          operationId: input.operation ?? randomUUID(),
+          operation,
+        }));
       } catch (error) { return refused(id, error); }
     }, [{ key: "sessionId", context: "sessionId" }]));
   }

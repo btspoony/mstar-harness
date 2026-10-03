@@ -1,6 +1,6 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 35,
+  "version": 36,
   "updated_at": "2026-10-03",
   "cases": [
     {
@@ -1486,6 +1486,26 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["invoke public intent without universal repair chain", "retain applied components from partial receipt", "name only remaining conflict and continue independent work"],
       "hard_fail_if": ["forces rebind and copied tokens as preflight", "treats partial receipt as no mutation", "sends session credentials to leaf"]
+    },
+    {
+      "id": "active-own-claim-release-reacquire",
+      "prompt": "A scoped primary plan PM has its own current-epoch ACTIVE binding and held execution claim, with no submitted/accepted handoff or integration attempt. Assignment content is missing. Continue through the ordinary public route without abandoning the plan. Negative controls: another live holder owns the claim, an accepted handoff transferred it to the coordinator, or a live integration claim exists. Explain the supported outcomes; do not execute state changes in this evaluation.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": [
+        "Context Loaded declaration",
+        "own plan release without reading missing Assignment content; retained release provenance, never Done",
+        "explicit same-holder plan bind --execution before content repair, then prepare/progress",
+        "sparse current-own-binding inputs; explicit supplied references/tokens remain checked constraints",
+        "foreign holder protected; accepted handoff uses its valid return/completion route; integration ownership is not released by plan release"
+      ],
+      "hard_fail_if": [
+        "treats release as irreversible or requires a new workflow",
+        "uses read-only resume to reacquire",
+        "adopts or releases a foreign held claim",
+        "marks stopped as completed or fabricates delivery",
+        "hand-edits lease rows or deletes retained release history",
+        "forces routine token copying or sends credentials to a leaf"
+      ]
     },
     {
       "id": "recovery-policy-host-noop",
