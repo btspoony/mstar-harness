@@ -454,6 +454,12 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
       message: expect.stringContaining("mstar status workflow-close --workflow wf-plan-1 --harness"),
     });
 
+    await expect(reconcileCatalogExecution(context, request.operationId)).rejects.toMatchObject({
+      name: "CatalogRegistrationError",
+      code: "catalog.registration-terminal-lifecycle",
+      message: expect.stringContaining("mstar status workflow-close --workflow wf-plan-1 --harness"),
+    });
+
     // An already-terminal close is the supported unregister-only recovery.
     const close = await closeFileWorkflow({ harnessRoot: harnessDir, workflowId: "wf-plan-1", endedAt: "2026-10-04" });
     expect(close).toMatchObject({ outcome: "already-terminal", unregistered: true });

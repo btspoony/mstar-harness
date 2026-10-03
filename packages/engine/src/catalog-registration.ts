@@ -1617,7 +1617,10 @@ export async function reconcileCatalogExecution(
   if (loaded === undefined) {
     throw new CatalogError("catalog.not-found", `No catalog registration operation ${JSON.stringify(id)} is recorded in this store.`);
   }
-  if (loaded.phase === "committed") return receiptOfRow(loaded);
+  if (loaded.phase === "committed") {
+    assertRegistrationEffectHeld(loaded, parseJournalDelta(loaded).workflow.harnessDir);
+    return receiptOfRow(loaded);
+  }
   if (loaded.phase === "aborted") {
     throw new CatalogRegistrationError(
       "catalog.registration-aborted",
