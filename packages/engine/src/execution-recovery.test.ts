@@ -487,6 +487,14 @@ describe("execution-restore", () => {
 
   test("execution-restore-preview-lists-every-domain-and-refuses-without-its-digest", async () => {
     const world = await recoveryWorld("restore-preview");
+    const baselineIssue = await captureIssue(world.context, issueInput("Origin-only baseline"), {
+      operationId: "op-origin-baseline",
+      actor: "project-manager",
+    });
+    const provenance = rawGet<{ id: number }>(
+      world.dbPath,
+      `select id from provenance where issue_id='${baselineIssue.issueId}' and kind='capture'`,
+    )!;
     const point = await recoveryPoint(world, "preview-point");
     const clean = await previewExecutionRestore(world.context, point.backupPath);
     // An unchanged store has no loss at all: no differences, no lost receipts.
@@ -502,11 +510,10 @@ describe("execution-restore", () => {
     expect((await previewExecutionRestore(world.context, point.backupPath)).lossDigest).toBe(clean.lossDigest);
 
     await mutateEveryDomain(world, "preview");
-    const provenance = rawGet<{ id: number }>(world.dbPath, "select id from provenance where kind='capture'")!;
     rawRun(world.dbPath, "update provenance set origin='scoped' where id=?", provenance.id);
     const provenanceKey = `issue:provenance:${provenance.id}`;
     const preview = await previewExecutionRestore(world.context, point.backupPath);
-    const issueId = rawGet<{ id: string }>(world.dbPath, "select id from issues")!.id;
+    const issueId = rawGet<{ id: string }>(world.dbPath, "select id from issues where title='Post-backup finding preview'")!.id;
     const keys = preview.authorityDifferences.map((entry) => `${entry.domain}:${entry.key}`);
     for (const expected of [
       provenanceKey,
@@ -603,7 +610,7 @@ describe("execution-restore", () => {
     );
     expect(stale.code).toBe("execution.recovery-loss-unaccepted");
     expect(stale.message).toContain("moved");
-    expect(rawGet<{ n: number }>(world.dbPath, "select count(*) as n from issues")!.n).toBe(2);
+    expect(rawGet<{ n: number }>(world.dbPath, "select count(*) as n from issues")!.n).toBe(3);
   });
 
   test("execution-restore-installs-the-selected-state-and-invalidates-old-references", async () => {
