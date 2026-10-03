@@ -239,14 +239,66 @@ async function completeAndUnregister(
     }
   });
 
-  test("non-six compass form still refuses on ACTIVE execution authority", async () => {
+  test("non-six ACTIVE compass gate evaluates Done plans and the compass close exit", async () => {
     const cwd = tempRoot();
-    const { harness } = await activeWorkflow(cwd, "wf-active-phase-five");
-    const result = await definition("iteration.gate").execute(
-      { workflow: "wf-active-phase-five", compass: "compass.md", harness } as never,
-      context(cwd),
-    );
-    expect(result).toMatchObject({ status: "refused", code: "execution.consumer-not-ready" });
+    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-done");
+    const store = await openStore(storeContext, "write");
+    try {
+      const plan = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get("wf-active-done", planId) as { state_json: string };
+      const planState = JSON.parse(plan.state_json) as Record<string, unknown>;
+      planState.status = "Done";
+      store.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify(planState), "wf-active-done", planId);
+    } finally {
+      store.close();
+    }
+    const compass = path.join(cwd, "delivery-compass.md");
+    writeFileSync(compass, `---
+iteration_id: iter-active-done
+start_date: "2026-09-01"
+status: completed
+iteration_base_branch: integration/test
+target_branch: main
+plans:
+  - ${planId}
+end_date: "2026-09-02"
+---
+`);
+    const result = await definition("iteration.gate").execute({
+      workflow: "wf-active-done",
+      compass,
+      harness,
+      branch: "integration/test",
+      integration: "integration/test",
+      target: "main",
+    } as never, context(cwd));
+    expect(result).toMatchObject({ status: "ok", data: { transition: "phase-4-pr-delivery", entry: { ok: true }, exit: { ok: true } } });
+  });
+
+  test("non-six ACTIVE compass gate requires registered plans to be Done", async () => {
+    const cwd = tempRoot();
+    const { harness } = await activeWorkflow(cwd, "wf-active-not-done");
+    const compass = path.join(cwd, "delivery-compass.md");
+    writeFileSync(compass, `---
+iteration_id: iter-active-not-done
+start_date: "2026-09-01"
+status: active
+iteration_base_branch: integration/test
+target_branch: main
+plans:
+  - plan-wf-active-not-done
+---
+`);
+    const result = await definition("iteration.gate").execute({
+      workflow: "wf-active-not-done",
+      compass,
+      harness,
+    } as never, context(cwd));
+    expect(result).toMatchObject({
+      status: "ok",
+      data: { transition: "phase-2-execute", entry: { ok: false } },
+    });
   });
 describe("coordination checks command family", () => {
   test("lease verification refuses a plan id outside the workflow snapshot scope", async () => {
