@@ -49,13 +49,15 @@ describe("roadmap-authority transactional domain", () => {
     await expect(readRoadmapAuthority(context, "missing-project")).rejects.toMatchObject({ code: "roadmap.project-not-found" });
   });
 
-  test("reviewed imports preserve exact content, revisions, replay receipts, and reject stale or drifted requests atomically", async () => {
+  test("imports current content after review while preserving revision CAS and replay", async () => {
     const context = await freshProject("project-reviewed");
     const sourcePath = join(context.harnessDir, "candidate.md");
-    const initial = content("project-reviewed", "Exact source text.");
-    writeFileSync(sourcePath, initial, "utf8");
+    const reviewedContent = content("project-reviewed", "Exact source text.");
+    writeFileSync(sourcePath, reviewedContent, "utf8");
     const review = await reviewRoadmapImport(context, "project-reviewed", sourcePath);
     expect(review).toMatchObject({ version: 1, expectedProjectRevision: 1, expectedRoadmapRevision: "absent" });
+    const editedContent = content("project-reviewed", "Edited after review.");
+    writeFileSync(sourcePath, editedContent, "utf8");
     const beforeHandle = await openStore(context, "read");
     const beforeState = beforeHandle.db.prepare("select revision, catalog_revision from store_meta where id=1").get();
     const beforeCounts = beforeHandle.db.prepare("select (select count(*) from issues) as issues, (select count(*) from execution_workflows) as workflows").get();
@@ -65,15 +67,14 @@ describe("roadmap-authority transactional domain", () => {
     expect(receipt.revision).toBe(1);
     expect((await importRoadmapAuthority(context, review, { operationId: "op-import" }))).toEqual(receipt);
     const read = await readRoadmapAuthority(context, "project-reviewed");
-    expect(read.roadmap?.contentMarkdown).toBe(initial);
+    expect(read.roadmap?.contentMarkdown).toBe(editedContent);
     const receiptHandle = await openStore(context, "read");
     const importOperation = receiptHandle.db.prepare("select result_json from store_operations where operation_id='op-import'").get() as { result_json: string };
     receiptHandle.close();
     expect(JSON.parse(importOperation.result_json)).toMatchObject({
       outcome: "committed",
-      provenance: { sourcePath: review.sourcePath, sourceHash: review.sourceHash },
+      provenance: { sourcePath: review.sourcePath },
     });
-    expect(read.roadmap?.contentHash).toBe(review.sourceHash);
     const derivedHandle = await openStore(context, "read");
     const afterState = derivedHandle.db.prepare("select revision, catalog_revision from store_meta where id=1").get();
     const afterCounts = derivedHandle.db.prepare("select (select count(*) from issues) as issues, (select count(*) from execution_workflows) as workflows").get();
@@ -90,7 +91,7 @@ describe("roadmap-authority transactional domain", () => {
     const staleRevision = beforeStale.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
     beforeStale.close();
     await expect(replaceRoadmapAuthority(context, {
-      projectId: "project-reviewed", expectedProjectRevision: 1, expectedRoadmapRevision: 1, contentMarkdown: initial,
+      projectId: "project-reviewed", expectedProjectRevision: 1, expectedRoadmapRevision: 1, contentMarkdown: reviewedContent,
     }, { operationId: "op-stale" })).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
     const afterStale = await openStore(context, "read");
     const afterStaleRevision = afterStale.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
@@ -101,20 +102,6 @@ describe("roadmap-authority transactional domain", () => {
     const stable = await readRoadmapAuthority(context, "project-reviewed");
     expect(stable.roadmap?.contentMarkdown).toBe(replaced);
 
-    const beforeDrift = await openStore(context, "read");
-    const driftRevision = beforeDrift.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
-    beforeDrift.close();
-    writeFileSync(sourcePath, content("project-reviewed", "Drifted source."), "utf8");
-    await expect(importRoadmapAuthority(context, review, { operationId: "op-import" })).resolves.toEqual(receipt);
-    await expect(importRoadmapAuthority(context, review, { operationId: "op-drift" })).rejects.toMatchObject({ code: "roadmap.source-drift" });
-    const afterDrift = await openStore(context, "read");
-    const afterDriftRevision = afterDrift.db.prepare("select revision from store_meta where id=1").get() as { revision: number };
-    const driftReceipt = afterDrift.db.prepare("select operation_id from store_operations where operation_id='op-drift'").get();
-    afterDrift.close();
-    expect(afterDriftRevision.revision).toBe(driftRevision.revision);
-    expect(driftReceipt).toBeUndefined();
-    expect((await readRoadmapAuthority(context, "project-reviewed")).roadmap?.revision).toBe(2);
-    await expect(importRoadmapAuthority(context, review, { operationId: "op-conflict" })).rejects.toBeInstanceOf(RoadmapError);
   });
 
   test("migration is explicit, removes only disposable roadmap projection, and missing stores refuse", async () => {

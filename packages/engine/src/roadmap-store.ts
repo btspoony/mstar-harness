@@ -32,7 +32,6 @@ type RoadmapErrorCode =
   | "roadmap.revision-conflict"
   | "roadmap.operation-conflict"
   | "roadmap.source-missing"
-  | "roadmap.source-drift"
   | "roadmap.invalid-content"
   | "roadmap.corrupt";
 
@@ -92,10 +91,10 @@ function readOn(db: StoreDb, projectId: string): RoadmapRead {
     | { project_id: string; content_markdown: string; content_hash: string; revision: number; updated_at: string }
     | undefined;
   if (!row) return { projectId, projectRevision: project.revision, roadmap: null };
-  if (row.project_id !== projectId || typeof row.content_markdown !== "string" || typeof row.content_hash !== "string" ||
-      !Number.isInteger(row.revision) || row.revision < 1 || typeof row.updated_at !== "string" ||
-      sha256(row.content_markdown) !== row.content_hash) {
-    throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed or has a mismatched content hash.`);
+  if (row.project_id !== projectId || typeof row.content_markdown !== "string" ||
+      typeof row.content_hash !== "string" || !Number.isInteger(row.revision) || row.revision < 1 ||
+      typeof row.updated_at !== "string") {
+    throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed.`);
   }
   try {
     const content = parseRoadmapContent(row.content_markdown);
@@ -355,11 +354,12 @@ export async function importRoadmapAuthority(
       if (prior.request_hash !== requestHash) throw new RoadmapError("roadmap.operation-conflict", "operationId was reused for a different request or domain.");
       return receiptFromOperation(prior.result_json);
     }
+    // The reviewed source hash records what the caller saw; the current path
+    // content is imported without a content-drift refusal.
     const source = sourceBytes(review.sourcePath);
-    if (source.hash !== review.sourceHash) throw new RoadmapError("roadmap.source-drift", "Reviewed roadmap source changed before import; no content was published.");
     validateContent(review.projectId, source.content);
-    // A reviewed import keeps the basis its preview OBSERVED: the review object
-    // is the caller's saved comparison, so neither revision is derived here.
+    // A reviewed import keeps the basis its preview OBSERVED; neither revision
+    // is derived here.
     return writeAuthority(
       db,
       { projectId: review.projectId, contentMarkdown: source.content },

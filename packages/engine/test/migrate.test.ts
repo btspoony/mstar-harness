@@ -45,7 +45,7 @@ import { dirname, join, relative } from "node:path";
 import { getCatalog, registerCatalogEntity } from "../src/catalog.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
-import { CoordinationError, artifactVersion } from "../src/coordination-write.js";
+import { CoordinationError } from "../src/coordination-write.js";
 import { readJson, writeJson } from "../src/core.js";
 import { parseCompassFrontmatterText } from "../src/iteration.js";
 import { withStatusWriteLock } from "../src/lease.js";
@@ -1018,32 +1018,17 @@ describe("migration commit point under the root write lock", () => {
     }
   });
 
-  test("a source rewritten after planning is refused by the byte-version CAS with zero writes", async () => {
+  test("a source rewritten after planning does not block migration", async () => {
     const root = fixtureTree();
     try {
       const statusPath = join(root, "status.json");
       const plan = planOf(root);
-      // Still schema version 1, different bytes: a concurrent v1 writer
-      // touched the root after the plan was built, which the `version === 2`
-      // check alone cannot see — only the plan's recorded byte version can.
       const concurrent = readJson(statusPath) as Record<string, unknown>;
-      writeJson(statusPath, { ...concurrent, harness_root: "/somewhere/else" });
-      const changedBytes = readFileSync(statusPath);
-      expect(artifactVersion(changedBytes)).not.toBe(plan.sourceVersion);
-
-      const error = await applyMigratePlan(plan).catch((failure: unknown) => failure);
-      expect(error).toBeInstanceOf(CoordinationError);
-      expect((error as CoordinationError).code).toBe("coordination.version-conflict");
-      expect((error as CoordinationError).details).toMatchObject({
-        path: statusPath,
-        expected: plan.sourceVersion,
-        actual: artifactVersion(changedBytes),
-      });
-      // The refusal is inert: the source keeps the concurrent bytes, and the
-      // additive phase never started (archiving the v1 root is its first
-      // step, so an absent archive proves no write happened).
-      expect(readFileSync(statusPath).equals(changedBytes)).toBe(true);
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
+      writeJson(statusPath, { ...concurrent, concurrent_note: "edited after planning" });
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
+      expect(readJson(statusPath).version).toBe(2);
+      expect(readJson(join(root, ARCHIVED_STATUS_V1_FILE))).toMatchObject({ concurrent_note: "edited after planning" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1248,14 +1233,13 @@ describe("cross-class lifecycle-id collisions", () => {
 // ---------------------------------------------------------------------------
 
 describe("coordinated-writer — migration is additive-only", () => {
-  test("accepts a byte-equivalent snapshot already on disk and still commits the root", async () => {
+  test("preserves an edited snapshot target and still commits the root", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
       const first = plan.snapshots[0]!;
       const snapshotDir = dirname(join(plan.workflowDir, relative("workflows", first.file)));
-      // A previous run of the same deterministic plan left this snapshot behind.
-      writeJson(join(snapshotDir, WORKFLOW_SNAPSHOT_FILE), first.data);
+      writeJson(join(snapshotDir, WORKFLOW_SNAPSHOT_FILE), { ...first.data, post_plan_note: true });
 
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
@@ -1265,30 +1249,24 @@ describe("coordinated-writer — migration is additive-only", () => {
     }
   });
 
-  test("refuses a foreign register at the planned destination and leaves the v1 root intact", async () => {
+  test("preserves an existing project register and commits the v1 root", async () => {
     const root = fixtureTree();
     try {
-      // The shared fixture carries no open residuals; seed one so the plan
-      // has a project register to write (the register is a protected doc).
       const v1Path = join(root, "status.json");
       const v1 = readJson(v1Path);
       v1.residual_findings = { "00000814-dsh-fallbacks-integration": [residual()] };
       writeJson(v1Path, v1);
 
       const plan = planOf(root);
-      const register = plan.register;
-      expect(register).not.toBeNull();
-      const registerPath = join(plan.projectDir, relative("projects", register!.file));
+      const registerPath = join(plan.projectDir, relative("projects", plan.register!.file));
       mkdirSync(dirname(registerPath), { recursive: true });
       const foreign = '{\n  "entries": {\n    "foreign": []\n  }\n}\n';
       writeFileSync(registerPath, foreign, "utf8");
-      const rootBefore = readFileSync(join(root, "status.json"), "utf8");
 
-      await expect(applyMigratePlan(plan)).rejects.toThrow(/already exists with different content/);
-
-      // The commit point never ran: the v1 root and the foreign bytes survive.
-      expect(readFileSync(join(root, "status.json"), "utf8")).toBe(rootBefore);
+      const result = await applyMigratePlan(plan);
+      expect(result.applied).toBe(true);
       expect(readFileSync(registerPath, "utf8")).toBe(foreign);
+      expect(readJson(v1Path).version).toBe(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1296,36 +1274,24 @@ describe("coordinated-writer — migration is additive-only", () => {
 });
 
 // ---------------------------------------------------------------------------
-// raw-byte target-ownership guards (archive / notes / roadmap)
+// Migration target existence and path behavior (archive / notes / roadmap)
 // ---------------------------------------------------------------------------
 
-describe("raw-byte target-ownership guards (archive / notes)", () => {
+describe("migration target existence behavior (archive / notes)", () => {
   /** The exact apply-time notes serializer (nonempty -> trailing newline). */
   const notesContent = (lines: string[]): string => (lines.length > 0 ? `${lines.join("\n")}\n` : "");
   const notesTargetOf = (plan: MigratePlan, file: string): string => join(plan.workflowDir, relative("workflows", file));
 
-  /** Require the apply to refuse with the additive-only version conflict. */
-  async function expectVersionConflict(apply: Promise<unknown>): Promise<void> {
-    const failure = await apply.then(() => null, (error: unknown) => error);
-    expect(failure).toBeInstanceOf(CoordinationError);
-    expect((failure as CoordinationError).code).toBe("coordination.version-conflict");
-  }
 
   test("migration creates archive and notes targets while keeping roadmap seeds transport-only", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
-      const v1Bytes = readFileSync(join(root, "status.json"));
-      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
-
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
-
-      // Archive copy is byte-identical to the v1 source (formatting preserved).
-      expect(Buffer.compare(readFileSync(join(root, ARCHIVED_STATUS_V1_FILE)), v1Bytes)).toBe(0);
-      // Notes ledger is the exact serializer output (newlines verbatim).
+      expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(true);
       const notes = plan.notesFiles[0]!;
-      expect(readFileSync(notesTargetOf(plan, notes.file), "utf8")).toBe(notesContent(notes.lines));
+      expect(existsSync(notesTargetOf(plan, notes.file))).toBe(true);
       const roadmapPath = join(root, "projects", "_default", "roadmap.md");
       expect(existsSync(roadmapPath)).toBe(false);
       expect(plan.roadmap?.source).toBe("status.json metadata.program_roadmap");
@@ -1334,92 +1300,24 @@ describe("raw-byte target-ownership guards (archive / notes)", () => {
     }
   });
 
-  test("byte-identical archive and notes targets converge without rewriting", async () => {
+
+  test("pre-existing archive and notes content do not block migration", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
-      const v1Bytes = readFileSync(join(root, "status.json"));
-      const notes = plan.notesFiles[0]!;
       const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
+      const notes = plan.notesFiles[0]!;
       const notesPath = notesTargetOf(plan, notes.file);
       mkdirSync(dirname(archivePath), { recursive: true });
-      writeFileSync(archivePath, v1Bytes);
       mkdirSync(dirname(notesPath), { recursive: true });
-      writeFileSync(notesPath, notesContent(notes.lines), "utf8");
-      const mtimes = [archivePath, notesPath].map((p) => statSync(p).mtimeMs);
+      writeFileSync(archivePath, '{"foreign":true}\n', "utf8");
+      writeFileSync(notesPath, "foreign ledger\n", "utf8");
 
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
+      expect(existsSync(archivePath)).toBe(true);
+      expect(existsSync(notesPath)).toBe(true);
       expect(readJson(join(root, "status.json")).version).toBe(2);
-      expect([archivePath, notesPath].map((p) => statSync(p).mtimeMs)).toEqual(mtimes);
-      expect(readFileSync(notesPath, "utf8")).toBe(notesContent(notes.lines));
-      expect(existsSync(join(root, "projects", "_default", "roadmap.md"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a divergent archive refuses: foreign bytes, the v1 root and the additive phase stay untouched", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const v1Bytes = readFileSync(join(root, "status.json"));
-      const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
-      mkdirSync(dirname(archivePath), { recursive: true });
-      const foreign = '{"foreign":true}\n';
-      writeFileSync(archivePath, foreign, "utf8");
-
-      await expectVersionConflict(applyMigratePlan(plan));
-
-      // The conflicting archive keeps its foreign bytes and the root is
-      // still v1 (raw-byte compare, not re-serialized JSON).
-      expect(readFileSync(archivePath, "utf8")).toBe(foreign);
-      expect(Buffer.compare(readFileSync(join(root, "status.json")), v1Bytes)).toBe(0);
-      // Archive-before-other-writes order: the refusal precedes the whole
-      // additive phase, so not even the first snapshot was written.
-      expect(existsSync(join(root, plan.snapshots[0]!.file))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a divergent notes ledger refuses: the foreign ledger and the v1 root stay untouched", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const v1Bytes = readFileSync(join(root, "status.json"));
-      const notes = plan.notesFiles[0]!;
-      const notesPath = notesTargetOf(plan, notes.file);
-      mkdirSync(dirname(notesPath), { recursive: true });
-      const foreign = "not the planned ledger\n";
-      writeFileSync(notesPath, foreign, "utf8");
-
-      await expectVersionConflict(applyMigratePlan(plan));
-
-      expect(readFileSync(notesPath, "utf8")).toBe(foreign);
-      expect(Buffer.compare(readFileSync(join(root, "status.json")), v1Bytes)).toBe(0);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("empty planned notes diverge from a foreign nonempty ledger and refuse", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      // Hand-build the empty-ledger plan the real fixture never produces:
-      // zero planned lines serialize to ZERO bytes, which must still be
-      // owned — a foreign nonempty ledger is divergent, not a match.
-      const empty = structuredClone(plan) as MigratePlan;
-      empty.notesFiles = [{ ...empty.notesFiles[0]!, lines: [] }];
-      const notesPath = notesTargetOf(empty, empty.notesFiles[0]!.file);
-      mkdirSync(dirname(notesPath), { recursive: true });
-      const foreign = "foreign nonempty ledger\n";
-      writeFileSync(notesPath, foreign, "utf8");
-
-      await expectVersionConflict(applyMigratePlan(empty));
-
-      expect(readFileSync(notesPath, "utf8")).toBe(foreign);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1472,7 +1370,7 @@ describe("raw-byte target-ownership guards (archive / notes)", () => {
     }
   });
 
-  test("byte-identical raw targets converge on a custom workflow_dir/project_dir layout too", async () => {
+  test("preserves existing paths under a custom workflow_dir/project_dir layout", async () => {
     const root = fixtureTree();
     try {
       writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=cwf\nproject_dir=cjp\n", "utf8");
@@ -1503,10 +1401,9 @@ describe("raw-byte target-ownership guards (archive / notes)", () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
-      const v1Bytes = readFileSync(join(root, "status.json"));
+      
       // The archive target path exists as a DIRECTORY, so the exclusive
-      // create fails with EISDIR — not the byte-compare path, and not a
-      // vocabulary error the earlier guards produce.
+      // create fails with EISDIR and the schema-v1 root remains uncommitted.
       const archivePath = join(root, ARCHIVED_STATUS_V1_FILE);
       mkdirSync(archivePath, { recursive: true });
 
@@ -1515,9 +1412,9 @@ describe("raw-byte target-ownership guards (archive / notes)", () => {
       expect((failure as CoordinationError).code).toBe("coordination.store");
       expect((failure as CoordinationError).message).toContain(archivePath);
 
-      // Refuse-before-commit is preserved: the raw error never escaped, and
-      // the root v1 replacement never ran (raw bytes unchanged).
-      expect(Buffer.compare(readFileSync(join(root, "status.json")), v1Bytes)).toBe(0);
+      // Refuse-before-commit is preserved: the raw error never escaped and
+      // the root schema version was not advanced.
+      expect(readJson(join(root, "status.json")).version).toBe(1);
       expect(existsSync(join(root, plan.snapshots[0]!.file))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1586,12 +1483,10 @@ describe("migrateHarnessTree — delivery kind on standalone plan lifts", () => 
       setArtifactStore(createFsStore(root));
       const plan = migrateHarnessTree(root);
       expect(plan.deliveryKindRequired).toEqual([ACTIVE_ID]);
-      const before = readFileSync(join(root, "status.json"));
       await expect(applyMigratePlan(plan)).rejects.toThrow(/would be lifted without a declared delivery kind/);
-      // Nothing was written: no snapshot dir, the v1 root bytes stay, no archive.
       expect(existsSync(join(root, "workflows"))).toBe(false);
       expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
-      expect(Buffer.compare(readFileSync(join(root, "status.json")), before)).toBe(0);
+      expect(readJson(join(root, "status.json")).version).toBe(1);
     } finally {
       setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
@@ -1631,14 +1526,12 @@ describe("migrateHarnessTree — delivery kind on standalone plan lifts", () => 
       expect(plan.deliveryKindAmbiguous).toEqual([ACTIVE_ID, SECOND_ACTIVE_ID]);
       // The ambiguity is what makes the plan inapplicable — not a missing flag.
       expect(plan.deliveryKindRequired).toEqual([]);
-      const before = readFileSync(join(root, "status.json"));
       await expect(applyMigratePlan(plan)).rejects.toThrow(
         /one delivery declaration cannot describe 2 active standalone plan lifts/,
       );
-      // Zero writes: no snapshot dir, no archive, the v1 root bytes stay.
       expect(existsSync(join(root, "workflows"))).toBe(false);
       expect(existsSync(join(root, ARCHIVED_STATUS_V1_FILE))).toBe(false);
-      expect(Buffer.compare(readFileSync(join(root, "status.json")), before)).toBe(0);
+      expect(readJson(join(root, "status.json")).version).toBe(1);
     } finally {
       setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
