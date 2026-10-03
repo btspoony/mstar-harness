@@ -13438,7 +13438,6 @@ async function captureExecutionProjectionSources(context) {
         diagnostics.push({ sourceKey, reason: "invalid", message: `invalid: registry membership has no workflow row (${item.workflow_id})` });
       }
     }
-    const workflowStateById = new Map;
     for (const item of workflows) {
       const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
       let state;
@@ -13507,31 +13506,12 @@ async function captureExecutionProjectionSources(context) {
         continue;
       }
       const planState = state;
-      const coordinationState = coordination;
       const planId = rowPlanId(planState);
       if (!planId || planId !== row.plan_id) {
         recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, "invalid: plan state id does not match its execution_plans key");
         continue;
       }
-      const workflowState = workflowStateById.get(row.workflow_id);
       const authorityPlanView = servedWorkflowById.get(row.workflow_id)?.plans.find((view) => view.plan.id === row.plan_id);
-      const leaseRow = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id);
-      let snapshotLease;
-      if (leaseRow) {
-        try {
-          snapshotLease = JSON.parse(leaseRow.lease_json);
-        } catch {}
-      }
-      const snapshotPlanBase = { ...planState, coordination: { revision: row.revision, ...coordinationState } };
-      const snapshotPlan = snapshotLease === undefined ? snapshotPlanBase : { ...snapshotPlanBase, execution_lease: snapshotLease };
-      if (workflowState) {
-        const workflowGate = validateWorkflowSnapshot({ ...workflowState, plans: [snapshotPlan] });
-        const blockingCodes = workflowGate.violations.filter((violation18) => violation18.code !== LEGACY_WORKTREE_PATH_CODE).map((violation18) => violation18.code);
-        if (blockingCodes.length > 0) {
-          recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, `invalid: plan does not validate in its workflow (${blockingCodes.join(", ")})`);
-          continue;
-        }
-      }
       if (!authorityPlanView) {
         recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, "invalid: served plan is missing from the execution authority graph");
         continue;

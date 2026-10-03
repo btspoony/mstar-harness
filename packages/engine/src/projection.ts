@@ -837,7 +837,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         diagnostics.push({ sourceKey, reason: "invalid", message: `invalid: registry membership has no workflow row (${item.workflow_id})` });
       }
     }
-    const workflowStateById = new Map<string, Record<string, unknown>>();
     for (const item of workflows) {
       const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
       let state: unknown;
@@ -902,29 +901,12 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
         continue;
       }
       const planState = state as Record<string, unknown>;
-      const coordinationState = coordination as Record<string, unknown>;
       const planId = rowPlanId(planState);
       if (!planId || planId !== row.plan_id) {
         recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state id does not match its execution_plans key");
         continue;
       }
-      const workflowState = workflowStateById.get(row.workflow_id);
       const authorityPlanView = servedWorkflowById.get(row.workflow_id)?.plans.find((view) => view.plan.id === row.plan_id);
-      const leaseRow = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id) as { lease_json: string } | undefined;
-      let snapshotLease: unknown;
-      if (leaseRow) {
-        try { snapshotLease = JSON.parse(leaseRow.lease_json); } catch { /* reported on the lease source below */ }
-      }
-      const snapshotPlanBase = { ...planState, coordination: { revision: row.revision, ...coordinationState } };
-      const snapshotPlan = snapshotLease === undefined ? snapshotPlanBase : { ...snapshotPlanBase, execution_lease: snapshotLease };
-      if (workflowState) {
-        const workflowGate = validateWorkflowSnapshot({ ...workflowState, plans: [snapshotPlan] });
-        const blockingCodes = workflowGate.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE).map((violation) => violation.code);
-        if (blockingCodes.length > 0) {
-          recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `invalid: plan does not validate in its workflow (${blockingCodes.join(", ")})`);
-          continue;
-        }
-      }
       if (!authorityPlanView) {
         recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: served plan is missing from the execution authority graph");
         continue;
