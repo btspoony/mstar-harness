@@ -1,6 +1,6 @@
 ---
 name: iteration-loop
-description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first auto direction lock + compass/plans + Review & Edit chain) through Phase 2–6 (execute → close → PR → merge-ready → post-merge close). Optional args: direction, scale (S|M|L|XL, default M). Not Done until the Phase 6 post-merge close completes. Minimal human intervention; no grill-me."
+description: "Autonomous full iteration loop for cloud agents — Phase 1 (code-first direction lock, retained design prototype, compass/plans and selected Review & Edit) through Phase 2–6 (execute → close → PR → merge-ready → post-merge close). Optional args: direction, scale (S|M|L|XL, default M). Not Done until Phase 6 post-merge close. Explicit autonomous opt-in; no routine human confirmation or grill-me."
 agent: project-manager
 input: "[direction] [scale]"
 ---
@@ -64,21 +64,24 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT）+ **`mstar-ite
 
 Execute **`mstar-iteration/references/phase-1-prepare.md`**（§1.1–§1.6；**autonomous** direction lock + scale budget + branch resolve SSOT → `references/autonomous-direction-lock.md`）：
 
-### 1–4. Research → Explore → Lock → Write
+### 1–4. Research → Explore → Lock → Prototype → Write
 
-Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）+ `STRATEGY.md`（if present）→ scope **2–4** candidates → **autonomous** lock（`direction` arg 约束；落盘 rationale + success criteria + non-goals + scale budget；branch resolve — never silent `main`/`master`；**STOP** if no credible candidate and no `direction` arg）→ execute the `direction-lock` anchor（`mstar-iteration/references/phase-1-prepare.md` §1.2 tail；rationale recorded on disk, compass not yet written）→ write compass + plans per §1.3–§1.5（business plan count within scale budget）。
+Survey structured harness dirs and planning artifacts as prescribed by §1.1 → scope **2–4** candidates → **autonomous** lock (`direction` constrains; retain rationale, success criteria, non-goals, scale budget and resolved branch policy; never silently default `main`/`master`; **STOP** if no credible candidate and no `direction`) → execute `direction-lock` at §1.2 tail before compass/plans drafts → persist the **§1.2.5 prototype** in the iteration package → write formal compass/plans/guides/specs per §1.3–§1.5.
+
+This command is explicit autonomous opt-in: choose **HTML, Markdown or JSON** to suit the design and retain it in **`{ITERATION_DIR}/<iteration-id>/prototypes/`**, with format rationale and autonomous disposition. Record path/revision and disposition in compass `## Prototype baseline`; plans trace it through existing `metadata.iteration_refs`. PM may invoke product-manager / architect for prototype contributions. Do not demand HTML or routine human confirmation, and do not fabricate user approval. Actual host Plan write/dispatch permissions still apply; use the active host bridge's supported resume when restricted.
 
 ### 5. Review & Edit Chain（HARD GATE）
 
-Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**：`product-manager` → `architect` → `writing-specialist` 顺序 invoke（**禁止** `{KNOWLEDGE_DIR}/` 新增；corpus hygiene）→ PM lock。**Assignment preflight** per **`command-shared-invariants.md`**。
+Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**: record PM include/skip reasons for product-manager / architect using complexity, remaining gaps and reusable prototype contributions; invoke selected roles sequentially in product-manager → architect order, then **mandatory writing-specialist last** → PM lock. No fake skip receipts, skipped-role markers or unresolved blocking questions; reassess selection for new gaps and return to prototype design for material changes. No `{KNOWLEDGE_DIR}/` additions; corpus hygiene and **Assignment preflight** (`command-shared-invariants.md`) remain required.
 
 **Pre-integration checklist**（print before §6；all `[x]`）：
 
 - [ ] Autonomous direction lock rationale recorded in compass（**not** grill-me）
 - [ ] `direction-lock` anchor executed once the autonomous lock rationale is recorded and **before** the compass/plans draft（same anchor and carrier as `iteration-start` §3.5；no `grill-me` on this route）
+- [ ] Prototype retained in iteration package with format rationale, autonomous disposition and traceability; no invented human approval
 - [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
 - [ ] compass + plans + `status.json` registered
-- [ ] product-manager / architect / writing-specialist invokes completed（**未**向 `{KNOWLEDGE_DIR}/` 新增）
+- [ ] Role selection reasons recorded; selected invokes returned sequentially, mandatory writer last; no fake skip receipts / skipped-role markers / blocking questions; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock：compass `status: locked` + Prepare gates pass
 - [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
 - [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入
