@@ -451,13 +451,13 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     await expect(registerCatalogExecution(context, request)).rejects.toMatchObject({
       name: "CatalogRegistrationError",
       code: "catalog.registration-terminal-lifecycle",
-      message: expect.stringContaining("mstar status workflow-close --workflow wf-plan-1 --harness"),
+      message: expect.stringContaining(`mstar status workflow-close --workflow wf-plan-1 --harness '${harnessDir}'`),
     });
 
     await expect(reconcileCatalogExecution(context, request.operationId)).rejects.toMatchObject({
       name: "CatalogRegistrationError",
       code: "catalog.registration-terminal-lifecycle",
-      message: expect.stringContaining("mstar status workflow-close --workflow wf-plan-1 --harness"),
+      message: expect.stringContaining(`mstar status workflow-close --workflow wf-plan-1 --harness '${harnessDir}'`),
     });
 
     // An already-terminal close is the supported unregister-only recovery.
