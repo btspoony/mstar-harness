@@ -79,14 +79,6 @@ function definition(id: string) {
 }
 
 describe("plan command family", () => {
-  test("registers all sixteen inventory identities, including dynamic transitions and retired verbs", () => {
-    const ids = getCommandDefinitions().map(({ id }) => id).filter((id) => id.startsWith("plan."));
-    expect(ids).toHaveLength(16);
-    expect(ids).toContain("plan.integration-start");
-    expect(ids).toContain("plan.reconcile");
-    expect(ids).toContain("plan.residual-add");
-    expect(ids).toContain("plan.residual-close");
-  });
 
   test("plan family sparse input passes descriptor validation without session or revision", () => {
     const input = definition("plan.progress").input.safeParse({

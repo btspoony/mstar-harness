@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -190,7 +191,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
     command({
       id: "status.workflow-close",
       cli: { path: ["status", "workflow-close"], aliases: [], arguments: [], options: [
-        { key: "workflow", flags: "--workflow <id>", required: true },
+        { key: "workflow", flags: "--workflow <id>", required: false },
         { key: "harness", flags: "--harness <path>", required: false },
         { key: "endedAt", flags: "--ended-at <date>", required: false },
         { key: "session", flags: "--session <path>", required: false },
@@ -202,7 +203,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: z.object({
-        workflow: z.string().min(1), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
+        workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
         sessionRef: z.string().optional(), expect: z.string().optional(), operation: z.string().optional(), reason: z.string().optional(), json: z.boolean().optional(),
       }),
       output,
@@ -210,12 +211,14 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       description: "Close a workflow only after engine lifecycle and delivery guards pass.",
       async execute(input, context) {
         const schema = z.object({
-          workflow: z.string().min(1), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
+          workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), endedAt: z.string().optional(), session: z.string().optional(),
           sessionRef: z.string().optional(), expect: z.string().optional(), operation: z.string().optional(), reason: z.string().optional(), json: z.boolean().optional(),
         });
         const parsed = schema.safeParse(input);
         if (!parsed.success) return invalid("status.workflow-close", parsed.error);
-        const { workflow, harness, endedAt, session } = parsed.data;
+        const workflow = parsed.data.workflow ?? context.executionIdentity?.workflowId;
+        const { harness, endedAt, session } = parsed.data;
+        if (workflow === undefined) return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector or acquired workflow identity is required" };
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) {
           return refused("status.workflow-close", "workflow.invalid-id", `invalid workflow id ${JSON.stringify(workflow)}`);
         }
@@ -226,28 +229,34 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           const activeRequested = activeFields.some((field) => field !== undefined);
           const active = (await resolveExecutionReadRoute({ harnessDir })) === "execution";
           if (activeRequested || active) {
-            if (active && !activeRequested) {
-              return refused("status.workflow-close", "execution.consumer-not-ready", "File-based workflow close is unavailable while active execution authority is enabled");
-            }
             if (endedAt !== undefined || session !== undefined) {
               return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active execution close cannot combine --ended-at or --session with its CAS envelope" };
             }
-            if (activeFields.some((field) => field === undefined) || parsed.data.reason === undefined || parsed.data.reason.trim() === "") {
-              return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active execution close requires --session-ref, --expect, --operation, and --reason" };
-            }
             if (context.sessionId === undefined || context.sessionId.trim() === "") {
-              return refused("status.workflow-close", "coordination.identity-missing", "The invocation has no acquired main-session identity");
+              return refused(
+                "status.workflow-close",
+                "coordination.identity-missing",
+                "This close needs an acquired coordinator identity: launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`.",
+              );
+            }
+            const acquired = context.executionIdentity;
+            if (acquired !== undefined && (acquired.workflowId !== workflow || acquired.role !== "coordinator" || acquired.planId !== null)) {
+              return refused("status.workflow-close", "coordination.identity-mismatch", "acquired caller identity does not address this workflow's coordinator seat");
             }
             const executionContext = executionContextFor(
               { harnessDir },
-              { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator", planId: null },
+              acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator", planId: null },
             );
+            const ref = parsed.data.sessionRef === undefined ? undefined : decodeExecutionSessionRef(parsed.data.sessionRef);
+            if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator" || ref.planId !== null)) {
+              return refused("status.workflow-close", "coordination.identity-mismatch", "sessionRef must address this workflow's coordinator seat");
+            }
             const receipt = await mutateExecutionWorkflow(executionContext, {
               workflowId: workflow,
-              session: decodeExecutionSessionRef(parsed.data.sessionRef!),
-              expected: parsed.data.expect as ExecutionToken,
-              operationId: parsed.data.operation!,
-              operation: { kind: "lifecycle", status: "completed", reason: parsed.data.reason },
+              ...(ref === undefined ? {} : { session: ref }),
+              ...(parsed.data.expect === undefined ? {} : { expected: parsed.data.expect as ExecutionToken }),
+              operationId: parsed.data.operation ?? randomUUID(),
+              operation: { kind: "lifecycle", status: "completed", reason: parsed.data.reason ?? "closed through status workflow-close" },
             });
             return ok("status.workflow-close", receipt);
           }

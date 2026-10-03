@@ -198,6 +198,7 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "plan.complete": unverified("complete plan delivery", "requires sealed prepare and integration evidence; no in-package fixture"),
   "plan.repair-delivery-source": unverified("repair delivery source metadata", "requires a registered plan; no in-package fixture"),
   "plan.reconcile": unverified("reconcile plan state with snapshots", "requires workflow state; no in-package fixture"),
+  "plan.release": unverified("release the caller's own execution claim", "requires an active bound plan claim; no in-package fixture"),
   "plan.residual-add": unverified("append a residual register entry", "requires a project register; no in-package fixture"),
   "plan.residual-close": unverified("close a residual register entry", "requires a project register; no in-package fixture"),
   // session family

@@ -403,6 +403,11 @@ export function resolveCliSessionIdentity(
  */
 const COORDINATOR_SEAT_ROUTES: Record<string, true> = {
   "workflow.register": true,
+  "workflow.evidence": true,
+  "workflow.phase": true,
+  "workflow.lifecycle": true,
+  "workflow.execution-policy": true,
+  "workflow.integration-worktree": true,
   "iteration.register": true,
   "status.workflow-close": true,
   "session.recover": true,
@@ -426,7 +431,19 @@ export function mintedIdentityScopeProblem(
   commandId: string,
 ): string | undefined {
   if (identity === undefined) return undefined;
-  const addressed = addressedMintedScope(input, commandId);
+  const planSparseRoute = commandId.startsWith("plan.") &&
+    commandId !== "plan.bind" && commandId !== "plan.show" &&
+    input.sessionRef === undefined && input.expect === undefined && input.execution !== true;
+  if (planSparseRoute) {
+    const workflowMismatch = typeof input.workflow === "string" && input.workflow !== identity.workflowId;
+    const coordinatorMismatch = input.coordinator === true && (identity.role !== "coordinator" || identity.planId !== null);
+    const planMismatch = typeof input.plan === "string" && identity.role === "plan-pm" && input.plan !== identity.planId;
+    if (workflowMismatch || coordinatorMismatch || planMismatch) {
+      return `the launched identity addresses ${describeMintedScope(identity)}; this sparse plan request selects a different workflow, role or plan`;
+    }
+    return undefined;
+  }
+  const addressed = addressedMintedScope(input, commandId, identity);
   if (addressed === undefined) return undefined;
   const mismatched = addressed.workflowId !== identity.workflowId ||
     (addressed.role !== undefined && addressed.role !== identity.role) ||
@@ -439,6 +456,7 @@ export function mintedIdentityScopeProblem(
 function addressedMintedScope(
   input: Record<string, unknown>,
   commandId: string,
+  identity?: ExecutionIdentity,
 ): { workflowId: string; role?: "coordinator" | "plan-pm"; planId?: string | null } | undefined {
   // A canonical session reference is itself an ACTIVE transport and carries the
   // whole addressed scope.
@@ -447,6 +465,10 @@ function addressedMintedScope(
     if (typeof wire !== "string" || wire === "") continue;
     try {
       const ref = decodeExecutionSessionRef(wire);
+      // A stated `--coordinator` seat is a role constraint: the reference still
+      // names the addressed workflow, but the compared seat is the declared
+      // one, never the reference's own role.
+      if (input.coordinator === true) return { workflowId: ref.workflowId, role: "coordinator", planId: null };
       return { workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
     } catch {
       // A malformed reference is the family's own typed refusal; the scope gate
@@ -454,15 +476,17 @@ function addressedMintedScope(
       return undefined;
     }
   }
-  // Only an ACTIVE consumption is constrained here: the explicit active bind
-  // flag or the active route's own full execution token (a numeric `--expect`
-  // is the file route's CAS transport, not an active one). A legacy route that
-  // ignores the identity entirely (a pre-activation register, a coordinator
-  // bootstrap or `--resume`) still refuses through its own contract, so an
-  // ambient minted value never turns into a scope refusal it does not own.
-  if (input.execution !== true && typeof input.expect !== "string") return undefined;
-  const workflowId = input.workflow;
-  if (typeof workflowId !== "string" || workflowId.trim() === "") return undefined;
+  // ACTIVE consumption includes sparse own-binding workflow operations. These
+  // commands derive their session/token from the selected coordinator seat;
+  // missing --expect must not bypass the minted identity's scope check.
+  const sparseCoordinatorRoute = COORDINATOR_SEAT_ROUTES[commandId] === true &&
+    commandId !== "workflow.register" && commandId !== "iteration.register" &&
+    commandId !== "session.recover";
+  if (input.execution !== true && typeof input.expect !== "string" && !sparseCoordinatorRoute) return undefined;
+  const workflowId = typeof input.workflow === "string" && input.workflow.trim() !== ""
+    ? input.workflow
+    : sparseCoordinatorRoute ? identity?.workflowId : undefined;
+  if (workflowId === undefined) return undefined;
   // The explicit active bind states its seat unambiguously …
   if (input.execution === true && input.coordinator === true) return { workflowId, role: "coordinator", planId: null };
   if (input.execution === true && typeof input.plan === "string") return { workflowId, role: "plan-pm", planId: input.plan };
@@ -470,6 +494,10 @@ function addressedMintedScope(
   // the command's own contract, never from the registered plan selector (that
   // names the row being registered, not the caller's seat).
   if (COORDINATOR_SEAT_ROUTES[commandId] === true) return { workflowId, role: "coordinator", planId: null };
+  // A stated `--coordinator` seat is a role constraint on every minted plan
+  // write, including the reference/token variants: the acquired plan-pm tuple
+  // may not be reinterpreted as the coordinator seat it does not declare.
+  if (input.coordinator === true) return { workflowId, role: "coordinator", planId: null };
   return { workflowId };
 }
 
