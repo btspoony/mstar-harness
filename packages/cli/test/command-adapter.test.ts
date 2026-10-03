@@ -530,21 +530,6 @@ describe("generated CLI adapter — minted identity transport", () => {
     }
   });
 
-  test("an explicit --session-id wins even over a malformed launched identity", async () => {
-    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
-    try {
-      process.env.MSTAR_EXECUTION_IDENTITY = "not json";
-      const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator", "--session-id", "explicit"]);
-      // The explicit override short-circuits the minted channel entirely: the
-      // invocation proceeds to the family's own required-field checks and never
-      // reports a broken minted transport.
-      const envelope: unknown = JSON.parse(result.stdout);
-      expect(field(envelope, "code")).toBe("command.invalid-input");
-      expect(identityCode(envelope)).not.toBe("command.identity-scope-mismatch");
-    } finally {
-      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
-    }
-  });
 
   test("sparse ACTIVE close preserves the minted plan-pm seat instead of reinterpreting it as coordinator", async () => {
     const prior = process.env.MSTAR_EXECUTION_IDENTITY;

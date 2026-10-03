@@ -343,7 +343,7 @@ function parseMintedExecutionIdentity(serialized: string): ExecutionIdentity {
   if (!isMintedTuple(value)) {
     throw new CliIdentityError(
       "command.invalid-identity",
-      "MSTAR_EXECUTION_IDENTITY must carry one §3.1 identity tuple (source, sessionId, workflowId, role, planId); a hand-set value is refused rather than guessed",
+      "MSTAR_EXECUTION_IDENTITY must carry one \u00a73.1 identity tuple (source, sessionId, workflowId, role, planId); a hand-set value is refused rather than guessed",
     );
   }
   try {

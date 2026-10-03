@@ -16,9 +16,9 @@ function mintedIdentity(overrides: Partial<ExecutionIdentity> = {}): ExecutionId
   return { source: "local", sessionId: "minted-session", workflowId: "wf-launched", role: "coordinator", planId: null, ...overrides };
 }
 
-test("CLI session identity prefers the flag and attributes its source", () => {
+test("CLI session identity accepts an explicit override without parsing a malformed launched identity", () => {
   process.env.MSTAR_HOST_SESSION_ID = "env-session";
-  process.env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(mintedIdentity());
+  process.env.MSTAR_EXECUTION_IDENTITY = "not json";
   expect(resolveCliSessionIdentity("flag-session")).toEqual({
     sessionId: "flag-session",
     sessionIdSource: "flag",

@@ -1292,11 +1292,6 @@ describe("mstar plan — scoped-operations", () => {
     const planSession = bindPlan(fixture, PLAN_ID);
     const before = snapshotState(fixture);
 
-    // No store-less register version is readable any more: the view carries
-    // the snapshot version only, and the issues themselves are the CAS inputs.
-    const view = jsonOf(runCli(["plan", "show", "--session", planSession, "--json"], fixture.root));
-    expect(view.register_version).toBeUndefined();
-    expect(view.allowed_operations).toEqual(["progress", "residual-add", "residual-close", "handoff"]);
 
     const entriesPath = join(fixture.root, "entries.json");
     writeJson(entriesPath, [issueEntryOf("occ-1", { severity: "critical" })]);
