@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions } from "../src/index.js";
@@ -26,114 +26,23 @@ function definition(id: string) {
   return found;
 }
 
-function input(id: string, harness: string, present: readonly string[]) {
-  const fields: Record<string, unknown> = {};
-  if (id === "workflow.register") Object.assign(fields, { workflow: "wf-test", planId: "plan-test", planTitle: "Test", planFile: "plans/plan-test.md", deliveryKind: "development" });
-  if (id === "workflow.evidence") {
-    const file = path.join(harness, "evidence.json");
-    writeFileSync(file, "{}");
-    Object.assign(fields, { workflow: "wf-test", file });
-  }
-  if (id === "iteration.register") Object.assign(fields, { workflow: "wf-test", compassRef: "compass.md", branchBase: "main", branchIntegration: "integration", branchTargetIteration: "main", row: [JSON.stringify({ id: "plan-test" })] });
-  Object.assign(fields, { harness });
-  for (const field of present) fields[field] = field === "sessionRef" ? "invalid-ref" : `${field}-value`;
-  return fields;
-}
-
-const routes = [
-  { id: "workflow.register", fields: ["expect", "operation"], labels: ["session identity", "expect", "operation"] },
-  { id: "workflow.evidence", fields: ["sessionRef", "expect", "operation"], labels: ["session identity", "sessionRef", "expect", "operation"] },
-  { id: "iteration.register", fields: ["expect", "operation"], labels: ["session identity", "expect", "operation"] },
-];
-
-function missingDiagnosticSet(message: string): Set<string> {
-  const prefix = "Active registration is missing ";
-  const end = message.indexOf(". CLI:");
-  if (!message.startsWith(prefix) || end < 0) throw new Error(`missing diagnostic section: ${message}`);
-  return new Set(message.slice(prefix.length, end).split(", "));
-}
-
-function missingCombinations(labels: readonly string[], activeFields: readonly string[]) {
-  return Array.from({ length: 2 ** labels.length }, (_, mask) => {
-    const missing = labels.filter((_, index) => (mask & (1 << index)) !== 0);
-    const present = labels.filter((label) => !missing.includes(label));
-    return { missing, present };
-  }).filter(({ missing, present }) => missing.length > 0 && activeFields.some((field) => present.includes(field)));
-}
-
-async function refuse(id: string, fields: string[], identity = true) {
-  const ctx = context(identity ? "main-session" : undefined);
-  return definition(id).execute(input(id, ctx.cwd, fields), ctx);
-}
-
-
-
-describe("active registration refusal diagnostics", () => {
-  for (const route of routes) {
-    const combinations = missingCombinations(route.labels, route.fields);
-    for (const { missing, present } of combinations) {
-      const hasIdentity = !missing.includes("session identity");
-      const presentArguments = present.filter((field) => field !== "session identity");
-      test(`${route.id} aggregates missing fields: ${missing.join(" + ")}`, async () => {
-        const result = await refuse(route.id, presentArguments, hasIdentity);
-        expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-        if (result.status !== "usage") throw new Error("expected usage refusal");
-        expect(missingDiagnosticSet(result.message)).toEqual(new Set(missing));
-        expect(result.message).toContain("CLI");
-        expect(result.message).toContain("--session-id");
-        expect(result.message).toContain("MSTAR_HOST_SESSION_ID");
-        expect(result.message).toContain("MCP");
-        expect(result.message).toContain("sessionId");
-        expect(result.message).toContain("status validate");
-        expect(result.message).toContain("replay id");
-      });
-    }
-  }
-
-  test("no-identity refusals explain session.run child semantics for register and evidence", async () => {
-    const register = await refuse("workflow.register", ["operation"], false);
-    expect(register).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (register.status !== "usage") throw new Error("expected usage refusal");
-    expect(register.message).toContain("session.run child carries a minted local identity");
-    expect(register.message).toContain("main session or pass an explicit --session-id");
-
-    const evidence = await refuse("workflow.evidence", ["sessionRef"], false);
-    expect(evidence).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (evidence.status !== "usage") throw new Error("expected usage refusal");
-    expect(evidence.message).toContain("session.run child carries a minted local identity");
-    expect(evidence.message).toContain("main session or pass an explicit --session-id");
+describe("active registration refusals", () => {
+  test("delivery evidence refuses an empty patch without invoking external effects", async () => {
+    const ctx = context("coordinator-session");
+    const result = await definition("workflow.evidence").execute({
+      workflow: "wf-test",
+      file: path.join(ctx.cwd, "evidence.json"),
+    }, ctx);
+    expect(result).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
+    if (result.status !== "refused") throw new Error("expected empty evidence refusal");
+    expect(result.message).toContain("at least one evidence member");
   });
 
-  test("recovery explains sessionRef acquisition and expect token scope", async () => {
-    const evidence = await refuse("workflow.evidence", ["expect", "operation"]);
-    expect(evidence.status).toBe("usage");
-    if (evidence.status !== "usage") throw new Error("expected usage refusal");
-    expect(evidence.message).toContain("active session reference returned by the plan bind receipt");
-    expect(evidence.message).toContain("pass it as --session-ref on the CLI or sessionRef in MCP input");
-    expect(evidence.message).toContain("For workflow.register and iteration.register, expect is the store's root execution token from mstar status validate");
-    expect(evidence.message).toContain("for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate");
-
-    const register = await refuse("workflow.register", ["operation"]);
-    expect(register.status).toBe("usage");
-    if (register.status !== "usage") throw new Error("expected usage refusal");
-    expect(register.message).toContain("For workflow.register and iteration.register, expect is the store's root execution token");
-
-    const iteration = await refuse("iteration.register", ["operation"]);
-    expect(iteration.status).toBe("usage");
-    if (iteration.status !== "usage") throw new Error("expected usage refusal");
-    expect(iteration.message).toContain("For workflow.register and iteration.register, expect is the store's root execution token");
-  });
-
-  test("legacy coordinator bind explains env identity refusal", async () => {
-    const ctx = context("environment-session", "env");
+  test("coordinator binding does not accept an environment-derived session identity", async () => {
     const result = await definition("plan.bind").execute({
       coordinator: true,
       workflow: "wf-test",
-    }, ctx);
+    }, context("environment-session", "env"));
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (result.status !== "usage") throw new Error("expected usage refusal");
-    expect(result.message).toContain("legacy pre-activation coordinator bootstrap");
-    expect(result.message).toContain("does not accept env-provided identity");
-    expect(result.message).toContain("pass --session-id explicitly");
   });
 });

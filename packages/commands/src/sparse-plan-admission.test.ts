@@ -334,16 +334,20 @@ describe("sparse plan intent admission", () => {
     expect(envelope.message).toContain("runtime session identity");
   });
 
-  test("an active operation without an operation id refuses as usage before any engine contact", async () => {
-    const { repoRoot, planRef } = await buildFixture("sparse-no-operation");
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), progress: PROGRESS }, PLAN_PM_ID);
-    // The operation id is the other caller-owned field the ACTIVE route cannot
-    // derive: this usage gate is the sibling of the runtime-identity check and
-    // fires before any store read, so nothing executes and the ref's binding
-    // is never consulted.
-    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (envelope.status !== "usage") throw new Error(`expected usage, got ${envelope.status}`);
-    expect(envelope.message).toContain("active operation requires an operation id");
+  test("an active progress update without an operation id persists the plan state", async () => {
+    const { repoRoot, planRef } = await buildFixture("sparse-derived-operation");
+    const progress = { ...PROGRESS, summary: "persisted without explicit operation id" };
+    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), progress }, PLAN_PM_ID);
+    expect(envelope.status).toBe("ok");
+    const stored = await readExecutionPlan(
+      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: PLAN_PM_ID, role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID }),
+      planRef,
+      PLAN_ID,
+    );
+    const storedPlan = stored.data.plan as { status?: unknown };
+    const storedProgress = stored.data.coordination?.progress as { summary?: unknown } | undefined;
+    expect(storedPlan.status).toBe("InProgress");
+    expect(storedProgress?.summary).toBe(progress.summary);
   });
 
   test("a live foreign holder's reference is refused instead of being adopted", async () => {
