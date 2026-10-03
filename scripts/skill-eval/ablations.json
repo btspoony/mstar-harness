@@ -1440,7 +1440,7 @@
     "supersededBaselineSha": "c4e338a02744bc28453e13f6981bd635f1b2158a",
     "baseSha": "c42c16b4ac4453eb6dde061aad8bc6c16afb53e8",
     "baselineRef": "origin/main",
-    "note": "Reviewed Route B re-freeze on 2026-10-04 for issue #357. The prior BASE is unreachable after history rewrite; its pinned BASE-tree blobs cannot be verified. beforeSha256 now pins the reachable origin/main BASE blobs, and afterSha256 remains the current owner bytes. This BASE post-dates the historical removal of some anchors, so their absence check is a reintroduction/permanence guard, not proof of that historical removal.",
+    "note": "Reviewed Route B re-freeze on 2026-10-04 for issue #357. The prior BASE is unreachable after history rewrite; its pinned BASE-tree blobs cannot be verified. beforeSha256 now pins the reachable origin/main BASE blobs, and afterSha256 remains the current owner bytes. This BASE post-dates the historical removal of some anchors, so their absence check is a reintroduction/permanence guard, not proof of that historical removal. The closure gate is manual-run only: CI does not execute scripts/skill-eval, so drift or reintroduction is surfaced only by a local run.",
     "removedAnchorSemantics": "permanence guard against reintroduction; historical removal was not re-proven against this replacement BASE"
   }
 }
