@@ -912,6 +912,25 @@ function gitObjectType(sha: string): string {
   return execFileSync("git", ["-C", REPO_ROOT, "cat-file", "-t", sha], { encoding: "utf8" }).trim();
 }
 
+function assertClosureBaseIsOriginMainAncestor(baseSha: string): void {
+  let originMainSha: string;
+  try {
+    originMainSha = execFileSync(
+      "git",
+      ["-C", REPO_ROOT, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+  } catch {
+    throw new Error("closure baseline ancestry check requires the origin/main ref — run `git fetch origin` before running the closure gate");
+  }
+
+  execFileSync(
+    "git",
+    ["-C", REPO_ROOT, "merge-base", "--is-ancestor", baseSha, originMainSha],
+    { stdio: "ignore" },
+  );
+}
+
 describe("A5 ablation inventory (frozen)", () => {
   test("inventory parses: schema, enums, and per-row field contract", () => {
     expect(ablations.schemaVersion).toBe(1);
@@ -941,11 +960,7 @@ describe("A5 ablation inventory (frozen)", () => {
   });
 
   test("reviewed re-freeze: BASE ancestry, beforeSha256 blobs, and current anchor states are enforced", () => {
-    expect(() => execFileSync(
-      "git",
-      ["-C", REPO_ROOT, "merge-base", "--is-ancestor", CLOSURE_PIN_BASE_SHA, "origin/main"],
-      { stdio: "ignore" },
-    )).not.toThrow();
+    assertClosureBaseIsOriginMainAncestor(CLOSURE_PIN_BASE_SHA);
     for (const rule of ablations.rules) {
       const abs = join(REPO_ROOT, rule.owner);
       expect(existsSync(abs), `${rule.ruleId} owner ${rule.owner}`).toBe(true);
