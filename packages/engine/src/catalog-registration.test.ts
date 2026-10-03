@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
+import { closeFileWorkflow } from "./coordination.js";
 import { getCatalog, listCatalog, registerCatalogEntity } from "./catalog.js";
 import {
   CatalogRegistrationError,
@@ -437,7 +438,7 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect((await listCatalog(context, {})).total).toBe(1);
   });
 
-  test("a committed registration replay refuses while a terminal snapshot remains root-registered", async () => {
+  test("a committed registration replay refuses until the terminal close unregisters the workflow", async () => {
     const { harnessDir, context } = await fixture("terminal-replay-");
     const request = planRequest({ harnessDir, operationId: "op-terminal-replay", expectedCatalogRevision: 0 });
     const receipt = await registerCatalogExecution(context, request);
@@ -450,9 +451,13 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     await expect(registerCatalogExecution(context, request)).rejects.toMatchObject({
       name: "CatalogRegistrationError",
       code: "catalog.registration-terminal-lifecycle",
-      message: expect.stringContaining("retry after the close sequence finishes, or route through catalog reconcile"),
+      message: expect.stringContaining("mstar status workflow-close --workflow wf-plan-1 --harness"),
     });
-    expect(receipt.operationId).toBe("op-terminal-replay");
+
+    // An already-terminal close is the supported unregister-only recovery.
+    const close = await closeFileWorkflow({ harnessRoot: harnessDir, workflowId: "wf-plan-1", endedAt: "2026-10-04" });
+    expect(close).toMatchObject({ outcome: "already-terminal", unregistered: true });
+    expect(await registerCatalogExecution(context, request)).toEqual(receipt);
   });
 
   test("interrupted registration \u2014 recovers a crash after the catalog publish: the pending marker is finished without republishing", async () => {

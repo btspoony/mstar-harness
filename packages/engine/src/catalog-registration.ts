@@ -1077,7 +1077,7 @@ function assertRegistrationEffectHeld(row: JournalRow, harnessDir: string): void
   ) {
     throw new CatalogRegistrationError(
       "catalog.registration-terminal-lifecycle",
-      `workflow ${JSON.stringify(workflow.workflowId)} has a terminal lifecycle snapshot while its root register entry remains present during the close window; retry after the close sequence finishes, or route through catalog reconcile`,
+      `workflow ${JSON.stringify(workflow.workflowId)} has a terminal lifecycle snapshot while its root register entry remains present during the close window; let an in-flight close finish, or if it was interrupted re-run the supported \`mstar status workflow-close --workflow ${workflow.workflowId} --harness ${harnessDir}\` action, then retry this registration`,
     );
   }
 }
