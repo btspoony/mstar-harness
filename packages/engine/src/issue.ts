@@ -12,7 +12,7 @@ import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "
 import type { CoordinatorBinding, RowCoordination } from "./coordination-write.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
 import { rowPlanIds } from "./status.js";
-import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import {
   WORKFLOW_SNAPSHOT_FILE,
   isTerminalSnapshot,
@@ -693,9 +693,20 @@ function insertOccurrence(
   return row.id;
 }
 
+export function assertIssueProvenanceSchema(db: StoreDb): void {
+  const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
+  if ((schema?.version ?? 0) < MIGRATIONS.length) {
+    throw new IssueError(
+      "milestone.schema-outdated",
+      `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store safe-upgrade" first.`,
+    );
+  }
+}
+
 function insertCaptureProvenance(db: StoreDb, issueId: string, cols: OccurrenceColumns): void {
+  assertIssueProvenanceSchema(db);
   db.prepare(
-    "insert into provenance(issue_id, kind, target, source_hash) values (?, ?, ?, ?)",
+    "insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, 'unscoped')",
   ).run(issueId, "capture", cols.sourceIdentity, sha256(cols.occurrenceKey));
 }
 
@@ -1094,6 +1105,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
+    assertIssueProvenanceSchema(db);
     // FW-6: same stage gate as listIssues — a staged store is refused, never
     // served as read authority.
     assertIssueStoreActive(db);
@@ -1527,6 +1539,7 @@ export function assertClosureAuthority(disposition: TerminalDisposition, evidenc
 }
 
 function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
+  assertIssueProvenanceSchema(db);
   const rows = db
     .prepare("select distinct target from provenance where issue_id = ? and kind = 'plan' and origin = 'scoped' order by target")
     .all(issueId) as Array<{ target: string }>;
@@ -1621,6 +1634,7 @@ export async function triageIssue(
  * reads through the transaction it already owns.
  */
 export function assertIssueLinkedToPlanOn(db: StoreDb, issueId: string, planId: string): void {
+  assertIssueProvenanceSchema(db);
   const linked = db
     .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
     .get(issueId, planId) as { ok: number } | undefined;
@@ -1806,9 +1820,29 @@ export function linkIssueOn(
   link: IssueLink,
   mutation: AuthorizedIssueMutation,
   composed?: ComposedTransactionRevision,
-  options: { origin?: "scoped" | "unscoped" } = {},
 ): IssueReceipt {
-  const origin = options.origin ?? "unscoped";
+  return linkIssueOnWithOrigin(db, issueId, link, mutation, composed, "unscoped");
+}
+
+/** Internal plan-scoped writer; callers must establish plan authority first. */
+export function linkIssueScopedOn(
+  db: StoreDb,
+  issueId: string,
+  link: IssueLink,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
+  return linkIssueOnWithOrigin(db, issueId, link, mutation, composed, "scoped");
+}
+
+function linkIssueOnWithOrigin(
+  db: StoreDb,
+  issueId: string,
+  link: IssueLink,
+  mutation: AuthorizedIssueMutation,
+  composed: ComposedTransactionRevision | undefined,
+  origin: "scoped" | "unscoped",
+): IssueReceipt {
   const hash = requestHash("linkIssue", {
     issueId,
     link,
@@ -1857,27 +1891,22 @@ export function linkIssueOn(
   } else {
     const target = requireNonblank("target", link.target);
     const sourceHash = sha256(lengthDelimited([link.kind, target]));
-    const prior = db
-      .prepare("select origin from provenance where issue_id = ? and kind = ? and target = ?")
-      .get(issueId, link.kind, target) as { origin: "scoped" | "unscoped" } | undefined;
-    if (prior) {
-      if (origin === "scoped" && prior.origin === "unscoped") {
-        db.prepare("update provenance set origin = 'scoped' where issue_id = ? and kind = ? and target = ?")
-          .run(issueId, link.kind, target);
-      } else {
-        const receipt: IssueReceipt = {
-          issueId,
-          revision: issue.revision,
-          storeRevision: readMeta(db).revision,
-          created: false,
-        };
-        recordOperation(db, mutation.operationId, hash, receipt, at);
-        return receipt;
-      }
-    } else {
-      db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, ?)")
-        .run(issueId, link.kind, target, sourceHash, origin);
+    assertIssueProvenanceSchema(db);
+    const existing = db
+      .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ? and origin = ?")
+      .get(issueId, link.kind, target, origin) as { ok: number } | undefined;
+    if (existing) {
+      const receipt: IssueReceipt = {
+        issueId,
+        revision: issue.revision,
+        storeRevision: readMeta(db).revision,
+        created: false,
+      };
+      recordOperation(db, mutation.operationId, hash, receipt, at);
+      return receipt;
     }
+    db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, ?)")
+      .run(issueId, link.kind, target, sourceHash, origin);
   }
 
   const revision = issue.revision + 1;
@@ -1893,9 +1922,20 @@ export async function linkIssue(
   issueId: string,
   link: IssueLink,
   mutation: MutationContext,
-  options: { origin?: "scoped" | "unscoped" } = {},
 ): Promise<IssueReceipt> {
   requireCaptureSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
-  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation, undefined, options));
+  return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
+}
+
+/** Internal plan-scoped writer; the file transport verifies its plan session before calling. */
+export async function linkIssueScoped(
+  context: StoreContext,
+  issueId: string,
+  link: IssueLink,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
+  assertIssueLinkVocabulary(link);
+  return withWrite(context, (handle) => linkIssueOnWithOrigin(handle.db, issueId, link, mutation, undefined, "scoped"));
 }

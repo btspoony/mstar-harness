@@ -46,7 +46,7 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { openStore, type StoreContext } from "./store-db.js";
-import { IssueError } from "./issue.js";
+import { assertIssueProvenanceSchema, IssueError } from "./issue.js";
 import {
   normalizeSeverity,
   validateResidual,
@@ -259,6 +259,7 @@ export async function findingsCleanupGate(
         `The issue store is ${meta && typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
       );
     }
+    assertIssueProvenanceSchema(db);
     const rows = db
       .prepare(
         "select issues.id as id, issues.severity as severity from issues " +

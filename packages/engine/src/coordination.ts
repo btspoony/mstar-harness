@@ -162,11 +162,12 @@ import {
 } from "./store-db.js";
 import {
   IssueError,
+  assertIssueProvenanceSchema,
   assertCaptureRequest,
   assertPlanIssueSession,
   captureIssue,
   closeIssue,
-  linkIssue,
+  linkIssueScoped,
   type CaptureInput,
   type ClosureEvidence,
   type TerminalDisposition,
@@ -4291,7 +4292,7 @@ async function mutateResidualAdd(
         // idempotent, so a retry after a partial failure heals instead of
         // leaving an unlinked issue the plan can never close.
         assertPlanIssueSession(context, sessionPath);
-        const link = await linkIssue(
+        const link = await linkIssueScoped(
           context,
           capture.issueId,
           { kind: "plan", target: scope.planId },
@@ -4301,7 +4302,6 @@ async function mutateResidualAdd(
             sessionFile: sessionPath,
             expectedRevision: capture.revision,
           },
-          { origin: "scoped" },
         );
         reportExternalCommit(
           `issue ${capture.issueId} linked to plan ${scope.planId} (occurrence ${entry.occurrenceKey})`,
@@ -4349,6 +4349,7 @@ async function mutateResidualAdd(
 async function assertIssueLinkedToPlan(context: StoreContext, issueId: string, planId: string): Promise<void> {
   const handle = await openStore(context, "read");
   try {
+    assertIssueProvenanceSchema(handle.db);
     const linked = handle.db
       .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
       .get(issueId, planId) as { ok: number } | undefined;

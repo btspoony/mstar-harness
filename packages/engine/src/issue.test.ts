@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeExecutionAuthority } from "./execution-store.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeStore, openStore, upgradeStore, type StoreContext } from "./store-db.js";
 import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
@@ -21,6 +21,7 @@ import {
   getIssue,
   linkIssue,
   listIssues,
+  linkIssueScoped,
   triageIssue,
   type CaptureInput,
   type Disposition,
@@ -77,6 +78,25 @@ function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
 function mut(operationId: string, actor = "project-manager"): MutationContext {
   return { operationId, actor };
 }
+
+test("origin-dependent issue reads refuse schema 7 and work after safe upgrade", async () => {
+  const context = ctx("origin-schema-gate-");
+  await initializeStore(context).then((handle) => handle.close());
+  const created = await captureIssue(context, baseInput({ occurrenceKey: "schema-origin" }), mut("schema-origin-capture"));
+  const old = await openStore(context, "write");
+  old.db.exec("alter table provenance drop column origin; delete from schema_version where version=8");
+  old.close();
+
+  await expect(getIssue(context, created.issueId)).rejects.toMatchObject({
+    name: "IssueError",
+    code: "milestone.schema-outdated",
+    message: expect.stringContaining("mstar store safe-upgrade"),
+  });
+
+  expect(await upgradeStore(context)).toEqual({ schemaVersion: 8 });
+  const detail = await getIssue(context, created.issueId);
+  expect(detail.disposition).toBe("open");
+});
 
 /** Observation half of `baseInput`; a recurrence differs only in these fields. */
 function occInput(overrides: Partial<OccurrenceInput> = {}): OccurrenceInput {
@@ -655,9 +675,13 @@ describe("issue dispositions, revisions, and relations", () => {
     const triaged = await triageIssue(context, issue.issueId, { severity: "medium", reason: "reclassified" }, {
       operationId: "actor-only-triage", actor: "project-manager", expectedRevision: issue.revision,
     });
-    const linked = await linkIssue(context, issue.issueId, { kind: "plan", target: "unregistered-plan-label" }, {
-      operationId: "actor-only-link", actor: "project-manager", expectedRevision: triaged.revision,
-    });
+    const linked = await Reflect.apply(linkIssueFromIndex, undefined, [
+      context,
+      issue.issueId,
+      { kind: "plan", target: "unregistered-plan-label" },
+      { operationId: "actor-only-link", actor: "project-manager", expectedRevision: triaged.revision },
+      { origin: "scoped" },
+    ]);
     const superseded = await closeIssue(context, issue.issueId, "superseded", {
       reason: "replaced", references: [], canonicalIssueId: target.issueId,
     }, { operationId: "actor-only-supersede", actor: "project-manager", expectedRevision: linked.revision });
@@ -665,7 +689,12 @@ describe("issue dispositions, revisions, and relations", () => {
     expect(superseded.revision).toBe(issue.revision + 3);
     const detail = await getIssue(context, issue.issueId);
     expect(detail.disposition).toBe("superseded");
-    expect(detail.provenance).toContainEqual(expect.objectContaining({ kind: "plan", target: "unregistered-plan-label" }));
+    expect(detail.provenance).toContainEqual(expect.objectContaining({ kind: "capture", origin: "unscoped" }));
+    expect(detail.provenance).toContainEqual(expect.objectContaining({
+      kind: "plan",
+      target: "unregistered-plan-label",
+      origin: "unscoped",
+    }));
     expect(detail.severity).toBe("medium");
     expect(detail.transitions[0]?.actor).toBe("project-manager");
   });
@@ -819,19 +848,17 @@ describe("issue dispositions, revisions, and relations", () => {
     const authority = await liveAuthority("relation-multiplan-");
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-mp"));
-    const afterPlan1 = await linkIssue(
+    const afterPlan1 = await linkIssueScoped(
       context,
       created.issueId,
       { kind: "plan", target: authority.planId },
       pmMut(authority, "link-a", { expectedRevision: created.revision }),
-      { origin: "scoped" },
     );
-    const afterPlan2 = await linkIssue(
+    const afterPlan2 = await linkIssueScoped(
       context,
       created.issueId,
       { kind: "plan", target: authority.peerPlanId },
       pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision }),
-      { origin: "scoped" },
     );
     await expect(
       closeIssue(
@@ -863,12 +890,11 @@ describe("issue dispositions, revisions, and relations", () => {
     const authority = await liveAuthority("relation-unscoped-plan-");
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-unscoped-plan"));
-    const linked = await linkIssue(
+    const linked = await linkIssueScoped(
       context,
       created.issueId,
       { kind: "plan", target: authority.planId },
       pmMut(authority, "unscoped-primary", { expectedRevision: created.revision }),
-      { origin: "scoped" },
     );
     await linkIssue(
       context,

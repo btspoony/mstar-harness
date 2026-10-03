@@ -139,7 +139,7 @@ import {
   captureIssueOn,
   closeIssueOn,
   issueWriteSeat,
-  linkIssueOn,
+  linkIssueScopedOn,
   storeRevisionOn,
   IssueError,
   type CaptureInput,
@@ -1468,7 +1468,7 @@ export async function residualAddExecutionPlan(
       // residual-close is checked against, and both verbs are idempotent, so a
       // retry converges instead of leaving an unlinked issue the plan can never
       // close.
-      linkIssueOn(
+      linkIssueScopedOn(
         tx.db,
         capture.issueId,
         { kind: "plan", target: planId },
@@ -1478,7 +1478,6 @@ export async function residualAddExecutionPlan(
           expectedRevision: capture.revision,
         },
         composed,
-        { origin: "scoped" },
       );
     }
     advancePlanRowRevision(tx, witness);

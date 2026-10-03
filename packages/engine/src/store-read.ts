@@ -30,7 +30,7 @@ import {
   type ExecutionReadSelection,
 } from "./execution-read.js";
 import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
-import { IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
+import { assertIssueProvenanceSchema, IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
@@ -744,6 +744,7 @@ function parseEvidenceText(json: string): string[] {
 
 function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   // Same pre-migration-7 tolerance as the page read above.
+  assertIssueProvenanceSchema(db);
   const milestoneColumn = issuesMilestoneColumn(db) ? ", milestone_id" : "";
   const issue = db
     .prepare(

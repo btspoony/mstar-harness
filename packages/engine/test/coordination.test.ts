@@ -395,7 +395,7 @@ async function linkedOpenIssues(fixture: Fixture, planId: string): Promise<Array
     return handle.db
       .prepare(
         "select issues.id as id, issues.severity as severity, issues.disposition as disposition from issues " +
-          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
           "where issues.disposition = 'open' order by issues.id asc",
       )
       .all(planId) as Array<{ id: string; severity: string; disposition: string }>;
@@ -1985,6 +1985,17 @@ describe("issue-authority — scoped plan issue operations (G2a)", () => {
     // plan only, and no legacy register file was created anywhere.
     const open = await linkedOpenIssues(fixture, PLAN_ID);
     expect(open.map((issue) => issue.id)).toEqual(["I-000001", "I-000002"]);
+    const provenance = await openStore({ harnessDir: fixture.harness }, "read");
+    try {
+      expect(
+        provenance.db.prepare("select kind, origin from provenance where issue_id='I-000001' order by kind").all(),
+      ).toEqual([
+        { kind: "capture", origin: "unscoped" },
+        { kind: "plan", origin: "scoped" },
+      ]);
+    } finally {
+      provenance.close();
+    }
     expect(existsSync(fixture.registerPath)).toBe(false);
     const peerView = await readPlanCoordination(fixture.peerSession, PEER_PLAN_ID, fixture.root);
     // No register byte version exists any more: the view reports the row's own

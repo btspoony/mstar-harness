@@ -274,6 +274,9 @@ const EXECUTION_MIGRATION_VERSION =
   MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 /** The migration that introduced the catalog authority (never a magic number). */
 const CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
+/** The migration that introduced provenance origin. */
+const PROVENANCE_ORIGIN_MIGRATION_VERSION =
+  MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
 
 /** §4.3: the canonical control harness root that owns this context's store. */
 function controlRootOf(context: StoreContext): string {
@@ -454,7 +457,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "issue",
     table: "provenance",
-    columns: ["id", "issue_id", "kind", "target", "source_hash", "legacy_project", "legacy_bucket", "legacy_entry_id", "legacy_json", "imported_at"],
+    columns: ["id", "issue_id", "kind", "target", "source_hash", "origin", "legacy_project", "legacy_bucket", "legacy_entry_id", "legacy_json", "imported_at"],
     orderBy: "id",
     key: (row) => `provenance:${text(row, "id")}`,
   },
@@ -622,7 +625,7 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   },
 ];
 
-type TableAvailability = { catalog: boolean; execution: boolean };
+type TableAvailability = { catalog: boolean; execution: boolean; provenanceOrigin: boolean };
 
 function available(table: AuthorityTable, availability: TableAvailability): boolean {
   if (table.requires === "catalog") return availability.catalog;
@@ -636,12 +639,15 @@ function readAuthorityRows(db: StoreDb, availability: TableAvailability): Author
   const seen = new Set<string>();
   for (const table of AUTHORITY_TABLES) {
     if (!available(table, availability)) continue;
-    const found = db.prepare(`select ${table.columns.join(", ")} from ${table.table} order by ${table.orderBy}`).all() as Array<
+    const columns = availability.provenanceOrigin
+      ? table.columns
+      : table.columns.filter((column) => column !== "origin");
+    const found = db.prepare(`select ${columns.join(", ")} from ${table.table} order by ${table.orderBy}`).all() as Array<
       Record<string, unknown>
     >;
     for (const raw of found) {
       const projected: Record<string, unknown> = {};
-      for (const column of table.columns) projected[column] = raw[column];
+      for (const column of columns) projected[column] = raw[column];
       const key = table.key(projected);
       if (seen.has(`${table.domain}\u0000${key}`)) {
         throw corrupt(`two ${table.table} rows share the inventory key ${JSON.stringify(key)}; the loss inventory cannot be trusted`);
@@ -988,6 +994,7 @@ async function readLiveStore(context: StoreContext, what: string): Promise<LiveR
       const availability: TableAvailability = {
         catalog: handle.schemaVersion >= CATALOG_MIGRATION_VERSION,
         execution: handle.schemaVersion >= EXECUTION_MIGRATION_VERSION,
+        provenanceOrigin: handle.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
       };
       // Verified before the inventory is handed back: the capability path read an
       // image of a store with no `-wal`, and that image only IS the live store
@@ -1256,6 +1263,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
   const availability: TableAvailability = {
     catalog: live.schemaVersion >= CATALOG_MIGRATION_VERSION,
     execution: live.schemaVersion >= EXECUTION_MIGRATION_VERSION,
+    provenanceOrigin: live.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
   };
   const copy = await readCopyRows(point, availability);
 

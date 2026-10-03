@@ -27,7 +27,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { withProtectedWrite } from "./coordination-write.js";
-import { captureIssue, getIssue, listIssues, linkIssue, type CaptureInput } from "./issue.js";
+import { captureIssue, getIssue, listIssues, linkIssue, linkIssueScoped, type CaptureInput } from "./issue.js";
 import { findingsCleanupGate } from "./project.js";
 import { createFsStore, resolveArtifactPath, type ArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
@@ -236,9 +236,9 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
       operationId: "cap-scoped-link",
       actor: "project-manager",
     });
-    await linkIssue(context, scoped.issueId, { kind: "plan", target: "plan-b" }, {
+    await linkIssueScoped(context, scoped.issueId, { kind: "plan", target: "plan-b" }, {
       operationId: "scoped-link", actor: "project-manager", expectedRevision: scoped.revision,
-    }, { origin: "scoped" });
+    });
     expect((await findingsCleanupGate(context, "plan-b", { mode: "zero-residual" })).violations).toHaveLength(1);
 
     const historical = await captureIssue(context, finding("historical-link"), {
