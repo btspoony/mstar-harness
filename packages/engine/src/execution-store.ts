@@ -1327,6 +1327,48 @@ export async function readExecutionState(context: StoreContext): Promise<Executi
     epoch: tx.epoch,
   }));
 }
+/**
+ * Read the cleanup safety universe from ACTIVE authority, including retained
+ * workflow rows that are no longer members of the root registry.
+ */
+export async function readExecutionCleanupSnapshots(
+  context: StoreContext,
+  workflowId: string,
+): Promise<{ selected: WorkflowSnapshot; workflows: readonly WorkflowSnapshot[] }> {
+  if (!isNonEmptyString(workflowId)) throw new CoordinationError("coordination.invalid-input", "workflowId must be non-empty");
+  return withExecutionReadTransaction(context, (tx) => {
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const registered = readExecutionGraph(tx.db, store, tx.execution);
+    const byId = new Map<string, WorkflowSnapshot>();
+    for (const workflow of registered.workflows) byId.set(workflow.state.id, cleanupSnapshot(workflow));
+    const retained = tx.db.prepare("select workflow_id from execution_workflows order by rowid").all() as Array<{ workflow_id?: unknown }>;
+    for (const row of retained) {
+      const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+      if (!byId.has(id)) byId.set(id, cleanupSnapshot(readWorkflowView(tx.db, store, id)));
+    }
+    const selected = byId.get(workflowId);
+    if (selected === undefined) {
+      throw new CoordinationError(
+        "coordination.workflow-not-found",
+        `the execution authority holds no workflow ${JSON.stringify(workflowId)}.`,
+        { workflow_id: workflowId },
+      );
+    }
+    return { selected, workflows: [...byId.values()] };
+  });
+}
+
+function cleanupSnapshot(workflow: ExecutionState["workflows"][number]): WorkflowSnapshot {
+  return {
+    ...(workflow.state as unknown as WorkflowSnapshot),
+    ...(workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease }),
+    plans: workflow.plans.map(({ plan, coordination, executionLease }) => ({
+      ...plan,
+      ...(coordination === null ? {} : { coordination }),
+      ...(executionLease?.status === "held" ? { execution_lease: executionLease } : {}),
+    })),
+  };
+}
 
 /**
  * §3 the same consistent state read INSIDE a transaction the caller already
