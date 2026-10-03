@@ -355,7 +355,12 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
 
     const gate = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "6"], fixture);
     expect(gate.exitCode).toBe(1);
-    expect(jsonOf(gate).code).toBe("execution.consumer-not-ready");
+    const phase6 = jsonOf(gate);
+    expect(phase6.code).toBe("PHASE6_ROOT_ENTRY_PRESENT");
+    expect(phase6.details).toMatchObject({ gate: { violations: expect.arrayContaining([
+      expect.objectContaining({ code: "PHASE6_NOT_TERMINAL" }),
+      expect.objectContaining({ code: "PHASE6_ROOT_ENTRY_PRESENT" }),
+    ]) } });
 
     const badPhase = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--phase", "7"], fixture);
     expect(badPhase.exitCode).toBe(2);
