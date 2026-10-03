@@ -312,6 +312,7 @@ export {
   evaluatePhaseGate,
   evaluatePostMergeClose,
   evaluatePostMergeCloseFromExecutionAuthority,
+  readRegisteredWorkflowFromExecutionAuthority,
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
   pushCadenceProbe,

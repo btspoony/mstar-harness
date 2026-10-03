@@ -701,6 +701,66 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
  * the gate answers for workflows the store knows about, never inventing a
  * verdict for an unknown id.
  */
+/** Read just the registered workflow and its plan rows for ACTIVE phase gates. */
+export async function readRegisteredWorkflowFromExecutionAuthority(
+  context: StoreContext,
+  workflowId: string,
+): Promise<WorkflowSnapshot | null> {
+  const handle = await openStore(context, "read");
+  try {
+    handle.db.exec("begin deferred");
+    try {
+      const authority = handle.db.prepare(
+        "select authority_state from execution_meta where id = 1",
+      ).get() as { authority_state: string } | undefined;
+      if (authority?.authority_state !== "active") {
+        throw new StoreError(
+          "execution.consumer-not-ready",
+          "the execution authority is not ACTIVE; this gate cannot answer from non-authoritative execution data",
+        );
+      }
+      const registration = handle.db.prepare(
+        "select entry_json from execution_registry where workflow_id = ?",
+      ).get(workflowId) as { entry_json: string } | undefined;
+      if (registration === undefined) return null;
+      let entry: unknown;
+      try {
+        entry = JSON.parse(registration.entry_json);
+      } catch {
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' has malformed root registration JSON`);
+      }
+      if (!isPlainObject(entry) || entry.id !== workflowId) {
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' root registration identity is invalid`);
+      }
+      const row = handle.db.prepare(
+        "select state_json from execution_workflows where workflow_id = ?",
+      ).get(workflowId) as { state_json: string } | undefined;
+      if (row === undefined) return null;
+      let snapshot: WorkflowSnapshot;
+      try {
+        const parsed: unknown = JSON.parse(row.state_json);
+        if (!isPlainObject(parsed)) throw new Error("workflow state is not an object");
+        snapshot = parsed as unknown as WorkflowSnapshot;
+      } catch {
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' state is not a valid object`);
+      }
+      const planRows = handle.db.prepare(
+        "select state_json from execution_plans where workflow_id = ? order by ordinal",
+      ).all(workflowId) as Array<{ state_json: string }>;
+      try {
+        snapshot.plans = planRows.map(({ state_json }) => JSON.parse(state_json));
+      } catch {
+        throw new StoreError("store.corrupt", `workflow '${workflowId}' plan state is not valid JSON`);
+      }
+      return snapshot;
+    } finally {
+      try { handle.db.exec("commit"); } catch { /* read-only deferred txn */ }
+    }
+  } finally {
+    handle.close();
+  }
+}
+
 export async function evaluatePostMergeCloseFromExecutionAuthority(context: StoreContext, workflowId: string): Promise<GateResult> {
   const violations: ValidationResult[] = [];
   const handle = await openStore(context, "read");

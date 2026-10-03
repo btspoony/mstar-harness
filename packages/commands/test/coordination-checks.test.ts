@@ -250,6 +250,16 @@ async function completeAndUnregister(
       planState.status = "Done";
       store.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
         .run(JSON.stringify(planState), "wf-active-done", planId);
+      store.db.prepare(
+        "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, 'null', ?, ?)",
+      ).run("wf-unrelated-corrupt", "2026-09-02T00:00:00.000Z", "2026-09-02T00:00:00.000Z");
+      store.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
+        .run("wf-unrelated-corrupt", JSON.stringify({
+          id: "wf-unrelated-corrupt",
+          type: "plan",
+          started_at: "2026-09-02T00:00:00.000Z",
+          dir: "workflows/wf-unrelated-corrupt",
+        }));
     } finally {
       store.close();
     }

@@ -45,7 +45,7 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { evaluatePhaseGate, evaluatePostMergeClose, readJson, resolveHarnessDir } from "@mstar-harness/engine";
+import { evaluatePhaseGate, readJson, resolveHarnessDir } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -133,6 +133,22 @@ async function loadPhase6Evaluator(): Promise<Phase6Evaluator | null> {
   }
 }
 
+type FilePhase6Evaluator = (snapshot: unknown, root: unknown) => {
+  ok: boolean;
+  violations: ValidationResult[];
+};
+
+async function loadFilePhase6Evaluator(): Promise<FilePhase6Evaluator | null> {
+  try {
+    const engine = await import("@mstar-harness/engine");
+    return typeof engine.evaluatePostMergeClose === "function"
+      ? engine.evaluatePostMergeClose as FilePhase6Evaluator
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** §5: the refusal of this gate's retired input outside phase 6 (or `null` when file route answers). */
 async function executionNotReady(
   harnessDir: string,
@@ -187,7 +203,7 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
     description:
       "Evaluate the Morning Star iteration Phase transition gates (mstar-iteration): reads the workflow snapshot ({WORKFLOW_DIR}/<id>/snapshot.json — .mstarc workflow_dir honored, default {harness}/workflows; resolved from the session cwd) and delivery-compass.md frontmatter and runs the engine evaluatePhaseGate (all compass-registered plans Done, close entry checklist, PR-delivery exit checklist). " +
       "`phase` labels the intended transition (phase-2-execute / phase-3-close / phase-4-pr-delivery) for the report; `workflowId` is the workflow id (CLI parity, single safe path component) and `compassPath` is a file path resolved against the session cwd. " +
-      "While the control harness's execution authority is ACTIVE the workflow snapshot is retired as a persistence route and this gate refuses execution.consumer-not-ready (its input document carries the plan session bindings the DB adapter does not). " +
+      "While the control harness's execution authority is ACTIVE, phase 6 evaluates close facts from the DB authority; non-six compass forms retain the execution.consumer-not-ready refusal. File-form phase 6 remains available when the authority is not ACTIVE. " +
       "Use before iteration-close or PR delivery to confirm the gate state. Returns one line per violation as [severity] code: message (fix: …).",
     parameters: pi.zod
       .object({
@@ -252,7 +268,15 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
             const rootPath = join(harnessDir, "status.json");
             if (existsSync(rootPath)) rootDoc = readJson(rootPath);
           } catch { rootDoc = undefined; }
-          const gate = evaluatePostMergeClose(readJson(snapshotPath), rootDoc);
+          const evaluate = await loadFilePhase6Evaluator();
+          if (evaluate === null) {
+            return result(
+              "installed @mstar-harness/engine lacks evaluatePostMergeClose — upgrade the engine; CLI fallback: mstar iteration gate",
+              { phase: params.phase, workflow_id: params.workflowId, ok: false },
+              true,
+            );
+          }
+          const gate = evaluate(readJson(snapshotPath), rootDoc);
           return result(
             gate.ok ? "gate ok" : `phase "6" gate violations:\n${violationLines(gate.violations)}`,
             { phase: params.phase, workflow_id: params.workflowId, ok: gate.ok, violations: gate.violations },

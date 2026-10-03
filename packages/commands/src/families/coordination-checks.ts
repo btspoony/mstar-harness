@@ -197,16 +197,11 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
 
             const compassPath = path.resolve(context.cwd, input.compass!);
             if (!existsSync(compassPath)) return refused(id, "iteration.gate.compass-not-found", `compass file not found: ${compassPath}`);
-            const { readExecutionState } = await import("@mstar-harness/engine");
-            const state = (await readExecutionState({ harnessDir: root })).data;
-            const workflow = state.workflows.find((entry) => entry.state.id === input.workflow);
-            if (workflow === undefined) {
-              return refused(id, "iteration.gate.workflow-not-found", `workflow '${input.workflow}' not found in the execution authority graph`);
+            const { readRegisteredWorkflowFromExecutionAuthority } = await import("@mstar-harness/engine");
+            const snapshot = await readRegisteredWorkflowFromExecutionAuthority({ harnessDir: root }, input.workflow);
+            if (snapshot === null) {
+              return refused(id, "iteration.gate.workflow-not-found", `workflow '${input.workflow}' not found in the registered execution authority`);
             }
-            const snapshot = {
-              ...workflow.state,
-              plans: workflow.plans.map(({ plan }) => ({ id: plan.id, status: plan.status })),
-            };
             const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
               currentBranch: input.branch,
               specIntegrationBranch: input.integration,
