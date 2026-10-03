@@ -8,6 +8,8 @@ Each per-host bridge (`cursor-plan-mode-bridge.md`, `kimi-plan-mode-bridge.md`, 
 
 The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**. Morning Star **SSOT** lives on disk under **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`): the main plan in `{PLAN_DIR}/<plan-id>-<name>.md`, the plan registry in `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + per-lifecycle `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows + leases), the iteration compass under `{ITERATION_DIR}/…` when in a formal iteration. Mirror every durable plan artifact to the repo; never treat the host plan file/URI/UI alone as the handoff surface.
 
+**Iteration Phase 1 exception**: until the current-design prototype checkpoint passes, the session carrier is not a formal plan to mirror/register. Use § `mstar-iteration Phase 1 in Plan mode` below instead of the early formal dual-write/bootstrap sequence. Initialization and every package write still obey actual host permissions.
+
 ### Priority (hard)
 
 1. User explicit instructions (this turn)
@@ -72,11 +74,13 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 
 ## `mstar-iteration` Phase 1 in Plan mode (shared gate)
 
-- **Single plan session**: use **one** plan file (host or SSOT draft); iterate the **same** file in place with feedback-driven edits. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate.
-- **Do not** run Review & Edit or create the integration branch until the user approves implementation (host approval gate: **Build** / **`ExitPlanMode`** / plan resolve). Plan mode ≠ executing todos — approval is the Phase 1 executable gate (Review chain, lock, branch).
-- Prepare phase (`specify → clarify → plan`) still applies; the mirrored plan is the harness **`plan`** artifact, not a substitute for clarify.
-- Branch policy in the plan session: write **recommended** `iteration_base_branch` / `target_branch` (+ short rationale) into the plan — do **not** silently default to `main`/`master`.
-- Host plan approval is **not** Morning Star **Done**. Implementation still follows phase gates, per-task commits, QC, and QA per the SSOT plan.
+- **Single session-plan carrier**: keep one host plan file/URI (or the same permitted draft carrier when no host file exists). Before prototype approval, it carries research, prototype links/revision, feedback, recommended branch policy and pending todos — not formal compass/guides/plans/specs. Update it in place; a package prototype is a design artifact, not a second executable plan. If a duplicate carrier exists, consolidate into the original and remove the duplicate only when file permissions allow it.
+- **Prototype first**: follow **`mstar-iteration/references/phase-1-prepare.md` §1.2 → §1.2.5 → §1.3**. Preserve `direction-lock` before formal drafts. Interactive preparation persists and presents a plain-language visual HTML in the iteration package; feedback → communication → same-prototype update → re-presentation repeats until explicit approval of the **current revision**. Feedback-close and earlier-version approval do not authorize drafting. An explicit autonomous opt-in retains an appropriate HTML/Markdown/JSON prototype with rationale and autonomous disposition, without routine human sign-off.
+- **Permissions are independent gates**: prototype design approval does not authorize Build / implementation. Obey the host's real Plan-mode write and invoke permissions; no shell, alternate tool, child or second plan may bypass them. Optional prototype specialist contributions occur only when invoke is allowed. Formal drafting follows the prototype checkpoint; Review & Edit / integration remain deferred until the host Build / `ExitPlanMode` / resolve gate permits them.
+- **Supported permission recovery**: if Plan mode only permits its session-plan file, retain the pending prototype path, design intent and next steps there; explain that no package prototype has been persisted/presented and no design gate has passed. Ask the user to use the active host's normal Build / exit / resolve control to continue **prototype preparation only**, not to approve an unseen design or start product implementation. Resume the same carrier in PM context, persist/show the prototype, finish its design checkpoint, then draft and invoke selected reviewers. If invoke is still unavailable, resume through a host entry exposing the required role tools, retaining the existing artifact paths; report the exact missing capability rather than fake returns.
+- **Selected Review & Edit**: follow §1.6 — record product-manager / architect include/skip reasons and reuse prototype contributions; invoke selected roles sequentially in that order, then mandatory writing-specialist last. No fake skip receipts, omitted-role markers or unresolved blocking questions. PM lock and integration follow actual returns.
+- Prepare (`specify → clarify → plan`) still applies. Recommended `iteration_base_branch` / `target_branch` (+ rationale) goes into the carrier without silent `main`/`master` defaults. Formal plans reference the prototype through existing `metadata.iteration_refs`.
+- Host plan approval is not Morning Star **Done**. Implementation still follows phase gates, per-task commits, QC and QA; this Phase 1 exception to early dual-write/bootstrap does not change ordinary per-plan behavior above.
 
 ## Anti-patterns (shared)
 
@@ -90,4 +94,4 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Host plan approval treated as Done authority | Check harness plan/status/QC/QA gates first |
 | Resume starts coding from host chat summary | Reload harness context and SSOT plan/status first |
-| Phase 1 Plan mode: Review / branch before Build | Keep Pre-Build document-only; execute those todos after approval |
+| Phase 1 Plan mode: formal drafts before prototype approval, or Review / branch before Build | Finish the current-design checkpoint first; use supported host permission-resume for restricted writes/invoke; never infer implementation permission from design approval |

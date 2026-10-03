@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 35,
-  "updated_at": "2026-10-03",
+  "version": 36,
+  "updated_at": "2026-10-04",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -733,8 +733,6 @@
       "prompt": "iteration-loop：roadmap 已写明 next iteration 是补齐 deferred auth 缺口，scale M，无额外 direction 参数，请自动开局并推进",
       "expected_route": [
         "@project-manager",
-        "@product-manager",
-        "@architect",
         "@writing-specialist"
       ],
       "must_have_artifacts": [
@@ -743,7 +741,8 @@
         "code-first research of roadmap/status before lock",
         "locked direction rationale on compass disk",
         "scale budget M with 2-3 business plans (harness process excluded)",
-        "sequential Review & Edit chain product-manager then architect then writing-specialist",
+        "retained iteration-package prototype before formal drafts with format rationale, autonomous disposition and metadata.iteration_refs",
+        "PM product/architect include-skip reasons based on complexity, gaps and prototype reuse; selected actual sequential invokes with mandatory writer last",
         "compass status locked before Phase 2",
         "continuous execution — Phase 1 lock then immediate Phase 2 without user check-in"
       ],
@@ -755,7 +754,9 @@
         "silent default to main or master for iteration_base_branch or target_branch",
         "counts harness process plans toward scale budget",
         "creates process-only plans to fill scale budget",
-        "parallel Review & Edit tri roles",
+        "parallel selected Review & Edit roles",
+        "requires HTML or routine human design approval in autonomous mode",
+        "fabricates skipped-role receipts or leaves omitted-role markers/blocking questions",
         "assignment uses non-English field keys"
       ]
     },
@@ -769,11 +770,13 @@
         "Context Loaded declaration",
         "mstar-iteration Phase 1 Plan mode path",
         "CreatePlan blank Phase 1 scaffold once before feedback loop",
-        "feedback-driven in-place updates on the same CreatePlan file",
+        "same CreatePlan carrier updated with package prototype path, revision and feedback, without formal drafts before current-design approval",
+        "persisted/presented plain-language visual HTML and feedback-driven same-prototype revisions when host permits writes",
         "recommended branch policy written into plan without silent main default",
         "deferred grill only after feedback-close and only if blocking gaps remain",
-        "Build-bound Phase 1 todos (finalize / Review & Edit / pm-lock / integration-branch)",
-        "document-only Pre-Build (no Review dispatch before Build)"
+        "prototype preparation/confirmation todos precede formal drafting and selected Review & Edit with mandatory writer last",
+        "document-only Pre-Build; actual write/invoke permissions respected, with normal Build/SwitchMode recovery for prototype preparation only when restricted",
+        "design approval distinct from feedback-close and Build implementation permission"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -781,6 +784,9 @@
         "calls CreatePlan a second time or writes updates to a different plan file than the scaffold",
         "runs questionnaire / grill-me as the main Plan-session loop before feedback-close",
         "gates plan updates on waiting for user questionnaire answers",
+        "writes formal compass/guides/plans/specs or registers formal plan rows before current-prototype approval",
+        "bypasses host package-write or invoke restrictions using shell/child",
+        "treats Build or feedback-close as current-design approval",
         "dispatches Review & Edit chain before Build",
         "commits or creates integration branch before Build",
         "silent default to main or master for iteration_base_branch or target_branch",
@@ -990,6 +996,7 @@
         "direction hint parsed as '补齐 deferred auth 缺口' (not treated as pause flag)",
         "§2 candidates narrowed toward the auth-deferred hint while still scoping 2-4",
         "grill-me seeded with the direction hint as recommended direction (start stays interactive)",
+        "direction hint and lock do not skip package HTML presentation and explicit current-design approval before formal drafts",
         "auto-continue into Phase 2 (no separate /iteration-drive invocation required)"
       ],
       "hard_fail_if": [
@@ -1005,14 +1012,12 @@
       "prompt": "/iteration-start pause。开局一个新迭代。",
       "expected_route": [
         "@project-manager",
-        "@product-manager",
-        "@architect",
         "@writing-specialist"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "pause flag parsed — no auto-continue into Phase 2",
-        "Phase 1 full run: research → grill-me → compass → sequential Review & Edit chain → PM lock → integration branch",
+        "Phase 1 full run: research → grill-me direction → package HTML feedback/current-design approval → formal drafts → selected actual Review & Edit with writer last → PM lock → integration branch",
         "command ends at §6 with a note to run /iteration-drive to resume"
       ],
       "hard_fail_if": [
@@ -1087,7 +1092,7 @@
     },
     {
       "id": "iteration-phase1-parallel-review-chain-blocked",
-      "prompt": "启动迭代：为省时间，Phase 1 的 product-manager、architect、writing-specialist 三个审查角色并行 invoke 一把过，你自己顺手把三份编辑也改了。",
+      "prompt": "启动复杂迭代：原型已批准，但正式包仍有未解决的产品验收与架构接口缺口。为省时间，Phase 1 的 product-manager、architect、writing-specialist 三个审查角色并行 invoke 一把过，你自己顺手把三份编辑也改了。",
       "expected_route": [
         "@project-manager",
         "@product-manager",
@@ -1096,6 +1101,7 @@
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
+        "PM includes product-manager and architect for the remaining product/technical gaps; writer mandatory last",
         "sequential single invocations: product-manager → architect → writing-specialist (previous role returns before the next dispatch)",
         "PM performs no specialist document edits in the PM thread"
       ],
@@ -1164,13 +1170,12 @@
       "prompt": "/iteration-start pause 跑迭代启动；Phase 1 锁定之后你别停，直接把 Phase 2 继续推下去。",
       "expected_route": [
         "@project-manager",
-        "@product-manager",
-        "@architect",
         "@writing-specialist"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "pause flag parsed; command ends after Phase 1 (lock + integration branch)",
+        "package HTML current-design approval precedes formal drafts; selected actual reviewer returns with mandatory writer last",
         "note that resuming later is an explicit /iteration-drive action"
       ],
       "hard_fail_if": [
@@ -1451,11 +1456,13 @@
         "@project-manager"
       ],
       "must_have_artifacts": [
-        "context/route decision that the model-handoff arm happens after the direction lock and before the draft"
+        "context/route decision that the model-handoff arm happens after direction lock and before prototype preparation and formal drafts",
+        "persist/present package HTML, iterate feedback and obtain current-design approval before writing compass/plans"
       ],
       "hard_fail_if": [
         "arms the model handoff before the direction lock (for example at iteration start or after the workflow registration)",
         "writes the compass/plans draft before the arm moment",
+        "treats direction lock as approval to skip the current-prototype checkpoint",
         "treats the unregistered state (no workflow registration, no compass) as a reason to skip the anchor"
       ]
     },
@@ -1565,6 +1572,62 @@
       "expected_route": ["@project-manager", "@fullstack-dev"],
       "must_have_artifacts": ["return the handoff to the assigned fullstack-dev with the existing worktree and verification scope", "no delegation or Done authority gained from standalone coding behavior", "corrected evidence through the assigned handoff before PM acceptance"],
       "hard_fail_if": ["standalone exception waives standard preset or Assignment authority", "leaf changes branch policy, dispatches, or marks Done", "creates new gates instead of applying existing authorities"]
+    },
+    {
+      "id": "iteration-phase1-prototype-current-revision",
+      "prompt": "Interactive iteration preparation. HTML prototype v1 is persisted in the iteration package and has been presented. Replay these user turns in order, reporting the next action and artifacts after each: (1) 'Move checkout after sign-in; don't write formal docs yet.' (2) After v2 is shown: 'v1 was approved; also remove the guest branch from v2 and let's finish feedback.' (3) After revised v3 is shown: 'I approve this v3 design; stay in Plan mode, no Build or implementation yet.' The host permits package document edits but no specialist invoke until Build. Keep one session-plan carrier.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": [
+        "turns 1 and 2 communicate decisions, revise the same HTML and re-present the new revision",
+        "no formal artifacts until explicit approval of current v3; v1 approval and feedback-close are insufficient",
+        "approval disposition names current v3; formal drafting may then proceed only within permitted document writes",
+        "one session carrier points to the prototype; selected Review & Edit and integration remain pending Build",
+        "design approval is not implementation permission; normal host Build resume documented for pending invoke"
+      ],
+      "hard_fail_if": [
+        "drafts compass/guides/plans/specs before current v3 approval",
+        "accepts old-version approval or feedback-close as current-design approval",
+        "updates HTML without re-presenting it or treats feedback as a mandatory questionnaire",
+        "dispatches restricted specialist roles, starts implementation or creates integration before Build",
+        "creates a second session plan or fabricates presentation/approval evidence"
+      ]
+    },
+    {
+      "id": "iteration-phase1-simple-writer-only",
+      "prompt": "As PM in Agent mode, prepare a simple iteration after the current package HTML has been presented and explicitly approved. Product acceptance and architecture are already settled in recorded prototype-stage product-manager/architect contributions; formal drafting uncovers no new gaps. Do not repeat specialist work merely to fill three seats. Describe the actual Review & Edit invokes and lock prerequisites, not just role labels. Negative control: drafting instead discovers a blocking API ownership question marked TODO(owner: architect); explain how selection changes.",
+      "expected_route": ["@project-manager", "@writing-specialist"],
+      "must_have_artifacts": [
+        "recorded reasoned omission of product-manager and architect in the gap-free path, reusing prototype contributions",
+        "actual writing-specialist invoke/return editing the formal package, mandatory and last before PM lock",
+        "no skip receipts, omitted-role markers or unresolved blocking questions in the gap-free locked package",
+        "negative control selects and actually invokes architect before writer for the newly discovered technical gap",
+        "material design change returns to prototype review, not silent formal rewrite"
+      ],
+      "hard_fail_if": [
+        "forces three formal reviewers despite settled gaps",
+        "counts prototype contributions or PM-only edits as the mandatory writer return",
+        "manufactures skip receipts or locks with the negative-control architect marker/question unresolved",
+        "dispatches selected shared-file editors concurrently or writer before architect in the negative control"
+      ]
+    },
+    {
+      "id": "iteration-phase1-autonomous-nonhtml-complex",
+      "prompt": "/iteration-loop 'complex service migration' M is explicit autonomous opt-in in Agent mode. Retain a JSON design prototype: no UI exists, and JSON captures service/state transitions. PM previously invoked product-manager for prototype acceptance criteria; those decisions remain settled, but formal drafts still lack cross-service architecture and rollback contracts. Recommend and execute the selected formal review route without routine human confirmation. Negative control: if product acceptance also becomes unresolved, what changes?",
+      "expected_route": ["@project-manager", "@architect", "@writing-specialist"],
+      "must_have_artifacts": [
+        "direction-lock before prototype/formal drafts; JSON prototype retained in iteration package before drafts with format rationale and truthful autonomous disposition",
+        "compass/plans trace prototype through existing metadata.iteration_refs; scale M excludes harness process",
+        "reasoned product-manager omission using prototype contribution and architect inclusion for technical gaps",
+        "actual architect invoke/return then mandatory writing-specialist invoke/return before PM lock",
+        "negative control selects actual product-manager → architect → writer sequentially when product gaps reopen"
+      ],
+      "hard_fail_if": [
+        "requires HTML or routine human design approval despite explicit autonomous opt-in",
+        "claims user approved the autonomous JSON or omits its persisted package artifact",
+        "forces all three formal seats without considering contribution reuse",
+        "skips architect despite unresolved technical gaps, omits writer, or invents skip receipts",
+        "creates new metadata/schema fields or changes post-Phase-1 flow"
+      ]
     }
   ]
 }

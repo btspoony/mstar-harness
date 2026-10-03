@@ -9,6 +9,8 @@
 - Cursor **Plan mode** is active (system guidance to use **CreatePlan** / **SwitchMode**).
 - Morning Star plugin or `/pm` is in use (`mstar-host`, `pm` skill, or `rules/mstar-cursor-plan-mode.mdc`).
 
+**New-iteration exception**: the Phase 1 section below overrides early formal bootstrap/mirroring and the ordinary CreatePlan body template. Keep the single early carrier non-formal until current-prototype approval; actual Plan write restrictions apply even to initialization.
+
 ## Before the first CreatePlan
 
 1. **Read** (minimum): `mstar-conventions`, `mstar-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
@@ -142,15 +144,15 @@ When starting a **new iteration** under Cursor Plan mode (host command may orche
 
 | Phase | Behavior | Forbidden |
 |-------|----------|-----------|
-| Early CreatePlan | After read-only research, **CreatePlan once** with blank Phase 1 scaffold + Build-bound todos; **record the returned plan file path** | Wait until direction lock finishes; call CreatePlan again later |
-| Feedback loop | User gives **direction / opinions only** (no questionnaire). Agent explores, recommends, and **edits that same plan file in place** (+ SSOT drafts). Absorb feedback → update again | Routine one-question-at-a-time interview; gate plan updates on user answers; write a second `*.plan.md`; open interview helpers before feedback-close |
-| Feedback-close | When user signals feedback done (e.g. 反馈结束 / 总结 / 准备 Build): if blocking gaps remain → **minimal** deferred interview on gaps only, still editing the **same** plan file; else ready for Build | Start the interview helper as the main Plan-session loop |
-| Pre-Build | Maintain documents only | Execute Review chain, or create `spec_integration_branch` |
-| Build | Finalize SSOT from the **same** CreatePlan body → sequential Review & Edit → PM lock → integration branch | Replay feedback/interview; finalize from a different plan URI than View Plan |
+| Early CreatePlan | After read-only research, **CreatePlan once** with a blank session carrier and pending preparation / Build-bound todos; record the returned path | Treat the carrier as a formal iteration draft; call CreatePlan again later |
+| Prototype feedback | Subject to actual write permissions, persist/present §1.2.5 package HTML; absorb opinions, communicate changes, revise the same prototype and re-present; update links/revision in the same CreatePlan file | Mandatory questionnaire; formal compass/guides/plans/specs before current-design approval; silent second plan |
+| Feedback-close / approval | Deferred minimal clarification only for blocking gaps after feedback-close; require explicit approval of the presented **current prototype** before formal drafts | Equate feedback-close, direction lock or old-version approval with current-design approval |
+| Pre-Build | Keep pending gated work in the carrier. If package writes/invoke are prohibited, use shared core permission recovery via normal **Build** / **SwitchMode** UX; resume prototype preparation, not product code | Bypass permission via shell/child; run formal Review chain or integration before Build |
+| Build | Reload PM context and resume the same carrier; finish prototype checkpoint if pending, then formal drafts → selected product/architect invokes → mandatory writer last → PM lock → integration | Treat Build as approval of unseen design; repeat resolved feedback; finalize from another URI; implement in PM thread |
 
-**Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session. Updates use file edit tools on that path. If a duplicate plan file was created by mistake: merge into the original, delete the duplicate, keep View Plan on the original.
+**Single CreatePlan URI (HARD)**: one CreatePlan per Phase 1 Plan session; updates use file edit tools on that returned path. The iteration-package HTML is a separate **prototype**, not a second plan. Consolidate accidental duplicate carriers into the original and remove duplicates only when permissions allow; keep View Plan on the original.
 
-**Bootstrap relationship**: ordinary per-plan work still uses `harness-init` / `spec-register` / `mirror-plan`. Phase 1 CreatePlan uses Phase 1 todos (`harness-init` → `direction-lock-arm` → `finalize-compass-plans` → review-edit seats → `pm-lock` → `integration-branch`). Snapshot `plans[]` rows should exist as drafts before Build when direction has converged.
+**Bootstrap relationship**: ordinary per-plan `harness-init` / `spec-register` / `mirror-plan` is unchanged. Phase 1 uses `harness-init` → `direction-lock-arm` → prototype preparation/confirmation → `finalize-compass-plans` → selected review-edit seats → mandatory writer → `pm-lock` → `integration-branch`. No formal snapshot plan rows before current-design approval; no writes beyond actual Plan permissions. Shared core defines supported recovery and design-vs-Build separation.
 
 **Helpers**: third-party interview helpers are **not** named here; host **command** layer may use them only after feedback-close when gaps remain.
 
