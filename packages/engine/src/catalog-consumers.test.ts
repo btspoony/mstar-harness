@@ -22,7 +22,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
-  EXECUTION_PIN_CONFLICT_CODE,
   assertExecutionCatalogPin,
   executionInputHash,
   readExecutionCatalogPin,
@@ -176,28 +175,25 @@ describe("catalog pin \u2014 a prepared execution keeps its frozen input", () =>
     expect(state.catalog_moved).toBe(false);
   });
 
-  test("catalog pin: a frozen input edited after preparation refuses and leaves both sides untouched", async () => {
-    const { context } = await withStore("pin-conflict-");
+  test("catalog pin: a frozen input edited after preparation keeps its recorded pin, neither side rewritten", async () => {
+    const { context } = await withStore("pin-recorded-");
     await registerPlan(context);
     const row = planRow();
     const pin = await pinFor(context, row);
-    const tampered = pinnedRow(row, pin, { file: `.mstar/plans/${PLAN_ID}-elsewhere.md` });
-    const read = pinRead(context, tampered);
+    const edited = pinnedRow(row, pin, { file: `.mstar/plans/${PLAN_ID}-elsewhere.md` });
+    const read = pinRead(context, edited);
 
+    // §365 the recorded pin is evidence of the selection, and the frozen row is
+    // data: an edit after preparation is tolerated rather than refused, so the
+    // reader serves the pin it recorded and the consumer is not blocked.
     const state = await readExecutionCatalogPin(read);
-    expect(state.conflict).not.toBeNull();
     expect(state.pin).toEqual(pin);
+    expect(state.conflict).toBeNull();
+    await assertExecutionCatalogPin(read);
 
-    let code: string | undefined;
-    try {
-      await assertExecutionCatalogPin(read);
-    } catch (error) {
-      code = (error as { code?: string }).code;
-    }
-    expect(code).toBe(EXECUTION_PIN_CONFLICT_CODE);
     // Neither side was overwritten: the catalog row and the recorded pin hold.
     expect((await getCatalog(context, { kind: "plan", id: PLAN_ID })).entity.revision).toBe(1);
-    expect((tampered.metadata as Record<string, unknown>).catalog_pin).toEqual(pin);
+    expect((edited.metadata as Record<string, unknown>).catalog_pin).toEqual(pin);
   });
 
   test("catalog pin: a plan pinned to a catalog row that no longer exists is a conflict", async () => {

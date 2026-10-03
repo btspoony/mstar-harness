@@ -32,7 +32,6 @@ import {
   CoordinationError,
   canonicalTarget,
   fileClaimHolderState,
-  isArtifactVersion,
   isNonEmptyString,
   isPlainObject,
   readArtifactBytes,
@@ -48,7 +47,7 @@ import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
 // from this module): neither module dereferences the other's bindings during
 // module evaluation, so the ESM live-binding cycle is safe (see status.ts).
-import { registerWorkflowEntryLocked, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
+import { registerWorkflowEntryLocked, rowPlanIds, validatePlanRow, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
 import {
   assertExecutionFileReadAllowed,
@@ -959,15 +958,11 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
 }
 
 /**
- * Writer contract (spec §C4). `expectedVersion` is the CAS token - the exact
- * on-disk artifact version (`sha256:<64 hex>`), or `"absent"` for
- * create-only. `createOnly` is the locked `absent` shorthand used by the
- * scaffold/migrate/audit writers: an existing document (even an empty or
- * malformed one) is never silently replaced.
- *
- * Omitting `expectedVersion` means create-only, NOT "replace whatever is
- * there": there is no missing-version compatibility fallback, so an existing
- * snapshot still refuses with `coordination.expected-version-required`.
+ * Writer contract (spec §C4). `createOnly` is the locked create-only shorthand
+ * used by the scaffold/migrate/audit writers: an existing document (even an
+ * empty or malformed one) is never silently replaced. Omitting it means
+ * replace-whatever-is-there under the snapshot lock — the lock discipline is
+ * the serializer, and there is no version token to present.
  *
  * The delta allowed here is `phase` + `updated_at` and nothing else - a
  * coordinator persists its phase projection through this writer without ever
@@ -975,7 +970,6 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
  * anchors. Lifecycle terminal changes belong to `closeWorkflow` (spec §C4).
  */
 export type WriteWorkflowSnapshotOptions = {
-  expectedVersion?: string;
   createOnly?: boolean;
   /**
    * Canonical coordinator session envelope path (spec §C4). Required when the
@@ -1008,27 +1002,13 @@ export async function writeWorkflowSnapshot(
   // Canonical authority discrimination precedes payload validation and the
   // lock (spec §4.3): with an ACTIVE execution authority the snapshot is
   // retired as a persistence route, so this refuses whatever store the caller
-  // injected and before any CAS token is inspected. The context is the target
+  // injected and before any payload validation. The context is the target
   // dir; `storeDbPath` normalizes it to the CONTROL harness root.
   assertExecutionFileWriteAllowed({ harnessDir: dir });
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {
     const detail = gate.violations.map((v) => v.message).join("; ");
     throw new Error(`refusing to write invalid workflow snapshot: ${detail}`);
-  }
-  if (opts.expectedVersion !== undefined && !isArtifactVersion(opts.expectedVersion)) {
-    throw new CoordinationError(
-      "coordination.invalid-input",
-      `expectedVersion must be "absent" or sha256:<64 hex> \u2014 got ${JSON.stringify(opts.expectedVersion)}`,
-      { expected: opts.expectedVersion },
-    );
-  }
-  if (opts.createOnly === true && opts.expectedVersion !== undefined && opts.expectedVersion !== "absent") {
-    throw new CoordinationError(
-      "coordination.invalid-input",
-      `createOnly implies expectedVersion "absent" \u2014 got ${JSON.stringify(opts.expectedVersion)}`,
-      { expected: opts.expectedVersion },
-    );
   }
   const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
   // Fail-loud path agreement : the lockdir serializes
@@ -1049,19 +1029,17 @@ export async function writeWorkflowSnapshot(
   // second lock (architect-locked 2026-08-27: locks stay with callers).
   await withStatusWriteLock(snapshotPath, async () => {
     const current = readArtifactBytes(snapshotPath);
-    const currentVersion = current?.version ?? "absent";
-    // Create-only is the default: an omitted token can create but never
-    // replace, so no caller reaches a locked CAS by accident (spec §C4 - no
-    // missing-version compatibility fallback).
-    const required = opts.createOnly === true ? "absent" : opts.expectedVersion ?? "absent";
-    if (required !== currentVersion) {
-      const missingToken = opts.createOnly !== true && opts.expectedVersion === undefined;
+    // Create-only is the writer's own existence rule: an existing document
+    // (even an empty or malformed one) is never silently replaced, and the
+    // refusal names the create-only intent rather than any version token. An
+    // omitted `createOnly` is a replace-whatever-is-there under this lock —
+    // the lock discipline is the serializer.
+    if (opts.createOnly === true && current !== undefined) {
       throw new CoordinationError(
-        missingToken ? "coordination.expected-version-required" : "coordination.version-conflict",
-        missingToken
-          ? `snapshot ${snapshotPath} already exists \u2014 replace it with an explicit expectedVersion (its current version is ${currentVersion}) or write a new snapshot`
-          : `snapshot ${snapshotPath} is at ${currentVersion}, writer required ${required}`,
-        { path: snapshotPath, expected: required, actual: currentVersion },
+        "coordination.direct-write-refused",
+        `snapshot ${snapshotPath} already exists \u2014 a create-only write never replaces one; remove it explicitly or ` +
+          `write without createOnly`,
+        { path: snapshotPath },
       );
     }
     const payload = current === undefined ? snapshot : mergePhaseProjection(current.payload, snapshot);
@@ -1128,33 +1106,23 @@ function assertCoordinatedSnapshotWriter(
 
 /**
  * Apply the field-scoped delta contract against the stored document: only
- * `phase` + `updated_at` may differ (spec §C4 line 152). Every other field -
- * plan rows, leases, the coordination block, branch anchors, lifecycle
- * scalars - is taken from disk, so this writer can never drop or rewrite them
- * implicitly, and lifecycle terminal changes stay on `closeWorkflow`.
+ * `phase` + `updated_at` are taken from the incoming snapshot (spec §C4 line
+ * 152). Every other field - plan rows, leases, the coordination block, branch
+ * anchors, lifecycle scalars - is taken from disk by construction, so this
+ * writer can never drop or rewrite them implicitly, and lifecycle terminal
+ * changes stay on `closeWorkflow`. A caller that supplies differing values for
+ * those fields simply has them ignored, because the stored document is the
+ * authority for everything outside the delta.
  */
 function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
   if (!isPlainObject(stored)) {
     throw new CoordinationError(
-      "coordination.version-conflict",
+      "coordination.store",
       "stored workflow snapshot is not an object \u2014 refusing a field-scoped rewrite over it",
       {},
     );
   }
   const allowed: string[] = ["phase", "updated_at"];
-  const keys = new Set([...Object.keys(stored), ...Object.keys(incoming as Record<string, unknown>)]);
-  const drifted = [...keys].filter(
-    (key) =>
-      !allowed.includes(key) &&
-      stableJson(stored[key]) !== stableJson((incoming as unknown as Record<string, unknown>)[key]),
-  );
-  if (drifted.length > 0) {
-    throw new CoordinationError(
-      "coordination.direct-write-refused",
-      `refusing snapshot write: field(s) ${drifted.join(", ")} differ from disk \u2014 this writer may only change ${allowed.join(", ")}`,
-      { fields: drifted, allowed },
-    );
-  }
   const next: Record<string, unknown> = { ...stored };
   for (const key of allowed) {
     const value = (incoming as unknown as Record<string, unknown>)[key];
@@ -1653,14 +1621,13 @@ export type RecordWorkflowDeliveryResult = {
  *   `delivery_kind`: the evidence belongs to the declared kind (§1);
  * - evidence the declared kind does not use (e.g. a completion record on a
  *   `development` workflow) - the declared kind is authoritative;
- * - a rewrite of the recorded PR identity (§4d records it once at submission:
- *   an identical re-record is idempotent, a different pair is refused);
- * - an empty patch or a malformed member: nothing is silently dropped;
- * - a `completion` fulfilment that would CHANGE once an owned plan row is
- *   `Done` (`coordination.completion-frozen` - contract §1 the mirror rule:
- *   the report-only fulfilment is recorded BEFORE the row is marked `Done`,
- *   and the same stable code refuses the same state on the DB route's
- *   `applyDeliveryEvidence`).
+ * - an empty patch or a malformed member: nothing is silently dropped.
+ *
+ * §365 re-recording delivery is a revisable mutation: the recorded PR identity, the
+ * report-only `completion` fulfilment, the compound disposition and the merge
+ * record are all data the close consults, so a later recording replaces them
+ * rather than being refused. A tampered replay of the SAME operation id is
+ * refused by the request-hash conflict instead.
  *
  * §R5/A19 the delivery tail (compound | PR identity | verified-merge record) is
  * EXTERNAL evidence that arrives when it arrives: it is captured whenever it is
@@ -1672,10 +1639,10 @@ export type RecordWorkflowDeliveryResult = {
  * so the ordering is bookkeeping rather than a caller ceremony. The DB route
  * enforces the same rule in `applyDeliveryEvidence`.
  *
- * Grandfathering: the completion freeze is a write-time rule only. A snapshot
- * that already carries delivery evidence while rows are not `Done` is never
- * retro-invalidated; an idempotent re-record returns without consulting row
- * state; `closeWorkflow` / `evaluatePostMergeClose` are unchanged.
+ * Grandfathering: a snapshot that already carries delivery evidence while rows
+ * are not `Done` is never retro-invalidated; an idempotent re-record returns
+ * without consulting row state; `closeWorkflow` / `evaluatePostMergeClose` are
+ * unchanged.
  *
  * Idempotent and re-entrant: re-recording the exact stored evidence performs
  * NO write and returns the snapshot as read (the timestamp is untouched), so
@@ -1749,20 +1716,12 @@ export async function recordWorkflowDelivery(
       );
     }
     const stored = isPlainObject(snapshot.delivery) ? snapshot.delivery : {};
-    // §4d immutability: the PR identity is recorded ONCE at submission - a
-    // different pair is a different delivery, not an evidence update, and a
-    // later payload must not be able to swap it (which would also let a
-    // contradictory identity reach the close). An identical re-record stays
-    // idempotent (`written: false` below); the compound disposition and the
-    // merge evidence remain updatable (a corrected disposition and a re-read
-    // merge record are legitimate evolutions).
-    const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
-    const incomingPr = isPlainObject(evidence.pr) ? evidence.pr : undefined;
-    if (recordedPr !== undefined && incomingPr !== undefined && stableJson(recordedPr) !== stableJson(incomingPr)) {
-      throw new Error(
-        `refusing to rewrite the recorded PR identity of workflow ${JSON.stringify(workflowId)}: \u00a74d records it once at submission \u2014 recorded ${JSON.stringify(recordedPr)}, refused ${JSON.stringify(incomingPr)} (a different PR is a different delivery, not an evidence update)`,
-      );
-    }
+    // §4d the registered branch anchors are the delivery identity: an incoming
+    // payload that contradicts them is refused on the DB route's field checks
+    // (`applyDeliveryEvidence`). Recording delivery evidence is a revisable
+    // mutation — the compound disposition, the PR record and the merge record
+    // may all evolve — so the previously recorded pair is data, never a second
+    // authority over this writer.
     const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;
     if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
       return { snapshot, written: false };
@@ -1774,26 +1733,8 @@ export async function recordWorkflowDelivery(
     // row-Done gate here - the semantic boundary is the close, which consults
     // the declared kind's complete evidence (`consultDeliveryEvidence`) against
     // the rows it has completed. The DB route's `applyDeliveryEvidence` states
-    // the same rule.
-    //
-    // The mirror rule for the ONE member recorded BEFORE the row is Done
-    // (contract §1: a report-only row "completes from an accepted handoff plus a
-    // recorded fulfilment of that policy - the fulfilment is recorded before the
-    // row is marked `Done`"). Once an owned row is Done the recorded fulfilment
-    // is FROZEN: it is the basis that row's `Done` was authorized against, so
-    // re-pointing it afterwards would leave the `Done` fact standing on evidence
-    // it was never accepted with (§4d freezes the PR identity the same way). An
-    // identical re-record never reaches this point (the idempotent return
-    // above), so a retried recording stays a no-op; the refusal carries the same
-    // stable code the DB route's `applyDeliveryEvidence` uses for the same state
-    // (`coordination.invalid-transition`).
-    if (members.includes("completion") && snapshot.plans.some((row) => row.status === "Done")) {
-      throw new CoordinationError(
-        "coordination.completion-frozen",
-        `refusing to record delivery evidence: coordination.completion-frozen: the completion fulfilment of workflow ${JSON.stringify(workflowId)} is frozen once an owned plan row is Done \u2014 record it before the row is marked Done (contract \u00a71: the fulfilment is recorded before the row is marked Done, so a later record is a re-pointed basis, never an evidence update)`,
-        { workflow_id: workflowId },
-      );
-    }
+    // the same rule, and the report-only `completion` fulfilment is recorded
+    // the same revisable way (a re-record under a new operation id replaces it).
     const next: WorkflowSnapshot = { ...snapshot, delivery: merged, updated_at: at };
     await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
     return { snapshot: next, written: true };
@@ -2085,29 +2026,62 @@ export type RegisterPlanWorkflowResult = {
 };
 
 /**
- * Identity subset compared on recovery (contract §4b: re-running the producer
- * must not duplicate identity). Timestamps (`started_at`/`updated_at`/`bound_at`)
- * are excluded by design - the orphaned snapshot's timestamps are preserved,
- * not rewritten, and a retry does not fail merely because the clock moved.
+ * Compare two snapshots' REGISTRATION IDENTITY by NAMED PRIMITIVE FIELD, never
+ * by any serialized form. The identity is the header fields a registration
+ * freezes — `id`, `type`, `delivery_kind`, `project`, `completion_policy`,
+ * `compass_ref`, the branch anchors `branch.base`/`source`/`integration`/
+ * `target`, and the coordinator binding's `session_id`/`session_file` — plus the
+ * addressed plan rows as a KEYED collection: each row's declared `id` is the
+ * key and its `file` the direct path value. Rows are matched by key, not by
+ * enumeration position (no consumer authorizes by row order; rows are located
+ * by id), and `title`/`status`/any prose or progress field is outside the
+ * identity — a progressed or reordered orphan still recovers.
  *
- * Shared with the catalog registration journal (`catalog-registration.ts`),
- * which re-verifies the on-disk registration identity before it publishes the
- * catalog delta (contract §3 step 3) - one definition of "which registration
- * this is", never a second one. Audit promotions are `type: plan` snapshots
- * and compare through this same subset.
+ * Used by the create-only producers' crash/retry recovery: re-running the
+ * producer must not duplicate identity, so a mismatch refuses instead of
+ * adopting a foreign registration.
  */
-export function planWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
-  const coordinator = snapshot.coordination?.coordinator;
-  return stableJson({
-    type: snapshot.type,
-    status: snapshot.status,
-    delivery_kind: snapshot.delivery_kind ?? null,
-    project: snapshot.project ?? null,
-    completion_policy: snapshot.completion_policy ?? null,
-    branch: snapshot.branch ?? null,
-    plans: snapshot.plans,
-    coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
-  });
+function registrationIdentityMatches(existing: WorkflowSnapshot, candidate: WorkflowSnapshot): boolean {
+  const branchField = (snapshot: WorkflowSnapshot, key: "base" | "source" | "integration" | "target"): unknown => {
+    const branch = snapshot.branch;
+    return isPlainObject(branch) ? branch[key] ?? null : null;
+  };
+  const coordinatorField = (snapshot: WorkflowSnapshot, key: "session_id" | "session_file"): unknown =>
+    snapshot.coordination?.coordinator?.[key] ?? null;
+  const rowFileById = (snapshot: WorkflowSnapshot): Map<string, unknown> | null => {
+    const rows = snapshot.plans ?? [];
+    const map = new Map<string, unknown>();
+    for (const row of rows) {
+      const id = rowPlanIds(row)[0];
+      if (id === undefined || map.has(id)) return null; // a row with no/duplicate id is not a valid registration
+      map.set(id, row.file ?? null);
+    }
+    return map;
+  };
+
+  if (
+    (existing.id ?? null) !== (candidate.id ?? null) ||
+    (existing.type ?? null) !== (candidate.type ?? null) ||
+    (existing.delivery_kind ?? null) !== (candidate.delivery_kind ?? null) ||
+    (existing.project ?? null) !== (candidate.project ?? null) ||
+    (existing.completion_policy ?? null) !== (candidate.completion_policy ?? null) ||
+    (existing.compass_ref ?? null) !== (candidate.compass_ref ?? null)
+  ) {
+    return false;
+  }
+  for (const anchor of ["base", "source", "integration", "target"] as const) {
+    if (branchField(existing, anchor) !== branchField(candidate, anchor)) return false;
+  }
+  for (const member of ["session_id", "session_file"] as const) {
+    if (coordinatorField(existing, member) !== coordinatorField(candidate, member)) return false;
+  }
+  const left = rowFileById(existing);
+  const right = rowFileById(candidate);
+  if (left === null || right === null || left.size !== right.size) return false;
+  for (const [id, file] of left) {
+    if (!right.has(id) || right.get(id) !== file) return false;
+  }
+  return true;
 }
 
 /**
@@ -2304,7 +2278,7 @@ export async function registerPlanWorkflow(
       // against the EXISTING snapshot bytes; an identity mismatch refuses
       // instead of adopting a foreign registration.
       const existing = readWorkflowSnapshot(workflowDir);
-      if (planWorkflowRegistrationIdentity(existing.snapshot) !== planWorkflowRegistrationIdentity(snapshot)) {
+      if (!registrationIdentityMatches(existing.snapshot, snapshot)) {
         throw new Error(
           `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +
             `with a different registration identity \u2014 remove that workflow or register under a different id`,
@@ -2392,31 +2366,13 @@ export type RegisterIterationWorkflowResult = {
 };
 
 /**
- * Identity subset compared on iteration registration recovery (the plan
- * producer's `planWorkflowRegistrationIdentity` sibling). Adds the snapshot
- * `id` itself - comparing only the path is insufficient - and the
- * `{ session_id, session_file }` coordinator projection: a candidate never
- * carries a coordinator, so an already-bound orphan refuses rather than
- * silently attaching another owner's workflow. Timestamps stay excluded -
- * the orphan's timestamps are preserved, not rewritten.
- *
- * Exported for the catalog registration journal
- * (`catalog-registration.ts`), which re-verifies this exact identity before
- * publishing a catalog delta (contract §3 step 3).
+ * The iteration producer's registration identity is compared through the same
+ * explicit-field rule as the plan producer (`registrationIdentityMatches`):
+ * the header identity fields plus the ordered plan rows. `id` is part of that
+ * comparison, so comparing only the path is insufficient, and an already-bound
+ * orphan (a candidate never carries a coordinator) refuses rather than silently
+ * attaching another owner's workflow. Timestamps stay outside the identity.
  */
-export function iterationWorkflowRegistrationIdentity(snapshot: WorkflowSnapshot): string {
-  const coordinator = snapshot.coordination?.coordinator;
-  return stableJson({
-    id: snapshot.id,
-    type: snapshot.type,
-    status: snapshot.status,
-    compass_ref: snapshot.compass_ref ?? null,
-    branch: snapshot.branch ?? null,
-    project: snapshot.project ?? null,
-    plans: snapshot.plans,
-    coordinator: coordinator ? { session_id: coordinator.session_id, session_file: coordinator.session_file } : null,
-  });
-}
 
 /**
  * Normalize the registration input's `compassRef` to the stored contract
@@ -2546,7 +2502,7 @@ export function iterationWorkflowSnapshot(
  * without replacing their bytes.
  *
  * Crash/retry recovery: a snapshot without its root entry (an orphan)
- * re-registers only when `iterationWorkflowRegistrationIdentity` matches -
+ * re-registers only when its registration identity matches (`registrationIdentityMatches`) -
  * the existing snapshot's bytes and timestamps are preserved verbatim and
  * the root entry is written with the orphan's `started_at` (`recovered:
  * true`). A differing identity (including a mismatched snapshot id or an
@@ -2709,8 +2665,7 @@ export async function registerIterationWorkflow(
       };
       if (
         existing.snapshot.id !== workflowId ||
-        iterationWorkflowRegistrationIdentity(identityProjection(existing.snapshot)) !==
-          iterationWorkflowRegistrationIdentity(identityProjection(snapshot))
+        !registrationIdentityMatches(identityProjection(existing.snapshot), identityProjection(snapshot))
       ) {
         throw new Error(
           `refusing to register workflow ${JSON.stringify(workflowId)}: snapshot ${snapshotPath} already exists ` +

@@ -471,20 +471,19 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
         code: "execution.direct-write-refused",
       });
 
-      // replaceCoordinatedArtifact: the ref shape and the CAS token are behind it.
+      // replaceCoordinatedArtifact: the ref shape is behind the authority veto.
       expect(
         await refusalOf(() =>
           replaceCoordinatedArtifact({
             harnessRoot: fx.harnessDir,
             ref: { kind: "json", key: "" },
             payload: null,
-            expectedVersion: "not-a-version",
             sessionPath,
           }),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
 
-      // amendPrepareWorkflow: both byte-version tokens are behind it.
+      // amendPrepareWorkflow: the patch shape is behind the authority veto.
       expect(
         await refusalOf(() =>
           amendPrepareWorkflow({

@@ -1636,7 +1636,7 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     const initialized = await initializeExecutionAuthority(context);
     const row = planRow("p-2");
     const pin: CatalogExecutionPin = {
-      store_id: initialized.storeId,
+      store_id: "not-this-store",
       entity_revision: 1,
       document_hash: executionInputHash(row, "p-2"),
       relation_hash: "0".repeat(64),
@@ -1647,13 +1647,16 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
       entry,
       snapshot,
       expected: initialized.token,
-      operationId: "missing-entity",
+      operationId: "foreign-pin",
     }).then(
       () => {
-        throw new Error("expected the missing catalog entity to refuse creation");
+        throw new Error("expected the foreign-store pin to refuse creation");
       },
       (error: unknown) => error,
     );
+    // §7 the retained semantic constraint is the store/ownership identity: a pin
+    // that names another store is never sealed as this store's frozen input. The
+    // recorded `document_hash` is provenance and is not compared.
     expect(refusal).toBeInstanceOf(ExecutionPinConflictError);
     expect((refusal as ExecutionPinConflictError).code).toBe("catalog.execution-pin-conflict");
     expect((refusal as ExecutionPinConflictError).details.plan_id).toBe("p-2");

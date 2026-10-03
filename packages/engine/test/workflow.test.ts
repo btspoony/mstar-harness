@@ -59,7 +59,7 @@ import {
 } from "../src/workflow.js";
 import { evaluatePostMergeClose } from "../src/iteration.js";
 import { PlanPathError } from "../src/plan-path.js";
-import { artifactVersion, CoordinationError } from "../src/coordination-write.js";
+import { CoordinationError } from "../src/coordination-write.js";
 import { closeFileWorkflow, setFileCloseGapForTest } from "../src/coordination.js";
 import { getCatalog, listCatalog } from "../src/catalog.js";
 import {
@@ -552,7 +552,7 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("an existing snapshot needs the CAS token — an omitted one may only create (T1-CAS-001)", async () => {
+  test("createOnly refuses an existing snapshot; an omitted option replaces under the lock (T1-CAS-001)", async () => {
     const root = tmpRoot("workflow-writer-");
     setArtifactStore(createFsStore(root));
     const dir = join(root, "workflows", "00000819-workflow-engine-core");
@@ -562,21 +562,15 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     const second = validSnapshot({ updated_at: "2026-08-19T11:00:00Z" });
     await writeWorkflowSnapshot(first as never, dir);
     const onDisk = readFileSync(path, "utf8");
-    const version = artifactVersion(onDisk);
-    // The forbidden missing-version fallback: an existing document is never
-    // replaced by a caller that named no version.
-    expect(await refusalCode(() => writeWorkflowSnapshot(second as never, dir))).toBe(
-      "coordination.expected-version-required",
+    // The retained create-only existence rule: an existing document is never
+    // silently replaced by a create-only writer.
+    expect(await refusalCode(() => writeWorkflowSnapshot(second as never, dir, { createOnly: true }))).toBe(
+      "coordination.direct-write-refused",
     );
     expect(readFileSync(path, "utf8")).toBe(onDisk);
-    // A stale token is a conflict, not a retry.
-    const stale = `sha256:${"0".repeat(64)}`;
-    expect(await refusalCode(() => writeWorkflowSnapshot(second as never, dir, { expectedVersion: stale }))).toBe(
-      "coordination.version-conflict",
-    );
-    expect(readFileSync(path, "utf8")).toBe(onDisk);
-    // The exact token replaces, and only phase/updated_at may differ.
-    await writeWorkflowSnapshot(second as never, dir, { expectedVersion: version });
+    // An omitted `createOnly` is a replace-whatever-is-there under the lock —
+    // there is no version token and no version-conflict path.
+    await writeWorkflowSnapshot(second as never, dir);
     const written = JSON.parse(readFileSync(path, "utf8"));
     expect(written.updated_at).toBe("2026-08-19T11:00:00Z");
     expect(written).toEqual(second);
@@ -592,7 +586,9 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
     const stored = validSnapshot({ updated_at: "2026-08-19T10:00:00Z" });
     await writeWorkflowSnapshot(stored as never, dir);
     const onDisk = readFileSync(path, "utf8");
-    const version = artifactVersion(onDisk);
+    // Fields outside the delta are taken from disk by construction, so a caller
+    // that supplies different lifecycle scalars does not move them — there is
+    // no canonical-serialized drift refusal, only the field-scoped merge.
     const tampered = {
       ...stored,
       status: "completed",
@@ -600,28 +596,18 @@ describe("writeWorkflowSnapshot — whole-rewrite under withStatusWriteLock", ()
       started_at: "2020-01-01",
       updated_at: "2026-08-19T11:00:00Z",
     };
-    expect(await refusalCode(() => writeWorkflowSnapshot(tampered as never, dir, { expectedVersion: version }))).toBe(
-      "coordination.direct-write-refused",
-    );
-    expect(readFileSync(path, "utf8")).toBe(onDisk);
-    // The widening this case pins: the pre-fix public surface let a caller
-    // *name* the lifecycle scalars it was rewriting on top of
-    // `phase`/`updated_at`, so this exact shape used to be honoured. The
-    // option is gone from the type — the cast is the test boundary, and the
-    // runtime path it opened must stay closed.
-    const legacyAuthority = ["status", "ended_at", "type", "started_at"] as const;
-    const widened = { ...stored, status: "running", ended_at: undefined, updated_at: "2026-08-19T11:00:00Z" };
-    expect(
-      await refusalCode(() =>
-        writeWorkflowSnapshot(widened as never, dir, { expectedVersion: version, authority: legacyAuthority } as never),
-      ),
-    ).toBe("coordination.direct-write-refused");
-    expect(readFileSync(path, "utf8")).toBe(onDisk);
-    const projected = { ...stored, phase: "Phase 3", updated_at: "2026-08-19T11:00:00Z" };
-    await writeWorkflowSnapshot(projected as never, dir, { expectedVersion: version });
+    await writeWorkflowSnapshot(tampered as never, dir);
+    const afterTamper = JSON.parse(readFileSync(path, "utf8"));
+    expect(afterTamper.status).toBe(stored.status);
+    expect(afterTamper.ended_at).toEqual(stored.ended_at);
+    expect(afterTamper.started_at).toBe(stored.started_at);
+    expect(afterTamper.updated_at).toBe("2026-08-19T11:00:00Z");
+    expect(readFileSync(path, "utf8")).not.toBe(onDisk);
+    const projected = { ...stored, phase: "Phase 3", updated_at: "2026-08-19T12:00:00Z" };
+    await writeWorkflowSnapshot(projected as never, dir);
     const written = JSON.parse(readFileSync(path, "utf8"));
     expect(written.phase).toBe("Phase 3");
-    expect(written.updated_at).toBe("2026-08-19T11:00:00Z");
+    expect(written.updated_at).toBe("2026-08-19T12:00:00Z");
     expect(written.status).toBe(stored.status);
     expect(written.ended_at).toEqual(stored.ended_at);
     rmSync(root, { recursive: true, force: true });
@@ -930,7 +916,7 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     expect(readFileSync(path, "utf8")).toBe(after);
   });
 
-  test("the recorded PR identity is immutable except for an identical re-record (§4d)", async () => {
+  test("a recorded PR identity is a revisable record, and an identical re-record is a no-op (§4d/§365)", async () => {
     const { dir, path } = fixture();
     const pr = { repo: "btspoony/mstar-harness", head: "feature/fixture", target: "main" };
     expect((await recordWorkflowDelivery(id, dir, { evidence: { pr }, at: "2026-09-12T01:00:00Z" })).written).toBe(true);
@@ -938,14 +924,15 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     // Identical re-record: idempotent, no write.
     expect((await recordWorkflowDelivery(id, dir, { evidence: { pr }, at: "2026-09-13T01:00:00Z" })).written).toBe(false);
     expect(readFileSync(path, "utf8")).toBe(afterRecord);
-    // A different identity is refused — a later payload cannot swap the PR.
-    await expect(
-      recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, head: "feature/other" } } }),
-    ).rejects.toThrow(/refusing to rewrite the recorded PR identity/);
-    await expect(
-      recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, target: "release/9" } } }),
-    ).rejects.toThrow(/refusing to rewrite the recorded PR identity/);
-    expect(readFileSync(path, "utf8")).toBe(afterRecord);
+    // A different identity is a revisable mutation under a new call — the
+    // recorded identity is data the close consults, not a second authority that
+    // refuses this writer.
+    const swapped = await recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, head: "feature/other" } } });
+    expect(swapped.written).toBe(true);
+    expect(swapped.snapshot.delivery?.pr).toEqual({ ...pr, head: "feature/other" });
+    const retargeted = await recordWorkflowDelivery(id, dir, { evidence: { pr: { ...pr, target: "release/9" } } });
+    expect(retargeted.written).toBe(true);
+    expect(retargeted.snapshot.delivery?.pr).toEqual({ ...pr, target: "release/9" });
   });
 
   test("the compound disposition and the merge record stay updatable (legitimate evolution)", async () => {
@@ -1014,53 +1001,39 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
 
   const completion = { policy: "acceptance report", evidence: "sdd/plan-a/report.md" };
 
-  test("the fulfilment is recorded before Done, then frozen: only a CHANGED reference is refused (F-2)", async () => {
+  test("the fulfilment is recorded before Done and remains revisable afterwards (F-2)", async () => {
     const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "InReview", done_at: undefined })] });
     const recorded = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
     expect(recorded.written).toBe(true);
 
-    // The row becomes Done exactly as `complete` writes it — the recorded
-    // fulfilment is now the basis of that `Done` fact.
+    // The row becomes Done exactly as `complete` writes it.
     const done = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     (done.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
     writeFileSync(path, JSON.stringify(done, null, 4) + "\n");
-    const afterDone = readFileSync(path, "utf8");
 
-    // Re-pointing the recorded evidence is a different completion of the same
-    // policy, never an evidence update: refused, with the DB route's own code.
-    let refusal: CoordinationError | undefined;
-    try {
-      await recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "sdd/plan-a/forged.md" } } });
-    } catch (error) {
-      if (!(error instanceof CoordinationError)) throw error;
-      refusal = error;
-    }
-    expect(refusal?.code).toBe("coordination.completion-frozen");
-    expect(readFileSync(path, "utf8")).toBe(afterDone);
+    // §365 a re-recorded fulfilment under a new call is a revisable mutation,
+    // not a freeze: the recorded reference is evidence the close consults, not a
+    // second authority over this writer.
+    const repointed = await recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "sdd/plan-a/repointed.md" } } });
+    expect(repointed.written).toBe(true);
+    expect(repointed.snapshot.delivery?.completion).toEqual({ ...completion, evidence: "sdd/plan-a/repointed.md" });
 
     // An identical re-record is the retried recording: a no-op, never a refusal.
-    const again = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-13T01:00:00Z" });
+    const again = await recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "sdd/plan-a/repointed.md" } }, at: "2026-09-13T01:00:00Z" });
     expect(again.written).toBe(false);
-    expect(readFileSync(path, "utf8")).toBe(afterDone);
 
-    // And the close still succeeds on the frozen evidence it consults.
+    // And the close still succeeds on the recorded fulfilment it consults.
     const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-14" });
     expect(closed.status).toBe("completed");
   });
 
-  test("a first-time fulfilment recorded after Done is refused too (the ordering is before Done, F-2)", async () => {
+  test("a first-time fulfilment recorded after Done is accepted, not frozen (F-2)", async () => {
     const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "Done" })] });
-    const before = readFileSync(path, "utf8");
-    let refusal: CoordinationError | undefined;
-    try {
-      await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
-    } catch (error) {
-      if (!(error instanceof CoordinationError)) throw error;
-      refusal = error;
-    }
-    expect(refusal?.code).toBe("coordination.completion-frozen");
-    expect(refusal?.message).toContain("before the row is marked Done");
-    expect(readFileSync(path, "utf8")).toBe(before);
+    const recorded = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
+    expect(recorded.written).toBe(true);
+    expect((JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>).delivery).toMatchObject({
+      completion,
+    });
   });
 
   test("grandfathering: pre-existing delivery evidence with non-Done rows is untouched and close consultation is unchanged", async () => {
@@ -1374,7 +1347,7 @@ describe("coordinated-writer — create-only snapshot writes", () => {
       await writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true });
       const before = readFileSync(snapshotPath, "utf8");
       await expect(writeWorkflowSnapshot(validSnapshot(), dir, { createOnly: true })).rejects.toMatchObject({
-        code: "coordination.version-conflict",
+        code: "coordination.direct-write-refused",
       });
       expect(readFileSync(snapshotPath, "utf8")).toBe(before);
     } finally {
@@ -2025,17 +1998,45 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     expect((JSON.parse(readFileSync(failStatus, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
   });
 
-  test("foreign orphan refusals: compass, branch, project, rows, snapshot id, coordinator; key order alone recovers", async () => {
-    // Row identity/order mismatch refuses.
+  test("foreign orphan refusals: compass, branch, project, row ids/paths, snapshot id, coordinator; reversal and key order alone recover", async () => {
+    // Row REORDER alone recovers: plan rows are a keyed collection located by
+    // id, and no consumer authorizes by row order. The orphan's bytes are kept.
+    {
+      const { root, statusPath, snapshotPath } = harness();
+      await registerIterationWorkflow(id, options(root));
+      const orphanBytes = readFileSync(snapshotPath, "utf8");
+      writeFileSync(statusPath, emptyRoot());
+      const reorderedRows = [...options(root).rows].reverse();
+      const { startedAt: _c, ...noClock } = options(root, { rows: reorderedRows });
+      const recovered = await registerIterationWorkflow(id, noClock);
+      expect(recovered.recovered).toBe(true);
+      expect(readFileSync(snapshotPath, "utf8")).toBe(orphanBytes);
+      expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toHaveLength(1);
+    }
+    // A row whose declared `file` points at a DIFFERENT plan document (the
+    // same id, another path) is a different registration: the row path is part
+    // of the identity, so it refuses with bytes unchanged.
     {
       const { root, statusPath, snapshotPath } = harness();
       await registerIterationWorkflow(id, options(root));
       const before = readFileSync(snapshotPath, "utf8");
       writeFileSync(statusPath, emptyRoot());
-      const foreignRows = [...options(root).rows].reverse();
-      await expect(registerIterationWorkflow(id, options(root, { rows: foreignRows }))).rejects.toThrow(
-        /different registration identity/,
+      // A second plan document exists at the alternate path, so the refusal
+      // comes from the registration-identity comparison, not the path prover.
+      writeFileSync(
+        join(root, "plans", "relocated-elsewhere.md"),
+        `# Engine producer\n\n**plan_id:** ${ROW_IDS[0]}\n`,
       );
+      const rows = [
+        { id: ROW_IDS[0], title: "Engine producer", file: "plans/relocated-elsewhere.md" },
+        { id: ROW_IDS[1], title: "CLI verb", file: `plans/${ROW_IDS[1]}.md` },
+      ];
+      // The row-path fact is enforced by the registration's own plan-path
+      // prover (the declared `file` must resolve to the registered plan
+      // document), so a relocated path refuses before any write.
+      await expect(
+        registerIterationWorkflow(id, options(root, { rows })),
+      ).rejects.toThrow(/not the registered plan file/);
       expect(readFileSync(snapshotPath, "utf8")).toBe(before);
       expect((JSON.parse(readFileSync(statusPath, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
     }
@@ -2801,10 +2802,11 @@ describe("prepare coordinator recovery audit schema", () => {
     expect(read.snapshot.coordination?.identity_recoveries).toEqual([recoveryEntry()]);
 
     const committedBytes = readFileSync(path, "utf8");
-    const version = artifactVersion(committedBytes);
 
     // A generic snapshot replacement may neither drop nor rewrite the audit —
-    // and it may not add one either.
+    // and it may not add one either. The coordination block is taken from disk
+    // by the field-scoped merge, so every supplied audit is ignored rather than
+    // compared, and the stored document is unchanged.
     const rewrites: ReadonlyArray<{ name: string; document: Record<string, unknown> }> = [
       {
         name: "drops the whole audit",
@@ -2832,14 +2834,13 @@ describe("prepare coordinator recovery audit schema", () => {
       },
     ];
     for (const rewrite of rewrites) {
-      const code = await refusalCode(() =>
-        writeWorkflowSnapshot(rewrite.document as never, dir, {
-          expectedVersion: version,
-          sessionPath: "/fixture/recovered-session.json",
-        }),
+      await writeWorkflowSnapshot(rewrite.document as never, dir, {
+        sessionPath: "/fixture/recovered-session.json",
+      });
+      expect(`${rewrite.name}: ${readWorkflowSnapshot(dir).snapshot.coordination?.identity_recoveries?.length}`).toBe(
+        `${rewrite.name}: 1`,
       );
-      expect(`${rewrite.name}: ${code}`).toBe(`${rewrite.name}: coordination.direct-write-refused`);
-      expect(readFileSync(path, "utf8")).toBe(committedBytes);
+      expect(`${rewrite.name}: ${readFileSync(path, "utf8")}`).toBe(`${rewrite.name}: ${committedBytes}`);
     }
 
     // The one delta the ordinary writer owns (phase + updated_at) keeps the
@@ -2847,7 +2848,7 @@ describe("prepare coordinator recovery audit schema", () => {
     await writeWorkflowSnapshot(
       recoveredSnapshot({ phase: "phase-2-execute", updated_at: "2026-09-21T11:00:00.000Z" }) as never,
       dir,
-      { expectedVersion: version, sessionPath: "/fixture/recovered-session.json" },
+      { sessionPath: "/fixture/recovered-session.json" },
     );
     const afterProjection = readWorkflowSnapshot(dir).snapshot;
     expect(afterProjection.phase).toBe("phase-2-execute");

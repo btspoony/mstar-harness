@@ -87,14 +87,18 @@ import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
-import { findRegisteredWorkflow, registerWorkflowEntryLocked, validateWorkflowEntry, type WorkflowEntry } from "./status.js";
+import {
+  findRegisteredWorkflow,
+  registerWorkflowEntryLocked,
+  rowPlanIds,
+  validateWorkflowEntry,
+  type WorkflowEntry,
+} from "./status.js";
 import {
   WORKFLOW_SNAPSHOT_FILE,
   assertDeliveryRegistrationCoherence,
   derivePlanRegistration,
-  iterationWorkflowRegistrationIdentity,
   iterationWorkflowSnapshot,
-  planWorkflowRegistrationIdentity,
   planWorkflowSnapshot,
   readWorkflowSnapshot,
   registerIterationWorkflow,
@@ -638,18 +642,58 @@ function executionPlanFor(context: StoreContext, request: CatalogExecutionReques
 }
 
 /**
- * The comparison the producers use for orphan recovery, by registration kind.
- * Audit promotions are `type: plan` snapshots and compare through the plan
- * subset (timestamps excluded — a retry never fails because the clock moved).
+ * The registration identity this request registers, recorded in the journal as
+ * an explicit NAMED-FIELD record (never a digest): the header identity fields,
+ * the four named branch anchors, the coordinator binding, and each addressed
+ * plan row by its declared `id` key with its `file` path value. The later
+ * comparison reads these fields directly — it never compares this serialized
+ * string.
  */
-function onDiskIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
-  return kind === "iteration" ? iterationWorkflowRegistrationIdentity(snapshot) : planWorkflowRegistrationIdentity(snapshot);
+function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
+  const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
+  const coordinator = snapshot.coordination?.coordinator;
+  return JSON.stringify({
+    kind,
+    id: typeof snapshot.id === "string" ? snapshot.id : null,
+    type: typeof snapshot.type === "string" ? snapshot.type : null,
+    delivery_kind: typeof snapshot.delivery_kind === "string" ? snapshot.delivery_kind : null,
+    project: typeof snapshot.project === "string" ? snapshot.project : null,
+    completion_policy: typeof snapshot.completion_policy === "string" ? snapshot.completion_policy : null,
+    compass_ref: typeof snapshot.compass_ref === "string" ? snapshot.compass_ref : null,
+    branch: {
+      base: branch.base ?? null,
+      source: branch.source ?? null,
+      integration: branch.integration ?? null,
+      target: branch.target ?? null,
+    },
+    coordinator:
+      coordinator === undefined
+        ? null
+        : { session_id: coordinator.session_id ?? null, session_file: coordinator.session_file ?? null },
+    rows: (snapshot.plans ?? []).map((row) => ({ id: rowPlanIds(row)[0] ?? null, file: row.file ?? null })),
+  });
+}
+
+/** One named primitive field off a plain record, or `null` when absent. */
+function fieldOf(record: Record<string, unknown>, key: string): unknown {
+  return record[key] ?? null;
+}
+
+/** The declared `file` path of one plan row, read directly (never serialized). */
+function rowFileByIdOf(row: unknown): unknown {
+  return isPlainObject(row) ? row.file ?? null : null;
 }
 
 /**
- * Project away execution progress before comparing migration ownership. The
- * existing registration identity remains the single source of its stable
- * fields; normalizing its mutable status members preserves that field set.
+ * Compare the current snapshot's registration identity with the recorded
+ * NAMED-FIELD record by reading each field directly: the header identity
+ * fields, the four named branch anchors, the coordinator binding's
+ * `session_id`/`session_file` (ownership), and the plan rows as a KEYED
+ * collection — each row's declared `id` is the key and its `file` the direct
+ * path value. Rows are matched by key, not by enumeration position (no consumer
+ * authorizes by row order), and `title`/`status`/any prose or progress field is
+ * outside the identity, so a progressed or reordered orphan still recovers. No
+ * field is compared through a serialized or compact form.
  */
 function migrationIdentityMatches(
   kind: CatalogExecutionKind,
@@ -659,25 +703,56 @@ function migrationIdentityMatches(
 ): boolean {
   let recorded: Record<string, unknown>;
   try {
-    recorded = JSON.parse(identity) as Record<string, unknown>;
+    const parsed = JSON.parse(identity) as unknown;
+    if (!isPlainObject(parsed)) {
+      return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
+    }
+    recorded = parsed;
   } catch {
     return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
   }
-  const coordinator = recorded.coordinator;
-  const recordedSnapshot = {
-    ...recorded,
-    coordination: coordinator === null || coordinator === undefined ? undefined : { coordinator },
-  } as unknown as WorkflowSnapshot;
-  return migrationOwnershipIdentity(kind, snapshot) === migrationOwnershipIdentity(kind, recordedSnapshot);
-}
-function migrationOwnershipIdentity(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot): string {
-  const registration = {
-    ...snapshot,
-    status: "running",
-    plans: snapshot.plans.map((plan) => ({ ...plan, status: "Todo" })),
-    coordination: snapshot.coordination === undefined ? undefined : { coordinator: snapshot.coordination.coordinator },
-  } as WorkflowSnapshot;
-  return onDiskIdentity(kind, registration);
+
+  const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
+  const coordinator = snapshot.coordination?.coordinator;
+  const coordinatorOf = (source: Record<string, unknown>, member: string): unknown =>
+    source.coordinator === null || source.coordinator === undefined
+      ? null
+      : isPlainObject(source.coordinator)
+        ? fieldOf(source.coordinator, member)
+        : null;
+  const planFileById = (rows: readonly unknown[]): Map<string, unknown> | null => {
+    const map = new Map<string, unknown>();
+    for (const row of rows) {
+      const id = isPlainObject(row) ? rowPlanIds(row)[0] : undefined;
+      if (id === undefined || map.has(id)) return null;
+      map.set(id, rowFileByIdOf(row));
+    }
+    return map;
+  };
+
+  if (fieldOf(recorded, "id") !== (snapshot.id ?? null)) return false;
+  if (fieldOf(recorded, "type") !== (snapshot.type ?? null)) return false;
+  if (fieldOf(recorded, "delivery_kind") !== (snapshot.delivery_kind ?? null)) return false;
+  if (fieldOf(recorded, "project") !== (snapshot.project ?? null)) return false;
+  if (fieldOf(recorded, "completion_policy") !== (snapshot.completion_policy ?? null)) return false;
+  if (fieldOf(recorded, "compass_ref") !== (snapshot.compass_ref ?? null)) return false;
+
+  const recordedBranch = isPlainObject(recorded.branch) ? (recorded.branch as Record<string, unknown>) : {};
+  for (const anchor of ["base", "source", "integration", "target"] as const) {
+    if (fieldOf(recordedBranch, anchor) !== (branch[anchor] ?? null)) return false;
+  }
+  for (const member of ["session_id", "session_file"] as const) {
+    if (coordinatorOf(recorded, member) !== (coordinator?.[member] ?? null)) return false;
+  }
+
+  const recordedRows = Array.isArray(recorded.rows) ? recorded.rows : [];
+  const left = planFileById(snapshot.plans ?? []);
+  const right = planFileById(recordedRows);
+  if (left === null || right === null || left.size !== right.size) return false;
+  for (const [id, file] of left) {
+    if (!right.has(id) || right.get(id) !== file) return false;
+  }
+  return true;
 }
 
 /**
@@ -1010,61 +1085,6 @@ function hasExecutionBytes(plan: CatalogExecutionPlan): boolean {
   return existsSync(plan.snapshotPath) || findRegisteredWorkflow(plan.harnessDir, plan.workflowId) !== undefined;
 }
 
-/**
- * A09 the replay no-op answers only while the committed registration's
- * file-route EFFECT is still held: BOTH the snapshot and the root register
- * entry a successful registration materialized must survive. A root that lost
- * the entry (overwritten by a foreign register, truncated) is a diverged
- * journal, not an already-satisfied intent — answering success would leave the
- * workflow unregistered while the journal claims it committed. The caller
- * repairs the divergence through `catalog reconcile`.
- */
-function assertRegistrationEffectHeld(plan: CatalogExecutionPlan): void {
-  // Presence alone is not the effect: a snapshot REPLACED by a foreign one, or
-  // a root entry re-pointed at another workflow, would otherwise let the replay
-  // answer success over a registration that no longer holds. The comparison is
-  // the registration's KEY FACE (id, type, status, addressed plan rows) — the
-  // fields a diverged registration cannot move without being a different
-  // registration — between the producer's reviewed definition (`plan.snapshot`,
-  // the identity source) and the bytes on disk, whose serialization may
-  // legitimately carry projections the reviewed request never spelled. A
-  // diverged journal refuses for `catalog reconcile` instead of answering
-  // success.
-  const snapshot = readSnapshotIfPresent(plan.dir);
-  const entry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
-  // The key face covers every registration-identity field the E07 fold
-  // freezes (branch anchors, project, delivery kind, completion policy and the
-  // row pointers). `status` is deliberately EXCLUDED: normal plan progress
-  // legitimately moves rows past their registration status (Todo → InReview →
-  // …) while the registration itself still holds, so comparing it would turn
-  // every post-registration retry into a false registration-conflict.
-  const keyFace = (s: WorkflowSnapshot): unknown => ({
-    id: s.id,
-    type: s.type,
-    branch: s.branch ?? null,
-    project: s.project ?? null,
-    delivery_kind: s.delivery_kind ?? null,
-    completion_policy: s.completion_policy ?? null,
-    plans: (s.plans ?? []).map((row) => ({ id: row.id, title: row.title, file: row.file })),
-  });
-  const identityHeld =
-    snapshot !== undefined &&
-    entry !== undefined &&
-    join(plan.harnessDir, entry.dir) === plan.dir &&
-    stableJson(keyFace(snapshot.snapshot)) === stableJson(keyFace(plan.snapshot));
-  if (identityHeld) return;
-  const detail =
-    snapshot === undefined || entry === undefined
-      ? "the snapshot or the root register entry is missing"
-      : "the on-disk snapshot or the root register entry no longer matches the committed registration identity";
-  throw new CatalogRegistrationError(
-    "catalog.registration-conflict",
-    `workflow ${JSON.stringify(plan.workflowId)} is committed in the registration journal, but its registered ` +
-      `effect no longer holds under ${plan.harnessDir} (${detail}): the journal and the registered bytes diverged. ` +
-      `Run "mstar catalog reconcile" to repair or abort the operation.`,
-  );
-}
-
 type ExecutionWrite = FileVersions & { recovered: boolean };
 
 /**
@@ -1378,19 +1398,6 @@ export async function registerCatalogExecution(
   const hash = requestHash(validated);
 
   const prepared = await withJournalWrite(context, (db) => {
-    // The registration identity and reviewed catalog delta a journal row was
-    // prepared against, read tolerantly: a damaged row proves nothing (every
-    // caller below treats an absent value as "not this registration"), and
-    // never throws out of a read.
-    const journalView = (row: JournalRow): { identity: unknown; catalog: unknown } => {
-      try {
-        const parsed = JSON.parse(row.catalog_delta_json) as unknown;
-        if (!isPlainObject(parsed) || !isPlainObject(parsed.workflow)) return { identity: undefined, catalog: undefined };
-        return { identity: parsed.workflow.identity, catalog: parsed.catalog };
-      } catch {
-        return { identity: undefined, catalog: undefined };
-      }
-    };
     // The operation id is checked FIRST: an idempotent replay of a committed
     // operation must not depend on where the catalog has moved since — only a
     // genuinely new operation is subject to the reviewed expectation.
@@ -1403,7 +1410,6 @@ export async function registerCatalogExecution(
         );
       }
       if (existing.phase === "committed") {
-        assertRegistrationEffectHeld(plan);
         return { kind: "replayed" as const, receipt: receiptOfRow(existing) };
       }
       if (existing.phase === "aborted") {
@@ -1418,25 +1424,23 @@ export async function registerCatalogExecution(
       // the `catalog reconcile` ceremony (R6/A28).
       return { kind: "resume" as const, operationId: existing.operation_id };
     }
-    // R1/R6/A09 — a repeat of a registration that already FULLY holds is a
-    // successful no-op: the same workflow, the same registration identity and
-    // the same reviewed catalog delta, already committed. Its recorded receipt
-    // is returned and nothing is written, re-timestamped or re-published — the
-    // create-only refusal below stays reserved for a genuinely different
-    // registration of the same workflow id.
+    // Uniqueness by KEY replaces content matching: a committed or pending
+    // registration of this workflow id under ANOTHER operation id is a
+    // genuinely different registration of the same workflow id and is refused
+    // with its existing actionable code. A repeat of the SAME registration is
+    // the same operation id, replayed above; no committed or pending state is
+    // re-compared with this request's identity or reviewed delta.
     const committedRows = db
       .prepare(`select ${JOURNAL_COLUMNS} from catalog_operations where phase = 'committed' order by updated_at asc`)
       .all() as JournalRow[];
-    const replayRow = committedRows.find((row) => {
-      if (parseJournalWorkflowId(row) !== plan.workflowId) return false;
-      const view = journalView(row);
-      return view.identity === plan.identity && stableJson(view.catalog) === stableJson(validated.delta);
-    });
-    if (replayRow !== undefined) {
-      // A09 the no-op answers only while the committed registration's
-      // file-route EFFECT is still held (see assertRegistrationEffectHeld).
-      assertRegistrationEffectHeld(plan);
-      return { kind: "replayed" as const, receipt: receiptOfRow(replayRow) };
+    const committedRow = committedRows.find((row) => parseJournalWorkflowId(row) === plan.workflowId);
+    if (committedRow !== undefined) {
+      throw new CatalogRegistrationError(
+        "catalog.registration-conflict",
+        `workflow ${JSON.stringify(plan.workflowId)} is already registered by operation ` +
+          `${JSON.stringify(committedRow.operation_id)}; a registration is create-only per workflow id \u2014 re-run that ` +
+          `operation id to replay its receipt, or remove the workflow before registering again.`,
+      );
     }
 
     const versions = readJournalVersions(db);
@@ -1449,24 +1453,16 @@ export async function registerCatalogExecution(
     }
     const inFlight = pendingRows(db).find((row) => parseJournalWorkflowId(row) === plan.workflowId);
     if (inFlight !== undefined) {
-      // A fresh operation id for the SAME registration is a retry: prove it by
-      // BOTH facts the pending operation was prepared against — the identity it
-      // resolved and the reviewed catalog delta it was reviewed with (the delta
-      // is part of the semantic request fingerprint, `requestHash`). Adopting a
-      // row whose delta differs would publish THAT registration's catalog writes
-      // under this request, so an identity match alone is not enough. A
-      // damaged/unreadable delta proves nothing, so the refusal below stands.
-      const view = journalView(inFlight);
-      if (view.identity === plan.identity && stableJson(view.catalog) === stableJson(validated.delta)) {
-        return { kind: "resume" as const, operationId: inFlight.operation_id };
-      }
+      // "One pending registration per workflow id" is the semantic uniqueness
+      // constraint: a half-registered workflow is never re-registered under
+      // another intent. Resume is the SAME operation id, replayed above.
       throw new CatalogRegistrationError(
         "catalog.registration-pending",
         `workflow ${JSON.stringify(plan.workflowId)} has a pending registration operation ${JSON.stringify(inFlight.operation_id)} ` +
-          `(${inFlight.phase}) for a DIFFERENT registration: its registration identity or its reviewed catalog delta does not ` +
-          `match this request. A half-registered workflow is never re-registered under another intent \u2014 ` +
-          `run "mstar catalog reconcile --operation-id ${inFlight.operation_id}", or abandon it explicitly ` +
-          '("mstar catalog reconcile --abort").',
+          `(${inFlight.phase}) for a DIFFERENT registration: it is not this request's operation id. A half-registered ` +
+          `workflow is never re-registered under another intent \u2014 re-run operation ` +
+          `${JSON.stringify(inFlight.operation_id)}, or run "mstar catalog reconcile --operation-id ` +
+          `${inFlight.operation_id}", or abandon it explicitly ("mstar catalog reconcile --abort").`,
       );
     }
     insertPrepared(db, validated, hash, journalDeltaOf(plan, validated), { ...readFileVersions(plan), ...versions });
@@ -1750,14 +1746,26 @@ export async function retireStaleCatalogExecutionsForMigration(
       const journal = parseJournalDelta(row);
       const snapshot = readSnapshotIfPresent(resolve(journal.workflow.snapshotPath, ".."))?.snapshot;
       const rootEntry = findRegisteredWorkflow(journal.workflow.harnessDir, journal.workflow.workflowId);
-      const expectedEntry =
-        snapshot === undefined
-          ? undefined
-          : workflowEntryOf({ workflowId: journal.workflow.workflowId } as CatalogExecutionPlan, snapshot);
-      if (snapshot === undefined || snapshot.id !== journal.workflow.workflowId || !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") || (rootEntry !== undefined && (expectedEntry === undefined || stableJson(rootEntry) !== stableJson(expectedEntry)))) { failReconcile(
-        `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +
-          "the registration bytes are missing or belong to a different workflow and cannot be retired",
-      ); }
+      // The retirement proves the SAME workflow on both sides by KEY: the
+      // snapshot's own identity and the root entry's `id`/`dir` — never a
+      // serialized equality of the two entries, whose projections may
+      // legitimately differ (a timestamp, a type alias) while describing the
+      // same registered workflow.
+      const entryHolds =
+        rootEntry === undefined ||
+        (rootEntry.id === journal.workflow.workflowId &&
+          rootEntry.dir === `workflows/${journal.workflow.workflowId}`);
+      if (
+        snapshot === undefined ||
+        snapshot.id !== journal.workflow.workflowId ||
+        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") ||
+        !entryHolds
+      ) {
+        failReconcile(
+          `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +
+            "the registration bytes are missing or belong to a different workflow and cannot be retired",
+        );
+      }
       if (hasPublishedDelta(db, row.operation_id) || journal.expectedCatalogRevision === catalogRevision) {
         failReconcile(`operation ${JSON.stringify(row.operation_id)} is not a stale unpublished registration and cannot be retired`);
       }

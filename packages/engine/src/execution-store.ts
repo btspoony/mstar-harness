@@ -110,7 +110,6 @@ export type ExecutionErrorCode =
   | "execution.token-kind"
   | "execution.scope-mismatch"
   | "execution.stale-token"
-  | "execution.effect-superseded"
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
@@ -1759,6 +1758,11 @@ function readCommittedReceipt<T>(
   if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
   const recovery = receipt.operationRecovery;
   if (recovery !== undefined) {
+    // Historical DB receipts stay READABLE: the envelope's own recovery fields
+    // are validated (a corrupt row is still `store.corrupt`), but a retired
+    // per-operation sidecar's `details` — the previous-seal provenance the
+    // reseal producers no longer emit — is accepted as recorded diagnostic
+    // payload rather than being re-asserted against a retired digest shape.
     if (
       !isPlainObject(recovery) ||
       !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) ||
@@ -1771,19 +1775,9 @@ function readCommittedReceipt<T>(
     ) {
       throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
     }
-    const details = recovery.details;
-    if (
-      details !== undefined &&
-      (!isPlainObject(details) ||
-        !isNonEmptyString(details.previous_prepared_at) ||
-        !isNonEmptyString(details.previous_prepared_by) ||
-        typeof details.previous_assignment_sha256 !== "string" ||
-        !/^[a-f0-9]{64}$/.test(details.previous_assignment_sha256))
-    ) {
-      throw corrupt(`${what}.result_json carries invalid previous-seal provenance`);
-    }
   }
-  // Stored diagnostic payload; its envelope and immutable seal identity were checked above.
+  // Stored diagnostic payload; its envelope was checked above and a retired
+  // `details` provenance is passed through unchanged for the reader.
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
   return {
     data: receipt.data as T,
@@ -1810,10 +1804,12 @@ function assertWorkflowIdentityIsNew(db: StoreDb, workflowId: string): void {
 /**
  * §3/§7: creation binds EXISTING catalog entity identities and never fabricates
  * a selection. A row that records a catalog pin must have that pin's selected
- * plan entity present in this store's catalog, and the pin must describe the
- * very row it is sealed with (the store-independent check `prepare` enforces).
- * A current catalog revision that moved past the recorded `entity_revision` is
- * explicitly tolerated — the pin freezes an identity, not a pointer.
+ * plan entity present in this store's catalog (the store-independent check
+ * `prepare` enforces). A current catalog revision that moved past the recorded
+ * `entity_revision` is explicitly tolerated — the pin freezes an identity, not
+ * a pointer — and the pin's recorded `document_hash` is provenance: the frozen
+ * input is the sealed selection itself, so a recorded digest that has moved on
+ * is history rather than a disagreement to refuse.
  */
 function assertSelectedCatalogEntities(
   db: StoreDb,
@@ -1830,13 +1826,6 @@ function assertSelectedCatalogEntities(
       throw new ExecutionPinConflictError(
         `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) \u2014 a foreign ` +
           `selection is never sealed as this store's frozen input`,
-        details,
-      );
-    }
-    if (executionInputHash(plan.row, plan.planId) !== pin.document_hash) {
-      throw new ExecutionPinConflictError(
-        `plan ${plan.planId}'s supplied pin records document hash ${pin.document_hash.slice(0, 12)}\u2026, but the frozen ` +
-          `execution input it is sealed with hashes differently \u2014 the pin and its row disagree; neither side is rewritten`,
         details,
       );
     }
