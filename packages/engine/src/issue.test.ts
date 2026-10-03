@@ -89,7 +89,7 @@ test("origin-dependent issue reads refuse schema 7 and work after safe upgrade",
 
   await expect(getIssue(context, created.issueId)).rejects.toMatchObject({
     name: "IssueError",
-    code: "milestone.schema-outdated",
+    code: "issue.schema-outdated",
     message: expect.stringContaining("mstar store safe-upgrade"),
   });
 

@@ -343,6 +343,7 @@ export type IssueErrorCode =
   | "issue.revision-conflict"
   | "issue.invalid-disposition"
   | "milestone.schema-outdated"
+  | "issue.schema-outdated"
   | "milestone.project-mismatch"
   | "milestone.invalid-input"
   | "milestone.not-found"
@@ -697,7 +698,7 @@ export function assertIssueProvenanceSchema(db: StoreDb): void {
   const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
   if ((schema?.version ?? 0) < MIGRATIONS.length) {
     throw new IssueError(
-      "milestone.schema-outdated",
+      "issue.schema-outdated",
       `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store safe-upgrade" first.`,
     );
   }
