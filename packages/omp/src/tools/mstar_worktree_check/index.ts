@@ -319,7 +319,7 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
           const lease = planView.executionLease;
           const input: L1PreDispatchInput = {
             workflowType: workflow.state.type,
-            integrationWorktreePath: params.integrationWorktreePath !== undefined ? resolve(params.integrationWorktreePath) : String(workflow.integrationLease?.worktree_path ?? ""),
+            integrationWorktreePath: params.integrationWorktreePath !== undefined ? resolve(params.integrationWorktreePath) : String(workflow.state.integration_worktree_path ?? ""),
             integrationBranch: String(branch.integration ?? ""),
             mainWorktree: main,
             expectedMainBranch: params.mainBranch ?? String(branch.base ?? ""),

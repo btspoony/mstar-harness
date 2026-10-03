@@ -269,7 +269,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             workflowType: registered.state.type,
             integrationWorktreePath: selectedIntegration !== undefined
               ? path.resolve(selectedIntegration)
-              : String(registered.integrationLease?.worktree_path ?? ""),
+              : typeof registered.state.integration_worktree_path === "string" ? registered.state.integration_worktree_path : "",
             integrationBranch: String(branch.integration ?? ""),
             mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
             expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),

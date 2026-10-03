@@ -93,6 +93,9 @@ describe("validation command family", () => {
     execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "initial"], { cwd });
     const harness = path.join(cwd, ".mstar");
     mkdirSync(harness, { recursive: true });
+    const integrationWorktree = path.join(cwd, "integration-worktree");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "integration/synthetic", integrationWorktree], { cwd });
+    mkdirSync(harness, { recursive: true });
     const storeContext = { harnessDir: harness };
     (await initializeStore(storeContext)).close();
     const initialized = await initializeExecutionAuthority(storeContext);
@@ -105,7 +108,8 @@ describe("validation command family", () => {
       snapshot: {
         schema_version: 1, id: "workflow-synthetic", type: "plan", status: "running",
         started_at: "2026-09-26T00:00:00Z", updated_at: "2026-09-26T00:00:00Z",
-        branch: { base: "expected-main", source: "feature/synthetic", target: "release/synthetic" },
+        branch: { base: "main", source: "feature/synthetic", integration: "integration/synthetic", target: "main" },
+        integration_worktree_path: integrationWorktree,
         plans: [{ id: "plan-synthetic", title: "Synthetic plan", file: "plans/plan-synthetic.md", status: "InProgress" }],
         delivery_kind: "development",
       },
