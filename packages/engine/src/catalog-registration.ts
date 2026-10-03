@@ -220,6 +220,7 @@ export type CatalogRegistrationErrorCode =
   | "catalog.registration-conflict"
   | "catalog.registration-pending"
   | "catalog.registration-aborted"
+  | "catalog.registration-terminal-lifecycle"
   | "catalog.reconcile-conflict";
 
 export class CatalogRegistrationError extends Error {
@@ -1062,6 +1063,25 @@ function parseJournalDelta(row: JournalRow): JournalDelta {
   return parsed as unknown as JournalDelta;
 }
 
+/**
+ * A committed journal receipt proves the catalog write, but not that the
+ * execution registration remains active during the close sequence.
+ */
+function assertRegistrationEffectHeld(row: JournalRow, harnessDir: string): void {
+  const workflow = parseJournalDelta(row).workflow;
+  const snapshot = readSnapshotIfPresent(resolve(workflow.snapshotPath, ".."))?.snapshot;
+  if (
+    snapshot !== undefined &&
+    (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot.status) &&
+    findRegisteredWorkflow(harnessDir, workflow.workflowId) !== undefined
+  ) {
+    throw new CatalogRegistrationError(
+      "catalog.registration-terminal-lifecycle",
+      `workflow ${JSON.stringify(workflow.workflowId)} has a terminal lifecycle snapshot while its root register entry remains present during the close window; let an in-flight close finish, or if it was interrupted re-run the supported \`mstar status workflow-close --workflow ${workflow.workflowId} --harness '${harnessDir}'\` action, then retry this registration`,
+    );
+  }
+}
+
 function failReconcile(detail: string): never {
   throw new CatalogRegistrationError("catalog.reconcile-conflict", detail);
 }
@@ -1416,6 +1436,7 @@ export async function registerCatalogExecution(
         );
       }
       if (existing.phase === "committed") {
+        assertRegistrationEffectHeld(existing, plan.harnessDir);
         return { kind: "replayed" as const, receipt: receiptOfRow(existing) };
       }
       if (existing.phase === "aborted") {
@@ -1596,7 +1617,10 @@ export async function reconcileCatalogExecution(
   if (loaded === undefined) {
     throw new CatalogError("catalog.not-found", `No catalog registration operation ${JSON.stringify(id)} is recorded in this store.`);
   }
-  if (loaded.phase === "committed") return receiptOfRow(loaded);
+  if (loaded.phase === "committed") {
+    assertRegistrationEffectHeld(loaded, parseJournalDelta(loaded).workflow.harnessDir);
+    return receiptOfRow(loaded);
+  }
   if (loaded.phase === "aborted") {
     throw new CatalogRegistrationError(
       "catalog.registration-aborted",
