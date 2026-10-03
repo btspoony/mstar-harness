@@ -1057,9 +1057,9 @@ function hostHistoryRecords(value: unknown, what: string, context: RowContext): 
 
 /**
  * `omp-hidden-v1`: the H2 session-inventory envelope, one per host session. The
- * outer document is canonical with a single terminal LF, its embedded H1 export
- * is hashed over the exact H1 serialization WITHOUT the trailing LF, and the
- * embedded records are decoded in place — the export is never duplicated.
+ * embedded H1 export carries its sha256 as recorded provenance (the digest is
+ * not recomputed as a barrier), and its records are decoded in place — the
+ * export is never duplicated.
  */
 function hiddenCodec(context: RowContext): unknown {
   const files = context.sources.map((witness) => {
@@ -1356,6 +1356,12 @@ function recoveryCodec(context: RowContext): unknown {
   const path = expectWitnessPath(backup.path, `${context.label} recovery inventory.backup.path`);
   const sha256 = expectHex64(backup.sha256, `${context.label} recovery inventory.backup.sha256`);
   const image = context.sources[0];
+  if (image.path !== path) {
+    refuse(
+      `${context.label} recovery inventory describes ${path}, which is not the pinned backup image ${image.path}; the inventory and the image must be ` +
+        `the same recovery point.`,
+    );
+  }
   if (document.integrity !== "verified") {
     refuse(`${context.label} recovery inventory declares integrity ${JSON.stringify(document.integrity)}; only a verified backup is a recovery point.`);
   }
@@ -1528,9 +1534,9 @@ function computeRow(
           `from a row identity alone.`,
       );
     }
-    // Every named byte is hashed before any decoding: a witness whose bytes were
-    // not supplied, were replaced or do not hash to the receipt is refused even
-    // when the codec would never have read it.
+    // Every named byte must be supplied before any decoding: a witness whose
+    // bytes were not handed in is refused even when the codec would never read
+    // it. A recorded digest is provenance, never a freshness barrier.
     for (const witness of [...sources, ...witnesses]) bytesOf(witness);
     facts = CODECS[surface]({ surface, workflowId, sources, evidence: witnesses, exclusions, bytesOf, label });
     resultHash = digestOf({ surface, workflowId, disposition, facts });
@@ -2113,6 +2119,9 @@ function validateHostProof(
     refuse(`${label} carries ${receipt.evidence.length} evidence document(s); the host proof pins exactly the attestation document.`);
   }
   const attestationWitness = receipt.evidence[0];
+  if (attestationWitness.root !== proof.attestation.root || attestationWitness.path !== proof.attestation.path) {
+    refuse(`${label}: the receipt's evidence document is not the attestation the manifest row proved.`);
+  }
   const key = coverageWitnessKey(proof.attestation.root, proof.attestation.path);
   if (!pinned.has(key)) refuse(`${label}: the proved attestation ${key} is not pinned by the manifest; it is not a reviewed input.`);
   const bytes = evidence.get(key);

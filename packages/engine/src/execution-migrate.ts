@@ -838,7 +838,7 @@ function configuredRootOf(roots: ExecutionMigrationRoots, path: string, what: st
  * explicit package/injector/recovery inputs. Nothing here is inferred, and an
  * unknown key refuses instead of being ignored.
  */
-function readInventoryFile(path: string): { inventory: ExecutionMigrationInventory; bytes: Buffer } {
+function readInventoryFile(path: string): { inventory: ExecutionMigrationInventory } {
   const what = `the execution-migration inventory at ${path}`;
   const bytes = readSourceBytes(path, what, `${what} is missing; the explicit inventory is the only source of the host/package/injector roots`);
   let document: unknown;
@@ -947,7 +947,6 @@ function readInventoryFile(path: string): { inventory: ExecutionMigrationInvento
     backup = { image: requireAbsolute(record.image, "backup.image"), inventory: requireAbsolute(record.inventory, "backup.inventory") };
   }
   return {
-    bytes,
     inventory: {
       version: EXECUTION_MIGRATION_INVENTORY_VERSION,
       roots,
@@ -1340,7 +1339,7 @@ function readDiscoveredWorkflow(input: {
   }
 
   const snapshotSource = readSnapshotSource(dir, workflowId, roots.control);
-  const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
+  recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
 
   const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
   const ownerStart = owners.length;
@@ -1951,7 +1950,6 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
   const inventoryPath = input.inventoryPath;
   const declared = inventoryPath === null ? null : readInventoryFile(inventoryPath);
   const inventory: ExecutionMigrationInventory | null = declared === null ? null : declared.inventory;
-  const inventoryBytes: Buffer | null = declared === null ? null : declared.bytes;
   const roots: ExecutionMigrationRoots =
     declared === null
       ? { control: root }
@@ -2004,7 +2002,7 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
         throw conflict(`workflow ${workflowId}'s dir ${dir} is not a real directory under the control root.`);
       }
       const snapshotSource = readSnapshotSource(dir, workflowId, roots.control);
-      const snapshotWitness = recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
+      recordWitness(ledger, "control", roots.control, snapshotSource.path, "workflow");
       const scan = scanWorkflowDir(dir, workflowId, relative(roots.control, dir));
       deferred.push(...scan.deferred);
       workflows.push(excludedWorkflow({
@@ -2113,8 +2111,9 @@ function discoverExecutionSources(context: StoreContext, input: { inventoryPath:
     deferred.push(deferredSurface(ENGINE_STATUS_SURFACE, []));
   }
 
-  if (inventoryPath !== null && inventoryBytes !== null) {
-    const inventoryWitness = witnessForPath(ledger, roots, inventoryPath, "the inventory file", "inventory");
+  if (inventoryPath !== null) {
+    // Records the inventory as a witnessed input; its digest is provenance only.
+    witnessForPath(ledger, roots, inventoryPath, "the inventory file", "inventory");
   }
 
   // ── the explicit host-session inventory (§4.2) ────────────────────────────

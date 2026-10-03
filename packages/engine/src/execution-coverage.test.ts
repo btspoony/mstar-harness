@@ -1023,6 +1023,38 @@ describe("execution-coverage", () => {
     refuseLeavingState(empty);
   });
 
+  test("execution-coverage-recovery-inventory-binds-its-backup-image", () => {
+    const valid = materialize(buildRows());
+    validate(valid);
+
+    // The verified inventory names another valid relative path than the assigned
+    // backup image: the decoded backup fact would otherwise publish an image the
+    // row does not hold.
+    const otherPath = materialize(buildRows());
+    const declared = consumerManifestOf(otherPath, "backup-recovery");
+    const backup = declared.manifest.backup as { path: string; sha256: string };
+    putManifest(
+      otherPath,
+      "backup-recovery",
+      { ...declared.manifest, backup: { ...backup, path: "backups/other.db" } },
+      declared.entry,
+    );
+    refuseLeavingState(otherPath);
+
+    // The recorded inventory digest is provenance: the same declared path with a
+    // different sha256 still describes the row's assigned backup image.
+    const driftedDigest = materialize(buildRows());
+    const samePath = consumerManifestOf(driftedDigest, "backup-recovery");
+    const sameBackup = samePath.manifest.backup as { path: string; sha256: string };
+    putManifest(
+      driftedDigest,
+      "backup-recovery",
+      { ...samePath.manifest, backup: { ...sameBackup, sha256: fakeHex(72) } },
+      samePath.entry,
+    );
+    validate(driftedDigest);
+  });
+
   test("execution-coverage-host-inventory-is-proved", () => {
     // The baseline row IS the positive: a real H2 envelope plus the pinned attestation.
     const valid = materialize(buildRows());
@@ -1053,6 +1085,32 @@ describe("execution-coverage", () => {
       sessions: [{ host: "omp", sessionId: SESSION_B, source: (foreignProof.sessions as Array<Record<string, unknown>>)[0].source }],
     });
     refuseLeavingState(foreignSession);
+
+    // The receipt's evidence document must BE the attestation the manifest row
+    // proved: a different, itself-pinned control path is a mispair.
+    const mispaired = materialize(buildRows());
+    const provedAttestation = hostDocs(WORKFLOW_A).attestation;
+    const decoy = doc("control", "coverage/attestation-decoy.json", provedAttestation.text);
+    const decoyWitness = overrideDoc(mispaired.evidence, decoy);
+    const mispairedIndex = rowIndex(mispaired, "omp-hidden-entries", WORKFLOW_A);
+    setReceipt(mispaired, mispairedIndex, { ...mispaired.coverage.receipts[mispairedIndex], evidence: [decoyWitness] });
+    repin(mispaired, [decoyWitness]);
+    setHostProof(mispaired, WORKFLOW_A, {
+      sessions: [{ host: "omp", sessionId: SESSION_A, source: witnessOf(hostDocs(WORKFLOW_A).envelope) }],
+      attestation: witnessOf(provedAttestation),
+    });
+    refuseLeavingState(mispaired);
+
+    // Digest-only drift in the receipt's evidence witness is provenance: the same
+    // root/path still names the proved attestation, so validation holds.
+    const driftedEvidence = materialize(buildRows());
+    const driftedIndex = rowIndex(driftedEvidence, "omp-hidden-entries", WORKFLOW_A);
+    const receiptWitness = driftedEvidence.coverage.receipts[driftedIndex].evidence[0];
+    setReceipt(driftedEvidence, driftedIndex, {
+      ...driftedEvidence.coverage.receipts[driftedIndex],
+      evidence: [{ ...receiptWitness, sha256: fakeHex(77) }],
+    });
+    validate(driftedEvidence);
 
     const { envelope, attestation } = hostDocs(WORKFLOW_A);
 
