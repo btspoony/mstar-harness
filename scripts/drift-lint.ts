@@ -395,9 +395,9 @@ export function checkFiveQuestionCorpus(files: Array<{ rel: string; text: string
     const m = rel.match(/^skills\/(mstar-[\w-]+)\/SKILL\.md$/);
     if (!m) continue;
     const profile = classifySkillLint(m[1]);
- // Runtime-corpus scope only: mode null = core exemption; authoring = the
- // standard's own suite. (`mode !== "runtime"` covers both by policy.)
-    if (profile.mode !== "runtime") continue;
+    // Runtime profiles retain their classified checks, including partial
+    // heading exemptions. Core and strict authoring stay outside this guard.
+    if (profile.kind !== "runtime" || profile.mode === null) continue;
     checked++;
     const result = lintFiveQuestion(stripFrontmatter(text), profile.mode);
     for (const v of result.violations) {

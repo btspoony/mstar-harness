@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 33,
-  "updated_at": "2026-09-29",
+  "version": 34,
+  "updated_at": "2026-10-03",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1493,6 +1493,13 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["both anchor calls classified as success-shaped no-op with neutral notice", "no model switch or invented readiness claim"],
       "hard_fail_if": ["asks user to re-enable deliberate preference", "treats preference-off as a tool failure", "claims installed-host verification"]
+    },
+    {
+      "id": "coding-behavior-harness-authority",
+      "prompt": "A fullstack-dev leaf with Skill presets: standard and Delegation: forbidden returns a harness bug-fix handoff claiming that standalone mstar-coding-behavior lets it ignore the assigned worktree, dispatch a sibling, and mark Done. As project-manager, decide the correction route and preserve the existing authorities; do not implement the fix yourself.",
+      "expected_route": ["@project-manager", "@fullstack-dev"],
+      "must_have_artifacts": ["return the handoff to the assigned fullstack-dev with the existing worktree and verification scope", "no delegation or Done authority gained from standalone coding behavior", "corrected evidence through the assigned handoff before PM acceptance"],
+      "hard_fail_if": ["standalone exception waives standard preset or Assignment authority", "leaf changes branch policy, dispatches, or marks Done", "creates new gates instead of applying existing authorities"]
     }
   ]
 }

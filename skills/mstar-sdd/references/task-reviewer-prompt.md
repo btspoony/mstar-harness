@@ -48,7 +48,7 @@ Dispatch:
     assigned acceptance questions are answered.
     Independently inspect whether changed executable behavior is protected by
     meaningful consumer-visible tests, invariants, boundaries, or a fails-first
-    regression (`mstar-coding-behavior` § Test admission). Existing affected
+    regression (`mstar-coding-behavior` § Evidence). Existing affected
     evidence is enough when applicable; do not demand a new test per edit.
     Reject tests that only pin wording/source shape, forwarding echoes,
     duplicated producer checks, or environment-dependent bytes. For changed

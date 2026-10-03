@@ -14,13 +14,13 @@
  * - `mstar-harness-core` SKILL.md § 与其它 `mstar-*` skill 的加载契约 —
  * core stays the lifecycle/authorization semantic authority; the LOAD
  * SELECTION authority is `mstar-roles` (Spec A2: single load-selection
- * authority, no second mandatory-role table). Topics reached by direct
- * invocation declare `mstar-harness-core` first in their Load Order /
- * First action section; the `mstar-roles` hub bootstrap is the ONE
- * exception — instead of a core-first declaration it must declare its
- * identity→preset decision matrix (identity-first, `Skill presets:`
- * none/standard arms, role-owned methods, unknown-preset refusal) and
- * keep the conditional core conflict-authority pointer.
+ * authority, no second mandatory-role table). Direct topics declare core
+ * first in their Load Order / First action section, except standalone
+ * `mstar-coding-behavior`, which has no mandatory load declaration, and
+ * the `mstar-roles` hub bootstrap, which declares its identity→preset
+ * decision matrix (identity-first, `Skill presets:` none/standard arms,
+ * role-owned methods, unknown-preset refusal) and conditional core
+ * conflict-authority pointer. Both exceptions are keyed on exact names.
  *
  * The parameter tables live here as machine data (roadmap §4.3:
  * "parameter tables → data"); `validateRoleMapping` checks the tables'
@@ -331,16 +331,15 @@ function extractLoadOrderSection(text: string): string | null {
  * Input: `skillTexts` maps skill name → full SKILL.md text. `mstar-harness-
  * core` itself and non-`mstar-*` skills are exempt.
  *
- * - Every `mstar-*` topic skill (reached by direct invocation) must have a
- * Load Order / First action section (heading Load Order / Load order /
- * First action) that names `mstar-harness-core` as its first dependency
- * (mentions in later sections do not count).
- * - The `mstar-roles` hub bootstrap is the ONE exception (narrow, keyed on
- * the skill name — broad exemptions are rejected): it does not declare
- * core-first; instead its Load Order section must declare the preset
- * decision matrix (`roles.loadorder.hub.bootstrap.missing` when tokens
- * are missing) and keep the conditional `mstar-harness-core`
- * conflict-authority pointer (`roles.loadorder.core.missing`).
+ * - `mstar-coding-behavior` is independently usable and exempt from
+ * mandatory Load Order and core-first declarations by exact name only.
+ * - Every other `mstar-*` topic skill (reached by direct invocation) must
+ * have a Load Order / First action section naming `mstar-harness-core`
+ * as its first dependency (mentions in later sections do not count).
+ * - The `mstar-roles` hub bootstrap declares the preset decision matrix
+ * instead of core-first (`roles.loadorder.hub.bootstrap.missing` when
+ * tokens are missing) and retains the conditional core conflict-authority
+ * pointer (`roles.loadorder.core.missing`). Broad exemptions are rejected.
  *
  * Violations:
  * - `roles.loadorder.section.missing` — no Load Order / First action section
@@ -353,13 +352,14 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
   const violations: ValidationResult[] = [];
   for (const [name, text] of Object.entries(skillTexts)) {
     if (!name.startsWith("mstar-") || name === "mstar-harness-core") continue;
+    if (name === "mstar-coding-behavior") continue;
     const section = extractLoadOrderSection(text);
     if (section === null) {
       violations.push(
         violation(
           "medium",
           "roles.loadorder.section.missing",
-          `skill "${name}" has no Load Order / First action section \u2014 every mstar-* topic skill must declare its first read (mstar-harness-core \u00a7 \u52a0\u8f7d\u5951\u7ea6; mstar-roles \u00a7 Load Order = single load-selection authority)`,
+          `skill "${name}" has no Load Order / First action section \u2014 mstar-* topics require a load declaration except exact mstar-coding-behavior (mstar-harness-core load contract; mstar-roles \u00a7 Load Order)`,
           `add a "## Load Order" section: topics name mstar-harness-core first; mstar-roles declares the Skill presets decision matrix`,
         ),
       );
@@ -403,7 +403,7 @@ export function lintLoadOrder(skillTexts: Record<string, string>): GateResult {
         violation(
           "medium",
           "roles.loadorder.core.missing",
-          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core \u00a7 \u52a0\u8f7d\u5951\u7ea6: directly-invoked topics keep core as first dependency; the mstar-roles hub bootstrap is the only exception)`,
+          `skill "${name}" Load Order section does not declare mstar-harness-core as its first dependency (mstar-harness-core load contract: exceptions are the mstar-roles hub bootstrap and exact standalone mstar-coding-behavior)`,
           "name mstar-harness-core first in the Load Order section",
         ),
       );
