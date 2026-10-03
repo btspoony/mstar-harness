@@ -294,7 +294,7 @@ function decideAppend(scan: LedgerScan, note: WorkflowNote): AppendDecision {
 type RetainedLedger =
   | Readonly<{ kind: "absent" }>
   /** The retained bytes AND the file identity they were read from. */
-  | Readonly<{ kind: "present"; bytes: Buffer; dev: number; ino: number }>;
+  | Readonly<{ kind: "present"; bytes: Buffer; dev: number; ino: number; fd: number }>;
 
 /**
  * Open one leaf without ever following a symbolic link; a link refuses. The
@@ -339,9 +339,12 @@ function readRetainedLedger(path: string): RetainedLedger {
         `${path} is not a regular file (a symlink or a non-file has no retained bytes to append to).`,
       );
     }
-    return { kind: "present", bytes: readFileSync(fd), dev: info.dev, ino: info.ino };
-  } finally {
+    // Pin the retained inode until commit; unlink/recreate must not recycle its
+    // identity between the read and the final destination check.
+    return { kind: "present", bytes: readFileSync(fd), dev: info.dev, ino: info.ino, fd };
+  } catch (error) {
     closeSync(fd);
+    throw error;
   }
 }
 
@@ -589,20 +592,24 @@ export async function appendWorkflowNote(
       ledgerPath,
       async () => {
         const retained = readRetainedLedger(ledgerPath);
-        if (retained.kind === "present") replaceLeafSeam(ledgerPath);
-        const scan = retained.kind === "absent" ? null : scanLedger(retained.bytes);
-        const decision = scan === null ? ({ kind: "append", terminateTail: false } as const) : decideAppend(scan, note);
-        // The final synchronous identity check, immediately before the mutation.
-        assertExecutionSessionCurrent(context, session);
-        if (decision.terminateTail || decision.kind === "append") {
-          const appended = decision.kind === "append" ? line : Buffer.from("\n");
-          commitLedgerLine({
-            path: ledgerPath,
-            retained,
-            line: decision.terminateTail && decision.kind === "append" ? Buffer.concat([Buffer.from("\n"), appended]) : appended,
-          });
+        try {
+          if (retained.kind === "present") replaceLeafSeam(ledgerPath);
+          const scan = retained.kind === "absent" ? null : scanLedger(retained.bytes);
+          const decision = scan === null ? ({ kind: "append", terminateTail: false } as const) : decideAppend(scan, note);
+          // The final synchronous identity check, immediately before the mutation.
+          assertExecutionSessionCurrent(context, session);
+          if (decision.terminateTail || decision.kind === "append") {
+            const appended = decision.kind === "append" ? line : Buffer.from("\n");
+            commitLedgerLine({
+              path: ledgerPath,
+              retained,
+              line: decision.terminateTail && decision.kind === "append" ? Buffer.concat([Buffer.from("\n"), appended]) : appended,
+            });
+          }
+          return { id: note.id, replayed: decision.kind === "replay" };
+        } finally {
+          if (retained.kind === "present") closeSync(retained.fd);
         }
-        return { id: note.id, replayed: decision.kind === "replay" };
       },
       { timeoutMs: ledgerLockWaitMs() },
     );

@@ -13,6 +13,7 @@ packages: root, engine, cli, commands, opencode, dsh, omp
 - Legacy migration derives current source data under its root lock; staged execution re-apply and activation refresh current validated JSON rows while preserving workflow/plan membership and session ownership. OMP reservation replay also requires the current coordinator identity, with native-outcome recording as recovery.
 - State `persist write` replacement semantics in help, update obsolete hash/CAS expectations in consumer tests, and escape non-ASCII code literals for bundled CLI execution.
 - Validate recovery-point paths before staging the image so missing/unreadable points return typed refusals with public backup/preview recovery. Rebuild the committed ZCode hook bundle from the current engine.
+- Keep the retained ledger descriptor open through commit so inode reuse cannot mask a replaced destination; clear stale migration `ended_at` fields while preserving authored notes. Use the existing integration-test budget for the thirteen-process actor-only scenario.
 
 <!-- CN -->
 - **哈希仅作溯源，不作门禁。** 删除已准备文档、已提交证据、workflow/catalog/roadmap 操作、迁移/覆盖/激活、恢复及存储 schema 记录中的内容哈希与规范序列化相等拒绝。普通文档编辑不再要求恢复字节、收养、重封或重签；已有摘要保留为历史信息。
@@ -25,3 +26,4 @@ packages: root, engine, cli, commands, opencode, dsh, omp
 - Legacy 迁移在 root lock 内派生当前源数据；staged execution 的重新 apply 与 activation 刷新当前有效 JSON 行，同时保留 workflow/plan 成员与 session 归属约束。OMP reservation 重放也须匹配当前 coordinator 身份，并通过记录原生 transport 的实际结果恢复。
 - 在 help 中明确 `persist write` 的整文档覆盖语义，迁移消费者测试中的过时 hash/CAS 期望，并转义代码字面量中的非 ASCII 字符以适配 bundled CLI。
 - 在暂存副本前校验 recovery-point 路径，缺失/不可读备份返回类型化拒绝及公开 backup/preview 恢复指引；由当前 engine 重建已提交的 ZCode hook bundle。
+- ledger 在 commit 前保留原文件描述符，避免 inode 复用掩盖目标替换；迁移刷新删除失效的 `ended_at` 并保留作者注释。十三进程 actor-only 场景采用已有集成测试预算。

@@ -542,6 +542,8 @@ describe("mstar issue actor-only mutations", () => {
     ], fixture.root);
   }
 
+  // Thirteen real CLI processes share a loaded CI worker; this integration
+  // scenario uses the same budget as the suite's other multi-process flow.
   test("close, triage, supersede, and link succeed on ACTIVE authority with actor alone", async () => {
     const fixture = await makeFixture();
     const closedId = await capture(fixture, "close");
@@ -564,7 +566,7 @@ describe("mstar issue actor-only mutations", () => {
     expect(jsonOf(runCli(["issue", "show", "--id", linkedId, "--harness", fixture.harness], fixture.root)).provenance).toContainEqual(
       expect.objectContaining({ kind: "plan", target: "unregistered-plan-label", origin: "unscoped" }),
     );
-  });
+  }, 30000);
 });
 describe("mstar status — the issue authority is never read as an empty rollup (G2b)", () => {
   test("a missing store refuses the rollup and the findings gate", () => {

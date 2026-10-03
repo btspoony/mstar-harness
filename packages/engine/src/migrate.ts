@@ -1117,6 +1117,8 @@ async function applyMigratePlanLocked(
         );
       }
       const payload = { ...existing, ...snapshot.data } as WorkflowSnapshot;
+      // A source-owned ended_at cannot survive a running current lift.
+      if (snapshot.data.ended_at === undefined) delete payload.ended_at;
       const gate = validateWorkflowSnapshot(payload);
       if (!gate.ok) throw new Error(`refusing to write invalid workflow snapshot: ${gate.violations.map((v) => v.message).join("; ")}`);
       assertFsStorePath(store, { kind: "snapshot", key: snapshot.id }, snapshotPath);

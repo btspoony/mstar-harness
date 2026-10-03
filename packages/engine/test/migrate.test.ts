@@ -1162,6 +1162,31 @@ describe("coordinated-writer — migration is additive-only", () => {
     }
   });
 
+  test("a running current source clears a partial target's ended time but preserves authored notes", async () => {
+    const root = fixtureTree();
+    try {
+      const completed = planOf(root).snapshots.find((snapshot) => snapshot.type === "plan" && snapshot.data.status === "completed")!;
+      const id = completed.data.plans[0]!.id;
+      const statusPath = join(root, "status.json");
+      const source = readJson(statusPath) as { plans: Array<Record<string, unknown>>; iterations: unknown[] };
+      source.plans = [source.plans.find((row) => row.id === id)!];
+      source.iterations = [];
+      writeJson(statusPath, source);
+      const preview = planOf(root);
+      const target = join(root, preview.snapshots[0]!.file);
+      writeJson(target, { ...preview.snapshots[0]!.data, post_plan_note: "retain this authored note" });
+      source.plans[0]!.status = "InProgress";
+      writeJson(statusPath, source);
+      await applyMigratePlan(preview);
+      const current = readJson(target);
+      expect(current.status).toBe("running");
+      expect(current.ended_at).toBeUndefined();
+      expect(current.post_plan_note).toBe("retain this authored note");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("an unrelated workflow target refuses and a configured separate destination recovers", async () => {
     const root = fixtureTree();
     try {
