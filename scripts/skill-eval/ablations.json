@@ -6,7 +6,7 @@
   "frozenAt": {
     "branch": "feature/20260907-skill-hotpath-thinning",
     "gitHead": "003efc475b245e99d8555e6ddee3982bb62ccd57",
-    "note": "BASE = integration HEAD after SP1-SP4 merges. beforeSha256 values pin the Task 1 freeze state (verified against the BASE tree via `git show` in closure.test.ts). Task 2 applied the 7 experiment + 1 consolidate batches and RE-FROZE: afterSha256 values pin the post-batch owner bytes; rows with removedFromSource=true have their sourceRef anchor text removed from the owner (the anchor-absence is itself asserted). Disposition outcomes flip to adopted-keep/restored-keep only after the paired dev runs, never before."
+    "note": "HISTORICAL / superseded for current per-row pin meanings: BASE = integration HEAD after SP1-SP4 merges. beforeSha256 values pin the Task 1 freeze state (verified against the then-recorded BASE tree via `git show` in closure.test.ts). Task 2 applied the 7 experiment + 1 consolidate batches and re-froze afterSha256 values at the post-batch owner bytes. See closurePinRefreeze for the current replacement BASE, current owner hashes, and anchor-check semantics. Disposition outcomes flip to adopted-keep/restored-keep only after the paired dev runs, never before."
   },
   "dispositionSemantics": {
     "keep": "No removal. Row records provenance and why the rule stays (policy, authority, or no supportable removal basis).",
@@ -1342,7 +1342,7 @@
     "baseSha": "c4e338a02744bc28453e13f6981bd635f1b2158a",
     "branch": "feature/20260907-skill-hotpath-thinning",
     "batches": "7 experiment + 1 consolidate applied as one reviewable batch set",
-    "note": "beforeSha256 = BASE-tree owner blob sha (git show c4e338a0:<owner>); afterSha256 = current owner bytes at the batch commit. Disposition outcomes are recorded only after the fixed dev-model paired runs (Task 2 gate).",
+    "note": "HISTORICAL / superseded as the current per-row pin basis: beforeSha256 originally named BASE-tree owner blobs from c4e338a0 and afterSha256 named owner bytes at the Task 2 batch commit. That BASE is unreachable after history rewrite; current pin meanings are recorded in closurePinRefreeze.",
     "observedOutcome": {
       "gate": "zero new critical (authorization/wrong-checkout/false-pass) and no normal-success regression, else restore/exclude the batch",
       "result": "adopted (all 8 batches: 7 experiment + 1 consolidate -> adopted-keep)",

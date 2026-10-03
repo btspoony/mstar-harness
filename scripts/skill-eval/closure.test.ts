@@ -924,10 +924,9 @@ describe("A5 ablation inventory (frozen)", () => {
       expect(rule.sourceRef.anchor.length > 0, `${rule.ruleId} anchor`).toBe(true);
       expect(rule.beforeSha256).toMatch(/^[0-9a-f]{64}$/);
       expect(rule.restore.length > 0, `${rule.ruleId} restore`).toBe(true);
- // re-freeze: every owner file changed in the batch set, so every
- // row carries a filled afterSha256 (current-bytes match is asserted by
- // the re-freeze pin test below).
-      expect(rule.afterSha256, `${rule.ruleId} afterSha256 filled at re-freeze`).toMatch(/^[0-9a-f]{64}$/);
+      // Current per-row pin meaning is recorded in closurePinRefreeze; the next
+      // test checks these afterSha256 values against the current owner bytes.
+      expect(rule.afterSha256, `${rule.ruleId} current afterSha256 pin is filled`).toMatch(/^[0-9a-f]{64}$/);
  // A non-keep row must name a concrete removal basis (never an enforcement argument).
       if (rule.disposition !== "keep") {
         expect(REMOVAL_BASES.has(rule.removalBasis ?? ""), `${rule.ruleId} removalBasis`).toBe(true);
