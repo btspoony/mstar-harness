@@ -542,23 +542,32 @@ describe("mstar issue actor-only mutations", () => {
     ], fixture.root);
   }
 
-  test("close, triage, supersede, and link succeed on ACTIVE authority with actor alone", async () => {
+  test("close succeeds on ACTIVE authority with actor alone", async () => {
     const fixture = await makeFixture();
     const closedId = await capture(fixture, "close");
     expect(mutate(fixture, "close", closedId, "actor-close", {
       reason: "accepted", references: ["qa.md"], alignmentRef: "PM acceptance record",
     }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", closedId, "--harness", fixture.harness], fixture.root)).disposition).toBe("resolved");
+  });
 
+  test("triage succeeds on ACTIVE authority with actor alone", async () => {
+    const fixture = await makeFixture();
     const triageId = await capture(fixture, "triage");
     expect(mutate(fixture, "triage", triageId, "actor-triage", { reason: "reclassify", severity: "medium" }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", triageId, "--harness", fixture.harness], fixture.root)).severity).toBe("medium");
+  });
 
+  test("supersede succeeds on ACTIVE authority with actor alone", async () => {
+    const fixture = await makeFixture();
     const canonicalId = await capture(fixture, "canonical");
     const supersededId = await capture(fixture, "superseded");
     expect(mutate(fixture, "supersede", supersededId, "actor-supersede", { reason: "replaced", canonicalIssueId: canonicalId }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", supersededId, "--harness", fixture.harness], fixture.root)).disposition).toBe("superseded");
+  });
 
+  test("link succeeds on ACTIVE authority with actor alone", async () => {
+    const fixture = await makeFixture();
     const linkedId = await capture(fixture, "linked");
     expect(mutate(fixture, "link", linkedId, "actor-link", { kind: "plan", target: "unregistered-plan-label" }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", linkedId, "--harness", fixture.harness], fixture.root)).provenance).toContainEqual(
