@@ -1614,6 +1614,14 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
     expect(readiness.binding.executionBinding?.session.sessionId).toBe(f.sessionId);
     // The envelope path is not part of an ACTIVE checkpoint's input at all.
     expect(f.input.coordinatorSessionPath).toBeUndefined();
+    const [, architect, writer] = f.input.reviews;
+    for (const reviews of [[writer], [architect, writer]]) {
+      const selected = await inspectPhase1Readiness(f.binding, { ...f.input, reviews });
+      expect(selected.ready).toBe(true);
+      if (!selected.ready) throw new Error(`unexpected refusal: ${selected.codes.join(", ")}`);
+      expect(selected.receipt.input.reviews).toEqual(reviews);
+      expect(selected.binding.executionBinding?.session.sessionId).toBe(f.sessionId);
+    }
   }, 120_000);
 
   test("the plan's registered pointer is the DB plan view's own, and a receipt naming another file refuses", async () => {
