@@ -1,0 +1,29 @@
+---
+category: Harness
+packages: root, engine, cli, commands, opencode, dsh, omp
+---
+
+- **Hashes are provenance, not gates.** Remove content-hash and canonical-serialized equality refusals across prepared documents, submitted evidence, workflow/catalog/roadmap operations, migration/coverage/activation, recovery and stored schema records. Ordinary document edits no longer require restoration, adoption, resealing or re-signing; recorded digests remain historical information.
+- **Keep real constraints.** Same-operation-id/different-request replay conflicts, current semantic scope/owner/QA/state/path requirements, numeric revision and execution-token constraints, and actual Git delivery facts remain. Remove obsolete byte-version, manifest/coverage hash and restore-loss digest admission inputs without adding bypass or replacement-seal protocols.
+- Align canonical CLI/workflow/evidence guidance and add four targeted routing scenarios with semantic negative controls; generated host assets continue to derive from canonical sources.
+- Accept equivalent session-reference and execution-token key JSON without byte canonicalization. Preserve interrupted ledger tails instead of truncating or refusing them, and retire only reviewed index rows while preserving added rows and narrative content.
+- Add a bounded architecture check for hash, raw-byte and canonical-equality refusals/assertions, with operation-id lookup evidence required for each replay exception.
+- Remove `persist --expect-version`, Prepare recovery/amendment byte-version inputs and `store execution restore --accept-loss-digest`. OMP launch admission and duplicate detection now use actual plan/session/checkout facts rather than prepared Assignment digests.
+- Restore compares authorized loss row identities/revisions and operation IDs, inventories and installs one private backup image, and retains fresh pre-restore safety backups. Re-preview is needed only for newly endangered work or authority generations, never for a changed digest.
+- Legacy migration derives current source data under its root lock; staged execution re-apply and activation refresh current validated JSON rows while preserving workflow/plan membership and session ownership. OMP reservation replay also requires the current coordinator identity, with native-outcome recording as recovery.
+- State `persist write` replacement semantics in help, update obsolete hash/CAS expectations in consumer tests, and escape non-ASCII code literals for bundled CLI execution.
+- Validate recovery-point paths before staging the image so missing/unreadable points return typed refusals with public backup/preview recovery. Rebuild the committed ZCode hook bundle from the current engine.
+- Keep the retained ledger descriptor open through commit so inode reuse cannot mask a replaced destination; clear stale migration `ended_at` fields while preserving authored notes. Keep actor-only mutation scenarios independently isolated instead of grouping thirteen CLI processes under one timeout.
+
+<!-- CN -->
+- **哈希仅作溯源，不作门禁。** 删除已准备文档、已提交证据、workflow/catalog/roadmap 操作、迁移/覆盖/激活、恢复及存储 schema 记录中的内容哈希与规范序列化相等拒绝。普通文档编辑不再要求恢复字节、收养、重封或重签；已有摘要保留为历史信息。
+- **保留真实约束。** 同一 operation-id 的不同请求仍触发 replay 冲突；当前语义 scope/owner/QA/state/path、数字 revision 与 execution-token 约束及真实 Git 交付事实仍有效。删除过时的字节版本、manifest/coverage 哈希及恢复 loss 摘要准入输入，不新增 bypass 或替代封印协议。
+- 对齐 canonical CLI/workflow/evidence 指引，并新增四个含语义负对照的定向路由场景；生成宿主资产继续由 canonical 源派生。
+- 接受语义等价的 session reference 与 execution-token key JSON，不再要求字节规范化。保留中断的 ledger 尾部而非截断或拒绝；仅清退已审查的 index 行，保留后增行与正文内容。
+- 新增有界架构检查，识别哈希、原始字节及规范序列化相等的拒绝/断言；每个 replay 例外均须有 operation-id 查询关联证据。
+- 删除 `persist --expect-version`、Prepare 恢复/修订的字节版本输入及 `store execution restore --accept-loss-digest`。OMP launch 的准入与重复请求判定改用真实 plan/session/checkout 事实，不再使用已准备 Assignment 的摘要。
+- Restore 比较已授权损失的行身份/revision 与 operation ID，盘点并安装同一份私有备份副本，保留即时恢复前安全备份。仅新增待丢失工作或权威世代变化需要重新预览，不因摘要变化要求重签。
+- Legacy 迁移在 root lock 内派生当前源数据；staged execution 的重新 apply 与 activation 刷新当前有效 JSON 行，同时保留 workflow/plan 成员与 session 归属约束。OMP reservation 重放也须匹配当前 coordinator 身份，并通过记录原生 transport 的实际结果恢复。
+- 在 help 中明确 `persist write` 的整文档覆盖语义，迁移消费者测试中的过时 hash/CAS 期望，并转义代码字面量中的非 ASCII 字符以适配 bundled CLI。
+- 在暂存副本前校验 recovery-point 路径，缺失/不可读备份返回类型化拒绝及公开 backup/preview 恢复指引；由当前 engine 重建已提交的 ZCode hook bundle。
+- ledger 在 commit 前保留原文件描述符，避免 inode 复用掩盖目标替换；迁移刷新删除失效的 `ended_at` 并保留作者注释。actor-only mutation 场景保持独立隔离，不再把十三次 CLI 调用集中到一个超时预算下。

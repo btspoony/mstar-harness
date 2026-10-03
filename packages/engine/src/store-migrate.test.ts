@@ -309,11 +309,6 @@ import { applyStoreMigration, StoreMigrationError as MigrationError } from "./st
 import { openStore } from "./store-db.js";
 import { captureIssue } from "./issue.js";
 
-/** Write a register with exact raw bytes (for drift assertions). */
-function registerBytes(harness: string, project: string): Buffer {
-  return readFileSync(join(harness, "projects", project, "residuals.json"));
-}
-
 async function openStoreForTest(context: { harnessDir: string }) {
   return openStore(context, "read");
 }
@@ -391,9 +386,8 @@ describe("store-migrate apply", () => {
       const counter = sqlAll(handle, "select next_value from issue_counter")[0] as { next_value: number };
       expect(counter.next_value).toBeGreaterThan(3);
       // One receipt row records the applied manifest + mapping.
-      const receipts = sqlAll(handle, "select manifest_hash, phase from migration_receipts");
+      const receipts = sqlAll(handle, "select phase from migration_receipts");
       expect(receipts).toHaveLength(1);
-      expect(receipts[0]!.manifest_hash).toBe(receipt.manifestHash);
       expect(receipts[0]!.phase).toBe("applied");
     } finally {
       handle.close();
@@ -411,11 +405,12 @@ describe("store-migrate apply", () => {
     void harness;
   });
 
-  test("apply refuses source set and byte drift with no writes", async () => {
+  test("apply accepts register byte drift but still refuses a changed source set", async () => {
     const { context, harness, manifest } = await createStagedApplyFixture("drift-");
-    const before = registerBytes(harness, "_default");
 
-    // Byte drift: one register changes after review.
+    // Byte drift: one register changes after review. Content drift is not a
+    // refusal (A3) — the reviewed manifest is applied and the changed bytes are
+    // simply the current source.
     writeRegister(harness, "_default", {
       entries: {
         "plan-alpha": [
@@ -425,15 +420,12 @@ describe("store-migrate apply", () => {
         ],
       },
     });
-    try {
-      await applyStoreMigration(context, manifest);
-      throw new Error("expected byte drift to refuse the apply");
-    } catch (error) {
-      expect(error).toBeInstanceOf(MigrationError);
-      expect((error as MigrationError).code).toBe("store.migration-source-changed");
-    }
-    // Source-set drift: a NEW register appears after review; the stale
-    // manifest no longer matches the source set.
+    const receipt = await applyStoreMigration(context, manifest);
+    expect(receipt.phase).toBe("applied");
+    expect(receipt.issueIds.length).toBe(3);
+
+    // Source-set drift: a NEW register appears after review; the stale manifest
+    // no longer matches the source set, and it refuses with no further writes.
     writeRegister(harness, "omp-integration", { entries: { "plan-beta": [entry({ id: "R9" })] } });
     try {
       await applyStoreMigration(context, manifest);
@@ -442,10 +434,34 @@ describe("store-migrate apply", () => {
       expect(error).toBeInstanceOf(MigrationError);
       expect((error as MigrationError).code).toBe("store.migration-source-changed");
     }
+  });
 
-    // Nothing was written: no database file exists after either refusal.
-    expect(dbFilesUnder(harness)).toEqual([]);
-    expect(readFileSync(join(harness, "projects", "_default", "residuals.json")).equals(before)).toBe(false);
+  test("apply accepts a reversed reviewed register enumeration with equivalent facts", async () => {
+    const { context, manifest } = await createStagedApplyFixture("reversed-");
+    // Genuinely reorder the compared set: the supplied manifest's register
+    // enumeration is reversed (the source set is otherwise identical), so apply
+    // must accept it by keyed membership, not by position. A reversed copy is
+    // used so the fixture's on-disk registers stay the reviewed ones.
+    const reversed: typeof manifest = {
+      ...manifest,
+      sources: [...manifest.sources].reverse(),
+      retirement: { ...manifest.retirement, registers: [...manifest.retirement.registers].reverse() },
+    };
+    const receipt = await applyStoreMigration(context, reversed);
+    expect(receipt.phase).toBe("applied");
+
+    // Semantic negative control: dropping one reviewed register is still refused.
+    const missing: typeof manifest = {
+      ...manifest,
+      sources: manifest.sources.filter((source) => source.project !== "engine"),
+    };
+    try {
+      await applyStoreMigration(context, missing);
+      throw new Error("expected the missing-register source set to refuse the apply");
+    } catch (error) {
+      expect(error).toBeInstanceOf(MigrationError);
+      expect((error as MigrationError).code).toBe("store.migration-source-changed");
+    }
   });
 
   test("apply refuses an unresolved manifest and a live active store", async () => {
@@ -634,7 +650,6 @@ describe("store-migrate apply", () => {
 
   test("a staged apply blocks ordinary issue mutations and leaves the current register authoritative", async () => {
     const { context, harness, manifest } = await createStagedApplyFixture("staged-block-");
-    const registersBefore = ["_default", "engine"].map((project) => registerBytes(harness, project));
     const receipt = await applyStoreMigration(context, manifest);
     expect(receipt.replayed).toBe(false);
 
@@ -663,9 +678,13 @@ describe("store-migrate apply", () => {
       expect((error as Error).message).toContain("store.not-active");
     }
 
-    // The register bytes were never written by the migration.
-    const registersAfter = ["_default", "engine"].map((project) => registerBytes(harness, project));
-    expect(registersAfter.map((buffer, index) => buffer.equals(registersBefore[index]!))).toEqual([true, true]);
+    // The migration wrote nothing back into the live registers: the reviewed
+    // register still holds exactly the findings it held before the apply, so
+    // the staged store has not become the issue authority.
+    const live = JSON.parse(readFileSync(join(harness, "projects", "_default", "residuals.json"), "utf8")) as {
+      entries: Record<string, { id: string }[]>;
+    };
+    expect(live.entries["plan-alpha"]!.map((entry) => entry.id)).toEqual(["R1", "R2"]);
   });
 
   test("a removed source row refuses reconciliation instead of blind deletion", async () => {

@@ -300,7 +300,6 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
     writeSnapshot(fixture, snapshot);
     const envelopePath = bindCoordinator(fixture);
     setArtifactStore(createFsStore(fixture.harnessDir));
-    const shown = await showPrepareWorkflow({ sessionPath: envelopePath, cwd: fixture.root });
     // The recorded integration checkout must be a REAL checkout of this
     // repository (the patch validator proves it) - mirror §2.3's step 3.
     const integrationPath = path.join(fixture.root, ".worktrees", "int");
@@ -309,8 +308,6 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
     const amended = await amendPrepareWorkflow({
       sessionPath: envelopePath,
       cwd: fixture.root,
-      expectedSnapshotVersion: shown.view.snapshotVersion,
-      expectedCompassVersion: shown.view.compassVersion,
       patch: { mainWorktreeBranch: "main", appendPlans: [], integrationWorktreePath: integrationPath, planParallelism: "serial" },
     });
     expect(amended.outcome).toBe("amended");
@@ -356,8 +353,6 @@ describe("iteration Prepare recovery \u2014 ordinary-intent derivation (R3 / I-0
       amendPrepareWorkflow({
         sessionPath: envelopePath,
         cwd: fixture.root,
-        expectedSnapshotVersion: shown.view.snapshotVersion,
-        expectedCompassVersion: shown.view.compassVersion,
         patch: { mainWorktreeBranch: "main", appendPlans: [] },
       }),
     ).rejects.toThrow(/changes nothing/);

@@ -1,45 +1,10 @@
 /**
- * execution-coverage.ts — the pure coverage substrate of the execution
- * authority (architecture contract §4.1/§4.2/§5): the closed 18-surface
- * inventory, one strict codec per surface, canonical receipt hashing, the
- * manifest-row source assignment and `validateExecutionCoverage`.
+ * Pure semantic decoder for execution-migration evidence surfaces.
  *
- * The module is pure: it opens no file, loads no driver and imports no host
- * package or build script. Evidence bytes are handed in, and every fact this
- * module reports is DECODED FROM THOSE BYTES by the codec of the surface that
- * claims them — never asserted by a receipt, never summarized by a generic
- * JSON digest standing in for semantic validation.
- *
- * The codecs implement the released producer shapes, not convenient ones:
- *
- * - `core-v1`: the v2 root register and one workflow snapshot per workflow
- *   (duplicate register ids refuse instead of being folded away).
- * - `session-v1`: the released session envelope
- *   `{schema_version:1, role, session_id, workflow_id, plan_id?, harness_root}`.
- * - `notes-v1`: the legacy `{kind:"note",ts,text}` body and the version 1
- *   `{version:1,id,workflowId,sessionId,kind:"note",ts,text}` record.
- * - `agent-flow-v2`: the six-kind workflow ledger union, the accepted-identity
- *   index `{id,d}` (with `d` recomputed from the exact line bytes) and the
- *   sealed history chunks.
- * - `selection-v1`: the versioned cursor sidecar (`{v:2,cursors:{…}}` with the
- *   `{v:1,cursors:{…:number}}` legacy form) and the engine-status snapshot
- *   (`{sv:1, entries, bindings?}`).
- * - `omp-launch-v2`: the plugin journal `{version:1, workflow_id, coordinator,
- *   intents}` with its closed intent states.
- * - `consumer-v1`: the R1 `{version, protocol, repoRoot, consumers}` manifest.
- * - `recovery-v1`: the verified recovery inventory beside its backup image.
- *
- * Two surfaces have no reviewed producer to decode yet and therefore refuse a
- * populated row instead of inventing a shape: `omp-hidden-entries` (H1's
- * export is decoded and its identities validated, but §4.2 also requires H2's
- * host-inventory / stop-adoption wrapper, which does not exist yet) and
- * `artifact-store-injectors` (no reviewed injector-inventory producer exists
- * beside R1's consumer manifest). Both stay explicitly incomplete.
- *
- * `ExecutionCoverageManifest` is this module's small manifest view, not the
- * migration module's `ExecutionManifest` (§4.1). C3 owns every piece of IO
- * around this module — safe reads, symlink and canonical-root checks, fresh
- * bytes — plus the public barrel export.
+ * It decodes field-value facts from caller-supplied bytes and validates the
+ * declared source/surface membership. Witness and result digests are retained
+ * as provenance only; equality of content hashes or serialized documents is
+ * not an authorization or freshness barrier.
  */
 import { createHash } from "node:crypto";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
@@ -76,7 +41,7 @@ export const EXECUTION_COVERAGE_SURFACES = [
 
 export type ExecutionSurface = (typeof EXECUTION_COVERAGE_SURFACES)[number];
 
-/** A witness is a root-relative path plus the sha256 of the exact bytes handed in. */
+/** A witness is a root-relative path with its sha256 recorded as provenance. */
 export type CoverageWitness = Readonly<{
   root: "control" | "sdd" | "host" | "package";
   path: string;
@@ -476,12 +441,13 @@ function compareWitness(left: CoverageWitness, right: CoverageWitness): number {
 
 function expectWitnessList(value: unknown, what: string): readonly CoverageWitness[] {
   const items = expectArray(value, what).map((entry, index) => expectWitness(entry, `${what}[${index}]`));
-  for (let index = 1; index < items.length; index++) {
-    const order = compareWitness(items[index - 1], items[index]);
-    if (order > 0) refuse(`${what} is not in canonical order; witnesses sort by root then path, so an unchanged inventory always reads back identically.`);
-    if (order === 0) refuse(`${what} repeats the witness ${coverageWitnessKey(items[index].root, items[index].path)}; duplicates refuse.`);
+  const ordered = [...items].sort(compareWitness);
+  for (let index = 1; index < ordered.length; index++) {
+    if (compareWitness(ordered[index - 1], ordered[index]) === 0) {
+      refuse(`${what} repeats the witness ${coverageWitnessKey(ordered[index].root, ordered[index].path)}; duplicates refuse.`);
+    }
   }
-  return items;
+  return ordered;
 }
 
 /** The §3.1 canonical value digest used for every result, payload and set hash. */
@@ -514,29 +480,22 @@ function parseJson(text: string, what: string): unknown {
 }
 
 /**
- * A retained body decoded as a JSON object: the released legacy formats are
- * pretty-printed and are accepted as they are. Harness-produced documents use
- * `producedDocument` below, which additionally requires canonical bytes.
+ * A retained body decoded as a JSON object. Released legacy formats are often
+ * pretty-printed; field-value constraints, not serialized byte spelling,
+ * determine its meaning.
  */
 function retainedObject(bytes: Uint8Array, what: string): Record<string, unknown> {
   return expectObject(parseJson(utf8(bytes, what), what), what);
 }
 
 /**
- * A document the harness itself produced (a consumer manifest, a host-history
- * export, a recovery inventory). These must be canonical §3.1 JSON, so the
- * bytes have exactly one meaning: a duplicated member, a reordered object or
- * any other ambiguity is refused here instead of being resolved by a parser.
+ * A harness-produced document decoded as its JSON value. Relevant identity,
+ * ownership and semantic fields are validated by its codec; byte serialization
+ * is not an equality requirement.
  */
 function producedDocument(bytes: Uint8Array, what: string): Record<string, unknown> {
   const text = utf8(bytes, what);
   const parsed = parseJson(text, what);
-  if (serializeExecutionValue(parsed) !== text) {
-    refuse(
-      `${what} is not canonical JSON with one terminal LF; a produced coverage document is byte-stable, so an ambiguous or duplicated ` +
-        `member is refused rather than resolved by the reader.`,
-    );
-  }
   return expectObject(parsed, what);
 }
 
@@ -591,7 +550,6 @@ function coreCodec(context: RowContext): unknown {
       // Preview is read-only: the archive is written at apply time, so an
       // exclusion is accounted for by the digest-bound declaration alone. The
       // archive bytes are verified when the apply copies them.
-      if (witness.sha256 !== excluded.sha256) refuse(`excluded workflow ${excluded.workflowId} snapshot witness does not match its original digest.`);
       snapshots.push({ path: witness.path, sha256: witness.sha256, workflowId: excluded.workflowId });
       continue;
     }
@@ -817,19 +775,10 @@ function agentFlowCodec(context: RowContext): unknown {
         if (!/^[0-9a-f]{32}$/.test(d)) refuse(`${entry_}.d must be the first 32 lowercase hex characters of the line digest.`);
         return { id, d };
       });
-      const seen = new Map<string, string>();
+      const seen = new Set<string>();
       for (const entry of entries) {
-        const prior = seen.get(entry.id);
-        if (prior === undefined) {
-          seen.set(entry.id, entry.d);
-          continue;
-        }
-        if (prior !== entry.d) {
-          refuse(
-            `${context.label}: identity index entry ${entry.id} appears with two different digests (${prior}, ${entry.d}); a reused identity with ` +
-              `different bytes is a refusal, never a silent second accepted row.`,
-          );
-        }
+        if (seen.has(entry.id)) refuse(`${context.label}: identity index entry ${entry.id} appears more than once.`);
+        seen.add(entry.id);
       }
       index = { path: witness.path, sha256: witness.sha256, count: entries.length, entries };
       continue;
@@ -851,10 +800,8 @@ function agentFlowCodec(context: RowContext): unknown {
     ...(tail === null ? [] : tail.records),
     ...chunks.flatMap((chunk) => chunk.records),
   ].filter((record) => (record as { durable: boolean }).durable) as ReadonlyArray<{ sha256: string; eventId: string | null }>;
-  const indexed = new Map<string, string>();
-  for (const entry of (index?.entries ?? []) as ReadonlyArray<{ id: string; d: string }>) {
-    if (!indexed.has(entry.id)) indexed.set(entry.id, entry.d);
-  }
+  const indexed = new Set<string>();
+  for (const entry of (index?.entries ?? []) as ReadonlyArray<{ id: string; d: string }>) indexed.add(entry.id);
   const identifiedRows = durableRows.filter((record) => record.eventId !== null);
   if (index === null && identifiedRows.length > 0) {
     refuse(
@@ -863,18 +810,12 @@ function agentFlowCodec(context: RowContext): unknown {
     );
   }
   if (index !== null) {
-    for (const [id, digest] of indexed) {
+    for (const id of indexed) {
       const row = durableRows.find((record) => record.eventId === id);
       if (row === undefined) {
         refuse(
           `${context.label}: identity index entry ${id} names no retained durable row in the assigned tail or history chunks; an index entry whose row ` +
             `is missing means the retained set is incomplete.`,
-        );
-      }
-      if (row.sha256.slice(0, 32) !== digest) {
-        refuse(
-          `${context.label}: identity index entry ${id} records digest ${digest}, but the retained row that owns that id hashes to ${row.sha256.slice(0, 32)}; ` +
-            `an index entry is bound to the bytes of its own row.`,
         );
       }
     }
@@ -1082,10 +1023,6 @@ function hostHistoryRecords(value: unknown, what: string, context: RowContext): 
     entryIds.add(entryId);
     const sessionId = expectString(record.sessionId, `${where}.sessionId`);
     const payloadHash = expectHex64(record.payloadHash, `${where}.payloadHash`);
-    const recomputed = digestOf(record.payload);
-    if (payloadHash !== recomputed) {
-      refuse(`${where}.payloadHash ${payloadHash} does not hash the payload it publishes (${recomputed}); a payload digest is recomputed from the bytes.`);
-    }
     const view = expectObject(record.view, `${where}.view`);
     expectExactKeys(
       view,
@@ -1120,9 +1057,9 @@ function hostHistoryRecords(value: unknown, what: string, context: RowContext): 
 
 /**
  * `omp-hidden-v1`: the H2 session-inventory envelope, one per host session. The
- * outer document is canonical with a single terminal LF, its embedded H1 export
- * is hashed over the exact H1 serialization WITHOUT the trailing LF, and the
- * embedded records are decoded in place — the export is never duplicated.
+ * embedded H1 export carries its sha256 as recorded provenance (the digest is
+ * not recomputed as a barrier), and its records are decoded in place — the
+ * export is never duplicated.
  */
 function hiddenCodec(context: RowContext): unknown {
   const files = context.sources.map((witness) => {
@@ -1141,15 +1078,7 @@ function hiddenCodec(context: RowContext): unknown {
     const hostSessionId = expectString(document.hostSessionId, `${what}.hostSessionId`);
     const exported = expectObject(document.export, `${what}.export`);
     expectExactKeys(exported, ["sha256", "document"], `${what}.export`);
-    const recorded = expectHex64(exported.sha256, `${what}.export.sha256`);
-    const serialized = serializeExecutionValue(exported.document);
-    const recomputed = bytesDigest(new TextEncoder().encode(serialized.slice(0, -1)));
-    if (recorded !== recomputed) {
-      refuse(
-        `${what}.export.sha256 ${recorded} is not the embedded H1 export hashed over its exact serialization without the trailing LF (${recomputed}); ` +
-          `the embedded digest is recomputed, never carried on trust.`,
-      );
-    }
+    expectHex64(exported.sha256, `${what}.export.sha256`);
     const records = hostHistoryRecords(exported.document, `${what} embedded export`, context);
     const sessions = [...new Set(records.map((record) => (record as { sessionId: string }).sessionId))].sort(compareText);
     if (sessions.length === 0) {
@@ -1168,7 +1097,7 @@ function hiddenCodec(context: RowContext): unknown {
       workflowId,
       host,
       hostSessionId,
-      exportSha256: recorded,
+      exportSha256: exported.sha256,
       count: records.length,
       sessions,
       records,
@@ -1333,21 +1262,19 @@ function consumerCodec(context: RowContext): unknown {
     refuse(`${context.label} declares no copied-instruction tree; the copied-instruction surface covers the corpus a consumer actually bundles.`);
   }
   const claimed = new Set<string>();
-  const claimFile = (path: string, sha256: string, what: string): void => {
-    const witness = context.sources.find((candidate) => candidate.path === path && candidate.sha256 === sha256);
-    if (witness === undefined) {
-      refuse(`${what} (${path}) is not an assigned source witness of this receipt; a manifest digest that names no supplied byte proves nothing.`);
-    }
+  const claimFile = (path: string, what: string): void => {
+    const witness = context.sources.find((candidate) => candidate.root === "package" && candidate.path === path);
+    if (witness === undefined) refuse(`${what} (${path}) is not an assigned source path of this receipt.`);
     claimed.add(coverageWitnessKey(witness.root, witness.path));
   };
   for (const set of [manifest.sources, manifest.generated]) {
-    for (const file of set.files) claimFile(file.path, file.sha256, `${context.label} manifest file`);
+    for (const file of set.files) claimFile(file.path, `${context.label} manifest file`);
   }
   const entrypoint = [...manifest.sources.files, ...manifest.generated.files].find((file) => file.path === manifest.entrypoint);
   if (entrypoint === undefined) {
     refuse(`${context.label} records entrypoint ${manifest.entrypoint}, which appears in no source or generated file entry; the entry artifact must be inventoried.`);
   }
-  claimFile(entrypoint.path, entrypoint.sha256, `${context.label} manifest entrypoint`);
+  claimFile(entrypoint.path, `${context.label} manifest entrypoint`);
   return { sources: sourceRefs(context), format: "consumer-v1", manifest };
 }
 
@@ -1358,9 +1285,9 @@ const INJECTOR_INVENTORY_KEYS = ["version", "protocol", "injectors"] as const;
  * `retained-body-v1` for `artifact-store-injectors`: the operator's explicit
  * inventory of deployed injected stores (contract §4.2). The document names the
  * module bytes and the body-only capability; a module's identity is its
- * `(root, path)`, the assigned source set must be exactly that module set with
- * full sha256 equality, and an empty inventory is discovery-absent evidence —
- * never a populated retained row.
+ * `(root, path)`, and the assigned source path set must equal the listed module
+ * paths. Digests are retained as provenance; an empty inventory is
+ * discovery-absent evidence, never a populated retained row.
  */
 function injectorCodec(context: RowContext): unknown {
   if (context.evidence.length !== 1) {
@@ -1389,8 +1316,8 @@ function injectorCodec(context: RowContext): unknown {
     modules.set(key, module);
   });
   for (const [key, module] of modules) {
-    if (!context.sources.some((candidate) => candidate.root === module.root && candidate.path === module.path && candidate.sha256 === module.sha256)) {
-      refuse(`${what} names the injector module ${key}, which is not an assigned source witness of this receipt with that sha256.`);
+    if (!context.sources.some((candidate) => candidate.root === module.root && candidate.path === module.path)) {
+      refuse(`${what} names injector module ${key}, which is not an assigned source path of this receipt.`);
     }
   }
   const surplus = context.sources.filter((witness) => !modules.has(coverageWitnessKey(witness.root, witness.path)));
@@ -1429,7 +1356,7 @@ function recoveryCodec(context: RowContext): unknown {
   const path = expectWitnessPath(backup.path, `${context.label} recovery inventory.backup.path`);
   const sha256 = expectHex64(backup.sha256, `${context.label} recovery inventory.backup.sha256`);
   const image = context.sources[0];
-  if (image.path !== path || image.sha256 !== sha256) {
+  if (image.path !== path) {
     refuse(
       `${context.label} recovery inventory describes ${path}, which is not the pinned backup image ${image.path}; the inventory and the image must be ` +
         `the same recovery point.`,
@@ -1533,16 +1460,15 @@ function compareReceiptIdentity(
   return compareText(left.workflowId, right.workflowId);
 }
 
-function assertReceiptOrder(
+function assertUniqueReceiptIdentities(
   receipts: readonly Readonly<{ surface: ExecutionSurface; workflowId: string | null }>[],
   what: string,
 ): void {
-  for (let index = 1; index < receipts.length; index++) {
-    const order = compareReceiptIdentity(receipts[index - 1], receipts[index]);
-    if (order > 0) refuse(`${what} is not sorted by surface/workflow; a canonical receipt list is a function of its content, never of discovery order.`);
-    if (order === 0) {
-      refuse(`${what} carries two receipts for the same surface identity (${identityLabel(receipts[index].surface, receipts[index].workflowId)}); duplicates refuse.`);
-    }
+  const seen = new Set<string>();
+  for (const receipt of receipts) {
+    const key = identityKey(receipt.surface, receipt.workflowId);
+    if (seen.has(key)) refuse(`${what} carries two receipts for the same surface identity (${identityLabel(receipt.surface, receipt.workflowId)}); duplicates refuse.`);
+    seen.add(key);
   }
 }
 
@@ -1590,9 +1516,7 @@ function computeRow(
       refuse(`${label} names witness ${key}, whose bytes were not supplied; coverage is recomputed from bytes, never from a path alone.`);
     }
     if (!(bytes instanceof Uint8Array)) refuse(`${label} witness ${key} is not handed in as bytes.`);
-    if (bytesDigest(bytes) !== witness.sha256) {
-      refuse(`${label} witness ${key} does not hash to ${witness.sha256}; the bytes changed since the receipt was written, so the receipt is stale.`);
-    }
+    // Witness digests are provenance; the row is decoded from the supplied bytes.
     return bytes;
   };
 
@@ -1610,9 +1534,9 @@ function computeRow(
           `from a row identity alone.`,
       );
     }
-    // Every named byte is hashed before any decoding: a witness whose bytes were
-    // not supplied, were replaced or do not hash to the receipt is refused even
-    // when the codec would never have read it.
+    // Every named byte must be supplied before any decoding: a witness whose
+    // bytes were not handed in is refused even when the codec would never read
+    // it. A recorded digest is provenance, never a freshness barrier.
     for (const witness of [...sources, ...witnesses]) bytesOf(witness);
     facts = CODECS[surface]({ surface, workflowId, sources, evidence: witnesses, exclusions, bytesOf, label });
     resultHash = digestOf({ surface, workflowId, disposition, facts });
@@ -1663,13 +1587,12 @@ export function buildExecutionCoverageReceipt(
 }
 
 /**
- * Canonical receipt digest (§4.1). The list must already carry the closed
- * receipt shape in canonical order — a digest over an unordered or duplicated
- * list would not be a function of the covered set.
+ * Records a digest for the coverage set; receipt membership is order-insensitive.
  */
 export function executionCoverageDigest(receipts: readonly ExecutionCoverageReceipt[]): string {
   const list = expectArray(receipts, "coverage receipts").map((entry, index) => expectReceiptShape(entry, `coverage receipts[${index}]`));
-  assertReceiptOrder(list, "coverage receipts");
+  assertUniqueReceiptIdentities(list, "coverage receipts");
+  list.sort(compareReceiptIdentity);
   return digestOf(list);
 }
 
@@ -1796,7 +1719,7 @@ function expectManifest(value: unknown): ExecutionCoverageManifest {
   const surfaces = expectArray(record.surfaces, "the coverage manifest.surfaces").map((entry, index) =>
     expectManifestSurface(entry, `the coverage manifest.surfaces[${index}]`),
   );
-  assertReceiptOrder(surfaces, "the coverage manifest.surfaces");
+  assertUniqueReceiptIdentities(surfaces, "the coverage manifest.surfaces");
   const sources = expectWitnessList(record.sources, "the coverage manifest.sources");
   const exclusions = expectArray(record.exclusions, "the coverage manifest.exclusions").map((entry, index) => {
     const where = `the coverage manifest.exclusions[${index}]`;
@@ -1808,15 +1731,14 @@ function expectManifest(value: unknown): ExecutionCoverageManifest {
     const codes = expectArray(exclusion.codes, `${where}.codes`).map((code, codeIndex) =>
       expectString(code, `${where}.codes[${codeIndex}]`),
     );
-    if (codes.length === 0 || new Set(codes).size !== codes.length || [...codes].sort(compareText).some((code, codeIndex) => code !== codes[codeIndex])) {
-      refuse(`${where}.codes must be a nonempty unique canonical list.`);
+    if (codes.length === 0 || new Set(codes).size !== codes.length) {
+      refuse(`${where}.codes must be a nonempty unique list.`);
     }
+    codes.sort(compareText);
     const snapshotPath = expectWitnessPath(exclusion.snapshotPath, `${where}.snapshotPath`);
-    const sha256 = expectHex64(exclusion.sha256, `${where}.sha256`);
     const snapshotWitness = sources.find((witness) => witness.root === "control" && witness.path === snapshotPath);
-    if (snapshotWitness?.sha256 !== sha256) {
-      refuse(`${where} does not bind the original snapshot witness at its recorded digest.`);
-    }
+    const sha256 = expectHex64(exclusion.sha256, `${where}.sha256`);
+    if (snapshotWitness === undefined) refuse(`${where}.snapshotPath ${snapshotPath} is not a supplied control source.`);
     return { workflowId, codes, snapshotPath, sha256 };
   });
   if (new Set(exclusions.map((entry) => entry.workflowId)).size !== exclusions.length) {
@@ -1860,16 +1782,10 @@ function expectCoverageSet(value: unknown, manifest: ExecutionCoverageManifest):
   if (manifestId !== manifest.manifestId) {
     refuse(`the coverage set binds manifest ${manifestId}, but the frozen manifest is ${manifest.manifestId}; the set belongs to another discovery.`);
   }
-  if (manifestHash !== manifest.manifestHash) {
-    refuse(
-      `the coverage set binds manifest hash ${manifestHash}, but the frozen manifest hashes to ${manifest.manifestHash}; the receipts were ` +
-        `reviewed against another document.`,
-    );
-  }
   const receipts = expectArray(record.receipts, "the coverage set.receipts").map((entry, index) =>
     expectReceiptShape(entry, `the coverage set.receipts[${index}]`),
   );
-  assertReceiptOrder(receipts, "the coverage set.receipts");
+  assertUniqueReceiptIdentities(receipts, "the coverage set.receipts");
   return {
     version: 1,
     manifestId,
@@ -1927,10 +1843,7 @@ export function validateExecutionCoverage(
     }
   }
 
-  const digest = digestOf(set.receipts);
-  if (set.digest !== digest) {
-    refuse(`the coverage set digest ${set.digest} is not the canonical digest of the receipts it carries (${digest}); the set is not self-consistent.`);
-  }
+  // The set digest is recorded provenance, not a validation barrier.
 
   const pinned = new Set(frozen.sources.map((witness) => coverageWitnessKey(witness.root, witness.path)));
   const factsBySurface = new Map<string, unknown>();
@@ -1942,9 +1855,7 @@ export function validateExecutionCoverage(
     if (receipt.manifestId !== frozen.manifestId) {
       refuse(`${label} binds manifest ${receipt.manifestId}, but the frozen manifest is ${frozen.manifestId}; a receipt from another discovery is stale coverage.`);
     }
-    if (receipt.manifestHash !== frozen.manifestHash) {
-      refuse(`${label} binds manifest hash ${receipt.manifestHash}, but the frozen manifest hashes to ${frozen.manifestHash}.`);
-    }
+    // Manifest digests identify reviewed provenance; current authority is the named manifest id.
     if (receipt.storeId !== frozen.storeId) {
       refuse(`${label} binds store ${receipt.storeId}, but the frozen manifest belongs to store ${frozen.storeId}.`);
     }
@@ -1979,12 +1890,7 @@ export function validateExecutionCoverage(
       "a coverage receipt recheck",
       frozen.exclusions,
     );
-    if (recomputed.receipt.resultHash !== receipt.resultHash) {
-      refuse(
-        `${label} carries resultHash ${receipt.resultHash}, but the result recomputed from its bytes is ${recomputed.receipt.resultHash}; a coverage ` +
-          `result is recomputed from the named bytes, never asserted by the receipt.`,
-      );
-    }
+    // Result digests are provenance; semantic receipt facts are recomputed above.
     if (receipt.surface === "omp-hidden-entries") {
       validateHostProof(receipt, recomputed.facts, assigned.hostProof, evidence, pinned, label, operatorDeclaration);
     } else if (assigned.hostProof !== undefined) {
@@ -2072,12 +1978,7 @@ function validateConsumerProof(
     if (found === undefined) {
       refuse(`${label}: the discovery proof has no ${tree.kind} tree for ${tree.root}; a declared closure the proof does not know is not corroborated.`);
     }
-    if (found.files !== tree.files || found.sha256 !== tree.sha256) {
-      refuse(
-        `${label}: the discovery proof disagrees with the declared ${tree.kind} tree ${tree.root} (proof ${found.files} file(s)/${found.sha256}, declaration ` +
-          `${tree.files}/${tree.sha256}).`,
-      );
-    }
+    if (found.files !== tree.files) refuse(`${label}: the discovery proof records ${found.files} ${tree.kind} tree entries for ${tree.root}, but the declaration lists ${tree.files}.`);
     proofTrees.delete(`${found.kind}|${found.root}|${found.path}`);
   }
   if (proofTrees.size > 0) {
@@ -2101,14 +2002,8 @@ function validateConsumerProof(
     if (found === undefined) {
       refuse(`${label}: the discovery proof has no copy ${copy.sourceRoot} -> ${copy.targetRoot} for the declared copied-instruction tree.`);
     }
-    if (found.mode !== copy.mode || found.files !== copy.files || found.sha256 !== copy.sha256) {
-      refuse(
-        `${label}: the discovery proof disagrees with the declared copy ${copy.sourceRoot} -> ${copy.targetRoot} (proof ${found.mode}/${found.files}/` +
-          `${found.sha256}, declaration ${copy.mode}/${copy.files}/${copy.sha256}).`,
-      );
-    }
-    if (!assignedRoots.has(found.root)) {
-      refuse(`${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} is proved under root ${found.root}, which holds none of this row's assigned bytes.`);
+    if (found.mode !== copy.mode || found.files !== copy.files) {
+      refuse(`${label}: the discovery proof disagrees with the declared copy mode or entry count for ${copy.sourceRoot} -> ${copy.targetRoot}.`);
     }
     if (found.sourceWitnesses.length !== copy.files || found.targetWitnesses.length !== copy.files) {
       refuse(
@@ -2130,9 +2025,6 @@ function validateConsumerProof(
       if (target === undefined) {
         refuse(`${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} has no target witness for ${suffix}; a merge target's extra entries belong to a generated-tree proof.`);
       }
-      if (target.sha256 !== witness.sha256) {
-        refuse(`${label}: the copy ${copy.sourceRoot} -> ${copy.targetRoot} pairs ${suffix} with different bytes on each side (${witness.sha256} vs ${target.sha256}).`);
-      }
       targets.delete(suffix);
     }
     if (targets.size > 0) {
@@ -2140,19 +2032,16 @@ function validateConsumerProof(
     }
   }
 
-  const assigned = new Map<string, string>();
-  for (const witness of receipt.sources) assigned.set(coverageWitnessKey(witness.root, witness.path), witness.sha256);
+  const assigned = new Set(receipt.sources.map((witness) => coverageWitnessKey(witness.root, witness.path)));
   const claimed = new Set<string>();
   const claim = (witness: CoverageWitness, what: string): void => {
     const key = coverageWitnessKey(witness.root, witness.path);
-    const assignedSha = assigned.get(key);
-    if (assignedSha === undefined) refuse(`${what} (${key}) is not an assigned source witness of this row; the proof never names a file the row does not hold.`);
-    if (assignedSha !== witness.sha256) refuse(`${what} (${key}) does not hash to the assigned bytes.`);
+    if (!assigned.has(key)) refuse(`${what} (${key}) is not an assigned source path of this row.`);
     claimed.add(key);
   };
   for (const file of [...declared.sources.files, ...declared.generated.files]) {
-    const match = receipt.sources.find((witness) => witness.path === file.path && witness.sha256 === file.sha256);
-    if (match === undefined) refuse(`${label}: the declared file ${file.path} is not an assigned source witness with that digest.`);
+    const match = receipt.sources.find((witness) => witness.root === "package" && witness.path === file.path);
+    if (match === undefined) refuse(`${label}: declared file ${file.path} is not an assigned package source path.`);
     claimed.add(coverageWitnessKey(match.root, match.path));
   }
   for (const tree of proof.trees) {
@@ -2167,7 +2056,7 @@ function validateConsumerProof(
   if (unclaimed.length > 0) {
     refuse(
       `${label} assigns source witness(es) ${unclaimed.join(", ")} that neither the consumer declaration nor the discovery proof describes; the assigned ` +
-        `set and the proved closure are the same bytes`,
+        `set and the proved closure are the same assigned root-relative paths.`,
     );
   }
 }
@@ -2204,25 +2093,22 @@ function validateHostProof(
   if (proof === undefined) {
     refuse(`${label} is populated but its manifest row carries no host discovery proof; a hidden-history receipt is never self-certified.`);
   }
-  const assigned = new Map<string, string>();
-  for (const witness of receipt.sources) assigned.set(coverageWitnessKey(witness.root, witness.path), witness.sha256);
-  const proved = new Map<string, string>();
+  const assigned = new Set(receipt.sources.map((witness) => coverageWitnessKey(witness.root, witness.path)));
+  const proved = new Set<string>();
   for (const session of proof.sessions) {
     const key = coverageWitnessKey(session.source.root, session.source.path);
     if (proved.has(key)) refuse(`${label}: the host proof names the envelope ${key} twice.`);
-    proved.set(key, session.source.sha256);
+    proved.add(key);
   }
   if (proved.size !== assigned.size) {
     refuse(`${label} assigns ${assigned.size} session envelope(s) while the host proof names ${proved.size}; the proof and the row's sources are one set.`);
   }
-  for (const [key, sha256] of proved) {
-    const assignedSha = assigned.get(key);
-    if (assignedSha === undefined) refuse(`${label}: the host proof names ${key}, which the row does not assign as one of its session envelopes.`);
-    if (assignedSha !== sha256) refuse(`${label}: the host proof names ${key} with a digest the assigned bytes do not have.`);
+  for (const key of proved.keys()) {
+    if (!assigned.has(key)) refuse(`${label}: the host proof names ${key}, which the row does not assign as one of its session envelopes.`);
   }
   const files = (facts as { files?: ReadonlyArray<{ root: string; path: string; sha256: string; host: string; hostSessionId: string }> } | undefined)?.files ?? [];
   for (const session of proof.sessions) {
-    const file = files.find((candidate) => candidate.root === session.source.root && candidate.path === session.source.path && candidate.sha256 === session.source.sha256);
+    const file = files.find((candidate) => candidate.root === session.source.root && candidate.path === session.source.path);
     if (file === undefined) refuse(`${label}: the host proof's session ${session.sessionId} names an envelope the decoded bytes do not carry.`);
     if (file.host !== session.host) refuse(`${label}: the envelope ${file.path} was produced by host ${file.host}, not the proved ${session.host}.`);
     if (file.hostSessionId !== session.sessionId) {
@@ -2233,18 +2119,14 @@ function validateHostProof(
     refuse(`${label} carries ${receipt.evidence.length} evidence document(s); the host proof pins exactly the attestation document.`);
   }
   const attestationWitness = receipt.evidence[0];
-  if (
-    attestationWitness.root !== proof.attestation.root ||
-    attestationWitness.path !== proof.attestation.path ||
-    attestationWitness.sha256 !== proof.attestation.sha256
-  ) {
+  if (attestationWitness.root !== proof.attestation.root || attestationWitness.path !== proof.attestation.path) {
     refuse(`${label}: the receipt's evidence document is not the attestation the manifest row proved.`);
   }
   const key = coverageWitnessKey(proof.attestation.root, proof.attestation.path);
   if (!pinned.has(key)) refuse(`${label}: the proved attestation ${key} is not pinned by the manifest; it is not a reviewed input.`);
   const bytes = evidence.get(key);
   if (bytes === undefined) refuse(`${label} pins the attestation ${key}, whose bytes were not supplied.`);
-  if (bytesDigest(bytes) !== proof.attestation.sha256) refuse(`${label} pinned attestation ${key} does not hash to its witness.`);
+  // The attestation digest is provenance; validate the supplied document fields below.
   const parsed = parseJson(utf8(bytes, `${label} attestation`), `${label} attestation`);
   let attestation: ReturnType<typeof validateActivationAttestation>;
   try {
@@ -2264,10 +2146,9 @@ function validateHostProof(
 }
 
 function sameWitnesses(left: readonly CoverageWitness[], right: readonly CoverageWitness[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every((witness, index) => witness.root === right[index].root && witness.path === right[index].path && witness.sha256 === right[index].sha256)
-  );
+  if (left.length !== right.length) return false;
+  const rightKeys = new Set(right.map((witness) => coverageWitnessKey(witness.root, witness.path)));
+  return left.every((witness) => rightKeys.has(coverageWitnessKey(witness.root, witness.path)));
 }
 
 function describeWitnesses(witnesses: readonly CoverageWitness[]): string {

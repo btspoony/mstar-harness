@@ -36,7 +36,6 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -134,10 +133,6 @@ function readJson(path: string): Record<string, unknown> {
 
 function headOf(cwd: string): string {
   return execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-}
-
-function sha256OfFile(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 /** The scoped Assignment header block `parseAssignmentFile` accepts. */
@@ -442,14 +437,6 @@ function refusalOf(outcome: PlanLaunchResult): { code: string; message: string }
   return outcome;
 }
 
-/** The plan row's current prepared Assignment pin (what a launch must match). */
-async function preparedHashOf(fixture: Fixture, planId: string): Promise<string> {
-  const coordination = (await planRowOf(fixture, planId as PlanId)).coordination as Record<string, unknown> | undefined;
-  const prepared = coordination?.prepared as Record<string, unknown> | undefined;
-  if (typeof prepared?.assignment_sha256 !== "string") throw new Error(`plan ${planId} has no prepared pin`);
-  return prepared.assignment_sha256;
-}
-
 /**
  * Recovered journal entries this plugin cannot re-derive from the engine: the
  * journal is this module's own transport document, so a stale or foreign
@@ -573,7 +560,6 @@ describe("phase2 launch admission journal", () => {
     const reserved = intentOf(await reserveFor(fixture, "plan-a"));
     expect(reserved.state).toBe("reserved");
     expect(reserved.workflowId).toBe(WORKFLOW_ID);
-    expect(reserved.preparedHash).toBe(sha256OfFile(fixture.assignments["plan-a"]!));
     expect(reserved.assignmentPath).toBe(fixture.assignments["plan-a"]!);
     expect(reserved.worktreePath).toBe(fixture.worktrees["plan-a"]!);
     expect(reserved.evidencePaths).toEqual([]);
@@ -660,25 +646,27 @@ describe("phase2 launch admission journal", () => {
     expect(journalIntents(fixture).map((entry) => entry.planId)).toEqual(["plan-a", "plan-b", "plan-c"]);
   });
 
-  test("prepared hash drift refuses", async () => {
+  test("a prose-only Assignment edit never refuses the launch bookkeeping", async () => {
     const fixture = await bindFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
 
     const a = intentOf(await reserveFor(fixture, "plan-a"));
-    // The pinned Assignment changes after the reservation: the transition that
-    // would create a pane must refuse instead of launching against drift.
+    // The Assignment's bytes change after the reservation, but only its prose:
+    // the launch journal records transport bookkeeping and no longer re-measures
+    // the prepared digest. A change of the Assignment's MEANING is adjudicated by
+    // the engine's own semantic `assertPreparedFresh` when the child binds the
+    // plan — not here, where a byte diff would refuse over a comment.
     writeText(fixture.assignments["plan-a"]!, `${readFileSync(fixture.assignments["plan-a"]!, "utf8")}\nReworked scope.\n`);
-    expect(refusalOf(await recordFor(fixture, a.id, "starting")).code).toBe("launch.prepared-hash-drift");
+    expect(intentOf(await recordFor(fixture, a.id, "starting")).state).toBe("starting");
     const intents = journalIntents(fixture);
     expect(intents.length).toBe(1);
-    expect(intents[0]!.state).toBe("reserved");
-    expect(intents[0]!.evidencePaths).toEqual([]);
+    expect(intents[0]!.state).toBe("starting");
 
-    // A fresh reservation against the same drifted Assignment refuses too,
-    // authorizes nothing, and leaves the recorded intent alone.
+    // A fresh reservation against the same edited Assignment reserves normally and
+    // authorizes nothing beyond the recorded transport intent.
     writeText(fixture.assignments["plan-b"]!, `${readFileSync(fixture.assignments["plan-b"]!, "utf8")}\nReworked scope.\n`);
-    expect(refusalOf(await reserveFor(fixture, "plan-b")).code).toBe("launch.prepared-hash-drift");
-    expect(journalIntents(fixture).length).toBe(1);
+    expect(intentOf(await reserveFor(fixture, "plan-b")).state).toBe("reserved");
+    expect(journalIntents(fixture).length).toBe(2);
   });
 
   test("uncertain submission never retries", async () => {
@@ -782,8 +770,8 @@ describe("phase2 launch admission journal", () => {
     expect(journalIntents(fixture).filter((entry) => entry.planId === "plan-a").length).toBe(1);
 
     // A stale journal entry this plugin cannot re-derive from the engine (an
-    // intent recorded against an earlier prepared revision) is a duplicate
-    // owner, not a second authorization.
+    // intent recorded for a DIFFERENT Assignment and checkout than plan-c's) is a
+    // duplicate owner, not a second authorization.
     const recorded = journalIntents(fixture);
     writeJson(fixture.journalPath, {
       ...readJson(fixture.journalPath),
@@ -818,7 +806,7 @@ describe("phase2 launch admission journal", () => {
     await driveChildToScopedStop(fixture, "plan-a", a.id);
 
     // The handoff was submitted by exactly plan-a's bound session, for the
-    // prepared pin and the checkout this launch recorded: it releases the slot.
+    // checkout this launch recorded: it releases the slot.
     expect(intentOf(await reserveFor(fixture, "plan-b")).state).toBe("reserved");
     expect(intentOf(await reserveFor(fixture, "plan-c")).state).toBe("reserved");
     expect(refusalOf(await reserveFor(fixture, "plan-d")).code).toBe("launch.capacity-exceeded");
@@ -829,24 +817,21 @@ describe("phase2 launch admission journal", () => {
     expect(released?.target).toBe("pane-plan-a");
   });
 
-  test("mismatched prepared pin keeps a stale intent occupying capacity", async () => {
+  test("a current coordinator cannot replay another coordinator's launch but can record its outcome", async () => {
     const fixture = await bindFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });
-
-    const a = intentOf(await reserveFor(fixture, "plan-a"));
-    await driveChildToScopedStop(fixture, "plan-a", a.id);
-
-    // A recovered intent from an earlier prepared revision: the row's durable
-    // handoff belongs to the CURRENT pin, so it cannot reclaim this record, and
-    // the recovered record keeps occupying plan-a.
-    appendJournalIntents(fixture, [{ ...a, id: "phase2-launch:plan-a:0", preparedHash: "0".repeat(64) }]);
-
-    expect(intentOf(await reserveFor(fixture, "plan-b")).state).toBe("reserved");
-    const refused = refusalOf(await reserveFor(fixture, "plan-c"));
-    expect(refused.code).toBe("launch.capacity-exceeded");
-    expect(refused.message).toContain("plan-a");
-    // Nothing was silently reclaimed to make room.
-    expect(journalIntents(fixture).filter((entry) => entry.planId === "plan-a").length).toBe(2);
+    const original = intentOf(await reserveFor(fixture, "plan-a"));
+    writeJson(fixture.journalPath, {
+      ...readJson(fixture.journalPath),
+      intents: [{ ...original, coordinatorSessionId: "previous-coordinator" }],
+    });
+    expect(refusalOf(await reserveFor(fixture, "plan-a")).code).toBe("launch.plan-occupied");
+    expect(journalIntents(fixture)).toHaveLength(1);
+    expect(intentOf(await recordFor(fixture, original.id, "refused")).state).toBe("refused");
+    const replacement = intentOf(await reserveFor(fixture, "plan-a"));
+    expect(replacement.id).not.toBe(original.id);
+    expect(replacement.coordinatorSessionId).toBe(authorityOf(fixture).identity.sessionId);
+    expect(intentOf(await recordFor(fixture, replacement.id, "starting")).state).toBe("starting");
   });
 
   test("foreign or other-attempt handoff stays occupied until an explicit release", async () => {
@@ -858,8 +843,9 @@ describe("phase2 launch admission journal", () => {
 
     // A recovered intent whose recorded checkout is NOT the one that handed off:
     // the durable handoff belongs to another launch/attempt, so it must not
-    // discharge this record even though the prepared pin and plan match.
-    expect(await preparedHashOf(fixture, "plan-a")).toBe(a.preparedHash);
+    // discharge this record even though the plan matches. Occupancy is matched on
+    // the real binding facts (coordinator, handoff submitter, assigned checkout),
+    // never on a recorded Assignment digest.
     const foreign = { ...a, id: "phase2-launch:plan-a:0", state: "reserved", worktreePath: fixture.worktrees["plan-b"]! };
     appendJournalIntents(fixture, [foreign]);
 

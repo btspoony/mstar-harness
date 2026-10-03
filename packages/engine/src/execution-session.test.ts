@@ -28,7 +28,6 @@ import {
   assertExecutionSessionCurrent,
   createLocalExecutionIdentity,
   decodeExecutionSessionRef,
-  encodeExecutionSessionRef,
   executionContextFor,
   resumeExecutionSession,
 } from "./execution-session.js";
@@ -59,19 +58,12 @@ const ref: ExecutionSessionRef = {
 };
 
 describe("execution session transport", () => {
-  test("encodes and decodes the canonical reference without adding authority", () => {
-    const wire = encodeExecutionSessionRef(ref);
+  test("accepts equivalent declared identity with reordered keys and formatted JSON", () => {
+    const reordered = Object.fromEntries(Object.entries(ref).reverse());
+    const wire = `exec-session-v1:${Buffer.from(JSON.stringify(reordered, null, 2), "utf8").toString("base64url")}`;
     expect(decodeExecutionSessionRef(wire)).toEqual(ref);
-    expect(() => decodeExecutionSessionRef(`${wire}AA`)).toThrow();
   });
-  test("rejects noncanonical pad bits and invalid UTF-8 bytes", () => {
-    const wire = encodeExecutionSessionRef(ref);
-    const encoded = wire.slice("exec-session-v1:".length);
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const last = encoded.length - 1;
-    const index = alphabet.indexOf(encoded[last] ?? "");
-    const padBits = `${encoded.slice(0, last)}${alphabet[(index & 0b111100) | 1]}`;
-    expect(() => decodeExecutionSessionRef(`exec-session-v1:${padBits}`)).toThrow();
+  test("rejects invalid UTF-8 bytes", () => {
     const invalidUtf8 = Buffer.from([0xff]).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
     expect(() => decodeExecutionSessionRef(`exec-session-v1:${invalidUtf8}`)).toThrow();
   });

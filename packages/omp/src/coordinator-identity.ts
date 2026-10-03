@@ -76,17 +76,17 @@ export const COORDINATOR_BIND_INPUT_KEYS = ["operation", "workflowId"] as const;
 export type CoordinatorShowRecoveryRequest = Readonly<{ operation: "show-recovery"; workflowId: string }>;
 
 /**
- * The `recover` input (prerequisite contract §3.3): the reviewed tokens and the
- * operator's own proof, plus the workflow. Deliberately absent: any session id
- * for the NEW identity (host-derived), the prior holder's session id or
- * envelope path (resolved from the stored binding, never accepted from the
- * caller), a root, a role and any force flag.
+ * The `recover` input (prerequisite contract §3.3): the workflow, the audited
+ * operation fields (operation id, reason, authorization reference) and the
+ * operator's own stop proof. Deliberately absent: any session id for the NEW
+ * identity (host-derived), the prior holder's session id or envelope path
+ * (resolved from the stored binding, never accepted from the caller), any
+ * observed digest of the snapshot or compass, a root, a role and any force
+ * flag.
  */
 export type CoordinatorRecoverRequest = Readonly<{
   operation: "recover";
   workflowId: string;
-  expectedSnapshotVersion: string;
-  expectedCompassVersion: string;
   operationId: string;
   reason: string;
   authorizationRef: string;
@@ -96,12 +96,10 @@ export type CoordinatorRecoverRequest = Readonly<{
 /** The only keys `show-recovery` accepts. */
 export const COORDINATOR_SHOW_RECOVERY_INPUT_KEYS = ["operation", "workflowId"] as const;
 
-/** The only keys `recover` accepts — reviewed tokens and stop proof, nothing else. */
+/** The only keys `recover` accepts — the audited operation fields, nothing else. */
 export const COORDINATOR_RECOVER_INPUT_KEYS = [
   "operation",
   "workflowId",
-  "expectedSnapshotVersion",
-  "expectedCompassVersion",
   "operationId",
   "reason",
   "authorizationRef",
@@ -620,8 +618,6 @@ export type CoordinatorRecoveryDeps = Readonly<{
     identity: ExecutionIdentity;
     priorSessionPath: string;
     priorSessionId: string;
-    expectedSnapshotVersion: string;
-    expectedCompassVersion: string;
     operationId: string;
     reason: string;
     authorizationRef: string;
@@ -694,9 +690,10 @@ function coordinatorCallContext(
 
 /**
  * `{operation:"show-recovery"}` — the read-only recovery view of one workflow
- * (prerequisite contract §3.3): the recorded owner, both byte versions and the
- * Prepare verdict, with no envelope bytes, credential or path. The caller uses
- * it to review before recovering; it writes nothing.
+ * (prerequisite contract §3.3): the recorded owner, the observed snapshot and
+ * compass digests (provenance only, they neither admit nor reject a recovery)
+ * and the Prepare verdict, with no envelope bytes, credential or path. The
+ * caller uses it to review before recovering; it writes nothing.
  *
  * This operation has the SAME key set in both authorities, so the addressed
  * root's route decides: an ACTIVE authority answers with the DB workflow/session
@@ -822,8 +819,6 @@ export async function recoverCoordinatorIdentity(
   if (!context.ok) return context.outcome;
   const request = raw as Record<string, unknown>;
   for (const [field, value] of [
-    ["expectedSnapshotVersion", request.expectedSnapshotVersion],
-    ["expectedCompassVersion", request.expectedCompassVersion],
     ["operationId", request.operationId],
     ["reason", request.reason],
     ["authorizationRef", request.authorizationRef],
@@ -886,8 +881,6 @@ export async function recoverCoordinatorIdentity(
       identity,
       priorSessionPath,
       priorSessionId,
-      expectedSnapshotVersion: request.expectedSnapshotVersion as string,
-      expectedCompassVersion: request.expectedCompassVersion as string,
       operationId: request.operationId as string,
       reason: request.reason as string,
       authorizationRef: request.authorizationRef as string,

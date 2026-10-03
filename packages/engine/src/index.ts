@@ -864,7 +864,6 @@ export type {
   ProjectionRows,
   ProjectionSourceDigest,
   ProjectionSourceKind,
-  ProjectionSourceLocation,
   ProjectionSourceState,
   RefreshReport,
   SourceDiagnostic,
@@ -999,19 +998,17 @@ export {
 // the validated coverage in one transaction against a verified recovery point,
 // and never activates. R2 adds the three separate crash-safe steps:
 // `activateExecutionMigration` takes the §4.2 maintenance → root → workflow lock
-// ladder and RECOMPUTES the coverage from the named bytes, requiring it to equal
-// BOTH the digest the operator approved and the set recorded at staging, before
-// it performs the single store-wide all-or-nothing cutover (one epoch advance,
-// imported references revoked, held ownership represented); a deferred (2b)
-// surface is diagnostic evidence only and is never an activation
+// ladder, re-reads current semantic identities and coverage, and performs the
+// single store-wide all-or-nothing cutover (one epoch advance, imported
+// references revoked, held ownership represented). Recorded digests do not
+// admit or veto the transition; a deferred (2b) surface is diagnostic evidence
+// only and is never an activation
 // precondition. `retireExecutionSources` moves the exact core sources and the
 // `retire`-disposition session envelopes into manifest-addressed history under a
 // resumable, fsynced per-item ledger, and `abortExecutionMigration` returns a
 // STAGED manifest to legacy without touching active data.
-// `collectExecutionCoverage` is the read-only coverage collector,
-// `executionManifestHash` is exported so a caller can hand the reviewed hash
-// back verbatim. ADDITIVE export - the engine package's exports map is the only
-// reachable surface for consumers.
+// `collectExecutionCoverage` is the read-only coverage collector, and
+// `executionManifestHash` produces historical provenance, not an approval input.
 export type {
   ExecutionDeferredSurface,
   ExecutionManifest,

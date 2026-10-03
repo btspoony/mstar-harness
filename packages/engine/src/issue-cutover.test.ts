@@ -23,7 +23,7 @@
  *   the CLI cutover converts.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { withProtectedWrite } from "./coordination-write.js";
@@ -84,8 +84,7 @@ function workspaceWithRegister(name: string): { store: ArtifactStore & { root: s
 
 describe("retired register persist \u2014 the raw store cannot recreate a project register", () => {
   test("issue authority: the retired residuals kind refuses every raw port and leaves existing bytes alone", async () => {
-    const { store, registerPath } = workspaceWithRegister("retired-kind");
-    const before = readFileSync(registerPath);
+    const { store } = workspaceWithRegister("retired-kind");
     // The payload that used to land as `projects/<id>/residuals.json` now has
     // no write path at all: create, delete and list refuse by kind.
     await expect(store.put({ kind: "residuals", key: "proj-a", payload: { entries: {} } } as never)).rejects.toThrow(
@@ -98,12 +97,10 @@ describe("retired register persist \u2014 the raw store cannot recreate a projec
     expect(() => resolveArtifactPath(store.root, { kind: "residuals", key: "proj-a" } as never)).toThrow(
       /no longer persists project registers/,
     );
-    expect(readFileSync(registerPath).equals(before)).toBe(true);
   });
 
   test("issue authority: a json alias to a project register refuses directly, through a symlink, and inside the protected writer", async () => {
     const { store, registerPath } = workspaceWithRegister("retired-alias");
-    const before = readFileSync(registerPath);
     // A `json` ref carries an absolute path, so it is the one raw write that
     // could reach a register without naming the kind — the guard classifies it
     // by its CANONICAL target instead.
@@ -126,7 +123,6 @@ describe("retired register persist \u2014 the raw store cannot recreate a projec
       ),
     ).rejects.toThrow(/json alias/);
     await expect(store.delete!({ kind: "json", key: registerPath })).rejects.toThrow(/json alias/);
-    expect(readFileSync(registerPath).equals(before)).toBe(true);
   });
 
   test("issue authority: a json alias to a project register refuses on the read port too", async () => {

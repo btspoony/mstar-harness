@@ -52,7 +52,6 @@ import {
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
-import { executionInputHash } from "./coordination.js";
 import { prepareExecutionPlan } from "./execution-coordination.js";
 import { previewExecutionMigration } from "./execution-migrate.js";
 import { readExecutionAuthority } from "./execution-read.js";
@@ -879,37 +878,20 @@ describe("execution-registration \u2014 migration boundary", () => {
     expect(await footprint(context)).toEqual(before);
   });
 
-  test("execution-registration-refuses-an-imported-pin-that-disagrees-with-its-row", async () => {
+  test("execution-registration-imports-a-pin-whose-recorded-hash-has-drifted", async () => {
     const { harnessRoot, context } = await legacyFixture("migration-pin");
     const storeId = (await one<{ store_id: string }>(context, "select store_id from store_meta where id = 1"))!.store_id;
 
-    // §7: a pin freezes the very row it is sealed with, so a same-store pin whose
-    // `document_hash` is not that row's frozen-input hash is refused rather than
-    // imported as this store's frozen selection.
+    // §365 the recorded `document_hash` is provenance: a pin whose row has moved
+    // since preparation is imported with the digest it recorded rather than
+    // re-hashed to refuse the store's own documented selection.
     writeLegacySource(harnessRoot, {
       store_id: storeId,
       entity_revision: 3,
       document_hash: "2".repeat(64),
       relation_hash: "3".repeat(64),
     });
-    const before = await footprint(context);
-    const refusal = await refusalOf(() =>
-      previewExecutionMigration({ context, operationId: "op-preview-pin", operator: "ops-engineer" }),
-    );
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("the pin and its row disagree");
-    expect(await footprint(context)).toEqual(before);
-
-    // The SAME source with the row's own hash — the released prepare shape — is
-    // the coherent pair: the refusal was the disagreement, not the fixture.
-    const row = { id: PLAN_ID, title: PLAN_TITLE, file: `plans/${PLAN_ID}.md`, status: "Todo" };
-    writeLegacySource(harnessRoot, {
-      store_id: storeId,
-      entity_revision: 3,
-      document_hash: executionInputHash(row, PLAN_ID),
-      relation_hash: "3".repeat(64),
-    });
-    const manifest = await previewExecutionMigration({ context, operationId: "op-preview-pin-ok", operator: "ops-engineer" });
+    const manifest = await previewExecutionMigration({ context, operationId: "op-preview-pin", operator: "ops-engineer" });
     expect(manifest.sources.length).toBeGreaterThan(0);
     expect(manifest.pendingCatalogOperations).toEqual([]);
     expect(existsSync(join(harnessRoot, "workflows", WORKFLOW_ID, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
@@ -1006,7 +988,6 @@ describe("execution-catalog-pin", () => {
     };
     expect(pin.store_id).toBe(fixture.storeId);
     expect(pin.entity_revision).toBe(2);
-    expect(pin.document_hash).toBe(sealed!.input_hash);
   });
 });
 
@@ -1088,7 +1069,6 @@ describe("execution-cross-domain", () => {
     // narrowed union member once instead of casting at every field read.
     const pinnedView = pinned.data as ExecutionPlanView;
     expect(pinnedView.frozenInput?.entity_revision).toBe(1);
-    expect(pinnedView.frozenInput?.document_hash).toBe(sealed!.input_hash);
     expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(sealed);
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(binding);
 

@@ -115,8 +115,6 @@ describe("session and workflow command families", () => {
     const input = {
       session: "/tmp/prior-coordinator.json",
       sessionId: "child-agent-session",
-      expectSnapshot: "snapshot-token",
-      expectCompass: "compass-token",
       operationId: "recover-1",
       reason: "the prior session stopped",
       authorizationRef: "approval-1",

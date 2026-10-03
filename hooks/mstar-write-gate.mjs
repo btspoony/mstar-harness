@@ -4,13 +4,11 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync as readFileSync2, readlinkSync as readlinkSync2, realpathSync, statSync as statSync2, writeSync } from "node:fs";
+import { readFileSync as readFileSync2, readlinkSync, realpathSync, statSync as statSync2, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative5, resolve } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
-import { createHash as createHash7 } from "node:crypto";
-import { createHash as createHash6 } from "node:crypto";
 import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync3, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync5 } from "node:fs";
 import { createRequire as createRequire22 } from "node:module";
 import { join as join18, resolve as resolve13 } from "node:path";
@@ -20,7 +18,6 @@ import {
   mkdirSync as mkdirSync6,
   readFileSync as readFileSync11,
   readdirSync as readdirSync8,
-  readlinkSync,
   statSync as statSync5,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
@@ -45,9 +42,9 @@ import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
 import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { createHash as createHash17 } from "node:crypto";
-import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
-import { join as join34 } from "node:path";
+import { createHash as createHash16 } from "node:crypto";
+import { readFileSync as readFileSync20 } from "node:fs";
+import { join as join33 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -1012,14 +1009,12 @@ function validatePreparedCoordination(value, what = "coordination.prepared") {
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
-    if (key === "assignment_intent")
-      continue;
-    if (!isNonEmptyString(value[key])) {
+    if (key !== "assignment_intent" && !isNonEmptyString(value[key])) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
     }
   }
-  if (value.assignment_intent !== undefined) {
-    const intent = value.assignment_intent;
+  const intent = value.assignment_intent;
+  if (intent !== undefined) {
     if (!isPlainObject(intent)) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
     } else {
@@ -1118,56 +1113,6 @@ function validateCoordinationIdentityRecovery(value, what = "coordination.identi
   }
   return violations;
 }
-function validateCoordinationSelfAmendment(value, what = "coordination.self_amendments[]") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.amendment.shape", `${what} must be an object`)];
-  const allowed = [
-    "at",
-    "session_id",
-    "old_sha256",
-    "new_sha256",
-    "plan_old_sha256",
-    "plan_new_sha256",
-    "operation_id",
-    "prepared_by_matches"
-  ];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.amendment.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  for (const key of ["at", "session_id", "operation_id"]) {
-    if (!isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.amendment.field", `${what}.${key} must be a non-empty string`));
-    }
-  }
-  for (const key of ["old_sha256", "new_sha256"]) {
-    if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
-      violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
-    }
-  }
-  if (value.old_sha256 === value.new_sha256 && typeof value.old_sha256 === "string") {
-    violations.push(invalid("coordination.amendment.hash", `${what}.old_sha256 and .new_sha256 must differ — an amendment records a move`));
-  }
-  const planHalves = ["plan_old_sha256", "plan_new_sha256"].filter((key) => value[key] !== undefined);
-  if (planHalves.length === 1) {
-    violations.push(invalid("coordination.amendment.hash", `${what}.plan_old_sha256 and .plan_new_sha256 are recorded together or not at all`));
-  }
-  if (planHalves.length > 0) {
-    for (const key of planHalves) {
-      if (typeof value[key] !== "string" || !SHA256_HEX.test(value[key])) {
-        violations.push(invalid("coordination.amendment.hash", `${what}.${key} must be a bare sha256 hex digest`));
-      }
-    }
-    if (value.plan_old_sha256 === value.plan_new_sha256 && typeof value.plan_old_sha256 === "string") {
-      violations.push(invalid("coordination.amendment.hash", `${what}.plan_old_sha256 and .plan_new_sha256 must differ — an amendment records a move`));
-    }
-  }
-  if (value.prepared_by_matches !== undefined && typeof value.prepared_by_matches !== "boolean") {
-    violations.push(invalid("coordination.amendment.annotation", `${what}.prepared_by_matches must be a boolean when present`));
-  }
-  return violations;
-}
 function validateSnapshotCoordination(value, what = "coordination") {
   if (!isPlainObject(value))
     return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
@@ -1181,15 +1126,6 @@ function validateSnapshotCoordination(value, what = "coordination") {
     violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
   } else {
     violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
-  }
-  if (value.self_amendments !== undefined) {
-    if (!Array.isArray(value.self_amendments)) {
-      violations.push(invalid("coordination.snapshot.field", `${what}.self_amendments must be an array`));
-    } else {
-      value.self_amendments.forEach((entry, index) => {
-        violations.push(...validateCoordinationSelfAmendment(entry, `${what}.self_amendments[${String(index)}]`));
-      });
-    }
   }
   if (value.identity_recoveries !== undefined) {
     if (!Array.isArray(value.identity_recoveries)) {
@@ -12135,9 +12071,6 @@ var EXECUTION_TABLE_NAMES = [
   "execution_migrations"
 ];
 var EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
-function migrationChecksum(migration) {
-  return createHash6("sha256").update(migration.sql, "utf8").digest("hex");
-}
 function readAppliedMigrations(db, tolerateMissingTable) {
   const present = db.prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'").get();
   if (!present?.n) {
@@ -12171,9 +12104,6 @@ function validateAppliedMigrations(applied) {
     }
     if (row.version !== i + 1) {
       throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
-    }
-    if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
-      throw new StoreError("store.schema-drift", `Checksum drift for migration ${row.version}: the applied row does not match the compiled migration. The store is refused rather than silently migrated; nothing was modified.`);
     }
     max = row.version;
   }
@@ -12258,9 +12188,6 @@ class RoadmapError extends Error {
     this.code = code2;
   }
 }
-function sha2562(value) {
-  return createHash7("sha256").update(value).digest("hex");
-}
 function requireRoadmapSchema(db) {
   const present = db.prepare("select count(*) as count from sqlite_master where type='table' and name='schema_version'").get();
   if (present?.count !== 1)
@@ -12290,8 +12217,8 @@ function readOn(db, projectId) {
   const row = db.prepare("select project_id, content_markdown, content_hash, revision, updated_at from project_roadmaps where project_id=?").get(projectId);
   if (!row)
     return { projectId, projectRevision: project.revision, roadmap: null };
-  if (row.project_id !== projectId || typeof row.content_markdown !== "string" || typeof row.content_hash !== "string" || !Number.isInteger(row.revision) || row.revision < 1 || typeof row.updated_at !== "string" || sha2562(row.content_markdown) !== row.content_hash) {
-    throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed or has a mismatched content hash.`);
+  if (row.project_id !== projectId || typeof row.content_markdown !== "string" || typeof row.content_hash !== "string" || !Number.isInteger(row.revision) || row.revision < 1 || typeof row.updated_at !== "string") {
+    throw new RoadmapError("roadmap.corrupt", `Stored roadmap for project ${projectId} is malformed.`);
   }
   try {
     const content3 = parseRoadmapContent(row.content_markdown);
@@ -12583,6 +12510,7 @@ function isExecutionKind(value) {
 }
 var TOKEN_PREFIX = "exec-v1";
 var STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var TOKEN_KEY_DECODER = new TextDecoder("utf-8", { fatal: true });
 function tokenRefusal(detail) {
   return new ExecutionError("execution.token-invalid", detail);
 }
@@ -12918,6 +12846,7 @@ async function readExecutionState(context) {
     epoch: tx.epoch
   }));
 }
+var SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
 class MilestoneError extends Error {
   code;
   constructor(code2, message) {
@@ -12973,92 +12902,16 @@ class ProjectionError extends Error {
     this.code = code2;
   }
 }
-var DATABASE_SOURCE_PRIMARY_KEYS = {
-  execution_registry: [],
-  execution_workflows: ["workflow_id"],
-  execution_plans: ["workflow_id", "plan_id"],
-  execution_leases: ["workflow_id", "plan_id"],
-  execution_integration_leases: ["workflow_id"]
-};
-function databaseSourceLocationError(location) {
-  if (!isPlainObject(location) || typeof location.table !== "string" || !Object.prototype.hasOwnProperty.call(DATABASE_SOURCE_PRIMARY_KEYS, location.table)) {
-    return "unknown database source table";
-  }
-  const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[location.table];
-  const sourceKeys = location.keys;
-  if (!isPlainObject(sourceKeys))
-    return "database source keys do not match the table primary key";
-  const keys = Object.keys(sourceKeys);
-  if (keys.length !== primaryKeys.length || primaryKeys.some((key) => !Object.prototype.hasOwnProperty.call(sourceKeys, key)) || keys.some((key) => typeof sourceKeys[key] !== "string" || sourceKeys[key] === "")) {
-    return "database source keys do not match the table primary key";
-  }
-  return null;
-}
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
 }
 function text4(value) {
   return typeof value === "string" && value !== "" ? value : null;
 }
-function churnAfterRead(spec) {
-  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
-    return;
-  const target = process.env.MSTAR_PROJECTION_CHURN_PATH;
-  if (target === undefined || target === "" || target !== spec.relativePath)
-    return;
-  try {
-    appendFileSync(spec.absolutePath, `
-`);
-  } catch {}
-}
-function readSource(spec, db) {
-  if (spec.source === "database") {
-    const sourceError = databaseSourceLocationError(spec);
-    if (sourceError !== null)
-      return { state: "invalid", sha256: null, content: null, diagnostic: sourceError };
-    if (db === undefined) {
-      return { state: "inaccessible", sha256: null, content: null, diagnostic: "capture arm pending (Task 2)" };
-    }
-    try {
-      if (spec.table === "execution_registry") {
-        const entries = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id asc").all();
-        for (const entry of entries) {
-          if (typeof entry.entry_json !== "string") {
-            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
-          }
-          try {
-            JSON.parse(entry.entry_json);
-          } catch {
-            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
-          }
-        }
-        const content5 = JSON.stringify(entries);
-        return { state: "ok", sha256: createHash17("sha256").update(content5, "utf8").digest("hex"), content: content5, diagnostic: null };
-      }
-      const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[spec.table];
-      const row = db.prepare(`select * from ${spec.table} where ${primaryKeys.map((key) => `${key} = ?`).join(" and ")}`).get(...primaryKeys.map((key) => spec.keys[key]));
-      if (row === undefined) {
-        return { state: "missing", sha256: null, content: null, diagnostic: `missing: no row at ${spec.relativePath}` };
-      }
-      const columns = spec.table === "execution_plans" ? [row.state_json, row.coordination_json] : [spec.table === "execution_workflows" ? row.state_json : row.lease_json];
-      if (columns.some((value) => typeof value !== "string")) {
-        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
-      }
-      try {
-        for (const column of columns)
-          JSON.parse(column);
-      } catch {
-        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
-      }
-      const content4 = columns.join("\x00");
-      return { state: "ok", sha256: createHash17("sha256").update(content4, "utf8").digest("hex"), content: content4, diagnostic: null };
-    } catch {
-      return { state: "inaccessible", sha256: null, content: null, diagnostic: `inaccessible: execution row read refused at ${spec.relativePath}` };
-    }
-  }
+function readSource(spec) {
   let content3;
   try {
-    content3 = readFileSync21(spec.absolutePath, "utf8");
+    content3 = readFileSync20(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -13071,8 +12924,7 @@ function readSource(spec, db) {
       diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  churnAfterRead(spec);
-  return { state: "ok", sha256: createHash17("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -13370,40 +13222,34 @@ async function captureExecutionProjectionSources(context) {
       rows,
       diagnostics: [{ sourceKey, reason: "invalid", message }],
       sourceSetHash: computeSourceSetHash(inputs.catalogRevision, sources),
-      blocked: true,
-      locations: []
+      blocked: true
     };
   }
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
     const sources = [];
-    const locations = [];
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash17("sha256").update(content3, "utf8").digest("hex");
+      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
-      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256: sha2564, state: readState, table: sourceSpec.table, keys: sourceSpec.keys });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash17("sha256").update(shaText, "utf8").digest("hex");
+      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
-      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", table: sourceSpec.table, keys: sourceSpec.keys });
     };
-    const spec = (table, kind, rel, keys) => ({
+    const spec = (kind, rel) => ({
       source: "database",
       sourceKey: sourceKeyOf2(kind, "harness", rel),
       kind,
       rootKind: "harness",
       relativePath: rel,
-      declared: true,
-      table,
-      keys
+      declared: true
     });
     const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all();
-    const registrySpec = spec("execution_registry", "root", "execution/registry", {});
+    const registrySpec = spec("root", "execution/registry");
     const malformedRegistryJson = registry.some((item) => {
       try {
         JSON.parse(item.entry_json);
@@ -13439,7 +13285,7 @@ async function captureExecutionProjectionSources(context) {
       }
     }
     for (const item of workflows) {
-      const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
+      const workflowSpec = spec("workflow", `execution/workflows/${item.workflow_id}`);
       let state;
       try {
         state = JSON.parse(item.state_json);
@@ -13488,7 +13334,7 @@ async function captureExecutionProjectionSources(context) {
     for (const row of plans) {
       if (!servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id))
         continue;
-      const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
+      const sourceSpec = spec("workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`);
       let state;
       let coordination;
       try {
@@ -13526,7 +13372,7 @@ async function captureExecutionProjectionSources(context) {
     for (const lease of leases) {
       if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id))
         continue;
-      const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
+      const leaseSpec = spec("workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`);
       let value;
       try {
         value = JSON.parse(lease.lease_json);
@@ -13546,30 +13392,27 @@ async function captureExecutionProjectionSources(context) {
       rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text4(servedLease.holder), worktreePath: text4(servedLease.worktree_path), expiresAt: text4(servedLease.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join34(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join33(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
-        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: read.state });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
         continue;
       }
       const parsed = deriveCompass(doc.iterationId, read.content, doc.relativePath);
       if ("diagnostic" in parsed) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "invalid", diagnostic: parsed.diagnostic, declared: true });
-        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "invalid" });
         diagnostics.push({ sourceKey: fspec.sourceKey, reason: "invalid", message: parsed.diagnostic });
         continue;
       }
       rows.compasses.push(parsed);
       sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
-      locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
     }
     const integrationLeases = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, lease_json from execution_integration_leases where workflow_id in (${placeholders}) order by workflow_id`, servedWorkflowIds, (id) => [id]);
     for (const row of integrationLeases) {
       if (!servedIntegrationLeaseIds.has(row.workflow_id))
         continue;
-      const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
+      const leaseSpec = spec("workflow", `execution/integration-leases/${row.workflow_id}`);
       let value;
       try {
         value = JSON.parse(row.lease_json);
@@ -13590,9 +13433,8 @@ async function captureExecutionProjectionSources(context) {
       rows.leases.push({ workflowId: row.workflow_id, planId: text4(mappedLease.plan_id) ?? "", kind: "integration-merge", holder: text4(mappedLease.holder), worktreePath: null, expiresAt: text4(mappedLease.expires_at) });
     }
     sources.sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
-    locations.sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
     const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
-    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: capturedStoreRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
+    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: capturedStoreRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0 };
   } finally {
     handle.close();
   }
@@ -13601,7 +13443,6 @@ async function captureFileProjectionSources(context) {
   const harness = catalogRootDir(context, "harness");
   const inputs = await readCatalogInputs(context);
   const sources = [];
-  const locations = [];
   const diagnostics = [];
   const rows = { workflows: [], plans: [], leases: [], compasses: [] };
   const record = (spec, read, state, diagnostic, options = {}) => {
@@ -13615,7 +13456,6 @@ async function captureFileProjectionSources(context) {
       diagnostic,
       declared: spec.declared
     });
-    locations.push(spec.source === "file" ? { source: "file", sourceKey: spec.sourceKey, relativePath: spec.relativePath, absolutePath: spec.absolutePath, sha256: read.sha256, state } : { source: "database", sourceKey: spec.sourceKey, relativePath: spec.relativePath, sha256: read.sha256, state, table: spec.table, keys: spec.keys });
     if (options.tolerate === true)
       return;
     if (state === "ok" && diagnostic === null)
@@ -13632,7 +13472,7 @@ async function captureFileProjectionSources(context) {
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join34(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join33(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -13657,7 +13497,7 @@ async function captureFileProjectionSources(context) {
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join34(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join33(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
@@ -13672,7 +13512,7 @@ async function captureFileProjectionSources(context) {
       kind: "workflow",
       rootKind: binding.rootKind,
       relativePath,
-      absolutePath: join34(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join33(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -13699,7 +13539,7 @@ async function captureFileProjectionSources(context) {
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join34(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join33(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -13716,7 +13556,6 @@ async function captureFileProjectionSources(context) {
     rows.compasses.push(derived);
   }
   sources.sort((a, b) => a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0);
-  locations.sort((a, b) => a.sourceKey < b.sourceKey ? -1 : a.sourceKey > b.sourceKey ? 1 : 0);
   const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
   return {
     formatVersion: PROJECTION_FORMAT_VERSION,
@@ -13725,15 +13564,14 @@ async function captureFileProjectionSources(context) {
     rows,
     diagnostics,
     sourceSetHash,
-    blocked: diagnostics.length > 0,
-    locations
+    blocked: diagnostics.length > 0
   };
 }
 function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash17("sha256").update(payload, "utf8").digest("hex");
+  return createHash16("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -13742,29 +13580,6 @@ var PROJECTION_TABLES = [
   "projection_leases",
   "projection_compasses"
 ];
-async function verifyCaptureStable(context, capture) {
-  const mismatched = [];
-  const databaseLocations = capture.locations.filter((location) => location.source === "database");
-  let handle;
-  if (databaseLocations.length > 0) {
-    try {
-      handle = await openStore(context, "read");
-    } catch {
-      return databaseLocations.map((location) => location.sourceKey).sort();
-    }
-  }
-  try {
-    for (const location of capture.locations) {
-      const observed = readSource(location, handle?.db);
-      const stableInvalidFile = location.source === "file" && location.state === "invalid" && observed.state === "ok" && observed.sha256 === location.sha256;
-      if (!stableInvalidFile && (observed.state !== location.state || observed.sha256 !== location.sha256))
-        mismatched.push(location.sourceKey);
-    }
-  } finally {
-    handle?.close();
-  }
-  return mismatched.sort();
-}
 function assertProjectionTables(handle) {
   const row = handle.db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'").get();
   if (!row?.n) {
@@ -13871,10 +13686,18 @@ function recordRetainedHealth(db, capture, movement, attempts, transactionOpen =
 function movementDiagnostics(movement, attempts) {
   if (movement === null)
     return [];
-  const message = `the source set moved while it was being published (${attempts} capture attempt(s)); the last good generation was retained -- retry when the writers are idle`;
-  if (movement.kind === "catalog")
-    return [{ sourceKey: "catalog", reason: "source-changing", message }];
-  return movement.keys.map((sourceKey) => ({ sourceKey, reason: "source-changing", message }));
+  if (movement.kind === "sources") {
+    return movement.keys.map((sourceKey) => ({
+      sourceKey,
+      reason: "source-changing",
+      message: `the execution authority or numeric store revision moved while publishing (${attempts} capture attempt(s)); capture again against current authority`
+    }));
+  }
+  return [{
+    sourceKey: "catalog",
+    reason: "source-changing",
+    message: `the catalog revision moved while publishing (${attempts} capture attempt(s)); retry when catalog writers are idle`
+  }];
 }
 function publishGeneration(db, capture, transactionOpen = false) {
   const checkedAt = new Date().toISOString();
@@ -13884,12 +13707,6 @@ function publishGeneration(db, capture, transactionOpen = false) {
     const meta = ensureProjectionFormat(db);
     const previous3 = readPublishedFingerprints(db, meta.generation);
     const changedKeys = changedSourceKeys(previous3, capture.sources);
-    if (meta.generation !== null && meta.sourceSetHash === capture.sourceSetHash) {
-      db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(checkedAt);
-      if (!transactionOpen)
-        db.exec("commit");
-      return reportOf({ generation: meta.generation, freshness: "current", builtAt: meta.builtAt, checkedAt, diagnostics: [] }, capture, [], false);
-    }
     const generation = (meta.generation ?? 0) + 1;
     for (const table of PROJECTION_TABLES)
       db.exec(`delete from ${table}`);
@@ -13918,9 +13735,6 @@ function selectWhereIn(db, sql, ids, params) {
   return rows;
 }
 async function attemptPublication(context, capture, attempts) {
-  const mismatched = await verifyCaptureStable(context, capture);
-  if (mismatched.length > 0)
-    return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
   if (capture.storeRevision !== undefined)
     await applyDatabaseChurn(context);
   const handle = await openStore(context, "write");
@@ -14819,7 +14633,7 @@ function landedPathOf(resolved) {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve(dirname(resolved), readlinkSync2(resolved));
+      return resolve(dirname(resolved), readlinkSync(resolved));
     } catch {
       let dir = dirname(resolved);
       for (;; ) {

@@ -881,10 +881,12 @@ describe("validateAuditFindingGates", () => {
 
   test("legacy and enriched batches pass; the gate does not mutate its input", () => {
     const findings = [legacyFinding(), enrichedFinding()];
-    const snapshot = JSON.stringify(findings);
     const gate = validateAuditFindingGates(findings);
     expect({ ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ ok: true, violations: [] });
-    expect(JSON.stringify(findings)).toBe(snapshot);
+    expect(findings.map(({ title, fingerprint }) => [title, fingerprint])).toEqual([
+      ["Fix N+1 query", undefined],
+      ["Unparameterized sink in export path", "sql-export-sink"],
+    ]);
   });
 
   test("duplicate fingerprint → audit.finding.fingerprint.duplicate with field path only", () => {
@@ -1219,7 +1221,6 @@ describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
     expect((thrown as TypeError).message).toContain("audit.finding.fingerprint.order");
     expect((thrown as TypeError).message).toContain("findings[1].fingerprint");
     expect(readdirSync(out).sort()).toEqual(["README.md"]);
-    expect(readFileSync(readme, "utf8")).toBe("# pre-existing index\n");
   });
 
   test("supplied fingerprint: null → gate violation TypeError before any write (never silent omission)", () => {
@@ -1323,21 +1324,13 @@ describe("scaffoldAuditPlan — gate integration + additive rendering", () => {
       date: "2026-09-07",
       repoShortSha: "deadbee",
     });
-    const before = readFileSync(join(out, "README.md"), "utf8");
-    // rerun: no new findings, no plan file rewritten; the README is rebuilt
-    // from the stored Status lines — fingerprint/severity/confidence of
-    // enriched rows survive, legacy rows keep their fallbacks ("see plan
-    // file" impact, "—" confidence — pre-existing rebuild behavior).
+    // Rerun without new findings rebuilds the index from the stored Status lines.
     const result = scaffoldAuditPlan(out, [], { date: "2026-09-07", repoShortSha: "deadbee" });
     expect(result.files).toEqual([]);
     expect(result.nextNumber).toBe(3);
     const rebuilt = readFileSync(join(out, "README.md"), "utf8");
-    expect(rebuilt).not.toBe(before); // finding-authoritative overrides no longer apply; parsed storage drives the rows
     expect(rebuilt).toContain("| 002 | Unparameterized sink in export path | security | see plan file | S | HIGH | HIGH | src/export.ts:88 — f-string builds the query | sql-export-sink | high | high | high |");
     expect(rebuilt).toContain("| 001 | Legacy row | perf | see plan file | S | LOW | — | src/orders.ts:42 — raw loop | — | — | — | — |");
-    // a second empty rerun is byte-stable — rebuild-from-storage converged
-    scaffoldAuditPlan(out, [], { date: "2026-09-07", repoShortSha: "deadbee" });
-    expect(readFileSync(join(out, "README.md"), "utf8")).toBe(rebuilt);
   });
 
   test("secret-bearing structured description is redacted normally; opaque files/fingerprints never altered", () => {
@@ -1672,10 +1665,7 @@ describe("promoteAuditPlans", () => {
     expect(existsSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE))).toBe(false);
     expect(existsSync(workflowDir)).toBe(false);
 
- // Root untouched: the conflicting root bytes survive the failed promote.
-    const after = readFileSync(statusPath, "utf8");
-    expect(after).toBe(JSON.stringify(staleRoot, null, 2));
-
+    expect(readJson(statusPath)).toEqual(staleRoot);
  // Retry after the root conflict is resolved converges end-to-end.
     writeFileSync(statusPath, JSON.stringify({ version: 2, updated_at: "2026-08-09", workflows: [] }, null, 2));
     const retry = await promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" });
@@ -1906,7 +1896,7 @@ describe("supplyChainChecks action-unpinned trailing comment (fix round)", () =>
 // ---------------------------------------------------------------------------
 
 describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => {
-  test("refuses to replace an existing snapshot and leaves its bytes unchanged", async () => {
+  test("refuses to replace an existing snapshot and preserves its identity", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "coordinated-writer-promote-"));
     try {
       const harnessDir = join(tmp, "harness");
@@ -1934,7 +1924,8 @@ describe("coordinated-writer — promoteAuditPlans create-only snapshot", () => 
       writeFileSync(snapshotPath, foreign, "utf8");
 
       await expect(promoteAuditPlans(outDir, ["001"], { harnessDir, deliveryKind: "development", branchSource: "feature/audit-plans", branchTarget: "main" })).rejects.toThrow(/already exists/);
-      expect(readFileSync(snapshotPath, "utf8")).toBe(foreign);
+      expect(existsSync(snapshotPath)).toBe(true);
+      expect(readJson(snapshotPath)).toMatchObject({ id: "audit-2026-09-15", plans: [] });
     } finally {
       setArtifactStore(undefined);
       rmSync(tmp, { recursive: true, force: true });
@@ -2019,14 +2010,24 @@ describe("catalog registration — the journal drives the audit promotion", () =
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
-  test("catalog registration — a failed promotion leaves no catalog row and reconciles to completion", async () => {
+  test("rollback deletes its created snapshot after a content-only edit, then reconciliation recovers", async () => {
     const { harnessDir, context } = await workspace("promote-failure-");
     const outDir = auditDir(harnessDir, "2026-09-17");
     const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "2026-09-17", WORKFLOW_SNAPSHOT_FILE);
     let armed = true;
+    let snapshotEdited = false;
     setArtifactStore({
       ...base,
       put: async (doc: ArtifactDoc) => {
+        if (doc.kind === "snapshot") {
+          await base.put(doc);
+          const saved = readJson(snapshotPath) as Record<string, unknown>;
+          saved.updated_at = "2099-01-01T00:00:00.000Z";
+          writeFileSync(snapshotPath, `${JSON.stringify(saved)}\n`, "utf8");
+          snapshotEdited = true;
+          return;
+        }
         if (armed && doc.kind === "status") {
           armed = false;
           throw new Error("injected status write failure");
@@ -2035,19 +2036,28 @@ describe("catalog registration — the journal drives the audit promotion", () =
       },
     });
 
-    await expect(
-      registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-failure", 0)),
-    ).rejects.toThrow(/injected status write failure/);
-    setArtifactStore(createFsStore(harnessDir));
+    const previousCwd = process.cwd();
+    try {
+      // Use this disposable harness as the actual process control root too;
+      // the workspace's active authority never resolves to the user's store.
+      process.chdir(harnessDir);
+      await expect(
+        registerCatalogExecution(context, auditRequest(harnessDir, outDir, "op-audit-failure", 0)),
+      ).rejects.toThrow(/injected status write failure/);
+      expect(snapshotEdited).toBe(true);
+      setArtifactStore(createFsStore(harnessDir));
 
-    // The promotion rolled its snapshot back; nothing published a catalog row.
-    expect(existsSync(join(harnessDir, "workflows", "2026-09-17", WORKFLOW_SNAPSHOT_FILE))).toBe(false);
-    expect((await listCatalog(context, {})).total).toBe(0);
-    expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-audit-failure"]);
+      expect(existsSync(snapshotPath)).toBe(false);
+      expect((await listCatalog(context, {})).total).toBe(0);
+      expect((await listPendingCatalogRegistrations(context)).map((entry) => entry.operationId)).toEqual(["op-audit-failure"]);
 
-    const recovered = await reconcileCatalogExecution(context, "op-audit-failure");
-    expect(recovered).toEqual({ operationId: "op-audit-failure", workflowId: "2026-09-17", catalogRevision: 1, recovered: true });
-    expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
-    expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
+      const recovered = await reconcileCatalogExecution(context, "op-audit-failure");
+      expect(recovered).toEqual({ operationId: "op-audit-failure", workflowId: "2026-09-17", catalogRevision: 1, recovered: true });
+      expect(validateStatus(join(harnessDir, "status.json")).ok).toBe(true);
+      expect((await listCatalog(context, { kind: "plan" })).total).toBe(1);
+    } finally {
+      process.chdir(previousCwd);
+      setArtifactStore(undefined);
+    }
   });
 });

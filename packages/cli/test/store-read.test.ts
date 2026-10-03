@@ -234,7 +234,20 @@ describe("dashboard views over a real store", () => {
 
     const workflows = await readDashboardView({ context, view: "workflows" });
     expect(workflows.projection.freshness).toBe("current");
-    expect(workflows.projection.generation).toBe(report.generation);
+    // A projection view refreshes before it reads, so this request publishes
+    // the current generation itself. The disclosure must match the generation
+    // the store holds now, not the fixture's earlier count.
+    const reader = await openStore(context, "read");
+    let published: number | null;
+    try {
+      const row = reader.db.prepare("select generation from projection_meta where id = 1").get();
+      published = typeof row === "object" && row !== null && "generation" in row && typeof row.generation === "number"
+        ? row.generation
+        : null;
+    } finally {
+      reader.close();
+    }
+    expect(workflows.projection.generation).toBe(published);
     expect(workflows.data as WorkflowListDTO).toEqual({ items: [], total: 0 });
 
     const iterations = await readDashboardView({ context, view: "iterations" });

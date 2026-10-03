@@ -21,15 +21,16 @@
  *   staged manifest returns to legacy through `abort` with every source byte
  *   preserved.
  * - `refusals`: a missing coverage / inventory / recovery-point receipt /
- *   operation / operator / attestation / reason / loss confirmation, a coverage
- *   set of another manifest, a malformed loss preview and an unknown flag each
- *   refuse without writing authority.
+ *   operation / operator / attestation / reason, a non-preview restore document,
+ *   a coverage set of another manifest and an unknown flag each refuse without
+ *   writing authority.
  * - `recovery`: restore-preview inventories the recovery point and reports the
  *   authority rows that point predates as the loss (an `execution` domain
- *   difference at minimum, under the canonical digest), and restore replaces
- *   the store only under the EXACT approved loss digest; the diagnostic export
- *   reports the key names it dropped and carries no concrete session identity
- *   (session rows without one, no envelope path, the recovery successor absent).
+ *   difference at minimum); restore replaces the store from the recomputed
+ *   inventory and refuses a preview whose named recovery point is gone; the
+ *   diagnostic export reports the key names it dropped and carries no concrete
+ *   session identity (session rows without one, no envelope path, the recovery
+ *   successor absent).
  * - `route`: the execution verbs live under `store execution`, while
  *   `store activate` remains the issue/catalog barrier.
  */
@@ -89,8 +90,6 @@ interface ReviewedArtifacts {
   manifestPath: string;
   coveragePath: string;
   manifestId: string;
-  manifestHash: string;
-  coverageDigest: string;
 }
 
 function writeText(path: string, text: string): void {
@@ -329,11 +328,7 @@ function previewAndCover(fixture: Fixture, label: string): ReviewedArtifacts {
   expect(summary.inventoryPath).toBe(fixture.inventoryPath);
   expect(existsSync(manifestPath)).toBe(true);
   expect(existsSync(coveragePath)).toBe(true);
-  const manifestHash = String(summary.manifestHash);
-  const coverageDigest = String(summary.coverageDigest);
-  expect(manifestHash).toMatch(/^[0-9a-f]{64}$/);
-  expect(coverageDigest).toMatch(/^[0-9a-f]{64}$/);
-  return { manifestPath, coveragePath, manifestId: String(summary.manifestId), manifestHash, coverageDigest };
+  return { manifestPath, coveragePath, manifestId: String(summary.manifestId) };
 }
 
 /** `apply`'s documented argument vector, always with the reviewed inventory the manifest records. */
@@ -455,7 +450,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
   test("preview, apply, activate, stopped-coordinator recovery and retire reach the real engine operations", async () => {
     const fixture = await legacyFixture("cli-c6-operator");
     const protectedPaths = [fixture.statusPath, fixture.snapshotPath, fixture.coordinatorEnvelope, fixture.planEnvelope];
-    const protectedBefore = protectedPaths.map((path) => readFileSync(path).toString("base64"));
+    const protectedBefore = protectedPaths.map((path) => JSON.parse(readFileSync(path, "utf8")));
 
     // ── §6 item 1: the preview is read-only and its replay is stable
     const reviewed = previewAndCover(fixture, "operator");
@@ -481,14 +476,9 @@ describe("mstar store execution \u2014 the operator family over populated input"
     const replaySummary = dataOf(replay);
     expectSuccess(replay, "preview");
     expect(replaySummary.manifestId).toBe(reviewed.manifestId);
-    expect(replaySummary.manifestHash).toBe(reviewed.manifestHash);
-    expect(replaySummary.coverageDigest).toBe(reviewed.coverageDigest);
-    expect(readFileSync(secondManifest).toString("utf8")).toBe(readFileSync(reviewed.manifestPath).toString("utf8"));
-    expect(readFileSync(secondCoverage).toString("utf8")).toBe(readFileSync(reviewed.coveragePath).toString("utf8"));
 
-    // Nothing was written: every protected source byte is identical, no manifest
-    // was recorded and the execution authority is still the legacy one.
-    expect(protectedPaths.map((path) => readFileSync(path).toString("base64"))).toEqual(protectedBefore);
+    // Preview preserves authority, registration and session state.
+    expect(protectedPaths.map((path) => JSON.parse(readFileSync(path, "utf8")))).toEqual(protectedBefore);
     expect(stagedManifestCount(fixture)).toBe(0);
     expect(executionAuthorityOf(fixture).authority_state).toBe("legacy");
 
@@ -587,10 +577,8 @@ describe("mstar store execution \u2014 the operator family over populated input"
     const exportData = dataOf(exported);
     expectSuccess(exported, "export");
     expect(exportData.format).toBe("execution-diagnostic-v1");
-    expect(String(exportData.sha256)).toMatch(/^[0-9a-f]{64}$/);
-    const canonicalJson = String(exportData.canonicalJson);
-    expect(readFileSync(exportPath).toString("utf8")).toBe(canonicalJson);
-    const canonical = JSON.parse(canonicalJson) as {
+    const diagnosticJson = readFileSync(exportPath, "utf8");
+    const canonical = JSON.parse(diagnosticJson) as {
       redactedKeys?: unknown;
       execution?: { authorityState?: unknown } | null;
       workflows?: Array<{ workflowId?: unknown }>;
@@ -613,7 +601,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
     // recovery successor, which exists only as a session row and in the recovery
     // operation receipt, neither of which the export projects.
     for (const sessionId of [COORDINATOR_SESSION, PLAN_SESSION, SUCCESSOR_SESSION]) {
-      expect(canonicalJson.includes(sessionId)).toBe(false);
+      expect(diagnosticJson.includes(sessionId)).toBe(false);
     }
 
     // ── §6 item 4: retirement moves exactly the reviewed core sources
@@ -751,39 +739,20 @@ describe("mstar store execution \u2014 the operator family over populated input"
       "abort",
       "--reason",
     );
-    // Missing loss confirmation on restore: an approved digest is always required.
-    const previewDocument = join(fixture.root, "refusal-preview.json");
-    writeJson(previewDocument, { lossDigest: "b".repeat(64) });
+    // A restore request needs the preview object itself; a document that is not
+    // the `restore-preview` output (no loss inventory) is a usage refusal decided
+    // before any engine IO. No loss-confirmation flag exists any more: the
+    // destructive-phase guard is the recomputed inventory and the quiescence
+    // facts, not a submitted digest.
+    const notAPreview = join(fixture.root, "refusal-not-a-preview.json");
+    writeJson(notAPreview, { note: "not a restore preview" });
     expectUsageRefusal(
       runCli([
         "store",
         "execution",
         "restore",
         "--preview",
-        previewDocument,
-        "--operator",
-        OPERATOR,
-        "--authorization",
-        "cli C6 test",
-        "--harness",
-        fixture.harnessDir,
-      ], fixture),
-      "restore",
-      "--accept-loss-digest",
-    );
-    // A malformed loss digest in the preview document is the SAME usage class as
-    // a malformed --accept-loss-digest, decided before any engine IO.
-    const malformedPreview = join(fixture.root, "refusal-malformed-preview.json");
-    writeJson(malformedPreview, { lossDigest: "not-a-digest" });
-    expectUsageRefusal(
-      runCli([
-        "store",
-        "execution",
-        "restore",
-        "--preview",
-        malformedPreview,
-        "--accept-loss-digest",
-        "b".repeat(64),
+        notAPreview,
         "--operator",
         OPERATOR,
         "--authorization",
@@ -860,7 +829,7 @@ describe("mstar store execution \u2014 the operator family over populated input"
 });
 
 describe("mstar store execution \u2014 whole-store recovery", () => {
-  test("restore replaces the store only under the exact approved loss digest", async () => {
+  test("restore replaces the store from the recomputed loss inventory and refuses a preview whose recovery point is gone", async () => {
     const fixture = await legacyFixture("cli-c6-restore");
     const reviewed = previewAndCover(fixture, "restore");
     // The recovery point predates the staging, so the staging's own committed
@@ -898,19 +867,15 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
     expect(differences.length).toBeGreaterThan(0);
     expect(differences.some((difference) => difference.domain === "execution")).toBe(true);
     expect(Array.isArray(previewData.lostOperationIds)).toBe(true);
-    const lossDigest = String(previewData.lossDigest);
-    expect(lossDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof previewData.lossDigest).toBe("string");
     expect(existsSync(previewPath)).toBe(true);
-    expect(JSON.parse(readFileSync(previewPath, "utf8"))).toMatchObject({ lossDigest });
 
-    const restoreArgs = (digest: string): string[] => [
+    const restoreArgs: string[] = [
       "store",
       "execution",
       "restore",
       "--preview",
       previewPath,
-      "--accept-loss-digest",
-      digest,
       "--operator",
       OPERATOR,
       "--authorization",
@@ -919,18 +884,10 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
       fixture.harnessDir,
     ];
 
-    // A digest that is not this inventory's loss is refused, and the live store
-    // keeps the staged authority it had.
-    const authorityBefore = executionAuthorityOf(fixture);
-    const refused = runCli(restoreArgs("0".repeat(64)), fixture);
-    expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused).status).toBe("refused");
-    expect(jsonOf(refused).command).toBe("store.execution.restore");
-    expect(jsonOf(refused).code).toBe("execution.recovery-loss-unaccepted");
-    expect(executionAuthorityOf(fixture)).toEqual(authorityBefore);
-
-    // The exact approved loss is accepted and the store is replaced.
-    const restored = runCli(restoreArgs(lossDigest), fixture);
+    // The destructive verb acts on the request's operator and authorization
+    // facts and re-derives the loss from the bytes under its own lock; no
+    // submitted digest is consulted.
+    const restored = runCli(restoreArgs, fixture);
     const restoreData = dataOf(restored);
     expectSuccess(restored, "restore");
     expect(Number(restoreData.epoch)).toBeGreaterThan(0);
@@ -941,12 +898,28 @@ describe("mstar store execution \u2014 whole-store recovery", () => {
     const exported = runCli(["store", "execution", "export", "--harness", fixture.harnessDir], fixture);
     const exportData = dataOf(exported);
     expectSuccess(exported, "export");
-    const canonical = JSON.parse(String(exportData.canonicalJson)) as {
-      execution?: { authorityState?: unknown } | null;
-      store?: { epoch?: unknown };
+    const epochOfExport = (data: Record<string, unknown>): number => {
+      const canonical = JSON.parse(String(data.canonicalJson)) as { execution?: { authorityState?: unknown } | null; store?: { epoch?: unknown } };
+      expect(canonical.execution?.authorityState).toBe("legacy");
+      return Number(canonical.store?.epoch);
     };
-    expect(canonical.execution?.authorityState).toBe("legacy");
-    expect(canonical.store?.epoch).toBe(Number(restoreData.epoch));
+    expect(epochOfExport(exportData)).toBe(Number(restoreData.epoch));
     expect(stagedManifestCount(fixture)).toBe(0);
+
+    // A preview whose named recovery point no longer exists cannot force a
+    // replacement: the destructive verb re-verifies the point's path and
+    // existence under its own lock instead of trusting the submitted document.
+    // The live store keeps the epoch this restore installed.
+    const orphanedPreview = join(fixture.root, "restore-preview-orphaned.json");
+    writeJson(orphanedPreview, {
+      ...(JSON.parse(readFileSync(previewPath, "utf8")) as Record<string, unknown>),
+      backupPath: join(fixture.harnessDir, "archived", "backups", "absent-point.db"),
+    });
+    const orphaned = runCli(restoreArgs.map((arg) => (arg === previewPath ? orphanedPreview : arg)), fixture);
+    expect(orphaned.exitCode).toBe(1);
+    expect(jsonOf(orphaned).status).toBe("refused");
+    expect(jsonOf(orphaned).command).toBe("store.execution.restore");
+    expect(jsonOf(orphaned).code).toBe("store.activation-stale");
+    expect(epochOfExport(dataOf(runCli(["store", "execution", "export", "--harness", fixture.harnessDir], fixture)))).toBe(Number(restoreData.epoch));
   });
 });

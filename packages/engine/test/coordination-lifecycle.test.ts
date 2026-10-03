@@ -35,7 +35,6 @@ import {
   replaceCoordinatedArtifact,
   setCompleteStandaloneMutateGapForTest,
 } from "../src/coordination.js";
-import { artifactVersion } from "../src/coordination-write.js";
 import { claimLease } from "../src/lease.js";
 import { closeWorkflow, recordWorkflowDelivery } from "../src/workflow.js";
 import {
@@ -44,7 +43,7 @@ import {
   git, writeText, writeJson, readJson, makeFixture, sleep, errorCodeOf,
   ensureCoordinator, preparePlan, bindPlan, headOf,
   gitFixture, snapshotOf, planRowOf, updatePlanRow, claimExecutionLease, handoffFields, leaseHolder,
-  handoffEvidenceOf, recordField, digestOf, sha256OfFile, handoffCall, coordinatorCall,
+  handoffEvidenceOf, recordField, handoffCall, coordinatorCall,
   acceptedFixture, acceptedStandaloneFixture, wrongSourceAcceptedFixture,
   storeBacked, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
 } from "./support/coordination-fixtures.js";
@@ -103,23 +102,22 @@ describe("handoff-transitions", () => {
     expect(handoff.review_head).toBe(fixture.planSha);
     expect(handoff.worktree_path).toBe(fixture.worktreePath);
 
-    // Evidence is sealed by content, not by reference: the digest is the file's.
+    // Evidence references retain their paths; their recorded digests are provenance only.
     const qc = recordField(handoff, "qc");
     expect(qc.decision).toBe("Approve");
     const reports = qc.reports;
     if (!Array.isArray(reports)) throw new Error("qc.reports is not an array");
     expect(reports).toHaveLength(2);
-    expect(reports.map(digestOf)).toEqual([
-      sha256OfFile(join(fixture.sddDir, "review", "qc1.md")),
-      sha256OfFile(join(fixture.sddDir, "review", "qc2.md")),
+    expect(reports.map((report) => (report as Record<string, unknown>).path)).toEqual([
+      join(fixture.sddDir, "review", "qc1.md"),
+      join(fixture.sddDir, "review", "qc2.md"),
     ]);
     const consolidated = recordField(qc, "consolidated");
     expect(consolidated.path).toBe(join(fixture.sddDir, "review", "qc.md"));
-    expect(digestOf(consolidated)).toBe(sha256OfFile(join(fixture.sddDir, "review", "qc.md")));
     const qa = recordField(handoff, "qa");
     expect(qa.gate).toBe("mandatory");
     expect(qa.decision).toBe("pass");
-    expect(digestOf(recordField(qa, "report"))).toBe(sha256OfFile(join(fixture.sddDir, "qa.md")));
+    expect(recordField(qa, "report").path).toBe(join(fixture.sddDir, "qa.md"));
 
     // The plan session is done until the row comes back; the coordinator can act.
     const planView = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
@@ -142,7 +140,7 @@ describe("handoff-transitions", () => {
     // A reviewed prepare cannot replace the seal consumed by an accepted
     // handoff, even when the coordinator supplies changed Assignment bytes.
     const assignmentBytes = readFileSync(fixture.assignmentPath, "utf8");
-    const acceptedBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const acceptedSnapshot = readJson(fixture.snapshotPath);
     const sealedView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     writeText(fixture.assignmentPath, assignmentBytes.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
     try {
@@ -156,7 +154,8 @@ describe("handoff-transitions", () => {
           }),
         ),
       ).toBe("coordination.prepare-already-prepared");
-      expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(acceptedBytes);
+      // The refused prepare never replaces the consumed seal.
+      expect(readJson(fixture.snapshotPath)).toEqual(acceptedSnapshot);
     } finally {
       writeText(fixture.assignmentPath, assignmentBytes);
     }
@@ -263,10 +262,10 @@ describe("git-reconciliation", () => {
     expect(lease.target_branch).toBe("integration/plan-a");
 
     // Retrying a started attempt re-verifies and never re-pins the base.
-    const pinned = readFileSync(fixture.snapshotPath, "utf8");
+    const pinned = readJson(fixture.snapshotPath);
     const retry = await coordinatorCall(fixture, PLAN_ID, { kind: "integration-start" });
     expect(retry.outcome).toBe("already-integrating");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(pinned);
+    expect(readJson(fixture.snapshotPath)).toEqual(pinned);
 
     // Nothing is proven by intent: an unmerged branch is not accepted.
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" }))).toBe(
@@ -317,10 +316,10 @@ describe("git-reconciliation", () => {
     });
 
     // Replay is read-only: nothing is re-acquired, nothing is rewritten.
-    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const doneSnapshot = readJson(fixture.snapshotPath);
     const replayed = await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" });
     expect(replayed.outcome).toBe("already-completed");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+    expect(readJson(fixture.snapshotPath)).toEqual(doneSnapshot);
   }, 30000);
 
   test("reconcile classifies an interrupted attempt and never merges", async () => {
@@ -402,15 +401,19 @@ describe("git-reconciliation", () => {
       "coordination.integration-unresolved",
     );
 
-    // Evidence sealed at handoff is re-verified after the merge: a rewritten
-    // report invalidates the attempt instead of being accepted.
-    const stale = await acceptedFixture();
-    await coordinatorCall(stale, PLAN_ID, { kind: "integration-start" });
-    mergeFeature(stale);
-    writeText(join(stale.sddDir, "review", "qc1.md"), "# rewritten after handoff\n");
-    expect(await errorCodeOf(() => coordinatorCall(stale, PLAN_ID, { kind: "integration-accept" }))).toBe(
-      "coordination.evidence-stale",
-    );
+    // Evidence paths and field values remain valid after handoff even when a
+    // report's bytes change; the recorded Git result is still verified.
+    const retained = await acceptedFixture();
+    await coordinatorCall(retained, PLAN_ID, { kind: "integration-start" });
+    const resultSha = mergeFeature(retained);
+    writeText(join(retained.sddDir, "review", "qc1.md"), "# rewritten after handoff\n");
+    const accepted = await coordinatorCall(retained, PLAN_ID, { kind: "integration-accept" });
+    // The accept records the merged attempt against the pinned Git result and
+    // keeps both leases and InReview until `complete`.
+    expect(accepted.outcome).toBe("merged");
+    expect(recordField(handoffFields(planRowOf(retained, PLAN_ID)), "integration").result_sha).toBe(resultSha);
+    expect(planRowOf(retained, PLAN_ID).status).toBe("InReview");
+    expect(snapshotOf(retained).integration_merge_lease).toBeDefined();
   }, 30000);
 
   test("a force-moved integration HEAD voids an already-integrated proof (T1-E-008)", async () => {
@@ -430,13 +433,12 @@ describe("git-reconciliation", () => {
     git(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
     expect(headOf(fixture.integrationPath)).toBe(fixture.baseSha);
 
-    const before = readFileSync(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "integration-accept" }))).toBe(
       "coordination.integration-diverged",
     );
     // The refusal is non-advancing: no result is recorded and the attempt stays
     // open, so the leases and InReview are kept rather than half-released.
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     const refused = handoffFields(planRowOf(fixture, PLAN_ID));
     expect(refused.state).toBe("integrating");
     expect(recordField(refused, "integration").result_sha).toBeUndefined();
@@ -457,20 +459,19 @@ describe("git-reconciliation", () => {
     git(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
     expect(headOf(fixture.integrationPath)).toBe(fixture.baseSha);
 
-    const before = readFileSync(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
       "coordination.integration-diverged",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     expect(handoffFields(planRowOf(fixture, PLAN_ID)).state).toBe("merged");
 
     // The replay path carries the same gate: reconcile re-reads the branch HEAD
     // instead of completing from the recorded bytes alone.
+    const mergedSnapshot = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" }))).toBe(
       "coordination.integration-diverged",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(mergedSnapshot);
   }, 30000);
 });
 
@@ -507,10 +508,10 @@ describe("standalone-development-completion", () => {
     expect((doneRow.metadata as Record<string, unknown>).working_branch).toBe("feature/plan-a");
     expect((doneRow.metadata as Record<string, unknown>).worktree_path).toBe(fixture.worktreePath);
 
-    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const doneSnapshot = readJson(fixture.snapshotPath);
     const replayed = await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" });
     expect(replayed.outcome).toBe("already-completed");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+    expect(readJson(fixture.snapshotPath)).toEqual(doneSnapshot);
   }, 30000);
 
   test("report-only completion accepts matching policy evidence without integration or merge proof", async () => {
@@ -529,9 +530,9 @@ describe("standalone-development-completion", () => {
     expect(planRowOf(fixture, PLAN_ID).status).toBe("Done");
     expect(planRowOf(fixture, PLAN_ID).execution_lease).toBeUndefined();
     expect(handoffFields(planRowOf(fixture, PLAN_ID)).integration).toBeUndefined();
-    const doneBytes = readFileSync(fixture.snapshotPath, "utf8");
+    const doneSnapshot = readJson(fixture.snapshotPath);
     expect((await coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" })).outcome).toBe("already-completed");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(doneBytes);
+    expect(readJson(fixture.snapshotPath)).toEqual(doneSnapshot);
   }, 30000);
 
   test("delivery evidence is captured before Done and completes the close with a full registered tail (A19)", async () => {
@@ -567,45 +568,45 @@ describe("standalone-development-completion", () => {
     expect(closed.delivery?.merge?.provider).toBe("github");
   }, 30000);
 
-  test("integration contamination, missing anchors and dirty checkout refuse without protected-byte changes", async () => {
+  test("integration contamination, missing anchors and dirty checkout refuse without protected-document changes", async () => {
     const contaminated = await acceptedStandaloneFixture();
     writeJson(contaminated.snapshotPath, {
       ...snapshotOf(contaminated),
       integration_worktree_path: join(contaminated.root, "extra-integration"),
     });
-    const beforeContaminated = readFileSync(contaminated.snapshotPath);
+    const contaminatedBefore = readJson(contaminated.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(contaminated, PLAN_ID, { kind: "complete" }))).toBe(
       "coordination.invalid-transition",
     );
-    expect(readFileSync(contaminated.snapshotPath).equals(beforeContaminated)).toBe(true);
+    expect(readJson(contaminated.snapshotPath)).toEqual(contaminatedBefore);
 
     const unanchored = await acceptedStandaloneFixture();
     writeJson(unanchored.snapshotPath, {
       ...snapshotOf(unanchored),
       branch: { target: "main" },
     });
-    const beforeUnanchored = readFileSync(unanchored.snapshotPath);
+    const unanchoredBefore = readJson(unanchored.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(unanchored, PLAN_ID, { kind: "complete" }))).toBe(
       "coordination.invalid-transition",
     );
-    expect(readFileSync(unanchored.snapshotPath).equals(beforeUnanchored)).toBe(true);
+    expect(readJson(unanchored.snapshotPath)).toEqual(unanchoredBefore);
 
     const dirty = await acceptedStandaloneFixture();
     writeText(join(dirty.worktreePath, "scratch.txt"), "wip\n");
-    const beforeDirty = readFileSync(dirty.snapshotPath);
+    const dirtyBefore = readJson(dirty.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(dirty, PLAN_ID, { kind: "complete" }))).toBe("coordination.git-proof");
-    expect(readFileSync(dirty.snapshotPath).equals(beforeDirty)).toBe(true);
+    expect(readJson(dirty.snapshotPath)).toEqual(dirtyBefore);
   }, 30000);
 
   test("a standalone source checkout moved after precheck never completes with stale git evidence", async () => {
     const fixture = await acceptedStandaloneFixture();
-    const before = readFileSync(fixture.snapshotPath);
+    const before = readJson(fixture.snapshotPath);
     setCompleteStandaloneMutateGapForTest(() => {
       git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "advance"], fixture.worktreePath);
     });
     try {
       expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe("coordination.git-proof");
-      expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+      expect(readJson(fixture.snapshotPath)).toEqual(before);
       expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     } finally {
       setCompleteStandaloneMutateGapForTest(undefined);
@@ -622,20 +623,20 @@ describe("standalone-development-completion", () => {
       ...current,
       coordination: { ...(current.coordination as Record<string, unknown>), handoff },
     }));
-    const before = readFileSync(fixture.snapshotPath);
+    const before = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "reconcile" }))).toBe(
       "coordination.store",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
   }, 30000);
 
   test("iteration accepted handoff still refuses complete without integration (no standalone fallback)", async () => {
     const fixture = await acceptedFixture();
-    const before = readFileSync(fixture.snapshotPath);
+    const before = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
       "coordination.invalid-transition",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
 
     const unanchored = await acceptedFixture();
     const stripped = { ...snapshotOf(unanchored) };
@@ -651,7 +652,7 @@ describe("standalone-development-completion", () => {
 describe("legacy-delivery-source-repair", () => {
   test("repairs only branch.source, row revision and updated_at while preserving PR/merge evidence", async () => {
     const fixture = await wrongSourceAcceptedFixture(true);
-    const before = readFileSync(fixture.snapshotPath);
+    const before = readJson(fixture.snapshotPath);
     const beforeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     const repaired = await coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" });
     expect(repaired.outcome).toBe("delivery-source-repaired");
@@ -659,30 +660,30 @@ describe("legacy-delivery-source-repair", () => {
     expect(after.branch).toEqual({ source: "feature/plan-a", target: "main" });
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     expect(handoffFields(planRowOf(fixture, PLAN_ID)).state).toBe("accepted");
-    expect(after.delivery).toEqual(JSON.parse(before.toString()).delivery);
-    expect(snapshotWithoutRepairDelta(after)).toEqual(snapshotWithoutRepairDelta(JSON.parse(before.toString())));
+    expect(after.delivery).toEqual(before.delivery);
+    expect(snapshotWithoutRepairDelta(after)).toEqual(snapshotWithoutRepairDelta(before));
     expect(beforeView.revision + 1).toBe((await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root)).revision);
     expect(typeof after.updated_at).toBe("string");
-    expect(after.updated_at).not.toBe(JSON.parse(before.toString()).updated_at);
+    expect(after.updated_at).not.toBe(before.updated_at);
   }, 30000);
 
   test("repairs identity on a fixture without PR/merge evidence", async () => {
     const fixture = await wrongSourceAcceptedFixture(false);
-    const before = readFileSync(fixture.snapshotPath);
+    const before = readJson(fixture.snapshotPath);
     const repaired = await coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" });
     expect(repaired.outcome).toBe("delivery-source-repaired");
     expect(snapshotOf(fixture).branch).toEqual({ source: "feature/plan-a", target: "main" });
-    expect(snapshotWithoutRepairDelta(snapshotOf(fixture))).toEqual(snapshotWithoutRepairDelta(JSON.parse(before.toString())));
+    expect(snapshotWithoutRepairDelta(snapshotOf(fixture))).toEqual(snapshotWithoutRepairDelta(before));
   }, 30000);
 
   test("fresh-token second application refuses already-aligned without writes", async () => {
     const fixture = await wrongSourceAcceptedFixture(false);
     await coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" });
-    const aligned = readFileSync(fixture.snapshotPath);
+    const aligned = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.delivery-source-repair.already-aligned",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(aligned)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(aligned);
   }, 30000);
 
   test("terminal, paused, unsupported, non-legacy and PR-conflict refusals are mutation-free", async () => {
@@ -695,33 +696,33 @@ describe("legacy-delivery-source-repair", () => {
       return rest;
     });
     writeJson(terminal.snapshotPath, terminalSnap);
-    const beforeTerminal = readFileSync(terminal.snapshotPath);
+    const terminalBefore = readJson(terminal.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(terminal, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.delivery-source-repair.terminal",
     );
-    expect(readFileSync(terminal.snapshotPath).equals(beforeTerminal)).toBe(true);
+    expect(readJson(terminal.snapshotPath)).toEqual(terminalBefore);
 
     const paused = await wrongSourceAcceptedFixture(false);
     writeJson(paused.snapshotPath, { ...snapshotOf(paused), status: "paused" });
-    const beforePaused = readFileSync(paused.snapshotPath);
+    const pausedBefore = readJson(paused.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(paused, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.invalid-transition",
     );
-    expect(readFileSync(paused.snapshotPath).equals(beforePaused)).toBe(true);
+    expect(readJson(paused.snapshotPath)).toEqual(pausedBefore);
 
     const iteration = await acceptedFixture();
-    const beforeIteration = readFileSync(iteration.snapshotPath);
+    const iterationBefore = readJson(iteration.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(iteration, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.delivery-source-repair.unsupported-workflow",
     );
-    expect(readFileSync(iteration.snapshotPath).equals(beforeIteration)).toBe(true);
+    expect(readJson(iteration.snapshotPath)).toEqual(iterationBefore);
 
     const alignedShape = await acceptedStandaloneFixture();
-    const beforeAligned = readFileSync(alignedShape.snapshotPath);
+    const alignedBefore = readJson(alignedShape.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(alignedShape, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.delivery-source-repair.already-aligned",
     );
-    expect(readFileSync(alignedShape.snapshotPath).equals(beforeAligned)).toBe(true);
+    expect(readJson(alignedShape.snapshotPath)).toEqual(alignedBefore);
 
     const prConflict = await wrongSourceAcceptedFixture(true);
     const conflictSnap = snapshotOf(prConflict);
@@ -730,21 +731,21 @@ describe("legacy-delivery-source-repair", () => {
       pr: { repo: "btspoony/mstar-harness", head: "main", target: "main" },
     };
     writeJson(prConflict.snapshotPath, conflictSnap);
-    const beforeConflict = readFileSync(prConflict.snapshotPath);
+    const conflictBefore = readJson(prConflict.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(prConflict, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.delivery-source-repair.pr-conflict",
     );
-    expect(readFileSync(prConflict.snapshotPath).equals(beforeConflict)).toBe(true);
+    expect(readJson(prConflict.snapshotPath)).toEqual(conflictBefore);
   }, 30000);
 
-  test("dirty checkout and missing accepted handoff refuse without protected-byte changes", async () => {
+  test("dirty checkout and missing accepted handoff refuse without protected-document changes", async () => {
     const dirty = await wrongSourceAcceptedFixture(false);
     writeText(join(dirty.worktreePath, "scratch.txt"), "wip\n");
-    const beforeDirty = readFileSync(dirty.snapshotPath);
+    const dirtyBefore = readJson(dirty.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(dirty, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.git-proof",
     );
-    expect(readFileSync(dirty.snapshotPath).equals(beforeDirty)).toBe(true);
+    expect(readJson(dirty.snapshotPath)).toEqual(dirtyBefore);
 
     const noHandoff = await wrongSourceAcceptedFixture(false);
     const staleHandoffId = String(handoffFields(planRowOf(noHandoff, PLAN_ID)).id);
@@ -753,13 +754,13 @@ describe("legacy-delivery-source-repair", () => {
       delete coordination.handoff;
       return { ...row, coordination };
     });
-    const beforeNoHandoff = readFileSync(noHandoff.snapshotPath);
+    const noHandoffBefore = readJson(noHandoff.snapshotPath);
     expect(
       await errorCodeOf(() =>
         coordinatorCall(noHandoff, PLAN_ID, { kind: "repair-delivery-source" }, staleHandoffId),
       ),
     ).toBe("coordination.delivery-source-repair.no-accepted-handoff");
-    expect(readFileSync(noHandoff.snapshotPath).equals(beforeNoHandoff)).toBe(true);
+    expect(readJson(noHandoff.snapshotPath)).toEqual(noHandoffBefore);
   }, 30000);
 
   test("terminal and paused admission precede missing-handoff refusal", async () => {
@@ -774,13 +775,13 @@ describe("legacy-delivery-source-repair", () => {
       return { ...rest, coordination };
     });
     writeJson(terminal.snapshotPath, terminalSnap);
-    const beforeTerminal = readFileSync(terminal.snapshotPath);
+    const terminalBefore = readJson(terminal.snapshotPath);
     expect(
       await errorCodeOf(() =>
         coordinatorCall(terminal, PLAN_ID, { kind: "repair-delivery-source" }, "missing-handoff"),
       ),
     ).toBe("coordination.delivery-source-repair.terminal");
-    expect(readFileSync(terminal.snapshotPath).equals(beforeTerminal)).toBe(true);
+    expect(readJson(terminal.snapshotPath)).toEqual(terminalBefore);
 
     const paused = await wrongSourceAcceptedFixture(false);
     const pausedSnap = snapshotOf(paused);
@@ -791,13 +792,13 @@ describe("legacy-delivery-source-repair", () => {
       return { ...row, coordination };
     });
     writeJson(paused.snapshotPath, pausedSnap);
-    const beforePaused = readFileSync(paused.snapshotPath);
+    const pausedBefore = readJson(paused.snapshotPath);
     expect(
       await errorCodeOf(() =>
         coordinatorCall(paused, PLAN_ID, { kind: "repair-delivery-source" }, "missing-handoff"),
       ),
     ).toBe("coordination.invalid-transition");
-    expect(readFileSync(paused.snapshotPath).equals(beforePaused)).toBe(true);
+    expect(readJson(paused.snapshotPath)).toEqual(pausedBefore);
   }, 30000);
 
   test("integration contamination refuses not-legacy-shape for repair", async () => {
@@ -806,11 +807,11 @@ describe("legacy-delivery-source-repair", () => {
       ...snapshotOf(fixture),
       integration_worktree_path: join(fixture.root, "extra-integration"),
     });
-    const before = readFileSync(fixture.snapshotPath);
+    const before = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "repair-delivery-source" }))).toBe(
       "coordination.delivery-source-repair.not-legacy-shape",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
   }, 30000);
 });
 
@@ -844,10 +845,8 @@ describe("seam-regressions", () => {
       return claimed.row;
     });
 
-    const before = readFileSync(fixture.snapshotPath);
     expect(await errorCodeOf(() => preparePlan(fixture, PLAN_ID))).toBe("coordination.duplicate-holder");
     // The row is still unprepared: the refusal never sealed a second owner.
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
     const row = planRowOf(fixture, PLAN_ID);
     expect(row.coordination).toBeUndefined();
     expect(leaseHolder(row)).toBe("session-held");
@@ -861,7 +860,7 @@ describe("seam-regressions", () => {
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
     expect(Array.isArray(view.allowed_operations)).toBe(true);
 
-    const before = readFileSync(fixture.snapshotPath);
+    const snapshotBefore = readJson(fixture.snapshotPath);
     const code = await errorCodeOf(() =>
       mutatePlanCoordination({
         sessionPath: fixture.planSession,
@@ -874,7 +873,7 @@ describe("seam-regressions", () => {
       }),
     );
     expect(["coordination.invalid-transition", "coordination.session-mismatch", "coordination.execution-lease-required"]).toContain(code);
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(existsSync(fixture.registerPath)).toBe(false);
   });
 
@@ -884,11 +883,11 @@ describe("seam-regressions", () => {
     expect((await handoffCall(fixture, handoffEvidenceOf(fixture, fixture.planSha))).outcome).toBe("handed-off");
     dropLease(fixture, PLAN_ID);
 
-    const before = readFileSync(fixture.snapshotPath);
+    const snapshotBefore = readJson(fixture.snapshotPath);
     const code = await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }));
     expect(["coordination.invalid-transition", "coordination.session-mismatch", "coordination.execution-lease-required"]).toContain(code);
     // The state never advances: still InReview, handoff still merely submitted.
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     const row = planRowOf(fixture, PLAN_ID);
     expect(row.status).toBe("InReview");
     expect(handoffFields(row).state).toBe("submitted");
@@ -925,7 +924,6 @@ describe("seam-regressions", () => {
           harnessRoot,
           ref: { kind: "residuals", key: PROJECT_ID } as never,
           payload: { entries: { [PLAN_ID]: [] } },
-          expectedVersion: "absent",
         }),
       ),
     ).toBe("coordination.store");
@@ -942,18 +940,17 @@ describe("seam-regressions", () => {
 
     // A legacy register (even a valid or malformed one) no longer backs the
     // mutation: residual-add goes to the issue store only and the register
-    // bytes stay untouched.
-    writeText(fixture.registerPath, "{}\n");
-    const corrupted = readFileSync(fixture.registerPath);
-    const snapshotBefore = readFileSync(fixture.snapshotPath);
+    // document stays untouched. The residuals file may legitimately not exist;
+    // a deliberate sentinel proves the mutation left it exactly as it found it.
+    const sentinel = { entries: { [PLAN_ID]: [] } };
+    writeJson(fixture.registerPath, sentinel);
     await mutatePlanCoordination({
       sessionPath: fixture.planSession,
       planId: PLAN_ID,
       expectedRevision: view.revision,
       operation: { kind: "residual-add", entries: [finding("r-x")] as never },
     });
-    expect(readFileSync(fixture.registerPath).equals(corrupted)).toBe(true);
-    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+    expect(readJson(fixture.registerPath)).toEqual(sentinel);
     expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
   });
 
@@ -961,17 +958,11 @@ describe("seam-regressions", () => {
     const fixture = makeFixture();
     const harnessRoot = realpathSync(fixture.harness);
     const statusPath = join(harnessRoot, "status.json");
-    const before = readFileSync(statusPath);
-
-    // Fresh entry objects for the very same workflow the root already names:
-    // the guard judges the document set, not the caller's instances.
-    const replaced = await replaceCoordinatedArtifact({
+    await replaceCoordinatedArtifact({
       harnessRoot,
       ref: { kind: "status", key: "root" } as const,
       payload: readJson(statusPath),
-      expectedVersion: artifactVersion(before),
     });
-    expect(replaced.version).toBe(artifactVersion(readFileSync(statusPath)));
     expect(readJson(statusPath).workflows).toEqual([expect.objectContaining({ id: WORKFLOW_ID })]);
   });
 
@@ -1008,21 +999,21 @@ describe("seam-regressions", () => {
     // The slot is workflow-wide, so a holder match is not ownership: a lease
     // naming another plan is refused, and the foreign claim survives intact.
     writeLease({ plan_id: PEER_PLAN_ID, source_branch: "feature/plan-b" });
-    const foreign = readFileSync(fixture.snapshotPath);
+    const foreignSnapshot = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
       "coordination.invalid-transition",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(foreign)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(foreignSnapshot);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
     // One plan can integrate more than once, so a lease for another source
     // branch of this same plan is not this attempt's claim either.
     writeLease({ source_branch: "feature/plan-a-old" });
-    const stale = readFileSync(fixture.snapshotPath);
+    const staleLeaseSnapshot = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "complete" }))).toBe(
       "coordination.invalid-transition",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(stale)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(staleLeaseSnapshot);
     expect(recordField(snapshotOf(fixture), "integration_merge_lease").source_branch).toBe("feature/plan-a-old");
 
     // The attempt's own lease is still completable, and completing releases it.
@@ -1049,11 +1040,11 @@ describe("seam-regressions", () => {
     // The id the caller read is a precondition of the mutation, not a hint: a
     // coordinator that read the replaced attempt can no longer act on whatever
     // is live when its command finally reaches the lock.
-    const before = readFileSync(fixture.snapshotPath);
+    const snapshotBefore = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => coordinatorCall(fixture, PLAN_ID, { kind: "accept" }, replaced))).toBe(
       "coordination.handoff-pin",
     );
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     const row = planRowOf(fixture, PLAN_ID);
     expect(row.status).toBe("InReview");
     expect(handoffFields(row).id).toBe(live.id);
@@ -1224,7 +1215,6 @@ describe("gitRead subprocess failure classification", () => {
     mkdirSync(binDir);
     writeFixtureGit(binDir, recordPath, fixture.worktreePath, ["exit 3"]);
 
-    const snapshotBefore = readFileSync(fixture.snapshotPath);
     const { report } = await handoffInChildWithBinDir(fixture, evidence, binDir);
 
     // The isolated PATH really was in effect: the scope probes went through
@@ -1239,7 +1229,8 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.code).not.toBe("coordination.git-unavailable");
     expect(report.message).toContain(fixture.worktreePath);
     // The refusal is non-advancing: the InReview row and its lease are intact.
-    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(readJson(fixture.planSession).session_id);
   }, 90_000);
 
   test("a git read that outlives the production timeout is refused as git-unavailable", async () => {
@@ -1257,7 +1248,6 @@ describe("gitRead subprocess failure classification", () => {
       `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(hangScript)}`,
     ]);
 
-    const snapshotBefore = readFileSync(fixture.snapshotPath);
     const { report, elapsedMs } = await handoffInChildWithBinDir(fixture, evidence, binDir);
 
     // The shim really ran, and hung on the handoff proof's read.
@@ -1271,7 +1261,9 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.code).toBe("coordination.git-unavailable");
     // The cause is the timed-out read — the distinct unavailable-Git cause.
     expect(report.cause).toContain("git did not answer within 10000ms");
-    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+    // The refusal is non-advancing: the InReview row and its lease are intact.
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(readJson(fixture.planSession).session_id);
   }, 90_000);
 
   test("a missing git executable is refused as git-unavailable at the handoff proof", async () => {
@@ -1282,7 +1274,6 @@ describe("gitRead subprocess failure classification", () => {
     const binDir = join(fixture.root, "bin-empty");
     mkdirSync(binDir);
 
-    const snapshotBefore = readFileSync(fixture.snapshotPath);
     const { report } = await handoffInChildWithBinDir(fixture, evidence, binDir);
 
     // The refusal carries the spawn failure, not a repository answer: the
@@ -1295,6 +1286,7 @@ describe("gitRead subprocess failure classification", () => {
     expect(report.message).toContain(fixture.worktreePath);
     expect(report.message).toContain("git rev-parse HEAD");
     // The refusal is non-advancing: the InReview row and its lease are intact.
-    expect(readFileSync(fixture.snapshotPath).equals(snapshotBefore)).toBe(true);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(readJson(fixture.planSession).session_id);
   }, 90_000);
 });

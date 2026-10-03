@@ -7,30 +7,32 @@
  *   as issue/catalog authority (§1, D19 `apply≠activate≠retire`). It requires
  *   the reviewed applied receipt, a strict installed-consumer attestation
  *   (concrete entrypoints/versions, quiesced sessions, the approving operator;
- *   never session credentials), revalidated exact source hashes/catalog
- *   digests, and a verified `VACUUM INTO` backup of the staged store. The
- *   revalidation runs twice: on the inspection connection, and again INSIDE the
- *   flip transaction, so a legacy write landing in the window after the
- *   inspection pass refuses instead of letting the epoch bump against sources
- *   that no longer hold the reviewed bytes. The authority-state flip, the epoch
+ *   never session credentials), and a verified `VACUUM INTO` backup of the
+ *   staged store. The register PATH SET is revalidated twice: on the inspection
+ *   connection, and again INSIDE the flip transaction, so a new unreviewed
+ *   legacy register landing in the window after the inspection pass refuses
+ *   instead of letting the epoch bump against a source set that no longer
+ *   matches the reviewed one. Content-byte drift is NOT a refusal — the
+ *   recorded digests are provenance. The authority-state flip, the epoch
  *   increment and the receipt row commit in ONE transaction — the epoch is
  *   atomic, not a follow-up write.
  * - Every receipt carries the authority generation (`storeId` + `epoch`), and
  *   `assertAuthorityCurrent` / the retirement re-check refuse a resumed handle
  *   or receipt from an earlier generation with `store.stale-epoch` instead of
  *   letting it act against a superseded generation (§5).
- * - `retireStoreSources` moves EXACT reviewed bytes into
+ * - `retireStoreSources` moves the reviewed registers into
  *   `<resolved root>/archived/store-migration/<activation-receipt-id>/` under
- *   a resumable per-item ledger. A late old-format write refuses
- *   `store.legacy-write-detected` and is never deleted. Mixed-content index
- *   files lose only their reviewed section lines; every other byte stays.
+ *   a resumable per-item ledger, preserving copy-before-remove ordering and
+ *   path containment. A mixed-content index file loses only the lines of the
+ *   table that still carries one of its reviewed row identities; every other
+ *   byte — narrative, unrelated tables, rows added after review — stays.
  * - The archived registers are historical migration input, never a rollback
  *   path: recovery after activation is the quiesced SQLite-consistent backup
  *   plus reconciliation (§7), and the marker says so explicitly.
  * - Nothing here reads or writes a lease, session, workflow snapshot or
  *   `status.json`. The migration path cannot steal, release or rebind a lease,
  *   and no marker or warning is treated as a fence against an old binary —
- *   the fence is the attestation, the revalidated hashes and the epoch.
+ *   the fence is the attestation, the register set and the epoch.
  */
 import { createHash } from "node:crypto";
 import {
@@ -51,18 +53,23 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
-import { verifyCatalogImport } from "./catalog-import.js";
+import {
+  detectIndexFamily,
+  indexRowIdentity,
+  readTables,
+  type IndexFamily,
+  type RawTable,
+} from "./catalog-import.js";
 import { writeJson } from "./core.js";
 import { withStatusWriteLock } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
-import { migrationManifestHash, type MigrationManifest, type MigrationReceipt } from "./store-migrate.js";
+import type { MigrationManifest, MigrationReceipt } from "./store-migrate.js";
 import {
   MIN_BUN_VERSION,
   MIN_NODE_VERSION,
   MIGRATIONS,
   assertStoreRuntimeSupported,
   compareVersions,
-  migrationChecksum,
   openStore,
   storeDbPath,
   StoreError,
@@ -888,13 +895,6 @@ function requireRetainedInventory(value: unknown, what: string): RetainedBodyInv
     revision,
     bodies,
   };
-  const recomputed = retainedInventoryDigest(inventory);
-  if (recomputed !== digest) {
-    throw invalid(
-      `has digest ${digest} but its own contents hash to ${recomputed}; the document does not describe the bodies it claims. ` +
-        `A forgotten or hand-edited inventory is not a recovery record`,
-    );
-  }
   return { ...inventory, digest };
 }
 
@@ -973,16 +973,17 @@ function assertCopyIsConsistent(db: StoreDb, backupPath: string): void {
 
 /**
  * §8 "schema/migration checksums": the copy must record exactly THIS build's
- * immutable migration prefix — the same versions, names and checksums, in the
- * same order. A copy recording a migration this engine does not have was
- * written by a newer build (it is "too new" to be read or installed here), and
- * a copy whose recorded checksum differs is not this build's store. Neither is
- * accepted, so `store_id` equality alone can never make a foreign or future
- * file look like this store's recovery point.
+ * immutable migration prefix — the same version ids, in the same order. A copy
+ * recording a migration this engine does not have was written by a newer build
+ * (it is "too new" to be read or installed here), and neither is accepted, so
+ * `store_id` equality alone can never make a foreign or future file look like
+ * this store's recovery point. The recorded `name`/`checksum` columns are
+ * provenance: "same version id, different SQL" is a build mismatch caught by
+ * CI, not a runtime gate.
  */
 function assertCopySchemaIsThisBuild(db: StoreDb, backupPath: string): void {
   const rows = db
-    .prepare("select version, name, checksum from schema_version order by version")
+    .prepare("select version from schema_version order by version")
     .all() as Array<Record<string, unknown>>;
   if (rows.length === 0) {
     throw new StoreActivationError(
@@ -999,16 +1000,11 @@ function assertCopySchemaIsThisBuild(db: StoreDb, backupPath: string): void {
   }
   for (const [index, row] of rows.entries()) {
     const migration = MIGRATIONS[index]!;
-    if (
-      row.version !== migration.version ||
-      row.name !== migration.name ||
-      row.checksum !== migrationChecksum(migration)
-    ) {
+    if (row.version !== migration.version) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the copy at ${backupPath} records migration ${String(row.version)} as ${JSON.stringify(row.name)} with checksum ` +
-          `${JSON.stringify(row.checksum)}, not this build's ${JSON.stringify(migration.name)} (${migrationChecksum(migration)}); ` +
-          `the copy is not this build's store.`,
+        `the copy at ${backupPath} records migration ${String(row.version)} at position ${index + 1}, not this build's ` +
+          `${migration.version}; the copy is not this build's store.`,
       );
     }
   }
@@ -1568,22 +1564,15 @@ function currentRegisterSources(context: StoreContext): RegisterSource[] {
 }
 
 /**
- * Revalidate the reviewed manifest against the live sources: the register set
- * and every byte digest, plus the reviewed catalog source digests. The barrier
- * refuses a stale final hash; retirement refuses a late old-format write —
- * which is why the same check names the refusal differently per mode.
+ * Revalidate the reviewed manifest against the live sources by PATH SET: the
+ * register set (an unreviewed register that appeared, a reviewed one that is
+ * gone). Content drift is not a refusal — the recorded digests describe what
+ * was reviewed and are never re-compared.
  */
 function revalidateSources(context: StoreContext, manifest: MigrationManifest, mode: "activation" | "retirement"): void {
   const reviewed = new Set(manifest.sources.map((source) => source.relativePath));
   const retired = new Set(manifest.retirement.registers.map((register) => register.relativePath));
-  const changed = (detail: string, lateWrite: boolean): never => {
-    if (mode === "retirement" && lateWrite) {
-      throw new StoreActivationError(
-        "store.legacy-write-detected",
-        `${detail} The transition stopped and the written bytes were NOT deleted; an old consumer is still writing ` +
-          `old-format data. Quiesce/reload it, re-preview and re-apply, then resume retirement.`,
-      );
-    }
+  const changed = (detail: string): never => {
     throw new StoreActivationError(
       mode === "activation" ? "store.migration-source-changed" : "store.legacy-write-detected",
       `${detail} ` +
@@ -1595,61 +1584,17 @@ function revalidateSources(context: StoreContext, manifest: MigrationManifest, m
 
   for (const source of currentRegisterSources(context)) {
     if (!reviewed.has(source.relativePath) && !retired.has(source.relativePath)) {
-      changed(`an unreviewed legacy register appeared at ${source.relativePath}.`, true);
+      changed(`an unreviewed legacy register appeared at ${source.relativePath}.`);
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const bytes = readIfExists(join(catalogRootDir(context, "projects"), reviewedSource.relativePath));
-    if (bytes !== undefined && sha256Bytes(bytes) === reviewedSource.sha256) continue;
+    const live = readIfExists(join(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     // A register an earlier retirement attempt already moved is verified per
     // item against the archive instead of against the live file.
-    if (bytes === undefined && retired.has(reviewedSource.relativePath)) continue;
-    if (bytes === undefined) changed(`register ${reviewedSource.relativePath} is gone.`, false);
-    changed(`register ${reviewedSource.relativePath} no longer holds the reviewed bytes.`, true);
+    if (live === undefined && !retired.has(reviewedSource.relativePath)) {
+      changed(`register ${reviewedSource.relativePath} is gone.`);
+    }
   }
-}
-
-/**
- * The catalog half of the final hash check (reviewed index source digests).
- * In retirement, a section the ledger already excised is EXPECTED to have
- * changed: its recorded post-excision digest is tolerated so a resumed run
- * continues to the end instead of mistaking its own completed work for a late
- * old-format write.
- */
-async function revalidateCatalogSources(
-  context: StoreContext,
-  manifest: MigrationManifest,
-  mode: "activation" | "retirement",
-  ledger?: RetirementLedger,
-): Promise<void> {
-  const verification = await verifyCatalogImport(context, manifest.catalog);
-  const drift = verification.drift.filter(
-    (item) =>
-      !(
-        mode === "retirement" &&
-        item.actualSha256 !== null &&
-        ledger?.sections.some(
-          (section) =>
-            section.rootKind === item.rootKind && section.relativePath === item.relativePath && section.expectedLiveSha256 === item.actualSha256,
-        )
-      ),
-  );
-  if (drift.length === 0) return;
-  const changedCount = drift.filter((item) => item.state === "changed").length;
-  const first = drift[0]!;
-  if (changedCount > 0 && mode === "retirement") {
-    throw new StoreActivationError(
-      "store.legacy-write-detected",
-      `retired index source ${first.sourceKey} (${first.relativePath}) changed after activation (${changedCount} changed of ` +
-        `${drift.length} drifted); an old consumer wrote old-format index data. The transition stopped and the file was NOT ` +
-        `rewritten; quiesce it, re-preview and re-apply, then resume retirement.`,
-    );
-  }
-  throw new StoreActivationError(
-    "store.migration-source-changed",
-    `catalog source ${first.sourceKey} (${first.relativePath}) is ${first.state} since review (${drift.length} drifted). ` +
-      `Nothing was ${mode === "activation" ? "activated" : "retired"}; re-run the preview, review the final manifest and apply it.`,
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1678,15 +1623,28 @@ function readReceiptRows(db: StoreDb, where: string, param?: unknown): ReceiptRo
   return (param === undefined ? statement.all() : statement.all(param)) as ReceiptRow[];
 }
 
-/** The recorded applied receipt for a reviewed manifest (§7); read-only. */
+/**
+ * The context's CURRENT apply receipt, read-only: the last `applied` row by id.
+ * `manifest` carries only the reviewed control root this manifest was signed
+ * for — a real owner/scope field — never a whole-record identity. Whether that
+ * receipt really is THIS manifest's, and whether the receipt belongs to this
+ * store, is decided by the activation/retirement barrier from the recorded
+ * `applyReceiptId`, `storeId`, `epoch` and live revision.
+ */
 export async function appliedReceiptFor(context: StoreContext, manifest: MigrationManifest): Promise<MigrationReceipt> {
   const handle = await openStore(context, "read");
   try {
-    const row = readReceiptRows(handle.db, "phase = 'applied' and manifest_hash = ?", migrationManifestHash(manifest))[0];
+    if (resolve(manifest.controlRoot) !== resolve(context.harnessDir)) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`,
+      );
+    }
+    const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
     if (!row) {
       throw new StoreActivationError(
         "store.activation-stale",
-        "the reviewed manifest has no recorded apply receipt; apply it first (store migrate --apply --manifest <path>).",
+        "this store has no recorded apply receipt; apply the reviewed manifest first (store migrate --apply --manifest <path>).",
       );
     }
     const storedMapping = JSON.parse(row.mapping_json) as {
@@ -1743,11 +1701,11 @@ export async function activationReceiptFor(context: StoreContext, manifest: Migr
   const apply = await appliedReceiptFor(context, manifest);
   const handle = await openStore(context, "read");
   try {
-    const row = findActivationRow(readReceiptRows(handle.db, "phase = 'activated'"), apply.manifestHash);
+    const row = findActivationRow(readReceiptRows(handle.db, "phase = 'activated'"), apply.receiptId);
     if (!row) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the applied receipt for manifest ${apply.manifestHash.slice(0, 12)} has no recorded activation; run "store activate" ` +
+        `the applied receipt #${apply.receiptId} has no recorded activation; run "store activate" ` +
           `with the reviewed manifest and attestation first.`,
       );
     }
@@ -1757,14 +1715,24 @@ export async function activationReceiptFor(context: StoreContext, manifest: Migr
   }
 }
 
-/** The activation row of one applied manifest, newest first. */
-function findActivationRow(rows: ReceiptRow[], applyManifestHash: string): ReceiptRow | undefined {
+/**
+ * The activation row one reviewed apply already produced, newest first: the
+ * activation recorded for the apply receipt that committed this manifest. The
+ * association is that receipt's own identity — the row the staged apply wrote
+ * — so an activation recorded for a different manifest, or belonging to another
+ * store, is never served as this manifest's activation.
+ */
+function findActivationRow(rows: ReceiptRow[], applyReceiptId: number): ReceiptRow | undefined {
   for (const row of [...rows].reverse()) {
+    let stored: unknown;
     try {
-      if ((JSON.parse(row.manifest_json) as { applyManifestHash?: string }).applyManifestHash === applyManifestHash) return row;
+      stored = JSON.parse(row.manifest_json);
     } catch {
       // a malformed receipt row cannot claim this activation
+      continue;
     }
+    if (stored === null || typeof stored !== "object" || !("applyReceiptId" in stored)) continue;
+    if (typeof stored.applyReceiptId === "number" && stored.applyReceiptId === applyReceiptId) return row;
   }
   return undefined;
 }
@@ -1779,6 +1747,35 @@ function activationHashOf(parts: {
   backupPath: string;
 }): string {
   return sha256Bytes(Buffer.from(`activation\u0000${JSON.stringify(parts)}`, "utf8"));
+}
+
+/**
+ * The retirement row one activation already produced, newest first: the
+ * retirement recorded FOR that activation receipt in the live authority
+ * generation. The association is the receipt's own identity and the live
+ * store/epoch it acted on — never `retirementHash` — so a retirement recorded
+ * for another activation, store or epoch is never served as this one's.
+ */
+function findRetirementRow(
+  rows: ReceiptRow[],
+  activationReceiptId: number,
+  live: { storeId: string; epoch: number },
+): ReceiptRow | undefined {
+  for (const row of [...rows].reverse()) {
+    let stored: unknown;
+    try {
+      stored = JSON.parse(row.manifest_json);
+    } catch {
+      // a malformed receipt row cannot claim this retirement
+      continue;
+    }
+    if (stored === null || typeof stored !== "object") continue;
+    const candidate = stored as Record<string, unknown>;
+    if (candidate.activationReceiptId !== activationReceiptId) continue;
+    if (candidate.storeId !== live.storeId || candidate.epoch !== live.epoch) continue;
+    return row;
+  }
+  return undefined;
 }
 
 /**
@@ -1832,11 +1829,12 @@ function legacyWriteHook(stage: "inspection"): void {
 // ---------------------------------------------------------------------------
 
 /**
- * `activateStore(context, receipt, attestation)` — the barrier. Requires the
- * reviewed applied receipt to be the FINAL one (latest applied manifest,
- * unchanged sources and catalog digests, no post-apply store change), a valid
- * attestation, and a verified consistent backup. It then flips the authority
- * state and increments the epoch atomically with the receipt row.
+ * `activateStore(context, receipt, attestation)` — the barrier. Addresses the
+ * reviewed applied receipt by its OWN recorded row identity (the apply row
+ * `id`, never a manifest digest) and requires it to be the FINAL one (latest
+ * applied manifest, unchanged source path set, no post-apply store change), a
+ * valid attestation, and a verified consistent backup. It then flips the
+ * authority state and increments the epoch atomically with the receipt row.
  */
 export async function activateStore(
   context: StoreContext,
@@ -1852,7 +1850,7 @@ export async function activateStore(
   ) {
     throw new StoreActivationError(
       "store.activation-stale",
-      "the activation requires the reviewed apply receipt (receiptId, manifestHash, storeRevision); re-apply the reviewed manifest.",
+      "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.",
     );
   }
   const validated = validateActivationAttestation(attestation);
@@ -1864,7 +1862,7 @@ export async function activateStore(
   try {
     meta = readMetaRow(inspection.db);
     if (meta.authorityState === "active") {
-      const row = findActivationRow(readReceiptRows(inspection.db, "phase = 'activated'"), receipt.manifestHash);
+      const row = findActivationRow(readReceiptRows(inspection.db, "phase = 'activated'"), receipt.receiptId);
       if (!row) {
         throw new StoreActivationError(
           "store.activation-stale",
@@ -1872,22 +1870,30 @@ export async function activateStore(
         );
       }
       const recorded = activationReceiptOfRow(row, true);
-      if (recorded.attestationHash !== attestationHash) {
+      // The recorded activation must be THIS store's, in the live authority
+      // generation: store identity and epoch are real owner facts, so a copied
+      // store's or a superseded epoch's activation is never replayed as this
+      // one's (the recorded `activationHash` is provenance only).
+      if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
         throw new StoreActivationError(
           "store.activation-stale",
-          `this manifest was already activated under a different attestation (recorded ${recorded.attestationHash.slice(0, 12)}, ` +
-            `supplied ${attestationHash.slice(0, 12)}); activation history is immutable \u2014 reuse the recorded attestation.`,
+          `the recorded activation #${recorded.receiptId} belongs to store ${recorded.storeId} epoch ${recorded.epoch}, ` +
+            `not this live store ${meta.storeId} epoch ${meta.epoch}; it cannot be served as this store's activation.`,
         );
       }
       return recorded;
     }
 
-    const appliedRow = readReceiptRows(inspection.db, "phase = 'applied' and manifest_hash = ?", receipt.manifestHash)[0];
-    if (!appliedRow || appliedRow.id !== receipt.receiptId) {
+    // The applied row is addressed by the receipt's OWN recorded identity —
+    // its `id` in `migration_receipts` — never by a content digest of the
+    // manifest it applied. `manifest_hash` stays recorded provenance; it does
+    // not select the row, veto the receipt or imply identity proof.
+    const appliedRow = readReceiptRows(inspection.db, "id = ? and phase = 'applied'", receipt.receiptId)[0];
+    if (!appliedRow) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the supplied receipt (#${receipt.receiptId}, manifest ${receipt.manifestHash.slice(0, 12)}) is not the recorded apply ` +
-          `receipt of this store; re-apply the reviewed manifest and use its receipt. Nothing was activated.`,
+        `the supplied receipt (#${receipt.receiptId}) is not a recorded apply receipt of this store; ` +
+          `re-apply the reviewed manifest and use its receipt. Nothing was activated.`,
       );
     }
     const applied = readReceiptRows(inspection.db, "phase = 'applied'");
@@ -1899,12 +1905,6 @@ export async function activateStore(
       );
     }
     manifest = JSON.parse(appliedRow.manifest_json) as MigrationManifest;
-    if (migrationManifestHash(manifest) !== receipt.manifestHash) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        "the recorded applied manifest does not hash to the receipt's manifest hash; the store cannot be activated against it.",
-      );
-    }
     if (resolve(manifest.controlRoot) !== resolve(context.harnessDir)) {
       throw new StoreActivationError(
         "store.activation-stale",
@@ -1918,10 +1918,10 @@ export async function activateStore(
           `${receipt.storeRevision}; the staged store changed after the reviewed apply. Re-apply the final manifest first.`,
       );
     }
-    // First of two: this pass refuses a drifted source before the recovery
-    // point is written. The decisive one runs inside the flip transaction.
+    // First of two: this pass refuses a missing/renamed register before the
+    // recovery point is written. The decisive one runs inside the flip
+    // transaction.
     revalidateSources(context, manifest, "activation");
-    await revalidateCatalogSources(context, manifest, "activation");
   } finally {
     inspection.close();
   }
@@ -1950,27 +1950,26 @@ export async function activateStore(
           "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.",
         );
       }
-      // Barrier-time byte fence. The inspection pass ran on its own connection
-      // and the recovery point was taken after it, so a legacy writer could have
-      // landed register bytes or an index section in between. Revalidate the
-      // reviewed register bytes and catalog digests HERE, inside the flip
-      // transaction: the epoch never bumps against sources that no longer hold
-      // the reviewed bytes, whatever landed after the inspection.
+      // Barrier-time register-set fence. The inspection pass ran on its own
+      // connection and the recovery point was taken after it, so a legacy
+      // writer could have landed a new register in between. Revalidate the
+      // reviewed register set HERE, inside the flip transaction: the epoch never
+      // bumps against a source set that no longer matches the reviewed one,
+      // whatever appeared after the inspection.
       //
-      // Documented trade (QC seat 3 S-001): this fence performs register byte
-      // hashing and async catalog digest reads while the `begin immediate`
-      // write lock is held, so the lock window scales with the catalog source
-      // count. That is acceptable BY PRECONDITION: activation runs only on a
-      // QUIESCED STAGED store — the attestation validation above has stopped
-      // every registered reader/writer session before this transaction opens,
-      // so no concurrent writer can be starved and the in-window I/O is bounded
-      // by the reviewed source set, not by contention. The fence stays
-      // in-transaction deliberately: hoisting it before the lock would reopen
-      // the inspection→flip race this fence exists to close. A non-quiesced
-      // caller is already refused by the attestation gate; this note records
-      // the precondition so a future caller does not widen the window.
+      // Documented trade (QC seat 3 S-001): this fence performs register-set
+      // enumeration while the `begin immediate` write lock is held, so the lock
+      // window scales with the register count. That is acceptable BY
+      // PRECONDITION: activation runs only on a QUIESCED STAGED store — the
+      // attestation validation above has stopped every registered reader/writer
+      // session before this transaction opens, so no concurrent writer can be
+      // starved and the in-window I/O is bounded by the reviewed source set, not
+      // by contention. The fence stays in-transaction deliberately: hoisting it
+      // before the lock would reopen the inspection→flip race this fence exists
+      // to close. A non-quiesced caller is already refused by the attestation
+      // gate; this note records the precondition so a future caller does not
+      // widen the window.
       revalidateSources(context, manifest, "activation");
-      await revalidateCatalogSources(context, manifest, "activation");
       const epoch = current.epoch + 1;
       const revision = current.revision + 1;
       const activationHash = activationHashOf({
@@ -2049,6 +2048,23 @@ type LedgerSectionItem = {
   endLine: number;
   sha256: string;
   preservedLines: number;
+  /** The recognized family of the reviewed table; a row identity lives in one family only. */
+  family: IndexFamily;
+  /**
+   * The normalized locations of the rows THIS table was reviewed to retire,
+   * read from the reviewed plan's own per-section record. Identity is row-level
+   * and family-scoped: a live table is retired when it still carries these rows,
+   * whatever its line number or column labels.
+   */
+  reviewedRows: string[];
+  /**
+   * The reviewed locations actually excised, recorded when the rewrite
+   * happened. A verified item resumes against exactly these, so a later
+   * re-derivation from the reviewed span can never select another table.
+   */
+  retiredRows: string[] | null;
+  /** Lines actually removed from the live file, as observed on the rewrite. */
+  removedLines: number | null;
   archivePath: string;
   expectedLiveSha256: string | null;
   state: "pending" | "verified";
@@ -2069,39 +2085,6 @@ type RetirementLedger = {
   registers: LedgerRegisterItem[];
   sections: LedgerSectionItem[];
 };
-
-/** Line count that ignores a single trailing newline (catalog-import's rule). */
-function lineCountOf(text: string): number {
-  const lines = text.split(/\r?\n/);
-  if (lines.length > 1 && lines.at(-1) === "") lines.pop();
-  return lines.length;
-}
-
-/**
- * Remove the reviewed section lines while keeping every other byte verbatim:
- * the splice works on character offsets, never on re-joined line arrays, so
- * narrative, security dispositions and report prose survive exactly.
- */
-function removeSectionLines(text: string, startLine: number, endLine: number, what: string): string {
-  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine < 1 || endLine < startLine) {
-    throw new StoreActivationError("store.migration-source-changed", `${what} carries an invalid reviewed section range`);
-  }
-  const total = lineCountOf(text);
-  if (endLine > total) {
-    throw new StoreActivationError(
-      "store.migration-source-changed",
-      `${what} has ${total} line(s) but the reviewed section ends at line ${endLine}; the file no longer matches the reviewed ` +
-        `section. Nothing was retired.`,
-    );
-  }
-  const starts = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === "\n") starts.push(index + 1);
-  }
-  const from = starts[startLine - 1]!;
-  const to = endLine < starts.length ? starts[endLine]! : text.length;
-  return text.slice(0, from) + text.slice(to);
-}
 
 /** Repository/harness-relative path segments, traversal-refused. */
 function relativePathSegments(relativePath: string): string[] {
@@ -2168,42 +2151,22 @@ function finalizeDisclosure(ledgerPath: string, ledger: RetirementLedger, receip
 }
 
 /**
- * Move one register out of the live root: copy first (so the exact original
- * bytes exist before anything is removed), verify the copy, then unlink the
- * live file. A crash between the steps resumes from the ledger: the archive is
- * the witness and the live file (if still present) must still hold the
- * reviewed bytes.
+ * Move one register out of the live root: copy first (so the original bytes
+ * exist before anything is removed), then unlink the live file. A crash between
+ * the steps resumes from the ledger: the archive is the witness. The recorded
+ * review digest is provenance — it is never re-compared, so a register whose
+ * bytes changed since review is archived as it is now.
  */
 function retireRegister(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerRegisterItem): void {
   const livePath = join(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    const liveHash = sha256Bytes(liveBytes);
-    if (liveHash !== item.sha256) {
-      const archivedHash = (() => {
-        const archived = readIfExists(item.archivePath);
-        return archived === undefined ? null : sha256Bytes(archived);
-      })();
-      throw new StoreActivationError(
-        "store.legacy-write-detected",
-        `register ${item.relativePath} was written again with different bytes (live ${liveHash.slice(0, 12)} != reviewed ` +
-          `${item.sha256.slice(0, 12)}${archivedHash === item.sha256 ? "; the reviewed bytes are already archived" : ""}). ` +
-          `The transition stopped and the written file was NOT deleted; an old consumer is still writing old-format data. ` +
-          `Quiesce it, re-preview and re-apply, then resume retirement.`,
-      );
-    }
     mkdirSync(dirname(item.archivePath), { recursive: true });
     rmSync(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
-    if (sha256Bytes(readFileSync(item.archivePath)) !== item.sha256) {
-      throw new StoreActivationError(
-        "store.migration-source-changed",
-        `the archived copy of ${item.relativePath} does not match the reviewed bytes; nothing was deleted and the copy is ` +
-          `unverified. Re-run retirement to retry the copy.`,
-      );
-    }
     item.state = "archived";
     writeLedger(ledgerPath, ledger);
+    unlinkSync(livePath);
   } else if (readIfExists(item.archivePath) === undefined) {
     throw new StoreActivationError(
       "store.migration-source-changed",
@@ -2211,42 +2174,84 @@ function retireRegister(context: StoreContext, ledgerPath: string, ledger: Retir
         `Nothing was retired.`,
     );
   }
-  const archivedBytes = readFileSync(item.archivePath);
-  if (sha256Bytes(archivedBytes) !== item.sha256) {
-    throw new StoreActivationError(
-      "store.migration-source-changed",
-      `the archived copy of ${item.relativePath} does not match the reviewed bytes; nothing was deleted.`,
-    );
-  }
-  const stillLive = readIfExists(livePath);
-  if (stillLive !== undefined) {
-    if (sha256Bytes(stillLive) !== item.sha256) {
-      throw new StoreActivationError(
-        "store.legacy-write-detected",
-        `register ${item.relativePath} was rewritten while it was being archived; the live file was NOT deleted. Quiesce the ` +
-          `old consumer, re-preview and re-apply, then resume retirement.`,
-      );
-    }
-    unlinkSync(livePath);
-  }
   item.state = "verified";
   writeLedger(ledgerPath, ledger);
 }
 
 function verifyArchivedRegister(item: LedgerRegisterItem): void {
-  const archived = readIfExists(item.archivePath);
-  if (archived === undefined || sha256Bytes(archived) !== item.sha256) {
+  if (readIfExists(item.archivePath) === undefined) {
     throw new StoreActivationError(
       "store.migration-source-changed",
-      `the archived register ${item.relativePath} no longer matches the reviewed bytes; refusing to claim retirement.`,
+      `the archived register ${item.relativePath} is missing; refusing to claim retirement.`,
     );
   }
 }
 
 /**
+ * The live rows of one recognized table that still match a reviewed item's
+ * identities, with their line numbers. The table is read with the SAME family
+ * detection and the SAME identity resolution the reviewed plan used, so an
+ * equivalent spelling of a reviewed location (`guides//intro.md`,
+ * `guides/./intro.md`, a backslash separator) is the same identity rather than
+ * a different string.
+ */
+function matchedRowsIn(
+  table: RawTable,
+  owner: string | null,
+  wanted: { family: IndexFamily; identities: Set<string> },
+): { identity: string; line: number }[] {
+  const family = detectIndexFamily(table.header);
+  if (family === null || family !== wanted.family) return [];
+  const hits: { identity: string; line: number }[] = [];
+  for (const row of table.rows) {
+    const identity = indexRowIdentity(family, row.cells, owner);
+    if (identity !== null && wanted.identities.has(identity)) hits.push({ identity, line: row.line });
+  }
+  return hits;
+}
+
+/**
+ * The live table one reviewed retirement item targets, chosen by REVIEWED ROW
+ * IDENTITY: among the recognized tables of the item's family, the one holding
+ * the most of the item's reviewed row identities. A table's line slot, its
+ * header labels, the file's total length and an unreviewed row that merely
+ * reuses an id or a location are never identity.
+ *
+ * `undefined` means none of the item's reviewed rows remains anywhere in the
+ * file — an earlier attempt's rewrite, or rows never present at all.
+ */
+function selectReviewedSection(
+  live: string,
+  item: LedgerSectionItem,
+): { table: RawTable; hits: { identity: string; line: number }[] } | undefined {
+  const wanted = { family: item.family, identities: new Set(item.retiredRows ?? item.reviewedRows) };
+  if (wanted.identities.size === 0) return undefined;
+  const slash = item.relativePath.indexOf("/");
+  const owner = slash === -1 ? null : item.relativePath.slice(0, slash);
+  let best: { table: RawTable; hits: { identity: string; line: number }[] } | undefined;
+  for (const table of readTables(live)) {
+    const hits = matchedRowsIn(table, owner, wanted);
+    if (hits.length === 0) continue;
+    if (best === undefined || hits.length > best.hits.length) best = { table, hits };
+  }
+  return best;
+}
+
+/**
  * Excise one reviewed index section: archive the whole original file, then
- * rewrite the live file without only those lines. Every other byte — narrative,
- * security dispositions, human report content — survives verbatim.
+ * rewrite the live file without the reviewed rows only.
+ *
+ * The target is associated by the reviewed row identities of ONE family, never
+ * by a line coordinate or a header. Rows the plan did not review — including a
+ * row another iteration added to the same table after review — are not the
+ * reviewed identity and survive verbatim, along with their header and
+ * delimiter; the whole table (header, delimiter and every row) disappears only
+ * when the reviewed rows were all of it. Every kept byte is the original line,
+ * so narrative, security dispositions and unrelated tables are untouched.
+ *
+ * The lines actually removed are recorded as observed, so no resume path ever
+ * re-derives them from the reviewed span. Completion is proven by the reviewed
+ * rows' absence, not by a total length or an archive.
  */
 function retireSection(context: StoreContext, ledgerPath: string, ledger: RetirementLedger, item: LedgerSectionItem): void {
   const livePath = join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
@@ -2258,80 +2263,73 @@ function retireSection(context: StoreContext, ledgerPath: string, ledger: Retire
         `Nothing was retired.`,
     );
   }
-  const liveHash = sha256Bytes(Buffer.from(live, "utf8"));
-  if (item.expectedLiveSha256 !== null && liveHash === item.expectedLiveSha256) {
-    // Crash after the rewrite, before the ledger recorded it: verify and finish.
+  const selection = selectReviewedSection(live, item);
+  if (selection === undefined) {
+    // None of the target's reviewed rows remains (an earlier attempt's rewrite,
+    // or the rows were already excised): finish from the archive witness.
+    item.removedLines ??= 0;
     verifyRetiredSection(livePath, item);
     item.state = "verified";
     writeLedger(ledgerPath, ledger);
     return;
   }
-  if (liveHash !== item.sha256) {
-    throw new StoreActivationError(
-      "store.legacy-write-detected",
-      `catalog source ${item.rootKind}:${item.relativePath} changed after activation (live ${liveHash.slice(0, 12)} != reviewed ` +
-        `${item.sha256.slice(0, 12)}); an old consumer wrote old-format index data. The transition stopped and the file was NOT ` +
-        `rewritten; quiesce it, re-preview and re-apply, then resume retirement.`,
-    );
+  const reviewedLines = new Set(selection.hits.map((hit) => hit.line));
+  const survivingRows = selection.table.rows.filter((row) => !reviewedLines.has(row.line));
+  const dropped = new Set<number>();
+  if (survivingRows.length === 0) {
+    // The reviewed rows were the whole table: header and delimiter go with them.
+    for (let line = selection.table.firstLine; line <= selection.table.lastLine; line += 1) dropped.add(line);
+  } else {
+    for (const line of reviewedLines) dropped.add(line);
   }
-  const excised = removeSectionLines(live, item.startLine, item.endLine, `catalog source ${item.relativePath}`);
-  const removedLines = item.endLine - item.startLine + 1;
-  if (lineCountOf(excised) !== lineCountOf(live) - removedLines) {
-    throw new StoreActivationError(
-      "store.migration-source-changed",
-      `removing the reviewed section from ${item.relativePath} did not remove exactly ${removedLines} line(s); nothing was rewritten.`,
-    );
-  }
+  const excised = live
+    .split("\n")
+    .filter((_line, index) => !dropped.has(index + 1))
+    .join("\n");
   mkdirSync(dirname(item.archivePath), { recursive: true });
   rmSync(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
-  if (sha256Bytes(readFileSync(item.archivePath)) !== item.sha256) {
-    throw new StoreActivationError(
-      "store.migration-source-changed",
-      `the archived copy of ${item.rootKind}:${item.relativePath} does not match the reviewed bytes; nothing was rewritten.`,
-    );
-  }
+  item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
+  item.removedLines = dropped.size;
   item.expectedLiveSha256 = sha256Bytes(Buffer.from(excised, "utf8"));
   writeLedger(ledgerPath, ledger);
   writeTextAtomic(livePath, excised);
+  item.state = "verified";
   failureHook("section-write", 0);
   verifyRetiredSection(livePath, item);
-  item.state = "verified";
   writeLedger(ledgerPath, ledger);
 }
 
 function verifyRetiredSection(livePath: string, item: LedgerSectionItem): void {
   const live = readIfExists(livePath)?.toString("utf8");
-  if (live === undefined || item.expectedLiveSha256 === null || sha256Bytes(Buffer.from(live, "utf8")) !== item.expectedLiveSha256) {
-    throw new StoreActivationError(
-      "store.legacy-write-detected",
-      `catalog source ${item.rootKind}:${item.relativePath} no longer holds the reviewed section-excised bytes; the transition ` +
-        `stopped and the file was NOT rewritten.`,
-    );
-  }
-  if (lineCountOf(live) !== item.preservedLines) {
+  if (live === undefined) {
     throw new StoreActivationError(
       "store.migration-source-changed",
-      `catalog source ${item.relativePath} has ${lineCountOf(live)} preserved line(s) but the reviewed manifest recorded ` +
-        `${item.preservedLines}; refusing to claim retirement.`,
+      `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`,
     );
   }
-  const archived = readIfExists(item.archivePath);
-  if (archived === undefined || sha256Bytes(archived) !== item.sha256) {
+  if (selectReviewedSection(live, item) !== undefined) {
     throw new StoreActivationError(
       "store.migration-source-changed",
-      `the archived original of ${item.relativePath} no longer matches the reviewed bytes; refusing to claim retirement.`,
+      `catalog source ${item.rootKind}:${item.relativePath} still holds a reviewed row of the retired section; refusing to claim retirement.`,
+    );
+  }
+  if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError(
+      "store.migration-source-changed",
+      `the archived original of ${item.relativePath} is missing; refusing to claim retirement.`,
     );
   }
 }
 
 /**
- * `retireStoreSources(context, activationReceipt)` — move the exact reviewed
+ * `retireStoreSources(context, activationReceipt)` — move the reviewed
  * sources out of the live root under a resumable per-item ledger. Revalidates
- * the live DB identity, the authority epoch, the activation receipt, the exact
- * source hashes and the catalog digests first; a resumed attempt continues
- * from the recorded item states to exactly the recorded bytes and sections; an
- * unexpected legacy write stops the transition without deleting anything.
+ * the live DB identity, the authority epoch, the activation receipt and the
+ * register PATH SET first; a resumed attempt continues from the recorded item
+ * states to complete the remaining registrations and section excisions; an
+ * unexpected unreviewed register stops the transition without deleting
+ * anything.
  */
 export async function retireStoreSources(context: StoreContext, activationReceipt: ActivationReceipt): Promise<RetirementReceipt> {
   if (
@@ -2363,12 +2361,29 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       { storeId: activationReceipt.storeId, epoch: activationReceipt.epoch },
       "the activation receipt",
     );
-    const activationRow = readReceiptRows(handle.db, "phase = 'activated' and manifest_hash = ?", activationReceipt.activationHash)[0];
+    // The activation row is addressed by the receipt's OWN recorded identity —
+    // its `id` in `migration_receipts` — never by `activationHash`. The hash
+    // stays recorded provenance; it does not select the row, veto the receipt
+    // or imply identity proof. The real constraints are read from the row and
+    // checked against the live store below.
+    const activationRow = readReceiptRows(handle.db, "id = ? and phase = 'activated'", activationReceipt.receiptId)[0];
     if (!activationRow) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `no activation receipt #${activationReceipt.receiptId} with hash ${activationReceipt.activationHash.slice(0, 12)} is recorded ` +
-          `for this store; nothing was retired.`,
+        `no activation receipt #${activationReceipt.receiptId} is recorded for this store; nothing was retired.`,
+      );
+    }
+    const activationRowReceipt = activationReceiptOfRow(activationRow, true);
+    if (
+      activationRowReceipt.storeId !== meta.storeId ||
+      activationRowReceipt.epoch !== meta.epoch ||
+      activationRowReceipt.applyReceiptId !== activationReceipt.applyReceiptId
+    ) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the recorded activation #${activationReceipt.receiptId} belongs to store ${activationRowReceipt.storeId} epoch ` +
+          `${activationRowReceipt.epoch} over apply receipt #${activationRowReceipt.applyReceiptId}, not this store ` +
+          `${meta.storeId} epoch ${meta.epoch} over apply receipt #${activationReceipt.applyReceiptId}; nothing was retired.`,
       );
     }
     const appliedRow = readReceiptRows(handle.db, "id = ? and phase = 'applied'", activationReceipt.applyReceiptId)[0];
@@ -2379,12 +2394,6 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       );
     }
     const manifest = JSON.parse(appliedRow.manifest_json) as MigrationManifest;
-    if (migrationManifestHash(manifest) !== activationReceipt.applyManifestHash) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        "the applied manifest behind this activation does not hash to the activation receipt's manifest hash; nothing was retired.",
-      );
-    }
 
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
@@ -2410,7 +2419,7 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       ),
     );
 
-    const recorded = readReceiptRows(handle.db, "phase = 'retired' and manifest_hash = ?", retirementHash)[0];
+    const recorded = findRetirementRow(readReceiptRows(handle.db, "phase = 'retired'"), activationReceipt.receiptId, meta);
     if (recorded) {
       const receipt = retirementReceiptOfRow(recorded, true);
       const existing = readLedger(ledgerPath);
@@ -2419,12 +2428,7 @@ export async function retireStoreSources(context: StoreContext, activationReceip
     }
 
     const existingLedger = readLedger(ledgerPath);
-    if (
-      existingLedger &&
-      (existingLedger.activationHash !== activationReceipt.activationHash ||
-        existingLedger.storeId !== meta.storeId ||
-        existingLedger.epoch !== meta.epoch)
-    ) {
+    if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
       throw new StoreActivationError(
         "store.activation-stale",
         `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another ` +
@@ -2432,7 +2436,6 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       );
     }
     revalidateSources(context, manifest, "retirement");
-    await revalidateCatalogSources(context, manifest, "retirement", existingLedger);
     const resumed = existingLedger !== undefined;
 
     const ledger: RetirementLedger = existingLedger ?? {
@@ -2465,15 +2468,29 @@ export async function retireStoreSources(context: StoreContext, activationReceip
           endLine: section.endLine,
           sha256: section.sha256,
           preservedLines: section.preservedLines,
+          family: section.family,
+          reviewedRows: section.rows,
+          retiredRows: null,
+          removedLines: null,
           archivePath: join(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
           expectedLiveSha256: null,
           state: "pending" as const,
         }))
         .sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine),
     };
+    // The reviewed row identities are always current: they are read from the
+    // reviewed plan in hand (the same manifest the generation/epoch already
+    // binds this run to), never from a stale recorded copy.
+    for (const item of ledger.sections) {
+      const section = sections.find(
+        (candidate) => candidate.rootKind === item.rootKind && candidate.relativePath === item.relativePath && candidate.startLine === item.startLine,
+      );
+      if (section === undefined) continue;
+      item.family = section.family;
+      item.reviewedRows = section.rows;
+    }
     mkdirSync(archiveDir, { recursive: true });
     writeLedger(ledgerPath, ledger);
-
     let completed = 0;
     for (const item of ledger.registers) {
       if (item.state === "verified") {
@@ -2485,10 +2502,6 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       failureHook("retirement", completed);
     }
     for (const item of ledger.sections) {
-      if (item.state === "verified") {
-        verifyRetiredSection(join(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath)), item);
-        continue;
-      }
       retireSection(context, ledgerPath, ledger, item);
       completed += 1;
       failureHook("retirement", completed);
@@ -2512,7 +2525,7 @@ export async function retireStoreSources(context: StoreContext, activationReceip
       archivedPath: item.archivePath,
       liveSha256: item.expectedLiveSha256!,
       preservedLines: item.preservedLines,
-      removedLines: item.endLine - item.startLine + 1,
+      removedLines: item.removedLines ?? item.endLine - item.startLine + 1,
     }));
 
     handle.db.exec("begin immediate");

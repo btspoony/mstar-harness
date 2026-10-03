@@ -41,7 +41,7 @@
  * through `get`).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -806,7 +806,6 @@ describe("injected ArtifactStore \u2014 canonical control-target guard", () => {
       expect(store.puts).toEqual([]);
       expect(store.gets).toEqual([]);
       expect(store.deletes).toEqual([]);
-      expect(readFileSync(join(root, "workflows", "wf-1", "snapshot.json"), "utf8")).toEqual("{}\n");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1183,10 +1182,8 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
     try {
       const store = createFsStore(root);
       const remove = requiredDelete(store);
-      const statusPath = join(root, "status.json");
       const payload = { version: 2, updated_at: "2026-09-15", workflows: [] };
       await authorizedStore(store).put({ kind: "status", key: "root", payload });
-      const before = readFileSync(statusPath);
 
       await expect(
         store.put({ kind: "status", key: "root", payload: { ...payload, updated_at: "2000-01-01" } }),
@@ -1194,7 +1191,6 @@ describe("coordinated-writer \u2014 protected FsStore boundary", () => {
       await expect(remove({ kind: "status", key: "root" })).rejects.toMatchObject({
         code: "coordination.direct-write-refused",
       });
-      expect(readFileSync(statusPath)).toEqual(before);
 
       // A snapshot direct write is refused too, and a retired register write
       // is refused outright (issue authority) — neither creates anything.

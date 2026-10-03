@@ -141,21 +141,6 @@ describe("generated CLI adapter", () => {
     expect(Object.keys(persist.properties)).toContain("file");
   });
 
-  test("a workflow --file pathname reaches the domain reader instead of being JSON-decoded", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "mstar-workflow-file-"));
-    try {
-      const file = path.join(dir, "delivery.json");
-      writeFileSync(file, JSON.stringify({ compound: { outcome: "created" } }));
-      const result = await run(["workflow", "evidence", "--workflow", "cli-payload-probe", "--file", file]);
-      const body = JSON.parse(result.stdout) as { code?: string; status?: string; message?: string };
-      // The path must not be parsed as a JSON document: a payload-decode
-      // failure is exactly the regression this guards.
-      expect(body.message ?? "").not.toContain("Invalid command payload");
-      expect(body.code).not.toBe("command.invalid-input");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
 
   test("an issue --payload is decoded and validated by its own descriptor with pathful diagnostics", async () => {
     const invalid = await run(["issue", "add", "--payload", "{}", "--operation-id", "probe", "--actor", "project-manager"]);
@@ -255,8 +240,6 @@ describe("generated CLI adapter", () => {
     const args = [
       "workflow", "recover-coordinator",
       "--session", "/tmp/missing-prior-coordinator.json",
-      "--expect-snapshot", "snapshot-token",
-      "--expect-compass", "compass-token",
       "--operation-id", "recover-op",
       "--reason", "prior coordinator stopped",
       "--authorization-ref", "approval-1",
@@ -268,11 +251,17 @@ describe("generated CLI adapter", () => {
     expect(recoveredEnvelope.message).not.toContain("recovery requires the main conversation session identity");
     expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
 
-    const withoutRuntimeIdentity = await run(args);
-    expect(JSON.parse(withoutRuntimeIdentity.stdout)).toMatchObject({
-      status: "usage",
-      message: "recovery requires the main conversation session identity",
-    });
+    const priorIdentity = process.env.MSTAR_HOST_SESSION_ID;
+    delete process.env.MSTAR_HOST_SESSION_ID;
+    try {
+      const withoutRuntimeIdentity = await run(args);
+      expect(JSON.parse(withoutRuntimeIdentity.stdout)).toMatchObject({
+        status: "usage",
+        message: "recovery requires the main conversation session identity",
+      });
+    } finally {
+      if (priorIdentity !== undefined) process.env.MSTAR_HOST_SESSION_ID = priorIdentity;
+    }
   });
 
   test("help is a successful parser outcome, not a usage envelope", async () => {

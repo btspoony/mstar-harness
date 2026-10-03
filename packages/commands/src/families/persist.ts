@@ -150,16 +150,15 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           { key: "file", flags: "--file <path>", required: false },
           { key: "store", flags: "--store <module>", required: false },
           { key: "schema", flags: "--schema <id>", required: false },
-          { key: "expectVersion", flags: "--expect-version <version>", required: false },
           { key: "session", flags: "--session <path>", required: false },
         ],
       },
-      input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), schema: z.string().optional(), expectVersion: z.string().optional(), session: z.string().optional() }),
+      input: z.object({ kind: z.string(), key: z.string().min(1), input: z.string().optional(), file: z.string().optional(), store: z.string().optional(), schema: z.string().optional(), session: z.string().optional() }),
       payloads: Object.fromEntries(Object.entries(payloadSchemas).map(([kind, descriptor]) => [
         kind,
         { schema: descriptor.schema, help: descriptor.help },
       ])),
-      output, effects: ["write"], description: "Persist one JSON coordination document.",
+      output, effects: ["write"], description: "Replace one authored JSON document (last write wins); coordinated authority requires its scoped writers.",
       async execute(input, context) {
         const id = "persist.write";
         const kind = parseKind(input.kind, id);
@@ -175,8 +174,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           validatePayload(kind, payload);
           const coordinated = kind === "status" || kind === "snapshot";
           const sessionPath = input.session;
-          if (coordinated && input.expectVersion === undefined) return usage(id, `persist ${kind} requires expectVersion for coordinated replacement`);
-          if (!coordinated && (input.expectVersion !== undefined || sessionPath !== undefined)) return usage(id, "expectVersion and session apply only to coordinated status/snapshot artifacts");
+          if (!coordinated && sessionPath !== undefined) return usage(id, "session applies only to coordinated snapshot artifacts");
           if (coordinated && input.schema !== undefined) return usage(id, `schema does not apply to coordinated ${kind} replacement`);
           if (kind === "snapshot" && sessionPath === undefined) return usage(id, "coordinated snapshot replacement requires a coordinator session");
           if (sessionPath !== undefined && !path.isAbsolute(sessionPath)) return usage(id, "session must be an absolute path");
@@ -189,7 +187,6 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
               harnessRoot: root,
               ref: { kind: kind as "status" | "snapshot", key: input.key },
               payload,
-              expectedVersion: input.expectVersion!,
               ...(sessionPath === undefined ? {} : { sessionPath }),
             });
           } else {

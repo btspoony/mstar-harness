@@ -43,7 +43,6 @@ import {
   executionInputSelection,
   leaseFailure,
   type CatalogExecutionPin,
-  type ResealReceiptDetails,
 } from "./coordination.js";
 import {
   CoordinationError,
@@ -85,7 +84,6 @@ import {
   type StoreDb,
 } from "./store-db.js";
 import {
-  WORKFLOW_TERMINAL_STATUSES,
   isTerminalSnapshot,
   rowValidationRoute,
   validateWorkflowSnapshot,
@@ -110,7 +108,6 @@ export type ExecutionErrorCode =
   | "execution.token-kind"
   | "execution.scope-mismatch"
   | "execution.stale-token"
-  | "execution.effect-superseded"
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
@@ -157,8 +154,8 @@ export type ExecutionSessionRef = {
   planId: string | null;
 };
 
-/** Immutable previous-seal provenance carried by a prepare action's sidecar. */
-export type ExecutionReceiptRecovery = RecoveryDetails & { readonly details?: ResealReceiptDetails };
+/** Recovery outcome and commit boundary carried by an execution action. */
+export type ExecutionReceiptRecovery = RecoveryDetails;
 
 /** §3: one consistent authority read, optionally carrying a committed action's sidecar. */
 export type ExecutionRead<T> = {
@@ -350,6 +347,7 @@ const TOKEN_PREFIX = "exec-v1";
 const STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+const TOKEN_KEY_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 /** §3.1: the grammar-checked contents of an `exec-v1` token. */
 export type ParsedExecutionToken = {
@@ -416,7 +414,7 @@ function decodeTokenKey(key64: string, kind: ExecutionKind): readonly string[] {
   if (!BASE64URL_RE.test(key64)) throw tokenRefusal("a token key must be unpadded base64url");
   let decoded: unknown;
   try {
-    decoded = JSON.parse(Buffer.from(key64, "base64url").toString("utf8"));
+    decoded = JSON.parse(TOKEN_KEY_DECODER.decode(Buffer.from(key64, "base64url")));
   } catch {
     throw tokenRefusal("a token key must be base64url-wrapped UTF-8 JSON");
   }
@@ -425,9 +423,6 @@ function decodeTokenKey(key64: string, kind: ExecutionKind): readonly string[] {
   }
   const key = decoded as string[];
   assertKeyShape(kind, key);
-  // Canonical encoding, checked by reconstruction: padding, embedded whitespace,
-  // non-minimal base64 and reordered output all disagree with the input here.
-  if (encodeTokenKey(key) !== key64) throw tokenRefusal("a token key must be the canonical encoding of its key array");
   return key;
 }
 
@@ -1759,6 +1754,11 @@ function readCommittedReceipt<T>(
   if (!isPlainObject(receipt.data)) throw corrupt(`${what}.result_json carries no execution state`);
   const recovery = receipt.operationRecovery;
   if (recovery !== undefined) {
+    // Historical DB receipts stay READABLE: the envelope's own recovery fields
+    // are validated (a corrupt row is still `store.corrupt`), but a retired
+    // per-operation sidecar's `details` — the previous-seal provenance the
+    // reseal producers no longer emit — is accepted as recorded diagnostic
+    // payload rather than being re-asserted against a retired digest shape.
     if (
       !isPlainObject(recovery) ||
       !["applied", "already-satisfied", "partial", "unresolved"].includes(String(recovery.outcome)) ||
@@ -1771,19 +1771,9 @@ function readCommittedReceipt<T>(
     ) {
       throw corrupt(`${what}.result_json carries an invalid recovery sidecar`);
     }
-    const details = recovery.details;
-    if (
-      details !== undefined &&
-      (!isPlainObject(details) ||
-        !isNonEmptyString(details.previous_prepared_at) ||
-        !isNonEmptyString(details.previous_prepared_by) ||
-        typeof details.previous_assignment_sha256 !== "string" ||
-        !/^[a-f0-9]{64}$/.test(details.previous_assignment_sha256))
-    ) {
-      throw corrupt(`${what}.result_json carries invalid previous-seal provenance`);
-    }
   }
-  // Stored diagnostic payload; its envelope and immutable seal identity were checked above.
+  // Stored diagnostic payload; its envelope was checked above and a retired
+  // `details` provenance is passed through unchanged for the reader.
   const storedRecovery = recovery as ExecutionReceiptRecovery | undefined;
   return {
     data: receipt.data as T,
@@ -1810,10 +1800,12 @@ function assertWorkflowIdentityIsNew(db: StoreDb, workflowId: string): void {
 /**
  * §3/§7: creation binds EXISTING catalog entity identities and never fabricates
  * a selection. A row that records a catalog pin must have that pin's selected
- * plan entity present in this store's catalog, and the pin must describe the
- * very row it is sealed with (the store-independent check `prepare` enforces).
- * A current catalog revision that moved past the recorded `entity_revision` is
- * explicitly tolerated — the pin freezes an identity, not a pointer.
+ * plan entity present in this store's catalog (the store-independent check
+ * `prepare` enforces). A current catalog revision that moved past the recorded
+ * `entity_revision` is explicitly tolerated — the pin freezes an identity, not
+ * a pointer — and the pin's recorded `document_hash` is provenance: the frozen
+ * input is the sealed selection itself, so a recorded digest that has moved on
+ * is history rather than a disagreement to refuse.
  */
 function assertSelectedCatalogEntities(
   db: StoreDb,
@@ -1830,13 +1822,6 @@ function assertSelectedCatalogEntities(
       throw new ExecutionPinConflictError(
         `plan ${plan.planId} selects catalog store ${pin.store_id}, which is not this store (${storeId}) \u2014 a foreign ` +
           `selection is never sealed as this store's frozen input`,
-        details,
-      );
-    }
-    if (executionInputHash(plan.row, plan.planId) !== pin.document_hash) {
-      throw new ExecutionPinConflictError(
-        `plan ${plan.planId}'s supplied pin records document hash ${pin.document_hash.slice(0, 12)}\u2026, but the frozen ` +
-          `execution input it is sealed with hashes differently \u2014 the pin and its row disagree; neither side is rewritten`,
         details,
       );
     }

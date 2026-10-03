@@ -353,38 +353,30 @@ describe("catalog import blocking rules", () => {
     expect((await catalogRows(fixture.context)).entities).toBe(0);
   });
 
-  test("source-digest drift blocks the import and writes nothing", async () => {
+  test("reviewed source drift is reported but does not block the import", async () => {
     const fixture = await freshWorkspace("drift-");
     const bodyPath = write(fixture.harness, "specs/contract.md", md("# Contract", "", "Reviewed body."));
-    const inputs: CatalogImportInput[] = [
-      {
-        rootKind: "specs",
-        relativePath: "contract.md",
-        mapping: { kind: "document", id: "contract", documentKind: "spec", title: "Contract" },
-      },
-    ];
-    const plan = await planCatalogImport(fixture.context, inputs);
+    const plan = await planCatalogImport(fixture.context, [{
+      rootKind: "specs",
+      relativePath: "contract.md",
+      mapping: { kind: "document", id: "contract", documentKind: "spec", title: "Contract" },
+    }]);
     expect(plan.conflicts).toEqual([]);
     expect(plan.sourceDigests).toHaveLength(1);
-    expect(await verifyCatalogImport(fixture.context, plan)).toEqual({ ok: true, conflicts: [], drift: [] });
 
     writeFileSync(bodyPath, md("# Contract", "", "Edited after review."));
-    const verification = await verifyCatalogImport(fixture.context, plan);
-    expect(verification.ok).toBe(false);
-    expect(verification.drift).toHaveLength(1);
-    expect(verification.drift[0]!.state).toBe("changed");
+    const changed = await verifyCatalogImport(fixture.context, plan);
+    expect(changed.ok).toBe(true);
+    expect(changed.drift).toHaveLength(1);
+    expect(changed.drift[0]!.state).toBe("changed");
+    const imported = await importCatalog(fixture.context, plan, { operationId: "imp-drift", actor: "project-manager" });
+    expect(imported.entities).toHaveLength(1);
+    expect((await catalogRows(fixture.context)).entities).toBe(1);
 
-    await expect(importCatalog(fixture.context, plan, { operationId: "imp-drift", actor: "project-manager" })).rejects.toMatchObject({
-      code: "catalog.import-source-drift",
-    });
-    expect((await catalogRows(fixture.context)).entities).toBe(0);
-
-    // A source that disappeared since review is drift too.
     rmSync(bodyPath);
-    await expect(importCatalog(fixture.context, plan, { operationId: "imp-drift-2", actor: "project-manager" })).rejects.toMatchObject({
-      code: "catalog.import-source-drift",
-    });
-    expect((await catalogRows(fixture.context)).entities).toBe(0);
+    const missing = await verifyCatalogImport(fixture.context, plan);
+    expect(missing.ok).toBe(true);
+    expect(missing.drift[0]!.state).toBe("missing");
   });
 
   test("refuses an unreviewed plan version and incomplete reviewed inputs", async () => {
@@ -436,7 +428,6 @@ describe("fresh-clone tracked bodies", () => {
       expect(proposal.idAssigned).toBe(true);
       const codes = plan.unknowns.filter((unknown) => unknown.key === `${proposal.kind}:${proposal.id}`).map((unknown) => unknown.code);
       expect(codes.sort()).toEqual(["identity", "membership"]);
-      expect(proposal.sourceHash).toBe(plan.sourceDigests.find((digest) => digest.sourceKey === `${proposal.rootKind}:${proposal.relativePath}`)!.sha256);
     }
 
     const receipt = await importCatalog(fixture.context, plan, { operationId: "imp-fresh", actor: "project-manager" });

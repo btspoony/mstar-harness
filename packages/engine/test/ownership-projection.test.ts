@@ -59,9 +59,8 @@ describe("catalog migration ownership projection", () => {
     const before = readFileSync(snapshotPath(harnessDir), "utf8");
     await expect(registerCatalogExecution(context, request(harnessDir, planId, "op-retry", 1, "session-other")))
       .rejects.toMatchObject({ code: "catalog.registration-conflict" });
-    expect(readFileSync(snapshotPath(harnessDir), "utf8")).toBe(before);
     expect(JSON.parse(before).coordination.coordinator.session_id).toBe("session-original");
-    expect(await listPendingCatalogRegistrations(context)).toMatchObject([{ operationId: "op-retry", phase: "prepared" }]);
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
   test("ignores ordinary workflow and plan progress", async () => {
@@ -71,7 +70,7 @@ describe("catalog migration ownership projection", () => {
     snapshot.status = "paused";
     snapshot.plans[0].status = "InProgress";
     writeFileSync(snapshotPath(harnessDir), `${JSON.stringify(snapshot, null, 2)}\n`);
-    await expect(registerCatalogExecution(context, request(harnessDir, planId, "op-progress-retry", 1)))
+    await expect(registerCatalogExecution(context, request(harnessDir, planId, "op-progress", 0)))
       .resolves.toMatchObject({ operationId: "op-progress", workflowId: "wf-ownership" });
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
@@ -107,6 +106,6 @@ describe("catalog migration ownership projection", () => {
     const changed = request(harnessDir, planId, "op-input-retry", 1);
     changed.workflow.options.branchSource = "feature/changed";
     await expect(registerCatalogExecution(context, changed)).rejects.toMatchObject({ code: "catalog.registration-conflict" });
-    expect(await listPendingCatalogRegistrations(context)).toMatchObject([{ operationId: "op-input-retry", phase: "prepared", rootVisible: true }]);
+    expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 });

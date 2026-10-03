@@ -60,7 +60,6 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -115,8 +114,6 @@ import phase2OrchestrationFactory, {
 } from "../src/extensions/phase2-orchestration";
 import {
   exportExecutionHostInventory,
-  historyExportDigest,
-  inventoryDigest,
   type ExecutionHostInventory,
 } from "../src/execution-host-inventory";
 
@@ -188,10 +185,6 @@ function writeJson(path: string, value: unknown): void {
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-}
-
-function sha256OfFile(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 /** The scoped Assignment header block `parseAssignmentFile` accepts. */
@@ -470,14 +463,13 @@ function snapshotOf(fixture: Fixture): WorkflowSnapshot {
 
 /**
  * Rewrite the snapshot's phase through the canonical engine writer — the same
- * field-scoped delta the Phase-2 entry guidance uses: the compare-and-swap token
- * is the version of the bytes just read, and a coordinated snapshot accepts the
- * write only from its own bound coordinator envelope.
+ * field-scoped delta the Phase-2 entry guidance uses. The writer takes no CAS
+ * token now (byte digests are record-only), and a coordinated snapshot accepts
+ * the write only from its own bound coordinator envelope.
  */
 async function writeSnapshot(fixture: Fixture, patch: Pick<WorkflowSnapshot, "phase">): Promise<void> {
   const now = new Date().toISOString();
   await writeWorkflowSnapshot({ ...snapshotOf(fixture), ...patch, updated_at: now }, fixture.workflowDir, {
-    expectedVersion: `sha256:${sha256OfFile(fixture.snapshotPath)}`,
     sessionPath: fixture.coordinatorSession,
   });
 }
@@ -1237,18 +1229,14 @@ describe("phase2 host adapter", () => {
     // The v2 bind record this session wrote is carried by H1's own reader.
     expect(inventory.export.document.records.some((record) => record.type === PHASE2_CUSTOM_TYPE)).toBe(true);
 
-    // Both digests are in the details, and each names its own exact bytes: the
-    // inner H1 export digest and the outer canonical envelope digest.
+    // The exported inventory remains associated with this workflow and host.
     expect(exported.details.mstarPhase2).toMatchObject({
       code: "exported",
       workflowId: WORKFLOW_ID,
       hostSessionId: session.getSessionId(),
-      exportSha256: historyExportDigest(inventory.export.document),
-      evidenceSha256: inventoryDigest(inventory),
       records: inventory.export.document.records.length,
       diagnostics: inventory.export.document.diagnostics.length,
     });
-    expect(createHash("sha256").update(text, "utf8").digest("hex")).toBe(exported.details.mstarPhase2!.evidenceSha256);
 
     // A decoded record that declares another workflow refuses the whole
     // document: the history is kept whole, never filtered to fit the assignment.

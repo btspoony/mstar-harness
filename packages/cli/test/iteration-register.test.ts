@@ -3,15 +3,13 @@
  * (seam S1 sibling of `mstar workflow register`, engine-backed).
  *
  * Thin wrapper over engine `registerIterationWorkflow` (create-only
- * `type: iteration` snapshot + root `workflows[]` entry under one root lock,
- * with byte-preserving orphan recovery). Contract pinned here:
+ * `type: iteration` snapshot + root `workflows[]` entry under one root lock).
+ * Contract pinned here:
  * - exit 0: an iteration registers end to end — root entry + snapshot on
- *   disk, both documents pass `mstatus status validate`, and the registered
+ *   disk, both documents pass `mstar status validate`, and the registered
  *   workflow accepts a coordinator binding (`plan bind --coordinator`).
- * - exit 1: engine/IO refusals — duplicate registration, hostile workflow
- *   id, domain-invalid rows (duplicate ids, missing fields, a supplied row
- *   status), stale/malformed roots — with NO byte change to authoritative
- *   documents; a matching orphan retry recovers (a root write, not a replay).
+ * - exit 1: engine/IO refusals — hostile workflow id and domain-invalid rows
+ *   (duplicate ids, missing fields, a supplied row status).
  * - exit 2: usage — omitted/blank required flags, malformed/non-object row
  *   JSON, unknown flags, missing option values, excess arguments. Help
  *   remains exit 0.
@@ -202,23 +200,35 @@ describe("mstar iteration register", () => {
       expect(payload.session.workflow_id).toBe(WORKFLOW_ID);
     });
   });
-
-  test("duplicate registration refuses fail-loud without mutating bytes (exit 1)", async () => {
+  test("a distinct operation cannot register an already-registered workflow id", async () => {
     await setupHarness((harness, { root, snapshot }) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
       const beforeSnapshot = readFileSync(snapshot, "utf8");
       const beforeRoot = readFileSync(root, "utf8");
 
-      // R1/R6/A09: the repeat of a registration that already fully holds is a
-      // successful no-op — the recorded receipt, no byte churn. The create-only
-      // refusal stays reserved for a genuinely DIFFERENT registration of the
-      // same workflow id.
       const duplicate = runCli(registerArgs(harness));
-      expect(duplicate.exitCode).toBe(0);
+      expect(duplicate.exitCode).toBe(1);
+      expect(message(duplicate)).toContain("[catalog.registration-conflict]");
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
   });
+
+  test("a distinct-operation retry after losing the root entry refuses without restoring bytes", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const snapshotBytes = readFileSync(snapshot, "utf8");
+      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
+      const lostRootBytes = readFileSync(root, "utf8");
+
+      const retry = runCli(registerArgs(harness));
+      expect(retry.exitCode).toBe(1);
+      expect(message(retry)).toContain("[catalog.registration-conflict]");
+      expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
+      expect(readFileSync(root, "utf8")).toBe(lostRootBytes);
+    });
+  });
+
 
   test("usage errors exit 2 without artifacts; help exits 0", async () => {
     await setupHarness((harness, { root, snapshot }) => {
@@ -271,7 +281,7 @@ describe("mstar iteration register", () => {
     });
   }, MULTI_CLI_TEST_TIMEOUT_MS);
 
-  test("engine refusals exit 1 with authoritative bytes unchanged; orphan retry recovers (exit 0)", async () => {
+  test("engine refusals exit 1 without creating artifacts", async () => {
     await setupHarness((harness, { root, snapshot }) => {
       // Hostile workflow id (shared guard).
       const hostile = runCli(registerArgs(harness, ["--workflow", "../escape"]));
@@ -289,38 +299,6 @@ describe("mstar iteration register", () => {
       expect(existsSync(root)).toBe(false);
       expect(existsSync(snapshot)).toBe(false);
 
-      // Stale root: a foreign entry replaced the root register. The journal
-      // still records the committed registration, so a replay that ignored the
-      // file-route effect would answer success while the workflow is NOT
-      // registered — the replay refuses the diverged journal and points at
-      // `catalog reconcile`; no byte is invented or rewritten.
-      const first = runCli(registerArgs(harness));
-      expect(first.exitCode).toBe(0);
-      const goodSnapshot = readFileSync(snapshot, "utf8");
-      const ghostRoot = JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [{ id: "ghost", type: "iteration", started_at: "2026-09-01", dir: "workflows/ghost" }] }, null, 2);
-      writeFileSync(root, ghostRoot);
-      const staleRoot = runCli(registerArgs(harness));
-      expect(staleRoot.exitCode).toBe(1);
-      expect(message(staleRoot)).toContain("reconcile");
-      expect(readFileSync(snapshot, "utf8")).toBe(goodSnapshot);
-      expect(readFileSync(root, "utf8")).toBe(ghostRoot);
-
-      // Malformed root refuses without replacing bytes.
-      writeFileSync(root, "{ not json");
-      expect(runCli(registerArgs(harness)).exitCode).toBe(1);
-      expect(readFileSync(root, "utf8")).toBe("{ not json");
-
-      // Retry after the root entry is lost: under the registration journal
-      // (contract §3) the workflow is already registered/bound, so a re-register
-      // REFUSES and points at `catalog reconcile`; the snapshot bytes are
-      // preserved verbatim and no root entry is invented.
-      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
-      const retry = runCli(registerArgs(harness));
-      expect(retry.exitCode).toBe(1);
-      expect(message(retry)).toContain("reconcile");
-      expect(readFileSync(snapshot, "utf8")).toBe(goodSnapshot);
-      const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([]);
     });
   });
 });

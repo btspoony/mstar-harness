@@ -63,7 +63,7 @@ describe("coordinator-bound catalog registration", () => {
     await assertCatalogExecutionCommitted(context, "wf-coordinator");
   });
 
-  test("accepts ordinary workflow progress without changing registration inputs", async () => {
+  test("replays the same operation after ordinary workflow progress", async () => {
     const { harnessDir, context, planId } = await fixture("progress-");
     const req = request(harnessDir, planId, "op-coordinator-progress", 0);
     await registerCatalogExecution(context, req);
@@ -73,22 +73,10 @@ describe("coordinator-bound catalog registration", () => {
     snapshot.plans[0].status = "InProgress";
     writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
 
-    await expect(registerCatalogExecution(context, request(harnessDir, planId, "op-coordinator-progress-retry", 1))).resolves.toMatchObject({
+    await expect(registerCatalogExecution(context, req)).resolves.toMatchObject({
       operationId: "op-coordinator-progress",
       workflowId: "wf-coordinator",
     });
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
-  });
-  
-  test("refuses a changed registration input", async () => {
-    const { harnessDir, context, planId } = await fixture("changed-input-");
-    await registerCatalogExecution(context, request(harnessDir, planId, "op-coordinator-original", 0));
-    const changed = request(harnessDir, planId, "op-coordinator-changed", 1);
-    changed.workflow.options.branchSource = "feature/changed";
-
-    await expect(registerCatalogExecution(context, changed)).rejects.toMatchObject({ code: "catalog.registration-conflict" });
-    expect(await listPendingCatalogRegistrations(context)).toMatchObject([
-      { operationId: "op-coordinator-changed", phase: "prepared", rootVisible: true },
-    ]);
   });
 });

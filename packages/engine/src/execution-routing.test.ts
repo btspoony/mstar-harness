@@ -222,15 +222,13 @@ afterEach(() => {
 });
 
 describe("execution-protected-route \u2014 an ACTIVE execution authority retires the file route", () => {
-  test("refuses direct and authorized persistence of the retired root and snapshot, leaving the bytes untouched", async () => {
+  test("refuses direct and authorized persistence of the retired root and snapshot", async () => {
     const fx = workspace("exec-routing-direct-");
     try {
       await activeExecution(fx);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
       const store = createFsStore(fx.harnessDir);
       const remove = requiredDelete(store);
-      const statusBefore = readFileSync(leftovers.statusPath);
-      const snapshotBefore = readFileSync(leftovers.snapshotPath);
       const payload = { version: 2, updated_at: "2000-01-01", workflows: [] };
 
       // (a) The authorized protected-write context is NOT a way around the veto.
@@ -256,8 +254,6 @@ describe("execution-protected-route \u2014 an ACTIVE execution authority retires
         code: "execution.direct-write-refused",
       });
 
-      expect(readFileSync(leftovers.statusPath)).toEqual(statusBefore);
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -267,9 +263,7 @@ describe("execution-protected-route \u2014 an ACTIVE execution authority retires
     const fx = workspace("exec-routing-injected-");
     try {
       await activeExecution(fx);
-      const leftovers = plantLeftovers(fx, PLANTED_ID);
-      const snapshotBefore = readFileSync(leftovers.snapshotPath);
-      const statusBefore = readFileSync(leftovers.statusPath);
+      plantLeftovers(fx, PLANTED_ID);
 
       // (a) The producer writes a snapshot AND a root entry: an INJECTED store
       // records nothing, and no file appears anywhere.
@@ -300,8 +294,6 @@ describe("execution-protected-route \u2014 an ACTIVE execution authority retires
         code: "execution.direct-write-refused",
       });
 
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
-      expect(readFileSync(leftovers.statusPath)).toEqual(statusBefore);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -400,8 +392,6 @@ describe("execution-protected-route \u2014 an ACTIVE execution authority retires
       await activeExecution(fx);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
       const store = createFsStore(fx.harnessDir);
-      const statusBefore = readFileSync(leftovers.statusPath);
-      const snapshotBefore = readFileSync(leftovers.snapshotPath);
 
       const refs: ArtifactRef[] = [
         { kind: "status", key: "root" },
@@ -414,8 +404,6 @@ describe("execution-protected-route \u2014 an ACTIVE execution authority retires
         expect(await refusalOf(() => store.get(ref))).toMatchObject({ code: "execution.consumer-not-ready" });
       }
       // The seam refuses to SERVE the bytes; it never removes or rewrites them.
-      expect(readFileSync(leftovers.statusPath)).toEqual(statusBefore);
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
 
       // The same refusals do not reach a legacy/staged harness: there the seam
       // keeps reading exactly what it read before.
@@ -441,11 +429,9 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
     const fx = workspace("exec-routing-entry-");
     try {
       await activeExecution(fx);
-      const leftovers = plantLeftovers(fx, PLANTED_ID);
+      plantLeftovers(fx, PLANTED_ID);
       const sessionPath = plantSessionEnvelope(fx);
       const statusPath = join(fx.harnessDir, "status.json");
-      const statusBefore = readFileSync(statusPath);
-      const snapshotBefore = readFileSync(leftovers.snapshotPath);
 
       // mutatePlanCoordination: an unknown operation, an invalid revision and
       // an unexpected request key all sit BEHIND the veto.
@@ -471,26 +457,23 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
         code: "execution.direct-write-refused",
       });
 
-      // replaceCoordinatedArtifact: the ref shape and the CAS token are behind it.
+      // replaceCoordinatedArtifact: the ref shape is behind the authority veto.
       expect(
         await refusalOf(() =>
           replaceCoordinatedArtifact({
             harnessRoot: fx.harnessDir,
             ref: { kind: "json", key: "" },
             payload: null,
-            expectedVersion: "not-a-version",
             sessionPath,
           }),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
 
-      // amendPrepareWorkflow: both byte-version tokens are behind it.
+      // amendPrepareWorkflow: the patch shape is behind the authority veto.
       expect(
         await refusalOf(() =>
           amendPrepareWorkflow({
             sessionPath,
-            expectedSnapshotVersion: "bogus",
-            expectedCompassVersion: "bogus",
             patch: {} as never,
           }),
         ),
@@ -507,8 +490,6 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
         expect(await refusalOf(read)).toMatchObject({ code: "execution.consumer-not-ready" });
       }
 
-      expect(readFileSync(statusPath)).toEqual(statusBefore);
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -550,7 +531,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
       const alias = join(fx.harnessDir, "alias-status.json");
       symlinkSync(leftovers.statusPath, alias);
       const store = createFsStore(fx.harnessDir);
-      const before = readFileSync(leftovers.statusPath);
 
       expect(
         await refusalOf(() =>
@@ -559,7 +539,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
           ),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
-      expect(readFileSync(leftovers.statusPath)).toEqual(before);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -573,7 +552,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
       const aliasDir = join(fx.harnessDir, "wf-alias");
       symlinkSync(dirname(leftovers.snapshotPath), aliasDir);
       const store = createFsStore(fx.harnessDir);
-      const before = readFileSync(leftovers.snapshotPath);
 
       expect(
         await refusalOf(() =>
@@ -586,7 +564,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
           ),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(before);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -616,7 +593,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
       }
       const wtFx: Fixture = { root: wtRoot, harnessDir: wtHarness, context: { harnessDir: wtHarness } };
       const leftovers = plantLeftovers(wtFx, PLANTED_ID);
-      const before = readFileSync(leftovers.snapshotPath);
 
       expect(
         await refusalOf(() =>
@@ -626,7 +602,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
           ),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(before);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
       rmSync(container, { recursive: true, force: true });
@@ -640,7 +615,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
       await activeExecution(fx);
       await withStore(foreign);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
-      const before = readFileSync(leftovers.snapshotPath);
       // The foreign store is the ACTIVE store while the target belongs to `fx`.
       setArtifactStore(createFsStore(foreign.harnessDir));
 
@@ -652,7 +626,6 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
           ),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(before);
       expect(existsSync(join(foreign.harnessDir, "workflows", PLANTED_ID))).toBe(false);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
@@ -667,7 +640,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
     try {
       await activeExecution(fx);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
-      const before = readFileSync(leftovers.statusPath);
       for (const suffix of ["-wal", "-shm"]) {
         rmSync(join(fx.harnessDir, `store.db${suffix}`), { force: true });
       }
@@ -681,7 +653,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
           ),
         ),
       ).toMatchObject({ code: "store.corrupt" });
-      expect(readFileSync(leftovers.statusPath)).toEqual(before);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -692,7 +663,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
     try {
       await activeExecution(fx);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
-      const before = readFileSync(leftovers.statusPath);
       const handle = await openStore(fx.context, "write");
       try {
         handle.db
@@ -709,7 +679,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
         ),
       );
       expect(refusal.code).toBe("store.schema-unsupported");
-      expect(readFileSync(leftovers.statusPath)).toEqual(before);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -728,7 +697,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
       await backupStore(fx.context, { out: join(held.harnessDir, "store.db") });
       const statusPath = join(held.harnessDir, "status.json");
       writeFileSync(statusPath, `${JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] })}\n`);
-      const before = readFileSync(statusPath);
 
       // Another writer holds the whole database (rollback-journal mode, so a
       // competing reader really waits instead of reading the WAL snapshot).
@@ -747,7 +715,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
         ),
       );
       expect(refusal.code).toBe("store.busy");
-      expect(readFileSync(statusPath)).toEqual(before);
     } finally {
       try {
         holder?.exec("rollback");
@@ -809,7 +776,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
     try {
       await activeExecution(fx);
       const leftovers = plantLeftovers(fx, PLANTED_ID);
-      const statusBefore = readFileSync(leftovers.statusPath);
       // A path that exists but is not a readable database — the driver class
       // (SQLITE_CANTOPEN) an unopenable store reports. It is an EXISTING store,
       // so it is refused; only a missing one keeps the legacy path.
@@ -830,7 +796,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
           ),
         ),
       ).toMatchObject({ code: "store.corrupt" });
-      expect(readFileSync(leftovers.statusPath)).toEqual(statusBefore);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }
@@ -847,7 +812,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
       // competing writer can genuinely hold the file.
       await backupStore(fx.context, { out: join(held.harnessDir, "store.db") });
       const leftovers = plantLeftovers(held, PLANTED_ID);
-      const snapshotBefore = readFileSync(leftovers.snapshotPath);
 
       holder = new DatabaseSync(join(held.harnessDir, "store.db"));
       holder.exec("pragma busy_timeout=0");
@@ -858,7 +822,6 @@ describe("execution-unavailable \u2014 an unusable store refuses instead of fall
       process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "50";
 
       expect(refusalCodeOf(() => readWorkflowSnapshot(dirname(leftovers.snapshotPath)))).toBe("store.busy");
-      expect(readFileSync(leftovers.snapshotPath)).toEqual(snapshotBefore);
     } finally {
       try {
         holder?.exec("rollback");

@@ -45,14 +45,14 @@
  * counts once and two asynchronous starts cannot both take the last slot. A
  * durable handoff (`submitted` / `accepted` / `integrating` / `merged` /
  * `completed`) releases a plan **only for the identity it actually belongs to**
- * — the row's own bound session, or an intent whose recorded plan, prepared
- * Assignment pin, launching coordinator, handing-off session and assigned
- * checkout all match. `returned` reactivates it, and a stale or foreign intent
- * is never silently reclaimed. An owner or epoch change keeps every unresolved
- * intent occupied: the new binding never drops a reservation and launches again,
- * and only recorded native transport evidence or explicit stopped-owner
- * reconciliation discharges it. Lowering the cap pauses further side-effecting
- * transitions without editing, revoking or killing anything that exists.
+ * — the row's own bound session, or an intent whose recorded plan, launching
+ * coordinator, handing-off session and assigned checkout all match. `returned`
+ * reactivates it, and a stale or foreign intent is never silently reclaimed. An
+ * owner or epoch change keeps every unresolved intent occupied: the new binding
+ * never drops a reservation and launches again, and only recorded native
+ * transport evidence or explicit stopped-owner reconciliation discharges it.
+ * Lowering the cap pauses further side-effecting transitions without editing,
+ * revoking or killing anything that exists.
  *
  * `uncertain` is terminal and stays occupied: a malformed response, a timeout
  * or a stalled prompt is never auto-retried, and only a durable handoff or an
@@ -118,6 +118,13 @@ export type LaunchIntent = Readonly<{
   workflowId: string;
   coordinatorSessionId: string;
   planId: string;
+  /**
+   * The prepared Assignment digest the row carried when this launch was
+   * reserved. **Provenance only**: it is never an admission, release or
+   * replay-identity input — occupancy and duplicate detection use the real
+   * row/Assignment-path/checkout/coordinator facts, and the engine's own
+   * semantic `assertPreparedFresh` adjudicates a changed Assignment meaning.
+   */
   preparedHash: string;
   assignmentPath: string;
   worktreePath: string;
@@ -499,7 +506,9 @@ function isLaunchIntent(value: unknown): value is LaunchIntent {
     nonEmpty(entry.workflowId) &&
     nonEmpty(entry.coordinatorSessionId) &&
     nonEmpty(entry.planId) &&
-    nonEmpty(entry.preparedHash) &&
+    // The prepared Assignment digest is recorded provenance, never an admission,
+    // release or replay-identity input: it is present but may be empty.
+    typeof entry.preparedHash === "string" &&
     nonEmpty(entry.assignmentPath) &&
     typeof entry.worktreePath === "string" &&
     typeof entry.transport === "string" &&
@@ -677,20 +686,19 @@ function boundSessionReachedStop(view: ExecutionPlanView): boolean {
 
 /**
  * True only when a durable handoff by THIS launch's child proves the intent
- * reached its scoped stop. Identity is matched term by term — plan row,
- * prepared Assignment pin, the launching coordinator, the bound plan session
- * that handed off, and the launch's own assigned checkout. Any mismatch
- * (prepared-hash drift, another session, another attempt, another worktree, a
- * coordinator that has since been replaced) is NOT a release: the intent keeps
- * occupying its slot until a durable handoff matches or an explicit observation
- * discharges it.
+ * reached its scoped stop. Identity is matched on real binding facts — plan
+ * row, the launching coordinator, the bound plan session that handed off, and
+ * the launch's own assigned checkout. Any mismatch (another session, another
+ * attempt, another worktree, a coordinator that has since been replaced) is NOT
+ * a release: the intent keeps occupying its slot until a durable handoff matches
+ * or an explicit observation discharges it. The prepared Assignment's recorded
+ * digest is provenance only and never decides this — the engine adjudicates a
+ * change of Assignment meaning when the child binds.
  */
 function intentReachedStop(workflow: ActiveWorkflow, intent: LaunchIntent): boolean {
   const view = findPlanView(workflow, intent.planId);
   if (view === null) return false;
   if (workflow.coordinator === null || workflow.coordinator.sessionId !== intent.coordinatorSessionId) return false;
-  const prepared = preparedOf(view);
-  if (prepared === null || prepared.assignment_sha256 !== intent.preparedHash) return false;
   const handoff = durableHandoffOf(view);
   const session = boundSessionOf(view);
   if (handoff === null || session === null) return false;
@@ -747,40 +755,15 @@ function assertPlanAvailable(view: ExecutionPlanView, planId: string): Refusal {
   return null;
 }
 
-function sha256File(path: string): string | null {
-  try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex");
-  } catch {
-    return null;
-  }
-}
-
-/** The pinned Assignment must still be the bytes the coordinator prepared. */
-function assertPreparedHash(prepared: Record<string, unknown>, planId: string): Refusal {
-  const assignmentPath = prepared.assignment_path;
-  const expected = prepared.assignment_sha256;
-  if (!nonEmpty(assignmentPath) || !nonEmpty(expected)) {
-    return refuse("launch.plan-not-prepared", `plan ${planId} has no hash-pinned prepared Assignment`);
-  }
-  const actual = sha256File(assignmentPath);
-  if (actual === null) {
-    return refuse("launch.prepared-hash-drift", `the prepared Assignment ${assignmentPath} of plan ${planId} is unreadable or missing`);
-  }
-  if (actual !== expected) {
-    return refuse(
-      "launch.prepared-hash-drift",
-      `the prepared Assignment of plan ${planId} changed on disk (prepared ${expected}, now ${actual}) — re-prepare before launching`,
-    );
-  }
-  return null;
-}
-
 /**
  * The plan scope a launch admits against, taken entirely from the DB plan view:
  * the row's own worktree/branch metadata (the same fields `planLeaseScope`
- * requires of any bindable plan) plus the prepared Assignment pin. Nothing here
+ * requires of any bindable plan) plus the prepared Assignment path. Nothing here
  * reads the retired workflow snapshot — on an ACTIVE root that file is refused
  * as a source outright, so a snapshot-reading resolver cannot serve this route.
+ * A change of the Assignment's meaning is adjudicated by the engine's own
+ * semantic `assertPreparedFresh` when the child binds the plan; the host does not
+ * re-measure recorded digests.
  */
 type LaunchScope = Readonly<{ assignmentPath: string; worktreePath: string; workingBranch: string }>;
 
@@ -1014,24 +997,36 @@ export async function reservePlanLaunch(
       const view = findPlanView(workflow, planId);
       if (view === null) return refuse("launch.plan-not-found", `workflow ${workflowId} has no plan row ${planId}`);
       const prepared = preparedOf(view);
-      if (prepared === null || !nonEmpty(prepared.assignment_sha256)) {
-        return refuse("launch.plan-not-prepared", `plan ${planId} has no hash-pinned prepared Assignment`);
+      const assignmentPath = prepared?.assignment_path;
+      if (prepared === null || !nonEmpty(assignmentPath)) {
+        return refuse("launch.plan-not-prepared", `plan ${planId} has no prepared Assignment`);
       }
-      const preparedHash = prepared.assignment_sha256;
 
       // Duplicate identical request: the recorded intent is returned only after
       // the current authority was revalidated by the resume above, so a stale or
-      // foreign caller never receives a reservation it no longer holds. Any other
-      // outstanding intent for this plan is a duplicate owner and refuses.
+      // foreign caller never receives a reservation it no longer holds. Two
+      // requests are identical when they name the same row, Assignment, checkout
+      // and transport — the recorded digests are provenance and never decide it.
+      // Any other outstanding intent for this plan is a duplicate owner and
+      // refuses.
+      const metadata = isPlainRecord(view.plan.metadata) ? view.plan.metadata : null;
+      const worktreePath = metadata?.worktree_path;
       const live = doc.intents.filter(
         (entry) => entry.planId === planId && entry.state !== "refused" && !intentReachedStop(workflow, entry),
       );
-      const identical = live.find((entry) => entry.preparedHash === preparedHash);
+      const identical = live.find(
+        (entry) =>
+          entry.coordinatorSessionId === authority.identity.sessionId &&
+          entry.assignmentPath === assignmentPath &&
+          typeof worktreePath === "string" &&
+          entry.worktreePath === worktreePath &&
+          entry.transport === request.transport,
+      );
       if (identical !== undefined) return { ok: true, intent: identical, applied: false };
       if (live.length > 0) {
         return refuse(
           "launch.plan-occupied",
-          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}); an uncertain or pre-bind intent needs a durable handoff or explicit human recovery`,
+          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}) from coordinator ${live[0]!.coordinatorSessionId}; inspect native transport evidence and use record-launch for a permitted submitted/refused outcome before reserving again. Recording uncertain preserves occupancy and does not permit retry; an existing bound child must finish through mstar plan handoff to discharge that occupancy`,
         );
       }
 
@@ -1049,14 +1044,11 @@ export async function reservePlanLaunch(
         return refuse("launch.settings-disabled", "phase2PlanInstances is off; extra plan primaries require the explicit opt-in");
       }
 
-      const drift = assertPreparedHash(prepared, planId);
-      if (drift !== null) return drift;
-
-      // The scope comes from the DB plan view (§6): the row's own
-      // worktree/branch metadata plus the prepared pin validated above. The
-      // retired-snapshot resolver is NOT used — on an ACTIVE root the snapshot is
-      // refused as a source (`execution.consumer-not-ready`), so a
-      // snapshot-reading resolver cannot serve this route at all.
+      // The scope comes from the DB plan view (§6): the row's own worktree/branch
+      // metadata plus the prepared Assignment path. The retired-snapshot resolver
+      // is NOT used — on an ACTIVE root the snapshot is refused as a source
+      // (`execution.consumer-not-ready`), so a snapshot-reading resolver cannot
+      // serve this route at all.
       const scoped = launchScopeOf(view, prepared, planId);
       if (scoped.ok === false) return scoped;
       const scope = scoped.scope;
@@ -1080,7 +1072,9 @@ export async function reservePlanLaunch(
         workflowId,
         coordinatorSessionId: authority.identity.sessionId,
         planId,
-        preparedHash,
+        // Provenance only: the digest the row was prepared under when this launch
+        // was reserved. It is never an admission, release or replay-identity input.
+        preparedHash: nonEmpty(prepared.assignment_sha256) ? prepared.assignment_sha256 : "",
         assignmentPath: scope.assignmentPath,
         worktreePath: scope.worktreePath,
         transport: request.transport,
@@ -1182,15 +1176,18 @@ export async function recordPlanLaunch(
 
         const view = findPlanView(workflow, intent.planId);
         if (view === null) return refuse("launch.plan-unavailable", `plan ${intent.planId} left the workflow`);
+        // A real binding fact survives the removed digest gate: the row must still
+        // be prepared from the same Assignment this launch was reserved against.
+        // Whether the Assignment's MEANING changed is adjudicated by the engine's
+        // own semantic `assertPreparedFresh` when the child binds, so the host does
+        // not re-measure the recorded digest here.
         const prepared = preparedOf(view);
-        if (prepared === null || prepared.assignment_sha256 !== intent.preparedHash) {
+        if (prepared === null || !nonEmpty(prepared.assignment_path) || prepared.assignment_path !== intent.assignmentPath) {
           return refuse(
-            "launch.prepared-hash-drift",
+            "launch.plan-unavailable",
             `plan ${intent.planId} is no longer prepared from the Assignment this launch was reserved for`,
           );
         }
-        const drift = assertPreparedHash(prepared, intent.planId);
-        if (drift !== null) return drift;
 
         const availability = assertPlanAvailable(view, intent.planId);
         if (availability !== null) {

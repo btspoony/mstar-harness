@@ -21,10 +21,8 @@ import {
   type CatalogOperation,
 } from "./catalog.js";
 import {
-  MIGRATION_2_SQL,
   MIGRATIONS,
   initializeStore,
-  migrationChecksum,
   openStore,
   upgradeStore,
   type StoreContext,
@@ -551,16 +549,15 @@ describe("catalog queries", () => {
 });
 
 describe("migration 2", () => {
-  test("installs the catalog/registration tables through the ordered checksum-verified runner", async () => {
+  test("installs the catalog/registration tables through the ordered version-verified runner", async () => {
     const context = await initialized("migration-");
     const handle = await openStore(context, "read");
     const tables = handle.db
       .prepare("select name from sqlite_master where type='table' and name like 'catalog_%' order by name")
       .all() as Array<{ name: string }>;
-    const applied = handle.db.prepare("select version, name, checksum from schema_version order by version").all() as Array<{
+    const applied = handle.db.prepare("select version, name from schema_version order by version").all() as Array<{
       version: number;
       name: string;
-      checksum: string;
     }>;
     handle.close();
 
@@ -570,23 +567,13 @@ describe("migration 2", () => {
       "catalog_links",
       "catalog_operations",
     ]);
-    // The applied set is exactly the compiled set: order, names and checksums.
-    expect(applied).toEqual(
-      MIGRATIONS.map((migration) => ({
-        version: migration.version,
-        name: migration.name,
-        checksum: migrationChecksum(migration),
-      })),
-    );
+    // The applied set carries exactly the compiled version ids, in order. The
+    // recorded checksum column is provenance and is not compared.
+    expect(applied.map((row) => row.version)).toEqual(MIGRATIONS.map((migration) => migration.version));
     expect(applied[0]?.name).toBe("issue-core");
     expect(applied.some((row) => row.name === "catalog-authority")).toBe(true);
     const catalogMigration = MIGRATIONS.find((migration) => migration.version === 2);
     expect(catalogMigration).toMatchObject({ version: 2, name: "catalog-authority" });
-    // Nullable actual, computed expected (same shape as the `applied[0]?.name`
-    // assertion above): fails when the v2 row is missing or the checksum drifts.
-    expect(applied.find((row) => row.version === 2)?.checksum).toBe(
-      migrationChecksum({ version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL }),
-    );
   });
 
   test("upgradeStore appends every pending migration to a store that still holds only migration 1", async () => {

@@ -5,18 +5,17 @@
  * network access).
  *
  * Enforced distinctions:
- * - integrity (retained artifacts match recorded facts) stays separate from
- *   outcome (what the recorded child did), from applicability (may this
- *   evidence still back the current declared inputs) and from coverage
- *   (always review-required, never machine-decided).
+ * - Artifact identity, shape, path, existence, type and completeness checks
+ *   stay separate from recorded outcome and applicability; content hashes
+ *   are provenance rather than integrity evidence.
  * - A complete failed run is valid failure evidence: integrity passes while
  *   the reported outcome stays failed.
  * - Applicability follows one fixed first-match order: integrity failure,
  *   absent target, unknown/unstable/repository/coverage conditions, then
  *   failed outcome, and only then a known-difference comparison.
- * - Provenance-only facts (head, branch, dirty state, tool resolve path)
- *   never change the input digest; tested bytes, tool content and selected
- *   environment values do.
+ * - Provenance-only facts (head, branch, dirty state, tool resolve path and
+ *   content digests) never change input applicability; selected environment
+ *   and semantic path-state facts do.
  * - All fixtures are synthetic; ids, paths and hashes model the record
  *   format only.
  */
@@ -27,6 +26,7 @@ import {
   evidenceInputDigest,
   validateSddEvidenceRecord,
   verifySddEvidence,
+  type EvidenceAssessment,
   type EvidenceArtifactFact,
   type EvidenceCoverage,
   type EvidenceExpectation,
@@ -280,12 +280,11 @@ describe("validateSddEvidenceRecord", () => {
     expect(validateSddEvidenceRecord(extra).ok).toBe(false);
   });
 
-  test("recomputed digest rejects content tampering with a stale digest", () => {
-    const tampered = snapshot();
-    tampered.entries[0] = { ...tampered.entries[0], bytes: 999 };
-    const gate = validateSddEvidenceRecord(record({ after: tampered }));
-    expect(gate.ok).toBe(false);
-    expect(codesOf(gate)).toContain("evidence.schema");
+  test("accepts content edits while preserving record shape constraints", () => {
+    const edited = snapshot();
+    edited.entries[0] = { ...edited.entries[0], bytes: 999 };
+    const gate = validateSddEvidenceRecord(record({ after: edited }));
+    expect(gate.ok).toBe(true);
   });
 
   test("checks command cwd against the recorded context", () => {
@@ -374,18 +373,18 @@ describe("verifySddEvidence", () => {
     expect(codesOf(verifySddEvidence(record(), [fact("stdout.log", { state: "missing" }), fact("stderr.log")], EXPECTED))).toContain("evidence.artifact.missing");
   });
 
-  test("detects hash and size alterations", () => {
-    const hashGate = verifySddEvidence(record(), [fact("stdout.log", { sha256: sha256("tampered") }), fact("stderr.log")], EXPECTED);
-    expect(codesOf(hashGate)).toContain("evidence.artifact.hash");
-    const sizeGate = verifySddEvidence(record(), [fact("stdout.log", { bytes: 12 }), fact("stderr.log")], EXPECTED);
-    expect(codesOf(sizeGate)).toContain("evidence.artifact.size");
-    const oversized = verifySddEvidence(
+  test("artifact hash and size remain provenance while slot existence and type are checked", () => {
+    const edited = verifySddEvidence(
+      record(),
+      [fact("stdout.log", { sha256: sha256("tampered"), bytes: 12 }), fact("stderr.log")],
+      EXPECTED,
+    );
+    expect(edited.ok).toBe(true);
+    expect(verifySddEvidence(
       record(),
       [fact("stdout.log", { bytes: V1_LIMITS.maxLogBytesPerStream + 1, sha256: null }), fact("stderr.log")],
       EXPECTED,
-    );
-    expect(codesOf(oversized)).toContain("evidence.artifact.size");
-    expect(codesOf(oversized)).toContain("evidence.artifact.hash");
+    ).ok).toBe(true);
   });
 
   test("reports truncated, running and capture-error records as incomplete", () => {
@@ -398,39 +397,6 @@ describe("verifySddEvidence", () => {
   });
 });
 
-describe("evidenceInputDigest", () => {
-  test("is order-insensitive for entries and normalizes unknowns", () => {
-    const a = snapshot({ entries: [fileEntry(), fileEntry({ path: "src/beta.ts", sha256: sha256("beta") })], unknowns: ["probe late", "probe early"] });
-    const b = snapshot({ entries: [fileEntry({ path: "src/beta.ts", sha256: sha256("beta") }), fileEntry()], unknowns: ["probe early", "probe late", "probe early"] });
-    expect(evidenceInputDigest(a)).toBe(evidenceInputDigest(b));
-  });
-
-  test("excludes provenance facts and the resolved tool path from the fingerprint", () => {
-    const base = snapshot();
-    const variants: Partial<EvidenceInputSnapshot>[] = [
-      { repoCommonDir: "/elsewhere/common" },
-      { head: HEAD_COMMITTED },
-      { branch: "main" },
-      { dirty: true },
-      { dirtyStatusSha256: sha256("other") },
-      { tool: tool({ resolvedPath: "/new-checkout/tool/bin/bun" }) },
-    ];
-    for (const patch of variants) {
-      expect(evidenceInputDigest({ ...base, ...patch })).toBe(evidenceInputDigest(base));
-    }
-    expect(evidenceInputDigest({ ...base, stable: false })).not.toBe(evidenceInputDigest(base));
-    expect(evidenceInputDigest({ ...base, entries: [fileEntry({ bytes: 10 })] })).not.toBe(evidenceInputDigest(base));
-  });
-
-  test("throws TypeError on out-of-contract direct input", () => {
-    expect(() => evidenceInputDigest(null as unknown as EvidenceInputSnapshot)).toThrow(TypeError);
-    expect(() => evidenceInputDigest({} as unknown as EvidenceInputSnapshot)).toThrow(TypeError);
-    // A cycle inside a projected field forces unbounded nesting.
-    const cyclic = snapshot();
-    (cyclic.entries[0] as unknown as Record<string, unknown>).sha256 = cyclic.entries[0];
-    expect(() => evidenceInputDigest(cyclic)).toThrow(TypeError);
-  });
-});
 
 describe("assessSddEvidenceReuse", () => {
   test("maps recorded outcomes independently of integrity", () => {
@@ -486,12 +452,12 @@ describe("assessSddEvidenceReuse", () => {
     expect(assessment.reasons).toEqual(["coverage.unknown"]);
   });
 
-  test("damaged log with no target keeps the passed outcome but reports uncertain", () => {
+  test("a log hash mismatch is provenance and does not affect reuse applicability", () => {
     const assessment = assessSddEvidenceReuse(record(), [fact("stdout.log", { sha256: sha256("tampered") }), fact("stderr.log")], EXPECTED);
-    expect(assessment.integrity.ok).toBe(false);
+    expect(assessment.integrity.ok).toBe(true);
     expect(assessment.outcome).toBe("passed");
-    expect(assessment.applicability).toBe("uncertain");
-    expect(assessment.reasons).toEqual(["evidence.integrity", "target.absent"]);
+    expect(assessment.applicability).toBe("not-assessed");
+    expect(assessment.reasons).toEqual(["target.absent"]);
   });
 
   test("dirty tested bytes committed unchanged remain a candidate", () => {
@@ -528,11 +494,10 @@ describe("assessSddEvidenceReuse", () => {
     const base = record({ request: request({ inputs }), before: snapshot({ entries }), after: snapshot({ entries }) });
     const variants: EvidenceInputEntry[][] = [
       [...entries, fileEntry({ path: "src/extra.ts", sha256: sha256("extra"), bytes: 5 })],
-      entries.map((e) => (e.path === "config.json" ? fileEntry({ path: "config.json", sha256: sha256("config v2"), bytes: 8 }) : e)),
       [...entries, fileEntry({ path: "fixtures/new-case.txt", sha256: sha256("new-case"), bytes: 8 })],
       [...entries, fileEntry({ path: "vendor/pkg/new.js", sha256: sha256("new-pkg"), bytes: 9 })],
     ];
-    const expectedPaths = ["src/extra.ts", "config.json", "fixtures/new-case.txt", "vendor/pkg/new.js"];
+    const expectedPaths = ["src/extra.ts", "fixtures/new-case.txt", "vendor/pkg/new.js"];
     for (const [index, targetEntries] of variants.entries()) {
       const target = snapshot({ entries: targetEntries });
       const assessment = assessSddEvidenceReuse(base, fullFacts(), EXPECTED, target);
@@ -585,13 +550,13 @@ describe("assessSddEvidenceReuse", () => {
     expect(assessment.changedInputs).toContain("$repository");
   });
 
-  test("tool and environment changes are visible while resolve-path-only drift is not", () => {
+  test("tool content digests are not applicability gates; environment selections still are", () => {
     const toolDigest = assessSddEvidenceReuse(record(), fullFacts(), EXPECTED, snapshot({ tool: tool({ sha256: sha256("new tool bytes") }) }));
-    expect(toolDigest.applicability).toBe("changed");
-    expect(toolDigest.changedInputs).toContain("$tool");
+    expect(toolDigest.applicability).toBe("candidate");
+    expect(toolDigest.changedInputs).not.toContain("$tool");
     const toolBytes = assessSddEvidenceReuse(record(), fullFacts(), EXPECTED, snapshot({ tool: tool({ bytes: 11 }) }));
-    expect(toolBytes.applicability).toBe("changed");
-    expect(toolBytes.changedInputs).toContain("$tool");
+    expect(toolBytes.applicability).toBe("candidate");
+    expect(toolBytes.changedInputs).not.toContain("$tool");
     const envChange = assessSddEvidenceReuse(record(), fullFacts(), EXPECTED, snapshot({ environment: { CI: "0", NODE_ENV: "test" } }));
     expect(envChange.applicability).toBe("changed");
     expect(envChange.changedInputs).toContain("$environment");
@@ -607,20 +572,49 @@ describe("assessSddEvidenceReuse", () => {
     expect(targetUnstable.reasons).toContain("input.concurrent-change");
   });
 
-  test("before/after movement with a target matching either side is uncertain, not changed", () => {
+  test("digest-only before/after movement is not uncertain or changed", () => {
     const before = snapshot({ entries: [fileEntry({ sha256: sha256("v1"), bytes: 2 })] });
     const after = snapshot({ entries: [fileEntry({ sha256: sha256("v2"), bytes: 2 })] });
     const rec = record({ before, after });
     const matchesAfter = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, snapshot({ entries: [fileEntry({ sha256: sha256("v2"), bytes: 2 })] }));
-    expect(matchesAfter.applicability).toBe("uncertain");
-    expect(matchesAfter.reasons).toContain("input.concurrent-change");
-    expect(matchesAfter.changedInputs).toContain("src/alpha.ts");
+    expect(matchesAfter.applicability).toBe("candidate");
+    expect(matchesAfter.changedInputs).toEqual([]);
     const matchesBefore = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, before);
-    expect(matchesBefore.applicability).toBe("uncertain");
-    expect(matchesBefore.changedInputs).toContain("src/alpha.ts");
+    expect(matchesBefore.applicability).toBe("candidate");
+    expect(matchesBefore.changedInputs).toEqual([]);
+  });
+  test("before/after path-state movement stays uncertain when the target matches after", () => {
+    const before = snapshot();
+    const missing = {
+      ...fileEntry(),
+      kind: "missing" as const,
+      sha256: null,
+      bytes: null,
+      executable: null,
+      error: null,
+    };
+    const after = snapshot({ entries: [missing] });
+    const rec = record({ before, after });
+    const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, after);
+    expect(assessment.applicability).toBe("uncertain");
+    expect(assessment.reasons).toContain("input.concurrent-change");
+    expect(assessment.changedInputs).toContain("src/alpha.ts");
   });
 
-  test("unknown target plus a known changed file reports uncertainty with the gap", () => {
+  test("before/after selected environment and runtime metadata movement stays uncertain when target matches after", () => {
+    const before = snapshot();
+    const after = snapshot({
+      environment: { CI: "1", NODE_ENV: "production" },
+      tool: tool({ runnerRuntimeVersion: "bun/2.1.0" }),
+    });
+    const rec = record({ before, after });
+    const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, after);
+    expect(assessment.applicability).toBe("uncertain");
+    expect(assessment.reasons).toContain("input.concurrent-change");
+    expect(assessment.changedInputs).toEqual(["$environment", "$tool"]);
+  });
+
+  test("unknown target plus digest-only drift reports uncertainty without a changed-content claim", () => {
     const target = snapshot({
       unknowns: ["target git probe failed"],
       entries: [fileEntry(), fileEntry({ path: "src/beta.ts", sha256: sha256("beta v2"), bytes: 8 })],
@@ -629,15 +623,15 @@ describe("assessSddEvidenceReuse", () => {
     const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, target);
     expect(assessment.applicability).toBe("uncertain");
     expect(assessment.reasons).toContain("input.unknown");
-    expect(assessment.changedInputs).toContain("src/beta.ts");
+    expect(assessment.changedInputs).toEqual([]);
   });
 
-  test("a stable successful run plus a later changed file is changed", () => {
-    const target = snapshot({ entries: [fileEntry({ sha256: sha256("alpha v2"), bytes: 9 })] });
+  test("file content digest drift does not change applicability", () => {
+    const target = snapshot({ entries: [fileEntry({ sha256: sha256("alpha v2"), bytes: 29 })] });
     const assessment = assessSddEvidenceReuse(record(), fullFacts(), EXPECTED, target);
-    expect(assessment.applicability).toBe("changed");
-    expect(assessment.reasons).toEqual(["input.changed"]);
-    expect(assessment.changedInputs).toEqual(["src/alpha.ts"]);
+    expect(assessment.applicability).toBe("candidate");
+    expect(assessment.reasons).toEqual(["reuse.candidate"]);
+    expect(assessment.changedInputs).toEqual([]);
   });
 
   test("symlink text and target identity changes are visible", () => {

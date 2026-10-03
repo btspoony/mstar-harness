@@ -35,10 +35,10 @@
  *   by the existing snapshot validator before it is stored.
  *
  * §4.1 discipline: every external read (the canonical compass bytes, the Git
- * probes) happens BEFORE SQLite ownership and is reduced to pinned witnesses;
- * the transaction re-reads exactly those bytes immediately before the commit,
- * so a compass edited or a checkout switched in that window refuses
- * `coordination.evidence-stale` instead of committing a stale proof.
+ * probes) happens BEFORE SQLite ownership, so a transition never decides
+ * against evidence it did not read; the transaction re-checks the facts it
+ * still stands on (the registered checkout is a path fact) rather than
+ * re-reading document bytes.
  *
  * The recovery bootstrap is deliberately NOT a silent lease steal and NOT a
  * second `bind`:
@@ -76,16 +76,13 @@ import {
   canonicalTarget,
   isNonEmptyString,
   isPlainObject,
-  sha256Bytes,
   type CoordinationErrorCode,
 } from "./coordination-write.js";
 import {
   PLAN_PARALLELISM_VALUES,
   gitRead,
-  pinGitRefWitness,
   prepareAmendmentComponent,
-  revalidateGitRefWitness,
-  type GitRefWitness,
+  revalidateGitProofWitness,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
@@ -166,7 +163,6 @@ import {
   deliveryEvidenceMembers,
   deliveryEvidenceViolations,
   isTerminalSnapshot,
-  stableJson,
   validateWorkflowSnapshot,
   type WorkflowDeliveryEvidence,
   type WorkflowExecutionPolicy,
@@ -365,22 +361,6 @@ function requestedOperationValue(operation: WorkflowExecutionOperation): unknown
 }
 
 /**
- * §4.2 (R6/R7/A09/A12) whether the requested effect is ALREADY held by the state
- * this transaction reads. The comparison is the operation's own addressed field
- * against the value the transition would store for it — the semantic read set of
- * the effect, never the whole header, the revisions or the receipt's history. A
- * satisfied effect is a current success even when the caller's token or receipt
- * is stale, and it must not spend a revision, a timestamp or a receipt row.
- */
-function workflowIntentHeld(state: Record<string, unknown>, operation: WorkflowExecutionOperation): boolean {
-  const stored = storedOperationValue(state, operation);
-  if (stored === undefined) return false;
-  const requested = requestedOperationValue(operation);
-  if (requested === undefined) return false;
-  return serializeExecutionValue(stored) === serializeExecutionValue(requested);
-}
-
-/**
  * §3.1/§4.2 the request fingerprint of one workflow operation: the operation
  * kind, the addressed workflow, the caller identity the receipt is bound to and
  * E01's semantic selection for that kind — never the transport freshness
@@ -457,13 +437,12 @@ function controlHarnessRoot(context: ExecutionContext): string {
  * §4.1 the pre-transaction evidence and its pinned witnesses
  * ------------------------------------------------------------------------ */
 
-/** The canonical compass a `phase` transition read, with the bytes it read. */
-type CompassEvidence = { path: string; sha256: string; doc: CompassDoc };
+/** The canonical compass a `phase` transition read, with the doc it parsed. */
+type CompassEvidence = { path: string; doc: CompassDoc };
 
 /**
  * §4.1 everything the external half of one workflow transition observed before
- * SQLite ownership. Each group is read only by the transition that needs it and
- * revalidated inside the transaction.
+ * SQLite ownership. Each group is read only by the transition that needs it.
  */
 type WorkflowEvidence = {
   /** `phase`: the canonical compass, and the §3.5 probes the DB authority holds. */
@@ -471,8 +450,6 @@ type WorkflowEvidence = {
   probes?: PhaseGateOptions;
   /** The checkout the Git probes were taken against (must still be the registered one). */
   checkout?: { path: string; branch: string | null };
-  /** The Git ref state the probes read, re-read immediately before the commit. */
-  gitWitness?: GitRefWitness;
   /** `integration-worktree`: the canonical candidate path and the branch it was on. */
   worktree?: { path: string; branch: string };
   /**
@@ -565,14 +542,11 @@ async function readPhaseEvidence(
   const integrationPath = isNonEmptyString(header.integration_worktree_path)
     ? canonicalTarget(header.integration_worktree_path)
     : null;
-  const evidence: WorkflowEvidence = { compass: { path: canonical, sha256: sha256Bytes(text), doc }, probes };
+  const evidence: WorkflowEvidence = { compass: { path: canonical, doc }, probes };
   if (integrationPath !== null) {
     const branch = gitRead(integrationPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
     if (branch !== undefined && branch !== "") probes.currentBranch = branch;
     evidence.checkout = { path: integrationPath, branch: branch === undefined || branch === "" ? null : branch };
-    // The probe's fact is the BRANCH the checkout is on, which is what `HEAD`
-    // records — pinning that file makes a switch in the commit window a refusal.
-    evidence.gitWitness = pinGitRefWitness(integrationPath, ["HEAD"]);
   }
   return evidence;
 }
@@ -653,10 +627,7 @@ async function readIntegrationWorktreeEvidence(
       { workflow_id: workflowId, path, expected: integrationBranch },
     );
   }
-  return {
-    worktree: { path, branch: integrationBranch },
-    gitWitness: pinGitRefWitness(path, ["HEAD"]),
-  };
+  return { worktree: { path, branch: integrationBranch } };
 }
 
 /** §4.1 the external evidence of one workflow operation, read before SQLite ownership. */
@@ -713,31 +684,42 @@ async function readCloseEvidence(context: ExecutionContext, workflowId: string):
   return { completions: derived.completions, pinned: derived.pinned };
 }
 
-/** §4.1 the commit-window half of the pinned evidence: the same bytes, or a refusal. */
+/**
+ * §4.1 the commit-window half of the pinned evidence: the current Git facts of
+ * the checkout this transition adopted, re-read immediately before the commit.
+ * The byte witnesses (a compass digest, a pinned ref digest) are gone — an edit
+ * to a document or a ref file is a record that has moved on, not a refusal. What
+ * is NOT a byte witness and must still hold is the branch fact: the checkout the
+ * transition is about to record has to be on the registered integration branch
+ * at the commit boundary, re-read through the same `assertBranchAlignment`
+ * validator the preflight used (a misaligned checkout is an invalid delivery
+ * fact, not digest drift). The candidate path must also still exist as a
+ * directory, because nothing records a checkout that is no longer there.
+ */
 function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
-  if (evidence.compass !== undefined) {
-    const current = existsSync(evidence.compass.path) ? sha256Bytes(readFileSync(evidence.compass.path)) : null;
-    if (current !== evidence.compass.sha256) {
+  const checkout = evidence.worktree ?? evidence.checkout;
+  if (checkout !== undefined && checkout.branch !== null) {
+    const { path, branch } = checkout;
+    if (!existsSync(path) || !statSync(path).isDirectory()) {
       throw new CoordinationError(
-        "coordination.evidence-stale",
-        `the compass ${evidence.compass.path} changed after the phase gate was read (${evidence.compass.sha256} -> ` +
-          `${current ?? "absent"}) \u2014 no phase commits on a stale gate input`,
-        { path: evidence.compass.path, expected: evidence.compass.sha256, actual: current },
+        "coordination.integration-unresolved",
+        `the integration checkout ${path} disappeared after it was validated; restore the checkout at the registered path ` +
+          `and retry the workflow transition`,
+        { path },
+      );
+    }
+    const alignment = assertBranchAlignment(path, branch);
+    if (!alignment.ok) {
+      throw new CoordinationError(
+        "coordination.integration-diverged",
+        `the integration checkout ${path} is no longer on the registered integration branch (${summarize(alignment.violations)}) ` +
+          `\u2014 the branch fact is re-read at the commit boundary`,
+        { path, expected: branch },
       );
     }
   }
-  if (evidence.gitWitness !== undefined) {
-    revalidateGitRefWitness(evidence.gitWitness, (message, details) =>
-      new CoordinationError("coordination.evidence-stale", message, details),
-    );
-  }
-  if (evidence.worktree !== undefined && (!existsSync(evidence.worktree.path) || !statSync(evidence.worktree.path).isDirectory())) {
-    throw new CoordinationError(
-      "coordination.evidence-stale",
-      `the integration checkout ${evidence.worktree.path} disappeared after it was validated \u2014 nothing records a checkout ` +
-        `that is no longer there`,
-      { path: evidence.worktree.path },
-    );
+  for (const proof of evidence.completions ?? []) {
+    if (proof.gitWitness !== undefined) revalidateGitProofWitness(proof.gitWitness);
   }
 }
 
@@ -907,69 +889,6 @@ function workflowConflictCause(
   });
 }
 
-/**
- * §4.1/§4.2 (A13) the refusal of a receipt whose effect a later accepted
- * operation superseded: the recorded receipt is historical evidence and is never
- * served as current state, and the typed cause names both facts with the one
- * choice that remains — accept what is stored now, or express the desired effect
- * as a NEW operation under a new operation id.
- */
-function supersededEffectCause(input: {
-  workflowId: string;
-  operationId: string;
-  operation: WorkflowExecutionOperation;
-  state: Record<string, unknown>;
-}): ExecutionError {
-  const code = "execution.effect-superseded";
-  const field = workflowOperationField(input.operation);
-  const stored = describeValue(storedOperationValue(input.state, input.operation));
-  const recorded = describeValue(requestedOperationValue(input.operation));
-  const problem: RecoveryProblem = {
-    component: "workflow-header",
-    path: field,
-    code,
-    sourcesTried: [
-      `execution_operations(epoch, ${JSON.stringify(input.operationId)}) \u2014 the recorded receipt`,
-      `workflow ${input.workflowId} as this transaction reads it`,
-    ],
-    currentFacts: [
-      `operation id ${JSON.stringify(input.operationId)} committed ${field} = ${recorded}`,
-      `${field} holds ${stored} now, so a later accepted operation superseded that effect`,
-    ],
-    needed:
-      `accept the current state of workflow ${input.workflowId}, or express the desired ${input.operation.kind} effect ` +
-      `again as a new operation with a NEW operation id`,
-    withheldEffect: `the recorded receipt: it is historical evidence and is never restored as current state`,
-    availableWork: [
-      `read the current state of workflow ${input.workflowId}`,
-      `express the desired effect under a new operation id`,
-      "independent operations on other workflows and plans continue",
-    ],
-  };
-  return new ExecutionError(
-    code,
-    `operation id ${JSON.stringify(input.operationId)} committed ${field} = ${recorded}, but workflow ${input.workflowId} ` +
-      `holds ${stored} now \u2014 a later accepted operation superseded that effect, and a superseded receipt is never ` +
-      `restored. Nothing was written.`,
-    {
-      component: problem.component,
-      path: problem.path,
-      workflow_id: input.workflowId,
-      operation_id: input.operationId,
-      current_value: stored,
-      recorded_value: recorded,
-      sources_tried: problem.sourcesTried,
-      current_facts: problem.currentFacts,
-      needed: problem.needed,
-      available_work: problem.availableWork,
-      recovery: unresolvedRecovery({
-        target: { workflowId: input.workflowId },
-        unresolved: [problem],
-      }),
-    },
-  );
-}
-
 /* ------------------------------------------------------------------------ *
  * §3 `mutateExecutionWorkflow` — the published workflow verb surface
  * ------------------------------------------------------------------------ */
@@ -1083,9 +1002,9 @@ async function resolveWorkflowIntent<Operation extends WorkflowExecutionOperatio
  * accepted operation and a committed receipt that makes an identical retry a
  * replay. The supplied token's ADDRESS and generation are strict; its REVISION is
  * transport freshness, so the frame recomputes the intent against the state it
- * reads now: a satisfied effect is a current success with no mutation (R6/A09/
- * A12), a relevant conflict is refused with the exact field (A11), a superseded
- * receipt is disclosed instead of restored (A13), and a superseded authority
+ * reads now: the SAME operation id replays its recorded receipt, a DISTINCT
+ * operation id acts on the current state (R6/A09/A12), a relevant conflict is
+ * refused with the exact field (A11), and a superseded authority
  * generation is re-resolved before anything is replayed (A26). It adds nothing a
  * caller can turn into permission: no gate verdict is read from the request, no
  * header field outside the operation's own member is writable, and identity
@@ -1160,11 +1079,10 @@ export async function mutateExecutionWorkflow(
         ];
     // §3.1 (R6/A09) an identical retry returns its recorded receipt — but only
     // after the CURRENT authority is revalidated (a revoked or epoch-invalidated
-    // coordinator never replays a receipt it may no longer own) and only while
-    // the effect it recorded is still held: a superseded effect is disclosed, not
-    // restored (A13). The receipt addresses the whole graph, so its token is the
-    // ROOT token. Looking the receipt up before the registry witness is what lets
-    // a terminal close's own retry answer, instead of "workflow not found".
+    // coordinator never replays a receipt it may no longer own). The receipt
+    // addresses the whole graph, so its token is the ROOT token. Looking the
+    // receipt up before the registry witness is what lets a terminal close's own
+    // retry answer, instead of "workflow not found".
     const replay = readOperationReplay<ExecutionState>(tx, {
       operationId: resolved.call.operationId,
       requestHash,
@@ -1174,14 +1092,6 @@ export async function mutateExecutionWorkflow(
     });
     if (replay !== null) {
       resolveWorkflowSession(tx, resolved.read);
-      if (!workflowIntentHeld(stored.state, operation)) {
-        throw supersededEffectCause({
-          workflowId,
-          operationId: resolved.call.operationId,
-          operation,
-          state: stored.state,
-        });
-      }
       return {
         ...replay,
         recovery: workflowRecovery({
@@ -1210,34 +1120,11 @@ export async function mutateExecutionWorkflow(
       releaseStoppedExecutionLeases(tx, { workflowId, releasedBy: session.sessionId, at });
     }
     const witness = readExecutionWorkflowWitness(tx, resolved.read);
-    // §4.2 (R6/R7/A09/A12) the effect is ALREADY held: the current state is the
-    // success the caller asked for, so this call reports it and spends nothing —
-    // no revision, no timestamp, no receipt row. Stale evidence is not consulted:
-    // a satisfied effect does not depend on the precursor file it once read.
-    //
-    // §R10/A20 the ONE exception is a TERMINAL lifecycle intent: its effect
-    // includes losing the ACTIVE registry row, so a workflow that already
-    // records the terminal status while still holding its membership is exactly
-    // the residue this close repairs — it is never "already satisfied" here
-    // (this point is reached only through a readable registry row, so the
-    // membership fact is already established).
-    const terminalLifecycle =
-      operation.kind === "lifecycle" && (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(operation.status);
-    if (!terminalLifecycle && workflowIntentHeld(stored.state, operation)) {
-      return {
-        ...readExecutionStateGraph(tx),
-        operationId: resolved.call.operationId,
-        replayed: true,
-        recovery: workflowRecovery({
-          workflowId,
-          outcome: "already-satisfied",
-          applied: [],
-          commitState: "none",
-          resolvedFrom: [{ path: workflowOperationField(operation), source: "stored workflow header" }],
-          warnings,
-        }),
-      };
-    }
+    // §4.2 retry semantics are two cases and only two: the SAME operation id
+    // replays its recorded receipt above, and any OTHER operation id is a fresh
+    // operation acting on the state this transaction reads. A header that
+    // already holds the requested value is simply re-applied by that fresh
+    // operation — there is no effect-held comparison that could refuse it.
     try {
       revalidateWorkflowEvidence(evidence);
     } catch (error) {
@@ -1466,7 +1353,7 @@ function assertHeaderValid(workflowId: string, header: Record<string, unknown>):
  * §3 the `phase` transition: the requested phase must be the transition the
  * lifecycle's own compass and its committed plan rows produce RIGHT NOW. The
  * gate is evaluated inside the transaction over the rows the commit will see,
- * with the compass bytes revalidated immediately before it — so a phase that
+ * with current checkout branch facts revalidated immediately before it — so a phase that
  * was skipped (the gate still says `phase-2-execute`) is refused, and no
  * caller-supplied verdict can enter the decision.
  */
@@ -1486,9 +1373,9 @@ function applyPhaseTransition(input: {
       : null;
     if (registeredPath !== checkout.path) {
       throw new CoordinationError(
-        "coordination.evidence-stale",
+        "coordination.path-mismatch",
         `the integration checkout of workflow ${workflowId} changed after its branch was probed (${String(checkout.path)} -> ` +
-          `${String(registeredPath)}) \u2014 the \u00A73.5 branch probe belongs to the registered checkout`,
+          `${String(registeredPath)}); retry the phase transition against the current registered checkout`,
         { workflow_id: workflowId, expected: registeredPath, actual: checkout.path },
       );
     }
@@ -1667,13 +1554,11 @@ function applyExecutionPolicy(workflowId: string, policy: WorkflowExecutionPolic
  * §3 the `delivery` transition: the same evidence rules the file route's
  * `recordWorkflowDelivery` enforces — the declared kind decides which members
  * exist (one shared member map), the structural validator decides their shape,
- * §4d keeps a recorded PR identity immutable and requires the recorded identity
- * to BE the registered delivery, and the delivery tail (§4c/§4d/§4f) is
- * recorded only once every owned row is `Done`. The ONE member that runs the
- * other way — the report-only `completion` fulfilment, recorded BEFORE the row
- * is marked `Done` (contract §1) — is frozen once an owned row is Done, so a
- * later re-point of that evidence is refused instead of silently becoming the
- * basis of a `Done` it never authorized. An identical re-record stays a no-op.
+ * and §4d requires an incoming identity to BE the registered delivery by field
+ * value. Re-recording a delivery (the PR identity, the report-only `completion`
+ * fulfilment, the compound disposition, the merge record) is a revisable
+ * mutation under a new operation id; a tampered replay of the SAME operation id
+ * is refused by the request-hash conflict. An identical re-record is a no-op.
  */
 function applyDeliveryEvidence(input: {
   header: Record<string, unknown>;
@@ -1706,12 +1591,12 @@ function applyDeliveryEvidence(input: {
     throw invalidWorkflowInput(`the delivery patch does not validate (${summarize(shape)})`);
   }
   const stored = (isPlainObject(header.delivery) ? header.delivery : {}) as Record<string, unknown>;
-  const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
   const incomingPr = isPlainObject(delivery.pr) ? delivery.pr : undefined;
-  if (recordedPr !== undefined && incomingPr !== undefined && stableJson(recordedPr) !== stableJson(incomingPr)) {
+  const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
+  if (recordedPr !== undefined && incomingPr !== undefined &&
+      (recordedPr.repo !== incomingPr.repo || recordedPr.head !== incomingPr.head || recordedPr.target !== incomingPr.target)) {
     throw invalidWorkflowTransition(
-      `workflow ${workflowId} records PR identity ${JSON.stringify(recordedPr)} once at submission (\u00A74d) \u2014 ` +
-        `${JSON.stringify(incomingPr)} is a different delivery, not an evidence update`,
+      `workflow ${workflowId} records a different PR identity; use the registered delivery identity or a separate workflow`,
       { workflow_id: workflowId },
     );
   }
@@ -1740,32 +1625,17 @@ function applyDeliveryEvidence(input: {
   // complete evidence (`consultDeliveryEvidence`) against rows it has completed —
   // so the ordering is bookkeeping rather than a caller ceremony.
   //
-  // The mirror rule for the ONE member recorded BEFORE the row is Done
-  // (contract §1: a report-only row "completes from an accepted handoff plus a
-  // recorded fulfilment of that policy — the fulfilment is recorded before the
-  // row is marked `Done`"). Once an owned row is Done the recorded fulfilment
-  // is FROZEN: it is the basis that row's `Done` was authorized against, so a
-  // different evidence reference is a re-pointed completion, not an evidence
-  // update (\u00A74d freezes the PR identity the same way). The identical
-  // re-record stays a no-op instead of a refusal — the file route's
-  // `recordWorkflowDelivery` returns before its own gate for exactly this
-  // reason — so a retried recording is idempotent on BOTH transports, and the
-  // same stable code refuses the same state there.
-  if (members.includes("completion")) {
-    const done = rows.filter((row) => rowStatusOf(row) === "Done").map((row) => String(row.id));
-    if (done.length > 0) {
-      const incoming = isPlainObject(delivery.completion) ? delivery.completion : null;
-      const recorded = isPlainObject(stored.completion) ? stored.completion : null;
-      if (stableJson(recorded) !== stableJson(incoming)) {
-        throw new CoordinationError(
-          "coordination.completion-frozen",
-          `workflow ${workflowId} cannot record the completion fulfilment: ${done.join(", ")} ` +
-            `${done.length === 1 ? "is" : "are"} Done, and the registered completion policy's fulfilment is recorded BEFORE ` +
-            `the row is marked Done (contract \u00A71) \u2014 the recorded evidence is the basis that row was completed on, so a ` +
-            `different reference is a re-pointed completion, never an evidence update`,
-          { workflow_id: workflowId },
-        );
-      }
+  // Completion freezes its accepted policy/reference, not the document body.
+  if (members.includes("completion") && rows.some((row) => rowStatusOf(row) === "Done")) {
+    const incoming = isPlainObject(delivery.completion) ? delivery.completion : undefined;
+    const recorded = isPlainObject(stored.completion) ? stored.completion : undefined;
+    if (recorded === undefined || incoming === undefined ||
+        recorded.policy !== incoming.policy || recorded.evidence !== incoming.evidence) {
+      throw new CoordinationError(
+        "coordination.completion-frozen",
+        `workflow ${workflowId} is Done against its recorded completion policy/reference; edit the referenced document normally; a different completed intent uses its own workflow`,
+        { workflow_id: workflowId },
+      );
     }
   }
   return { ...stored, ...delivery } as WorkflowDeliveryEvidence;

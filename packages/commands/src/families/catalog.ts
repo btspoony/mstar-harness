@@ -56,7 +56,7 @@ const lifecycles: readonly CatalogLifecycle[] = ["active", "archived", "supersed
 const relations: readonly CatalogRelation[] = ["belongs-to", "documents", "spec-ref", "knowledge-ref", "derived-from", "supersedes"];
 const descriptions: Record<(typeof verbs)[number], string> = {
   discover: "Read-only inventory proposals with source hashes, unknowns and index sections proposed for retirement.",
-  import: "Apply a reviewed catalog plan; conflicts and reviewed-source drift refuse the whole import before writes.",
+  import: "Apply a reviewed catalog plan to current sources; semantic conflicts refuse before writes, while source hashes remain provenance.",
   register: "Register a catalog row or attach to the row owning its canonical location.",
   update: "Change catalog-only metadata with an expected-revision guard.",
   link: "Record a relation between registered catalog rows.",

@@ -118,6 +118,8 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **`recovery-policy-attribution-unknown`**：猜测 model、倒填编辑时间、将真实 provenance 写入 tracked plan，或新增机器完整性门禁。
 - **`recovery-policy-sparse-intent`**：强制 rebind / token-copy preflight、丢弃 verb 已应用的部分结果，或向 leaf 传 session credentials；实际输入仍按 CLI verb 显式提供。
 - **`recovery-policy-host-noop`**：要求重启刻意关闭的 preference、把 `preference-off` 当工具失败，或声称已做 installed-host 验证；phase-1 no-op 与 binding 状态无关；仅 preference 开启时要求 pending binding。
+- **Hash-as-record-only cases**: `hash-record-only-post-prepare`, `hash-record-only-submitted-evidence`, `hash-record-only-source-output-drift`, and `hash-record-only-request-replay` distinguish ordinary prose/report/source/output edits from real holder, scope/QA/cleanup, path/state, numeric revision and Git conflicts. Do not require adoption, restoration, resealing, re-signing or deleted hash flags. Only same-operation-id/different-request `request_hash` replay remains a hash conflict; receipt replay is independent of current output bytes.
+- Run these four cases before/after with their embedded negative controls and record actual completion output plus judgments. Targeted static/link checks do not establish model compliance. Use the existing session-completion evaluation route; do not run the full corpus or create a replacement runner for this change.
 
 ## 3. 迭代规则
 
@@ -246,4 +248,4 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 ## Assets
 
-- `assets/routing-evals.json` — PM 路由回归场景集（结构：`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`）。评估时用 `cat` 或 `jq` 读取；**更新场景集须与本 skill 同 PR 维护**以避免版本漂移。本 skill 侧的维护事实：场景集当前为 **`version` 34 · 69 例**（含 `plan-scope-*` 7 例、`phase2-*` 6 例与 `recovery-policy-*` 5 例，其防守信号均登记在 § 2）；数字以场景集文件为准，此处只随更新改写。
+- `assets/routing-evals.json` — canonical PM routing/gate cases (`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`), maintained with this skill in the same change. Current version: **35 · 73 cases**, including four `hash-record-only-*` cases with semantic negative controls and the standalone coding-behavior authority case. For this cutover, evaluate only those four affected cases; unrelated cases remain unchanged.

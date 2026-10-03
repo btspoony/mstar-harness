@@ -816,7 +816,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
     });
   });
 
-  test("re-promote of the same workflow id → exit 1, names the snapshot path, first rows intact", () => {
+  test("re-promote of a registered workflow id refuses without replacing its snapshot", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const { harnessDir, outDir } = scaffoldFixture(dir);
       const first = runCli(["audit", "promote", outDir, "--plans", "001", "--harness", harnessDir,
@@ -832,11 +832,8 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
       const snapshotPath = join(harnessDir, "workflows", "audit-2026-08-08", "snapshot.json");
       const before = readJson(snapshotPath);
 
-      // Second promote (different subset) must refuse with exit 1 and name
-      // the existing snapshot path — no silent whole-rewrite. Post-cutover,
-      // the refusal is the catalog registration journal's stable
-      // `catalog.registration-conflict` code: the snapshot's identity is NOT
-      // this reviewed request, and nothing was replaced or deleted.
+      // A new operation cannot create the same workflow id again; the
+      // registration conflict is the behavioral contract, not path wording.
       const second = runCli(["audit", "promote", outDir, "--plans", "002", "--harness", harnessDir,
         "--delivery-kind",
         "development",
@@ -846,8 +843,7 @@ describe("mstar audit promote — v2 workflow registration for selected plans", 
         "main",
       ]);
       expect(second.exitCode).toBe(1);
-      const refusal = cliEnvelope(second, "refused", "catalog.registration-conflict");
-      expect(refusal.message).toContain(snapshotPath);
+      cliEnvelope(second, "refused", "catalog.registration-conflict");
 
       // First rows intact.
       const after = readJson(snapshotPath);

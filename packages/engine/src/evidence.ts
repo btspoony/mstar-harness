@@ -230,10 +230,9 @@ const CODE_SCHEMA = "evidence.schema";
 const CODE_IDENTITY = "evidence.identity";
 const CODE_ARTIFACT_MISSING = "evidence.artifact.missing";
 const CODE_ARTIFACT_TYPE = "evidence.artifact.type";
-const CODE_ARTIFACT_SIZE = "evidence.artifact.size";
-const CODE_ARTIFACT_HASH = "evidence.artifact.hash";
 const CODE_INCOMPLETE = "evidence.incomplete";
 
+ 
 const INPUT_PURPOSES: readonly EvidenceInputSpec["purpose"][] = ["source", "test", "fixture", "config", "dependency"];
 const FACT_STATES: readonly EvidenceArtifactFact["state"][] = ["regular", "missing", "symlink", "other", "unreadable"];
 
@@ -437,11 +436,9 @@ export function evidenceInputDigest(snapshot: EvidenceInputSnapshot): string {
 
 /**
  * Validate one retained evidence record. Malformed unknown input yields
- * `GateResult` violations (all severity high) and never throws. Checks the
- * exact property sets at every object level, the fixed v1 collection
- * limits, state/outcome/endedAt consistency, log slot literals and caps,
- * entry/tool/environment fact rules, command cwd agreement with the
- * recorded context, and recomputation of every snapshot digest.
+ * `GateResult` violations (all severity high) and never throws. Checks exact
+ * property sets, fixed collection limits, state/outcome/endedAt consistency,
+ * log slots, entry/tool/environment fact rules and command cwd agreement.
  */
 export function validateSddEvidenceRecord(record: unknown): GateResult {
   const out: ValidationResult[] = [];
@@ -822,7 +819,6 @@ function validateLimits(limits: unknown, requestTimeoutMs: number | null, out: V
 }
 
 function validateSnapshot(snapshot: unknown, what: string, environmentKeys: string[] | null, out: ValidationResult[]): void {
-  const snapshotMark = out.length;
   if (!isPlainObject(snapshot)) {
     out.push(violation(CODE_SCHEMA, `${what} must be a JSON object or null`));
     return;
@@ -883,12 +879,8 @@ function validateSnapshot(snapshot: unknown, what: string, environmentKeys: stri
     out.push(violation(CODE_SCHEMA, `${what}.digest must be lowercase 64-hex; got ${JSON.stringify(snapshot.digest ?? null)}`));
     return;
   }
-  // Recompute the digest only over a structurally clean snapshot (marked at
-  // this snapshot's start, so earlier sibling snapshots cannot suppress it);
-  // a hostile shape must never throw out of the validator.
-  if (out.length === snapshotMark) {
-    validateDigest(snapshot, what, out);
-  }
+  // The recorded fingerprint is provenance; current content is not compared
+  // against it to decide whether the record is valid.
 }
 
 function validateEntries(entries: unknown, what: string, out: ValidationResult[]): void {
@@ -1008,28 +1000,14 @@ function validateTool(toolFp: unknown, what: string, out: ValidationResult[]): v
   }
 }
 
-function validateDigest(snapshot: Record<string, unknown>, what: string, out: ValidationResult[]): void {
-  try {
-    const recomputed = evidenceInputDigest(snapshot as unknown as EvidenceInputSnapshot);
-    if (recomputed !== snapshot.digest) {
-      out.push(violation(CODE_SCHEMA, `${what}.digest does not match the recomputed fingerprint; the snapshot content and digest disagree`));
-    }
-  } catch (error) {
-    out.push(violation(CODE_SCHEMA, `${what}.digest could not be recomputed: ${(error as Error).message}`));
-  }
-}
 
 // ---------------------------------------------------------------------------
-// Artifact verification (integrity).
+// Artifact verification.
 // ---------------------------------------------------------------------------
 
 /**
- * Verify that the retained artifacts match the recorded facts and that the
- * record is complete: exactly one regular-file fact per fixed log slot,
- * exact bytes and hash, finished state, non-truncated logs and no capture
- * errors. A completed nonzero exit with complete artifacts verifies as
- * valid failure evidence — integrity is independent of the recorded
- * outcome. Gate codes are fixed; no hard-blocked override exists.
+ * Check artifact identity, fixed slots, existence/type and evidence completeness.
+ * Recorded artifact sizes and hashes are provenance only.
  */
 export function verifySddEvidence(
   record: unknown,
@@ -1107,7 +1085,6 @@ function verifyValidatedRecord(
   }
 
   for (const slot of ["stdout.log", "stderr.log"] as const) {
-    const logKey = slot === "stdout.log" ? "stdout" : "stderr";
     const facts = bySlot.get(slot) ?? [];
     if (facts.length === 0) {
       out.push(violation(CODE_ARTIFACT_MISSING, `missing artifact fact for the fixed ${slot} slot`));
@@ -1126,13 +1103,8 @@ function verifyValidatedRecord(
       out.push(violation(CODE_ARTIFACT_TYPE, `retained ${slot} is not a verifiable regular file (state ${JSON.stringify(artifact.state)})`));
       continue;
     }
-    const recorded = rec.logs[logKey];
-    if (artifact.bytes !== recorded.bytes || artifact.bytes > LOG_STREAM_CAP) {
-      out.push(violation(CODE_ARTIFACT_SIZE, `retained ${slot} has ${String(artifact.bytes)} bytes; the record requires exactly ${String(recorded.bytes)} within the ${LOG_STREAM_CAP}-byte cap`));
-    }
-    if (artifact.sha256 !== recorded.sha256) {
-      out.push(violation(CODE_ARTIFACT_HASH, `retained ${slot} hash does not match the recorded hash; content was altered or is unverifiable`));
-    }
+    // The record's artifact hash and size are retained as provenance; their
+    // equality with current bytes does not govern evidence acceptance.
   }
 
   if (rec.state !== "finished") {
@@ -1162,11 +1134,7 @@ function recordedOutcome(rec: SddEvidenceRecord): EvidenceAssessment["outcome"] 
 
 function entryEquals(a: EvidenceInputEntry, b: EvidenceInputEntry): boolean {
   return (
-    a.path === b.path &&
     a.kind === b.kind &&
-    a.sha256 === b.sha256 &&
-    a.bytes === b.bytes &&
-    a.executable === b.executable &&
     a.linkText === b.linkText &&
     a.resolvedRelativePath === b.resolvedRelativePath &&
     a.error === b.error
@@ -1190,8 +1158,6 @@ function diffEntryPaths(a: readonly EvidenceInputEntry[], b: readonly EvidenceIn
 function toolEquals(a: EvidenceToolFingerprint, b: EvidenceToolFingerprint): boolean {
   return (
     a.requested === b.requested &&
-    a.sha256 === b.sha256 &&
-    a.bytes === b.bytes &&
     a.platform === b.platform &&
     a.arch === b.arch &&
     a.runnerRuntimeVersion === b.runnerRuntimeVersion &&
@@ -1269,17 +1235,10 @@ function targetLaneOf(after: EvidenceInputSnapshot | null, target: EvidenceInput
 }
 
 /**
- * Assess whether one retained evidence bundle still applies to the current
- * declared inputs. Read-only: no child execution, discovery, version probe
- * or write. The four outputs stay separate — a damaged log or an identity
- * mismatch never rewrites the recorded outcome, and a failed or incomplete
- * run can never become a reuse candidate. `changedInputs` discloses sorted
- * known differing paths (or `$tool`/`$environment`/`$repository` labels)
- * even when an earlier rule already forces uncertainty; no-target mode
- * returns an empty list. Digest equality is consulted only after the
- * preceding first-match checks, so an unknown marker never becomes a false
- * changed/candidate result. A malformed target snapshot is downgraded to
- * the unknown lane instead of throwing.
+ * Assess retained evidence for agent review. Recorded content digests never
+ * establish applicability; semantic scope, observation state, repository and
+ * environment facts remain visible. Read-only: no child execution, discovery,
+ * version probe or write. A malformed target snapshot degrades to unknown.
  */
 export function assessSddEvidenceReuse(
   record: unknown,
@@ -1302,8 +1261,10 @@ export function assessSddEvidenceReuse(
   if (outcome === "incomplete") reasons.add("outcome.incomplete");
 
   const after = rec.after;
-  const beforeAfterMoved = after !== null && rec.before.digest !== after.digest;
   const beforeAfterPaths = after !== null ? diffEntryPaths(rec.before.entries, after.entries) : [];
+  const beforeAfterToolMoved = after !== null && !toolEquals(rec.before.tool, after.tool);
+  const beforeAfterEnvironmentMoved = after !== null && !environmentEquals(rec.before.environment, after.environment);
+  const beforeAfterMoved = beforeAfterPaths.length > 0 || beforeAfterToolMoved || beforeAfterEnvironmentMoved;
 
   let lane = unusableTargetLane;
   if (target !== undefined) {
@@ -1321,6 +1282,8 @@ export function assessSddEvidenceReuse(
   // an unusable target discloses only record-derived movement.
   if (target !== undefined) {
     for (const path of beforeAfterPaths) changedInputs.add(path);
+    if (beforeAfterToolMoved) changedInputs.add("$tool");
+    if (beforeAfterEnvironmentMoved) changedInputs.add("$environment");
     if (lane.usable) {
       for (const path of lane.paths) changedInputs.add(path);
       if (lane.toolDiffers) changedInputs.add("$tool");
@@ -1339,9 +1302,7 @@ export function assessSddEvidenceReuse(
     // only an integrity-valid run without a target is not-assessed.
     applicability = integrity.ok ? "not-assessed" : "uncertain";
     reasons.add("target.absent");
-    if (snapshotHasUnknowns(rec.before) || (after !== null && snapshotHasUnknowns(after))) reasons.add("input.unknown");
     if (!rec.before.stable || (after !== null && !after.stable) || beforeAfterMoved) reasons.add("input.concurrent-change");
-    if (rec.before.repoCommonDir === null || (after !== null && after.repoCommonDir === null)) reasons.add("input.repository");
     if (declarationUnknown) reasons.add("coverage.unknown");
   } else {
     // Rules 3-5: target comparison lanes.
@@ -1354,25 +1315,22 @@ export function assessSddEvidenceReuse(
       after !== null && after.repoCommonDir !== null && lane.repoCommonDir !== null && after.repoCommonDir !== lane.repoCommonDir;
     const targetHeadMissing = lane.usable && lane.head === null;
     if (recordUnknowns || targetUnknown) reasons.add("input.unknown");
+    if (repoMissing || repoDifferent) reasons.add("input.repository");
     if (targetHeadMissing) reasons.add("input.unknown");
     if (lane.usable && lane.unknowns.includes("target.expected-head-mismatch")) reasons.add("target.expected-head-mismatch");
     if (unstable || beforeAfterMoved) reasons.add("input.concurrent-change");
-    if (repoMissing || repoDifferent) reasons.add("input.repository");
     if (declarationUnknown) reasons.add("coverage.unknown");
-
     if (!integrity.ok) {
       // Rule 1: integrity failure is uncertain whether or not a target exists.
       applicability = "uncertain";
     } else if (recordUnknowns || targetUnknown || unstable || beforeAfterMoved || repoMissing || repoDifferent || targetHeadMissing || declarationUnknown) {
-      // Rule 3: any unknown/unstable/repository/coverage condition is
-      // uncertain — never a changed/candidate claim.
+      // Unknown, unstable, repository or coverage conditions remain uncertain.
       applicability = "uncertain";
     } else if (outcome !== "passed") {
-      // Rule 4: failed or incomplete proof cannot satisfy a passing criterion.
+      // A failed or incomplete proof cannot satisfy a passing criterion.
       applicability = "uncertain";
     } else if (after !== null && (lane.paths.length > 0 || lane.toolDiffers || lane.envDiffers)) {
-      // Rule 5: known differences in tested bytes, tool content or selected
-      // environment.
+      // Semantic path-state, tool metadata or selected environment differences.
       applicability = "changed";
       reasons.add("input.changed");
     } else {

@@ -723,7 +723,7 @@ describe("new coordinator start only", () => {
     expect(harness.notices()).toHaveLength(0);
     expect(harness.attempts).toHaveLength(0);
     // `/iteration-drive` never creates a reservation, and none of these did.
-    expect(readFileSync(join(repo.harness, "status.json"), "utf8")).toBe(before.register);
+    expect(JSON.parse(readFileSync(join(repo.harness, "status.json"), "utf8"))).toEqual(JSON.parse(before.register));
     expect(readdirSync(join(repo.harness, "workflows")).sort()).toEqual(before.workflows);
     expect(readdirSync(join(repo.harness, "iterations")).sort()).toEqual(before.iterations);
 
@@ -2420,7 +2420,7 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     const bytesBefore = readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8");
     const again = await harness.runCoordinatorTool({ operation: "bind", workflowId });
     expect(coordinatorCodeOf(again)).toBe("coordination.duplicate-holder");
-    expect(readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8")).toBe(bytesBefore);
+    expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(bytesBefore));
   }, 60_000);
 
   test("leaf, scoped-plan, id-less and caller-forged calls cannot cross-bind", async () => {
@@ -2493,7 +2493,7 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     }
 
     // Every refusal above wrote nothing.
-    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(before));
     expect(existsSync(join(repo.harness, "workflows", workflowId, "sessions"))).toBe(false);
   }, 60_000);
 
@@ -2647,18 +2647,19 @@ function createRecoverableWorkflow(repo: ControlRepo, workflowId: string, priorS
   writeRegister(repo.harness, [repo.siblingId, workflowId]);
 }
 
-/** The recovery request body a reviewed caller sends (tokens filled per case). */
+/**
+ * The recovery request body a reviewed caller sends. The removed byte-version
+ * gate inputs are never part of it: the workflow id, the audited operation
+ * fields and the stop proof are the whole request.
+ */
 function recoveryToolParams(
   workflowId: string,
-  view: Record<string, unknown>,
   priorSessionId: string,
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
     operation: "recover",
     workflowId,
-    expectedSnapshotVersion: view.snapshotVersion,
-    expectedCompassVersion: view.compassVersion,
     operationId: "op-host-recover-1",
     reason: "the host handoff of the prior session was cancelled",
     authorizationRef: "PM-authorization-20260921",
@@ -2704,7 +2705,8 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     const priorEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${RECOVERY_PRIOR_SESSION}.json`);
     const priorBytes = readFileSync(priorEnvelope, "utf8");
 
-    // The host reads the view first: the recorded owner and both reviewed tokens.
+    // The host reads the view first: the recorded owner and the observed
+    // snapshot/compass digests (provenance only).
     const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
     expect(view.isError).toBe(false);
     expect(view.details.ok).toBe(true);
@@ -2713,7 +2715,7 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     expect(details.allowed).toBe(true);
     expect(JSON.stringify(details)).not.toContain("sessions/");
 
-    const recovered = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    const recovered = await harness.runCoordinatorTool(recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION));
     expect(recovered.isError).toBe(false);
     const receipt = recovered.details.mstarCoordinator as Record<string, unknown>;
     expect(receipt).toMatchObject({
@@ -2740,7 +2742,7 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     expect(recordedFile.endsWith(`/sessions/coordinator-${hostId}.json`)).toBe(true);
     expect(existsSync(newEnvelope)).toBe(true);
     expect(JSON.parse(readFileSync(newEnvelope, "utf8"))).toMatchObject({ role: "coordinator", session_id: hostId });
-    expect(readFileSync(priorEnvelope, "utf8")).toBe(priorBytes);
+    expect(JSON.parse(readFileSync(priorEnvelope, "utf8"))).toEqual(JSON.parse(priorBytes));
 
     const audit = recoveryAuditOfWorkflow(repo, workflowId);
     expect(audit).toHaveLength(1);
@@ -2762,17 +2764,15 @@ describe("prerequisite identity — registered coordinator recovery tool handler
       prior_session_id: RECOVERY_PRIOR_SESSION,
       session_id: hostId,
       stopped_session_ids: [RECOVERY_PRIOR_SESSION],
-      snapshot_version_before: details.snapshotVersion,
-      compass_version: details.compassVersion,
     });
 
     // An exact retry is a stable receipt: the host learns it already holds the
     // binding instead of re-running the write.
     const committedBytes = readFileSync(snapshotPath, "utf8");
-    const retry = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    const retry = await harness.runCoordinatorTool(recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION));
     expect(retry.isError).toBe(false);
     expect((retry.details.mstarCoordinator as Record<string, unknown>).replay).toBe(true);
-    expect(readFileSync(snapshotPath, "utf8")).toBe(committedBytes);
+    expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(committedBytes));
     expect(recoveryAuditOfWorkflow(repo, workflowId)).toHaveLength(1);
   }, 90000);
 
@@ -2789,28 +2789,28 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     const hostId = harness.sessionManager.getSessionId();
     const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
     const before = readFileSync(snapshotPath, "utf8");
-    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
-    const details = view.details.mstarCoordinator as Record<string, unknown>;
 
-    // The registered schema owns the union: an identity-shaped field is refused
-    // by the schema AND by the raw handler's own boundary.
+    // The registered schema owns the union: an identity-shaped field — or one of
+    // the removed byte-version gate inputs — is refused by the schema AND by the
+    // raw handler's own boundary.
     for (const forged of [
-      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), sessionId: hostId },
-      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), priorSessionPath: "/tmp/creds.json" },
-      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), harnessRoot: "/elsewhere/.mstar" },
-      { ...recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION), force: true },
+      { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), sessionId: hostId },
+      { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), priorSessionPath: "/tmp/creds.json" },
+      { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), harnessRoot: "/elsewhere/.mstar" },
+      { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), force: true },
+      { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), expectedSnapshotVersion: `sha256:${"0".repeat(64)}` },
+      { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), expectedCompassVersion: `sha256:${"0".repeat(64)}` },
     ]) {
       expect({ forged, valid: harness.validateCoordinator(forged).success }).toEqual({ forged, valid: false });
       const raw = await harness.runRawCoordinatorTool(forged);
       expect({ forged, code: coordinatorCodeOf(raw) }).toEqual({ forged, code: "forbidden-field" });
     }
 
-    // A request that omits a reviewed token is not recoverable at all: the
-    // registered schema refuses it and so does the raw handler.
+    // A request that omits a required operation field is not recoverable at all:
+    // the registered schema refuses it and so does the raw handler.
     const incomplete = {
       operation: "recover",
       workflowId,
-      operationId: "op-host-recover-x",
       reason: "r",
       authorizationRef: "a",
       stoppedSessionIds: [RECOVERY_PRIOR_SESSION],
@@ -2822,22 +2822,12 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     // ENGINE refuses it (the host forwards the assertion verbatim, so the guard
     // is the one evaluated against the binding under the snapshot lock).
     const unstoppable = await harness.runCoordinatorTool(
-      recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION, {
+      recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION, {
         operationId: "op-host-recover-2",
         stoppedSessionIds: ["some-other-session"],
       }),
     );
     expect(coordinatorCodeOf(unstoppable)).toBe("coordination.identity-recovery.unauthorized");
-
-    // A refusal through the engine keeps the engine's own code (a stale token is
-    // not a re-derivable identity and never becomes a success).
-    const stale = await harness.runCoordinatorTool(
-      recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION, {
-        operationId: "op-host-recover-3",
-        expectedSnapshotVersion: `sha256:${"0".repeat(64)}`,
-      }),
-    );
-    expect(coordinatorCodeOf(stale)).toBe("coordination.identity-recovery.stale");
 
     // Leaf and identity-less host sessions cannot recover anything.
     const taskSession = newSession(repo.main);
@@ -2848,20 +2838,20 @@ describe("prerequisite identity — registered coordinator recovery tool handler
       sessionManager: taskSession,
       mode: "json",
     });
-    expect(coordinatorCodeOf(await taskHarness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION)))).toBe("leaf-session");
+    expect(coordinatorCodeOf(await taskHarness.runCoordinatorTool(recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION)))).toBe("leaf-session");
 
     const idless = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: newSession(repo.main) });
     const manager = idless.sessionManager as unknown as { getSessionId: () => string };
     const realGetSessionId = manager.getSessionId;
     manager.getSessionId = () => "";
     try {
-      expect(coordinatorCodeOf(await idless.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION)))).toBe("identity-missing");
+      expect(coordinatorCodeOf(await idless.runCoordinatorTool(recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION)))).toBe("identity-missing");
     } finally {
       manager.getSessionId = realGetSessionId;
     }
 
     // Nothing above moved the workflow or created an envelope.
-    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(before));
     expect(existsSync(join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${hostId}.json`))).toBe(false);
     expect((await harness.runCoordinatorTool({ operation: "show-recovery", workflowId })).details.mstarCoordinator).toMatchObject({
       priorSessionId: RECOVERY_PRIOR_SESSION,
@@ -2894,17 +2884,15 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     });
     const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
     const before = readFileSync(snapshotPath, "utf8");
-    const view = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
-    const details = view.details.mstarCoordinator as Record<string, unknown>;
 
-    const refused = await harness.runCoordinatorTool(recoveryToolParams(workflowId, details, RECOVERY_PRIOR_SESSION));
+    const refused = await harness.runCoordinatorTool(recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION));
     expect(coordinatorCodeOf(refused)).toBe("coordination.identity-recovery.foreign-owner");
     // §3.3: no envelope path — and no rejected caller value — in the tool text
     // or the details. The already-public workflow and recorded session ids name
     // the binding the caller failed to authenticate.
     expect(String(refused.content[0]?.text)).not.toContain("sessions/");
     expect(JSON.stringify(refused.details)).not.toContain("sessions/");
-    expect(readFileSync(snapshotPath, "utf8")).toBe(before);
+    expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(before));
   }, 120000);
 });
 

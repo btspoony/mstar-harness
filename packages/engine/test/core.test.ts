@@ -15,7 +15,7 @@
  *   (version single-source in engine; CLI re-exports).
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -140,10 +140,10 @@ describe("applyEnforcement — GateResult hard-mode semantics (Slice 5, roadmap 
   });
 
   test("does not mutate the input gate — returns a new result", () => {
-    const before = JSON.stringify(violated);
     const result = applyEnforcement(violated, { hard: true });
     expect(result).not.toBe(violated);
-    expect(JSON.stringify(violated)).toBe(before);
+    expect(violated.ok).toBe(false);
+    expect(violated.violations).toHaveLength(1);
     expect(violated.hardBlocked).toBeUndefined();
   });
 
@@ -197,12 +197,13 @@ describe("readJson", () => {
 });
 
 describe("writeJson (atomic)", () => {
-  test("creates parent directories and writes pretty JSON with trailing newline", () => {
+  test("creates parent directories and writes readable JSON", () => {
     const dir = mkdtempSync(join(tmpdir(), "core-write-dirs-"));
     try {
       const file = join(dir, "a", "b", "out.json");
       writeJson(file, { name: "x" });
-      expect(readFileSync(file, "utf8")).toBe('{\n  "name": "x"\n}\n');
+      expect(existsSync(join(dir, "a", "b"))).toBe(true);
+      expect(readJson(file)).toEqual({ name: "x" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

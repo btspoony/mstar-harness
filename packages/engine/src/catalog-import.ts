@@ -12,13 +12,10 @@
  *   error and never a fabricated row (§4).
  * - Import applies a REVIEWED plan through the shared catalog domain verbs
  *   (P1 `registerCatalogEntity` / `linkCatalogEntities`), so every write keeps
- *   the store's epoch/role/idempotency/transaction rules. The reviewed source
- *   hashes are re-verified before the first write; a conflict or a source drift
- *   refuses the whole import instead of silently preferring one source. A
- *   failure AFTER writes started is never a silent prefix: the applied prefix
- *   is journalled progress and the failure is rethrown as an explicit
- *   `catalog.import-partial` error that reports what applied and how to resume
- *   (RV-3).
+ *   its transaction and journal rules. Source hashes remain provenance; drift
+ *   does not veto an import. A failure AFTER writes started is never a silent
+ *   prefix: applied proposals are journalled progress and the failure reports
+ *   the exact partial state and resume guidance (RV-3).
  * - Import never creates a workflow session, retires an index or repairs issue
  *   authority; live index retirement belongs to the cutover plan's G6.
  *
@@ -112,11 +109,10 @@ const ORDINARY_FILES: Record<string, true> = { "readme.md": true, "install.md": 
 const COMPASS_FILE = "delivery-compass.md";
 const ROADMAP_FILE = "roadmap.md";
 
-/** Stable refusal codes for the import transport. */
+/** Refusal codes for import shape, semantic conflicts and partial progress. */
 export type CatalogImportErrorCode =
   | "catalog.import-invalid-plan"
   | "catalog.import-conflict"
-  | "catalog.import-source-drift"
   | "catalog.import-unknown-input"
   | "catalog.import-partial";
 
@@ -241,6 +237,15 @@ export type CatalogImportRetirementSection = {
   /** Lines outside the retired section, preserved verbatim. */
   preservedLines: number;
   sourceKey: string;
+  /** The recognized family of this table; a row identity is only valid inside it. */
+  family: IndexFamily;
+  /**
+   * The normalized catalog locations of the reviewed rows inside THIS table,
+   * in row order. The retirement reader associates a live table with a
+   * reviewed section by these values, so a table is never selected by a
+   * file-wide union of ids and paths.
+   */
+  rows: string[];
 };
 
 export type CatalogImportPlan = {
@@ -352,7 +357,8 @@ type PathResolution = { ok: true; relativePath: string } | { ok: false; reason: 
  * Non-throwing core of `normalizeRelativePath`. A reviewed import input still
  * fails hard on a bad path; a legacy index row may legitimately carry a
  * cross-root/history reference (`../../plans/<id>.md`) that the caller retains
- * as a disclosed unknown instead of losing the whole proposal (§4).
+ * as a disclosed unknown instead of losing the whole proposal (§4). It is the
+ * ONE definition of a catalog location's normalized form.
  */
 function resolveRelativePath(raw: unknown, label: string): PathResolution {
   if (typeof raw !== "string" || raw.trim() === "") return { ok: false, reason: `${label} must be a nonblank relative path` };
@@ -467,7 +473,7 @@ function fallbackTitle(relativePath: string): string {
 // Legacy index tables
 // ---------------------------------------------------------------------------
 
-type RawTable = {
+export type RawTable = {
   header: string[];
   headerLine: number;
   firstLine: number;
@@ -487,7 +493,7 @@ function isDelimiterRow(line: string): boolean {
 }
 
 /** Every markdown table in the file, in document order. */
-function readTables(text: string): RawTable[] {
+export function readTables(text: string): RawTable[] {
   const lines = text.split(/\r?\n/);
   const tables: RawTable[] = [];
   for (let i = 0; i < lines.length - 1; i += 1) {
@@ -520,19 +526,19 @@ function cellLinkTarget(cell: string): string | null {
   return match === null ? null : match[1]!.trim();
 }
 
-function cellBacktickToken(cell: string): string | null {
+export function cellBacktickToken(cell: string): string | null {
   const match = /^`([^`]+)`$/.exec(cell.trim());
   return match === null ? null : match[1]!.trim();
 }
 
 /** The path a first-cell reference points at: link target, else a backticked token. */
-function cellReference(cell: string): string | null {
+export function cellReference(cell: string): string | null {
   return cellLinkTarget(cell) ?? cellBacktickToken(cell);
 }
 
-type IndexFamily = "iteration-rows" | "document-rows" | "package-documents";
+export type IndexFamily = "iteration-rows" | "document-rows" | "package-documents";
 
-function detectIndexFamily(header: string[]): IndexFamily | null {
+export function detectIndexFamily(header: string[]): IndexFamily | null {
   const keys = header.map((cell) => cellText(cell).toLowerCase());
   const has = (token: string) => keys.includes(token);
   if (has("iteration")) return "iteration-rows";
@@ -942,6 +948,39 @@ function lineCountOf(text: string): number {
   return lines.length;
 }
 
+/**
+ * The catalog identity of ONE recognized index row, as the reviewed parser
+ * itself records it: an iteration row is identified by its own id, and a
+ * document/package row by its normalized catalog location — resolved through
+ * `resolveRelativePath`, the ONE definition of that normalized form, including
+ * the package owner. An id is never compared against a location: the two are
+ * different kinds of fact and cross-matching them selects an unrelated row.
+ *
+ * `null` when the row declares no usable identity (no backticked iteration id,
+ * no reference, or a reference that leaves its catalog root).
+ */
+export function indexRowIdentity(family: IndexFamily, cells: string[], owner: string | null): string | null {
+  if (family === "iteration-rows") return cellBacktickToken(cells[0] ?? "");
+  const reference = cellReference(cells[0] ?? "");
+  if (reference === null) return null;
+  const trimmed = reference.replace(/^\.\//, "").replace(/\/+$/, "");
+  const resolved = resolveRelativePath(
+    family === "package-documents" && owner !== null ? `${owner}/${trimmed}` : trimmed,
+    "index row path",
+  );
+  return resolved.ok ? resolved.relativePath : null;
+}
+
+/** One recognized table's reviewed row identities, in row order. */
+function reviewedRowIdentities(family: IndexFamily, rows: { cells: string[] }[], owner: string | undefined): string[] {
+  const identities: string[] = [];
+  for (const row of rows) {
+    const identity = indexRowIdentity(family, row.cells, owner ?? null);
+    if (identity !== null) identities.push(identity);
+  }
+  return identities;
+}
+
 /** One index file: recognized tables become proposals, everything else stays. */
 function parseIndexFile(acc: Accumulator, context: StoreContext, source: IndexSource): void {
   const read = readForEvidence(acc, context, source.rootKind, source.relativePath);
@@ -952,6 +991,7 @@ function parseIndexFile(acc: Accumulator, context: StoreContext, source: IndexSo
     const family = detectIndexFamily(table.header);
     if (family === null) continue;
     const header = table.header.map((cell) => cellText(cell)).join(" | ");
+    const reviewedRowIds = reviewedRowIdentities(family, table.rows, source.owner);
     acc.sections.push({
       rootKind: source.rootKind,
       relativePath: source.relativePath,
@@ -961,6 +1001,8 @@ function parseIndexFile(acc: Accumulator, context: StoreContext, source: IndexSo
       sha256: sha256(read.text),
       preservedLines: Math.max(0, lineCount - (table.lastLine - table.firstLine + 1)),
       sourceKey: read.sourceKey,
+      family,
+      rows: reviewedRowIds,
     });
     for (const row of table.rows) {
       if (family === "iteration-rows") parseIterationRow(acc, context, source, read.sourceKey, row, table.header);
@@ -1366,9 +1408,8 @@ async function readLocalCatalog(context: StoreContext): Promise<Map<string, Cata
 
 /**
  * `planCatalogImport(context, inputs)` -- the reviewed-mapping step (§4): the
- * caller supplies the identity/relations it reviewed, the engine re-reads the
- * named sources for the reviewed hashes and reports conflicts and what cannot
- * be recovered. Reads only.
+ * caller supplies the identity/relations it reviewed; source digests are
+ * recorded as provenance.
  */
 export async function planCatalogImport(context: StoreContext, inputs: CatalogImportInput[]): Promise<CatalogImportPlan> {
   if (!Array.isArray(inputs)) throw invalidPlan("inputs must be an array of reviewed import inputs");
@@ -1543,9 +1584,8 @@ function requirePlan(plan: CatalogImportPlan): void {
 }
 
 /**
- * Re-check a reviewed plan against the current sources and the plan's own
- * conflicts. Read-only: the same check `importCatalog` refuses on, exposed so a
- * reviewer can reconcile hashes before writing (§4).
+ * Report source changes since review as provenance; this diagnostic does not
+ * gate `importCatalog`.
  */
 export async function verifyCatalogImport(context: StoreContext, plan: CatalogImportPlan): Promise<CatalogImportVerification> {
   requirePlan(plan);
@@ -1562,30 +1602,18 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
       state: read.state === "ok" ? "changed" : read.state,
     });
   }
-  return { ok: plan.conflicts.length === 0 && drift.length === 0, conflicts: plan.conflicts, drift };
+  return { ok: plan.conflicts.length === 0, conflicts: plan.conflicts, drift };
 }
 
 /**
  * `importCatalog(context, plan, operation)` -- apply a reviewed plan.
  *
- * The reviewed hashes are verified first and a conflict blocks: nothing is
- * written when the plan disagrees with itself or its sources moved. Each
- * proposal is then applied through the shared catalog domain verbs, with a
- * deterministic per-proposal operation id derived from `operation.operationId`,
- * so a retry (or a second call after a crash) replays the applied rows and
- * converges instead of double-writing. No workflow session is created and no
- * index is retired.
- *
- * A mid-plan failure is NEVER a silent prefix (RV-3): the domain verbs commit
- * each applied proposal together with its journal row, so the applied prefix
- * is persisted progress, and the failure is rethrown as an explicit
- * `catalog.import-partial` error naming exactly what applied, which proposal
- * failed, and how to resume (re-run the SAME plan with the SAME operationId —
- * applied proposals replay idempotently from the journal). The verbs are not
- * re-entered inside one caller-managed transaction: each owns its own
- * transaction and journal rules (the P1 boundary the registration journal
- * also keeps), so the resumable journal — not a hand-rolled second writer —
- * is the atomicity story here.
+ * The reviewed hashes are provenance, not an applicability gate. Conflicts
+ * block before writes; proposals then apply through the shared catalog domain
+ * verbs with deterministic per-proposal operation ids so retries converge.
+ * A mid-plan failure is NEVER a silent prefix: applied proposals are journalled
+ * progress and the failure is rethrown with the exact partial state and resume
+ * guidance. Each domain verb owns its transaction and journal rules.
  */
 export async function importCatalog(
   context: StoreContext,
@@ -1603,16 +1631,6 @@ export async function importCatalog(
     throw new CatalogImportError(
       "catalog.import-conflict",
       `the plan carries ${plan.conflicts.length} unresolved conflict(s); no source is preferred silently. First: ${first.message}`,
-    );
-  }
-  const verification = await verifyCatalogImport(context, plan);
-  if (verification.drift.length > 0) {
-    const first = verification.drift[0]!;
-    throw new CatalogImportError(
-      "catalog.import-source-drift",
-      `the reviewed source ${first.sourceKey} is ${first.state} since review ` +
-        `(expected ${first.expectedSha256.slice(0, 12)}, actual ${first.actualSha256 === null ? "none" : first.actualSha256.slice(0, 12)}); ` +
-        `${verification.drift.length} source(s) drifted and nothing was imported`,
     );
   }
 

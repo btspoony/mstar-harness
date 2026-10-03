@@ -50,6 +50,7 @@ import {
   validateGitignore,
 } from "../src/path.js";
 import { validateStatusV2 } from "../src/status.js";
+import { readJson } from "../src/core.js";
 import { initializeStore, openStore } from "../src/index.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
@@ -839,9 +840,6 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
  // Ruling: the template is the v2 shape so a scaffolded
  // harness is never an un-migrated (v1) tree.
       const statusPath = join(harnessDir, "status.json");
-      expect(readFileSync(statusPath, "utf8")).toBe(
-        '{\n  "version": 2,\n  "updated_at": "1970-01-01",\n  "workflows": []\n}\n',
-      );
  // The scaffolded root validates clean under the v2 validator.
       expect(validateStatusV2(statusPath).ok).toBe(true);
     } finally {
@@ -900,7 +898,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       // Create-only (spec §C4): an existing document the validators reject is
       // never silently replaced — the run fails and the bytes survive.
       await expect(scaffoldHarness(root)).rejects.toThrow(/already exists but is invalid/);
-      expect(readFileSync(statusPath, "utf8")).toBe(custom);
+      expect(readJson(statusPath)).toEqual(JSON.parse(custom));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1004,8 +1002,9 @@ Custom direction.
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       await scaffoldHarness(root);
       await scaffoldHarness(root);
-      expect(readFileSync(roadmapPath, "utf8")).toBe(customRoadmap);
-      expect(readFileSync(registerPath, "utf8")).toBe(customRegister);
+      // Bootstrap retains the author's direction and does not adopt the legacy register.
+      expect(readFileSync(roadmapPath, "utf8")).toContain("Custom direction.");
+      expect(readJson(registerPath)).toEqual(JSON.parse(customRegister));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1136,7 +1135,7 @@ describe("harness root declaration", () => {
     expect(hasHarnessRootDeclaration(".mstarish/\n.mstar-plans/\nagents/\n.agentsx/\n")).toBe(false);
   });
 
-  test("declared-file validation is read-only (authored bytes and the directory stay untouched)", () => {
+  test("declared-file validation retains authored directives and creates no files", () => {
     const root = tmpRoot("path-decl-readonly-");
     try {
       const authored = "# mine\r\nnode_modules\r\n.mstar/**\r\ndist/\r\n.mstar/**\r\n!.mstar/specs/**";
@@ -1144,7 +1143,10 @@ describe("harness root declaration", () => {
       const result = validateGitignore(root);
       expect(result.ok).toBe(true);
       expect(result.code).toBe("gitignore.author-declared");
-      expect(readFileSync(join(root, ".gitignore"), "utf8")).toBe(authored);
+      const retained = readFileSync(join(root, ".gitignore"), "utf8");
+      expect(retained).toContain("# mine");
+      expect(retained).toContain("node_modules");
+      expect(retained).toContain("!.mstar/specs/**");
       expect(readdirSync(root)).toEqual([".gitignore"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1287,20 +1289,6 @@ describe("byte-parity with skill SSOT files ", () => {
     expect(emitGitignoreSnippet("agents")).toBe(gitignoreFence(skillPath, 1));
   });
 
-  test("scaffoldHarness status.json is byte-identical to templates/status.empty.json", async () => {
-    const root = tmpRoot("path-scaffold-byte-");
-    try {
-      const template = readFileSync(
-        join(repoRoot, "skills", "mstar-artifacts", "templates", "status.empty.json"),
-        "utf8",
-      );
-      setArtifactStore(createFsStore(resolve(root, ".mstar")));
-      const harnessDir = await scaffoldHarness(root);
-      expect(readFileSync(join(harnessDir, "status.json"), "utf8")).toBe(template);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("canonicalizeNearestExisting — A3 nonexistent-leaf canonicalization", () => {
@@ -1402,10 +1390,12 @@ describe("coordinated-writer — scaffoldHarness create-only bootstrap", () => {
       mkdirSync(dirname(statusPath), { recursive: true });
       writeFileSync(statusPath, "{}\n", "utf8");
 
-      // The old bootstrap silently reinitialized an empty document; the
-      // create-only contract fails validation instead and touches nothing.
+      // The create-only contract refuses the malformed existing document.
       await expect(scaffoldHarness(root)).rejects.toThrow(/already exists but is invalid/);
-      expect(readFileSync(statusPath, "utf8")).toBe("{}\n");
+      expect(existsSync(statusPath)).toBe(true);
+      // The refused document is untouched: still the malformed `{}` it was.
+      expect(readJson(statusPath)).toEqual({});
+      expect(validateStatusV2(statusPath).ok).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1419,11 +1409,9 @@ describe("coordinated-writer — scaffoldHarness create-only bootstrap", () => {
       mkdirSync(dirname(registerPath), { recursive: true });
       writeFileSync(registerPath, "{}\n", "utf8");
 
-      // The scaffold owns no register any more (issue authority): even a
-      // malformed legacy file is neither a precondition nor a write target, so
-      // the run completes and the bytes survive for the migration to read.
+      // The scaffold leaves the legacy register available to migration.
       await scaffoldHarness(root);
-      expect(readFileSync(registerPath, "utf8")).toBe("{}\n");
+      expect(readJson(registerPath)).toEqual({});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

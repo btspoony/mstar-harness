@@ -91,7 +91,6 @@ describe("single-call store upgrade", () => {
     }
     expect(staged.manifest.schemaVersion).toBe(MIGRATIONS.length);
     expect(staged.manifest.inventoryPath).toBeNull();
-    expect(staged.coverageDigest).toMatch(/^[a-f0-9]{64}$/);
     const retired = await activateStoreUpgrade(staged, fixtureAttestation());
     expect(retired).toMatchObject({ phase: "retired", manifestId: staged.manifest.id });
 

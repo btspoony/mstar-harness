@@ -4,6 +4,7 @@ import { withExecutionReadGuard, type StoreContext } from "./store-db.js";
 import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity, type ExecutionIdentityScope } from "./session-identity.js";
 
 const SESSION_WIRE_PREFIX = "exec-session-v1:";
+const SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId", "planId"] as const;
 
 type SessionScope = Omit<ExecutionCaller, "sessionId">;
@@ -81,7 +82,7 @@ export function encodeExecutionSessionRef(ref: ExecutionSessionRef): string {
   return `${SESSION_WIRE_PREFIX}${Buffer.from(bytes, "utf8").toString("base64url")}`;
 }
 
-/** Decode and strictly validate a canonical session reference transport. */
+/** Decode a session reference transport and validate its declared identity fields. */
 export function decodeExecutionSessionRef(wire: string): ExecutionSessionRef {
   if (typeof wire !== "string" || !wire.startsWith(SESSION_WIRE_PREFIX)) {
     throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid wire prefix");
@@ -92,24 +93,17 @@ export function decodeExecutionSessionRef(wire: string): ExecutionSessionRef {
     if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1) throw new Error("invalid base64url");
     const padded = encoded.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (encoded.length % 4)) % 4);
     const bytes = Buffer.from(padded, "base64");
-    const canonicalWire = bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-    if (canonicalWire !== encoded) throw new Error("non-canonical base64url");
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const roundTrip = Buffer.from(text, "utf8");
-    if (!roundTrip.equals(bytes)) throw new Error("invalid utf8");
+    text = SESSION_DECODER.decode(bytes);
   } catch {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid canonical UTF-8 base64url");
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid UTF-8 base64url");
   }
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid canonical JSON");
+    throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid JSON");
   }
   assertRefShape(value);
-  if (serializeExecutionValue(value) !== text) {
-    throw new ExecutionError("execution.canonical-value", "an execution session reference is not canonical JSON");
-  }
   return value;
 }
 

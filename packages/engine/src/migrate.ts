@@ -83,15 +83,15 @@
  * twice (silent overwrite at apply); the plan is refused fail-loud with
  * the conflict list.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
-import { StoreError, openStore, storeDbPath } from "./store-db.js";
+import { openStore, storeDbPath } from "./store-db.js";
 import { CoordinationError, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import {
   isOpenResidual,
@@ -103,7 +103,7 @@ import {
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
   assertDeliveryRegistrationCoherence,
-  stableJson,
+  validateWorkflowSnapshot,
   writeWorkflowSnapshot,
   type WorkflowDeliveryKind,
   type WorkflowLifecycleStatus,
@@ -202,6 +202,8 @@ export type MigrateOptions = {
 export type MigratePlan = {
  /** Resolved harness dir. */
   root: string;
+  /** Caller declarations reused when apply derives the locked current source. */
+  options?: MigrateOptions;
   /**
  * Resolved `{WORKFLOW_DIR}` (Phase-5 F1): the `.mstarc` `[config]
  * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows`. The
@@ -219,14 +221,6 @@ export type MigratePlan = {
  */
   projectDir: string;
   dryRun: boolean;
-  /**
-   * Byte version (`sha256:…`, or `"absent"`) of the source `status.json` this
-   * plan was derived from (spec §C3 source-version CAS). The executor
-   * re-reads the source under the root lock before its first write and
-   * refuses a root whose bytes moved after planning — a still-v1 document
-   * changed by another writer is never silently replaced.
-   */
-  sourceVersion: string;
   /** Root status.json already at `version: 2` -> nothing to plan/apply. */
   alreadyMigrated: boolean;
   /** Human message (no-op reason when `alreadyMigrated`). */
@@ -736,21 +730,18 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     completionPolicy: opts.completionPolicy,
   };
   const statusPath = join(harnessDir, MIGRATE_STATUS_FILE);
- // Payload and byte version come from ONE read: the executor re-checks that
- // version under the root lock (spec §C3), so the plan must record the exact
- // bytes its additive writes were derived from.
   const source = readArtifactBytes(statusPath);
-  const sourceVersion = source?.version ?? "absent";
   const legacy = (source?.payload ?? {}) as StatusDoc;
 
   if (legacy.version === 2) {
     const updatedAt = typeof legacy.updated_at === "string" && legacy.updated_at !== "" ? legacy.updated_at : "1970-01-01";
     return {
       root: harnessDir,
+      options: { ...opts },
       workflowDir,
       projectDir,
       dryRun: opts.dryRun === true,
-      sourceVersion,
+      
       alreadyMigrated: true,
       message: `no-op: ${statusPath} is already at schema version 2 (migrated) \u2014 nothing to do`,
       snapshots: [],
@@ -953,10 +944,10 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 
   return {
     root: harnessDir,
+    options: { ...opts },
     workflowDir,
     projectDir,
     dryRun: opts.dryRun === true,
-    sourceVersion,
     alreadyMigrated: false,
     message: `planned migration of ${snapshots.length} lifecycles (${steps.length} steps)`,
     snapshots,
@@ -973,44 +964,15 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 }
 
 /**
- * Execute a migration plan. Additive-first ordering: the v1 root is archived,
- * workflow snapshots/notes and the project register are written BEFORE the
- * root v2 replacement — the LAST step, the commit point. A legacy roadmap is
- * returned as a transport candidate only. A failure before commit leaves v1
- * intact (re-run applies the same deterministic plan). Re-running on a v2
- * root, or with a `dryRun` plan, is a no-op. Every destination stays inside
- * the harness dir; every snapshot is validated fail-closed inside
- * `writeWorkflowSnapshot` — the writer is the authoritative validator, so
- * the apply loop does not pre-validate (a gate here would run the same O(rows)
- * pass twice per snapshot).
+ * Apply current v1 authority using the preview's caller declarations. Archive
+ * and destination writes precede the root v2 commit point; retry re-derives
+ * current content rather than requiring the old preview's bytes. A v2 root
+ * or dry-run plan is a no-op. Destination paths come from the same validated
+ * planner used by preview, never from caller-edited preview write steps.
  */
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {
     return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes` };
-  }
-  // A single declaration describes ONE delivery identity, so a plan that would
-  // stamp it onto 2+ active standalone lifts is not applicable — the apply
-  // boundary refuses it too (the CLI reports the same condition as usage
-  // before any write), checked first because the operator DID pass a
-  // declaration and the batch split is the actionable reason.
-  if (plan.deliveryKindAmbiguous.length > 0) {
-    throw new Error(
-      `refusing to apply migration: one delivery declaration cannot describe ` +
-        `${plan.deliveryKindAmbiguous.length} active standalone plan lifts (${plan.deliveryKindAmbiguous.join(", ")}) \u2014 ` +
-        `migrate them in batches of one declared lifecycle (CLI: run migrate once per plan, each with its own --delivery-kind)`,
-    );
-  }
-  // A plan that would lift ACTIVE standalone plan snapshots without a declared
-  // delivery kind is not applicable (contract §1/§4a): the apply boundary is
-  // the API caller's guard too — the CLI reports the same condition as usage
-  // before any write, and neither path may create a lifecycle no close could
-  // complete.
-  if (plan.deliveryKindRequired.length > 0) {
-    throw new Error(
-      `refusing to apply migration: ${plan.deliveryKindRequired.length} active standalone plan snapshot(s) ` +
-        `(${plan.deliveryKindRequired.join(", ")}) would be lifted without a declared delivery kind \u2014 ` +
-        `re-plan with an explicit deliveryKind (CLI: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>)`,
-    );
   }
   const statusPath = join(plan.root, MIGRATE_STATUS_FILE);
   const current = readJson(statusPath);
@@ -1018,42 +980,6 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
 
- // Phase-5 F1: actual write targets derive from the RESOLVED layout dirs
- // recorded on the plan (`.mstarc` `workflow_dir` / `project_dir`, else
- // defaults under the harness dir) — the canonical `file` fields stay the
- // default-layout rel names (display/provenance), the resolved dirs are
- // where a custom layout must land. `relative("workflows"|"projects", …)`
- // strips the canonical prefix and re-joins under the resolved dir.
-  const harnessRoot = resolve(plan.root);
-  const workflowRoot = resolve(plan.workflowDir);
-  const projectRoot = resolve(plan.projectDir);
-  if (!isAbsolute(plan.workflowDir) || !isAbsolute(plan.projectDir)) {
-    throw new Error(
-      `refusing to apply migration: plan workflowDir/projectDir must be absolute (got ${JSON.stringify(plan.workflowDir)} / ${JSON.stringify(plan.projectDir)})`,
-    );
-  }
-
- // Defense-in-depth at the write boundary (Phase-5 F1
- // extended): the planner already refuses unsafe ids via
- // assertSafePathComponent, but apply is a public API — re-enforce the
- // module invariant ("no fs writes outside the harness dir or the
- // resolved workflow/project dirs") on every planned destination so a
- // hand-built plan can never escape `plan.root` via a relative path.
-  const allDestinations = [
-    plan.archive.file,
-    ...plan.snapshots.map((snapshot) => snapshot.file),
-    ...plan.notesFiles.map((notes) => notes.file),
-    ...(plan.register !== null ? [plan.register.file] : []),
-  ];
-  for (const destination of allDestinations) {
-    const resolvedDest = resolve(join(plan.root, destination));
-    const inside = (dir: string): boolean => resolvedDest === dir || resolvedDest.startsWith(`${dir}${sep}`);
-    if (!inside(harnessRoot) && !inside(workflowRoot) && !inside(projectRoot)) {
-      throw new Error(
-        `refusing to apply migration: destination escapes the harness dir (${JSON.stringify(destination)}) \u2014 every write must stay under ${JSON.stringify(plan.root)}, the workflow dir (${JSON.stringify(plan.workflowDir)}) or the project dir (${JSON.stringify(plan.projectDir)})`,
-      );
-    }
-  }
 
   const store = getArtifactStore();
 
@@ -1068,27 +994,14 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
   await assertNoActiveStoreForLegacyLayout(plan.root);
 
  // The apply is a multi-document write (archive → snapshots → notes →
- // register → root v2 replacement), so it runs under the ROOT lock in the
- // mandated acquisition order root → snapshot → register (spec §C3). The
- // lock prevents root writers and concurrent migrations from interleaving
- // with commit, and makes the source-version re-check atomic with all writes.
- // `withStatusWriteLock` is not reentrant: nothing inside may re-take it.
-  return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store, workflowRoot, projectRoot));
+ // register → root v2 replacement), so it runs under the ROOT lock. The lock
+ // prevents root writers and concurrent migrations from interleaving with
+ // commit. Schema version is a field-value no-op, not a content fingerprint.
+  return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store));
 }
 
 /**
- * Raw-byte ownership guard for migration's non-JSON write targets (archive
- * copy and JSONL notes): absent -> exclusive create; byte-identical (a
- * previous run of this same deterministic plan) -> converge untouched;
- * divergent foreign bytes -> refused under the root lock, never overwritten.
- * comparison is raw bytes — these files are preserved verbatim, never
- * re-serialized through `stableJson`.
- */
-/**
- * Wrap a raw fs failure on a migration target in the coordination.*
- * vocabulary — every fs error leaving {@link writeRawMigrateTarget} carries
- * the envelope; thrown before the root v2 replacement, so refuse-before-
- * commit semantics are unchanged.
+ * Wrap a raw fs failure on a migration target in the coordination vocabulary.
  */
 function rawTargetStoreError(filePath: string, error: unknown): CoordinationError {
   return new CoordinationError(
@@ -1098,34 +1011,24 @@ function rawTargetStoreError(filePath: string, error: unknown): CoordinationErro
   );
 }
 
-function writeRawMigrateTarget(filePath: string, expected: Buffer): void {
+function writeRawMigrateTarget(filePath: string, content: Buffer): void {
   try {
     mkdirSync(dirname(filePath), { recursive: true });
   } catch (error) {
     throw rawTargetStoreError(filePath, error);
   }
   try {
-    writeFileSync(filePath, expected, { flag: "wx" });
+    writeFileSync(filePath, content, { flag: "wx" });
     return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw rawTargetStoreError(filePath, error);
-  }
- // Exclusive-create collision: re-read and compare raw bytes — never overwrite.
-  let existing: Buffer;
-  try {
-    existing = readFileSync(filePath);
-  } catch (error) {
-    // EEXIST but the re-read failed (the "existing target" is e.g. a
-    // directory, where O_EXCL reports EEXIST before EISDIR can).
-    throw rawTargetStoreError(filePath, error);
-  }
-  if (Buffer.compare(existing, expected) !== 0) {
-    throw new CoordinationError(
-      "coordination.version-conflict",
-      `refusing to apply migration: ${filePath} already exists with different content \u2014 migration is additive-only`,
-      { path: filePath },
-    );
-  }
+    try {
+      if (!statSync(filePath).isFile()) throw rawTargetStoreError(filePath, new Error("existing target is not a regular file"));
+    } catch (statError) {
+      if (statError instanceof CoordinationError) throw statError;
+      throw rawTargetStoreError(filePath, statError);
+    }
+}
 }
 
 /**
@@ -1158,76 +1061,77 @@ async function assertNoActiveStoreForLegacyLayout(harnessDir: string): Promise<v
 }
 
 /**
- * Locked half of `applyMigratePlan`: the source byte-version re-check plus
- * the whole additive phase and the root v2 replacement. Assumes the root
- * lock on `statusPath` is held (see the caller) and performs ZERO writes
- * before that re-check passes.
+ * Locked half of `applyMigratePlan`: the additive phase and root v2
+ * replacement. Assumes the root lock on `statusPath` is held.
  */
 async function applyMigratePlanLocked(
-  plan: MigratePlan,
+  reviewed: MigratePlan,
   statusPath: string,
   store: ArtifactStore,
-  workflowRoot: string,
-  projectRoot: string,
 ): Promise<MigrateResult> {
-  const workflowTargetOf = (canonicalFile: string): string => join(workflowRoot, relative("workflows", canonicalFile));
-  const projectTargetOf = (canonicalFile: string): string => join(projectRoot, relative("projects", canonicalFile));
 
- // Source byte-version CAS (spec §C3): the plan records the byte version of
- // the exact `status.json` read it was derived from. Under the root lock, a
- // root a concurrent migrate already committed is the idempotent no-op;
- // any other movement of those bytes is refused before the first write, so
- // the archived copy and every additive write always match the source the
- // plan describes.
   const source = readArtifactBytes(statusPath);
   const sourcePayload = source?.payload;
   if (isPlainObject(sourcePayload) && sourcePayload.version === 2) {
     return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
-  const sourceVersion = source?.version ?? "absent";
-  if (sourceVersion !== plan.sourceVersion) {
-    throw new CoordinationError(
-      "coordination.version-conflict",
-      `refusing to apply migration: ${statusPath} changed since the plan was built (planned ${plan.sourceVersion}, found ${sourceVersion}) \u2014 re-run the plan against the current root`,
-      { path: statusPath, expected: plan.sourceVersion, actual: sourceVersion },
+
+  // Preview data is diagnostic; derive the destinations from current authority.
+  const plan = migrateHarnessTree(reviewed.root, reviewed.options);
+  if (plan.deliveryKindAmbiguous.length > 0) {
+    throw new Error(
+      `refusing to apply migration: one delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts ` +
+        `(${plan.deliveryKindAmbiguous.join(", ")}); migrate them in batches of one declared lifecycle (CLI: --delivery-kind)`,
     );
   }
+  if (plan.deliveryKindRequired.length > 0) {
+    throw new Error(
+      `refusing to apply migration: ${plan.deliveryKindRequired.length} active standalone plan snapshot(s) ` +
+        `(${plan.deliveryKindRequired.join(", ")}) would be lifted without a declared delivery kind; ` +
+        `re-plan with an explicit deliveryKind (CLI: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>)`,
+    );
+  }
+  const workflowTargetOf = (file: string): string => join(plan.workflowDir, relative("workflows", file));
+  const projectTargetOf = (file: string): string => join(plan.projectDir, relative("projects", file));
 
- // 1. Archive the v1 root BEFORE anything else touches it (never deleted
- // without that copy). The copy is an owned raw target like the ones
- // below: the CAS-checked v1 source bytes (this read sits under the same
- // root lock the CAS ran under) exclusively create the archive, a
- // byte-identical leftover converges, a foreign archive is refused —
- // never overwritten.
+ // 1. Archive the v1 root before the commit point; an existing archive is left
+ // untouched and never compared with current bytes.
   writeRawMigrateTarget(join(plan.root, plan.archive.file), readFileSync(statusPath));
 
- // 2. Workflow snapshots (additive, create-only). Validation happens inside
- // writeWorkflowSnapshot — the writer fails closed before any write, so
- // there is no apply-loop gate (writer validation is
- // authoritative; a pre-write gate here would run the same O(rows) pass
- // twice per snapshot). A missing snapshot is created with locked `absent`
- // semantics; an existing one is accepted ONLY when it is byte-equivalent to
- // the planned payload (a previous run of this same deterministic plan), so
- // a partial apply converges on re-run while a foreign snapshot is refused.
+ // 2. Refresh only destinations with this workflow identity. JSON is still the
+ // authority before the root commit, including on retry after a partial apply.
   for (const snapshot of plan.snapshots) {
     const snapshotDir = dirname(workflowTargetOf(snapshot.file));
     const snapshotPath = join(snapshotDir, WORKFLOW_SNAPSHOT_FILE);
-    const existing = readArtifactBytes(snapshotPath);
-    if (existing === undefined) {
+    if (!existsSync(snapshotPath)) {
       await writeWorkflowSnapshot(snapshot.data, snapshotDir, { createOnly: true });
       continue;
     }
-    if (stableJson(existing.payload) !== stableJson(snapshot.data)) {
-      throw new CoordinationError(
-        "coordination.version-conflict",
-        `refusing to apply migration: ${snapshotPath} already exists with different content \u2014 migration is additive-only`,
-        { path: snapshotPath, actual: existing.version },
+    await withStatusWriteLock(snapshotPath, async () => {
+      const existing = readJson(snapshotPath);
+      if (existing.id !== snapshot.id || existing.type !== snapshot.type || existing.coordination !== undefined) {
+        throw new CoordinationError(
+          "coordination.store",
+          `migration target ${snapshotPath} belongs to another or coordinated workflow; configure a separate workflow_dir in .mstarc and retry migrate`,
+          { path: snapshotPath },
+        );
+      }
+      const payload = { ...existing, ...snapshot.data } as WorkflowSnapshot;
+      // A source-owned ended_at cannot survive a running current lift.
+      if (snapshot.data.ended_at === undefined) delete payload.ended_at;
+      const gate = validateWorkflowSnapshot(payload);
+      if (!gate.ok) throw new Error(`refusing to write invalid workflow snapshot: ${gate.violations.map((v) => v.message).join("; ")}`);
+      assertFsStorePath(store, { kind: "snapshot", key: snapshot.id }, snapshotPath);
+      // A v1 root still owns these uncoordinated migration destinations. This
+      // is not a runtime phase projection: all current source rows are lifted.
+      await withProtectedWrite(snapshotPath, "put", () =>
+        store.put({ kind: "snapshot", key: snapshot.id, payload }),
       );
-    }
+    });
   }
 
- // 3. Notes ledgers (additive; raw-byte ownership guard — the JSONL bytes
- // are preserved verbatim, never re-serialized).
+ // 3. Notes ledgers are create-only destinations and retain their planned
+ // contents exactly; an existing regular file is left untouched.
   for (const notes of plan.notesFiles) {
     const content = notes.lines.length > 0 ? `${notes.lines.join("\n")}\n` : "";
     writeRawMigrateTarget(workflowTargetOf(notes.file), Buffer.from(content, "utf8"));
@@ -1256,34 +1160,19 @@ async function applyMigratePlanLocked(
       const filePath = projectTargetOf(plan.register.file);
       mkdirSync(dirname(filePath), { recursive: true });
       await withStatusWriteLock(filePath, async () => {
-        const existing = readArtifactBytes(filePath);
-        if (existing === undefined) {
+        if (!existsSync(filePath)) {
           await withProtectedWrite(filePath, "put", () => {
             writeJson(filePath, registerData);
           });
           return;
         }
- // Additive-only: an existing register is accepted ONLY when it is
- // byte-equivalent to the planned payload; anything else is refused.
-        if (stableJson(existing.payload) !== stableJson(registerData)) {
-          throw new CoordinationError(
-            "coordination.version-conflict",
-            `refusing to apply migration: ${filePath} already exists with different content \u2014 migration is additive-only`,
-            { path: filePath, actual: existing.version },
-          );
-        }
+        
       });
     }
   }
 
- // 6. Root v2 replacement — the COMMIT POINT (last step), already serialized
- // with the root writers by the caller's root lock; the source version
- // re-check at the top of this function turned a stale plan into a no-op
- // before the first write. The gate runs HERE (not before the additive
- // phase) because it validates the planned v2 root against the snapshots
- // this same run just wrote; the write itself goes through the private
- // protected-write context (a raw writeJson here would bypass the store
- // boundary).
+ // 6. Root v2 replacement — the commit point, serialized with root writers.
+ // The schema-version check above preserves idempotence after migration.
   const rootGate = validateStatusV2(plan.rootV2.data, { harnessDir: plan.root });
   if (!rootGate.ok) {
     throw new Error(`refusing to apply migration: invalid v2 root: ${rootGate.violations.map((v) => v.message).join("; ")}`);

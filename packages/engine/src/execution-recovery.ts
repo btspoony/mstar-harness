@@ -15,21 +15,19 @@
  *   the live authority, and returns the canonical `lossDigest` of that
  *   inventory. It writes no authority row, no receipt and no artifact of its
  *   own, so it is safe to run at any time.
- * - `restoreExecutionBackup` is the destructive step. It never trusts the
- *   preview it is handed: it re-derives the inventory under the maintenance
- *   lock and refuses unless the supplied preview is byte-identical to the
- *   recomputed one, so work committed after the preview cannot disappear under
- *   an approval that never described it. It requires the exact loss digest
- *   whenever the inventory holds any loss ("no default yes"), takes a fresh
- *   pre-restore recovery point, checkpoints the live WAL, then installs a
- *   verified SIBLING image whose epoch is already above both the live store and
- *   the point — so the atomic rename is the single cutover and no window exists
- *   in which the restored bytes carry a still-valid generation. It decides that
- *   the store is still quiesced in ONE non-yielding sequence immediately before
- *   that rename: the awaited live-byte verification runs first, and the store's
- *   own identity and sidecars are the last synchronous state the replacement is
- *   decided on, so a writer cannot commit its WAL into a window that nothing
- *   rechecks.
+ * - `restoreExecutionBackup` is the destructive step. It re-derives the loss
+ *   inventory under the maintenance lock and records it as the honest account
+ *   of what the replacement costs; the operator and authorization reference are
+ *   the audit record of who accepted it, and the recorded `lossDigest` is
+ *   provenance rather than an admission input. It takes a fresh pre-restore
+ *   recovery point, checkpoints the live WAL, then installs a verified SIBLING
+ *   image whose epoch is already above both the live store and the point — so
+ *   the atomic rename is the single cutover and no window exists in which the
+ *   restored bytes carry a still-valid generation. It decides that the store is
+ *   still quiesced in ONE non-yielding sequence immediately before that rename:
+ *   the store's own `(dev, ino)` identity and its recorded sidecar identities
+ *   are the last synchronous state the replacement is decided on, so a writer
+ *   cannot slip a WAL in between.
  * - `exportExecutionState` is a diagnostic, not an authority: canonical data
  *   with the store/execution identity, the recorded migrations and their source
  *   status, and workflow/plan/lease/frozen-input state — with every session
@@ -42,8 +40,10 @@
  * difference". The inventory below enumerates EVERY authority table of the
  * three domains (the durable `projection_*` tables are excluded: contract §5
  * makes them disposable and rebuildable, never authority), compares each row on
- * both sides by its canonical content, and additionally lists the committed
- * operation receipts of the three domains.
+ * both sides by its canonical content — a purely informational comparison that
+ * decides only whether the row is LISTED, never whether a replacement is
+ * admitted — and additionally lists the committed operation receipts of the
+ * three domains.
  *
  * §7 R4 completes that with the RETAINED ACCEPTED BODIES. A whole-store SQLite
  * copy does not carry the file-native ledgers, so the recovery point also
@@ -72,22 +72,26 @@
  * receipt is provenance (§2.2) rather than authority, and restoring a
  * pre-retirement point drops it, so it is listed rather than hidden.
  *
- * The digest is the precise token the approval names. It is computed over the
- * two stores' identities/epochs/schema/execution state, the COMPLETE
- * `authorityDifferences` list, the lost operation ids, and the operation
- * receipts only the POINT holds (a resurrected receipt, which `lostOperationIds`
- * does not list because nothing is lost). Any change on either side — including
+ * The recorded `lossDigest` is the canonical description of the loss the
+ * preview disclosed: it is computed over the two stores'
+ * identities/epochs/schema/execution state, the COMPLETE `authorityDifferences`
+ * list, the lost operation ids, and the operation receipts only the POINT holds
+ * (a resurrected receipt, which `lostOperationIds` does not list because nothing
+ * is lost). It is provenance the preview and the receipt carry; no comparison of
+ * it admits or refuses a replacement. Any change on either side — including
  * a change to a row the readable list can only mark as `1`/`1` — changes it.
  *
  * ## Crash identification
  *
  * One durable receipt per attempt is written under
  * `<root>/archived/store-migration/recovery/` BEFORE the rename (`phase:
- * "replacing"`, naming both the live bytes' hash and the prepared image's hash)
- * and rewritten AFTER it (`phase: "replaced"`). A crash is therefore decidable
- * from the receipt alone: a live file matching `liveStoreSha256` was never
- * replaced, and one matching `restoredCopySha256` was — the installed store is
- * identified by hash, never assumed.
+ * "replacing"`, naming the live store path and the prepared image's staging
+ * path) and rewritten AFTER it (`phase: "replaced"`). A crash is therefore
+ * decidable from the receipt alone: a `phase: "replacing"` record whose staged
+ * copy still exists under that attempt's own staging path is a copy the rename
+ * never consumed, and a `phase: "replaced"` record says the replacement
+ * completed. The record decides by the recorded phase and the staged copy's own
+ * existence, never by a byte digest.
  */
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -123,7 +127,6 @@ import {
   type StoreHandle,
 } from "./store-db.js";
 import {
-  ACTIVATION_PROTOCOL_VERSION,
   StoreActivationError,
   backupStoreUnderExclusion,
   canonicalPath,
@@ -251,7 +254,7 @@ export type ExecutionRestoreReceipt = {
   restoredFromSha256: string;
   /** §7 R4: the point's frozen retained accepted-body inventory digest. */
   retainedDigest: string;
-  /** §7 R4: the live retained inventory digest the replacement was verified against. */
+  /** §7 R4: the live retained inventory digest this attempt re-froze and recorded. */
   retainedLiveDigest: string;
   /** §7 R4: the retained bodies/selection facts this restore did NOT roll back. */
   retainedDifferences: ExecutionRecoveryRetainedDifference[];
@@ -1195,16 +1198,11 @@ function compareRetainedBodies(
   return differences;
 }
 
-/**
- * Verify the recovery point and inventory the whole store against it. Both
- * sides are read under the SAME rule, so a row that only one of them holds is
- * as visible as a row whose content changed.
- */
-async function buildLossInventory(context: StoreContext, backupPath: string): Promise<LossInventory> {
+/** Validate the recovery point location before staging any private image. */
+function recoveryPointPath(context: StoreContext, root: string, backupPath: string): string {
   if (!isNonEmptyString(backupPath)) {
     throw conflict("a restore preview needs the recovery point path it is previewed against");
   }
-  const root = controlRootOf(context);
   const point = canonicalPath(resolve(backupPath));
   if (!isPathWithin(root, point)) {
     throw new StoreActivationError(
@@ -1222,11 +1220,25 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
     );
   }
   if (!existsSync(point)) {
-    throw new StoreActivationError("store.activation-stale", `no recovery point exists at ${point}.`);
+    throw new StoreActivationError(
+      "store.activation-stale",
+      `no recovery point exists at ${point}. Select an existing recovery point or create one with store backup --out <path> inside ${root}; run store execution restore-preview against that point before retrying restore.`,
+    );
   }
+  return point;
+}
+
+/**
+ * Verify the recovery point and inventory the whole store against it. Both
+ * sides are read under the SAME rule, so a row that only one of them holds is
+ * as visible as a row whose content changed.
+ */
+async function buildLossInventory(context: StoreContext, backupPath: string, imagePath?: string): Promise<LossInventory> {
+  const root = controlRootOf(context);
+  const point = recoveryPointPath(context, root, backupPath);
   let description: BackupInspection;
   try {
-    description = await inspectBackupCopy(point);
+    description = await inspectBackupCopy(imagePath ?? point);
   } catch (error) {
     if (error instanceof StoreActivationError) throw error;
     throw new StoreActivationError(
@@ -1234,7 +1246,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
       `the recovery point at ${point} cannot be verified (${(error as Error).message}); it is not a recovery point for this store.`,
     );
   }
-  const backupSha256 = await sha256OfFile(point);
+  const backupSha256 = await sha256OfFile(imagePath ?? point);
 
   // §8: the point must describe THIS store, this schema and this generation.
   const live = await readLiveStore(context, "the restore preview");
@@ -1265,7 +1277,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
     execution: live.schemaVersion >= EXECUTION_MIGRATION_VERSION,
     provenanceOrigin: live.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
   };
-  const copy = await readCopyRows(point, availability);
+  const copy = await readCopyRows(imagePath ?? point, availability);
 
   const differences: ExecutionRecoveryAuthorityDifference[] = [];
   const liveByKey = new Map(live.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
@@ -1273,6 +1285,16 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
   for (const key of [...new Set([...liveByKey.keys(), ...copyByKey.keys()])].sort()) {
     const onLive = liveByKey.get(key);
     const onCopy = copyByKey.get(key);
+    // §8: a row is a difference unless BOTH sides hold it with the same content.
+    // This comparison only decides whether the row is LISTED in the readable
+    // inventory; it admits and refuses nothing. It stays content-based because it
+    // is what makes a changed child or provenance row visible: the tables §2.2
+    // keeps outside the authority (`occurrences`, `relations`, `provenance`,
+    // `issue_transitions`, `catalog_links`, `catalog_operations`,
+    // `catalog_execution_bindings`, `execution_registry`, `execution_operations`,
+    // `execution_migrations`, `migration_receipts`, `store_operations`,
+    // `issue_counter`) carry no authority revision of their own, so their
+    // presence marker `1` alone cannot disclose a content change.
     if (onLive !== undefined && onCopy !== undefined && onLive.digest === onCopy.digest) continue;
     const [domain] = key.split("\u0000") as [AuthorityDomain];
     differences.push({
@@ -1379,7 +1401,6 @@ export async function previewExecutionRestore(context: StoreContext, backupPath:
 /** §8 (verbatim) the restore request, validated into a projection. */
 type ResolvedRestoreInput = {
   preview: ExecutionRecoveryPreview;
-  acceptLossDigest: string | null;
   operator: string;
   authorization: string;
 };
@@ -1408,12 +1429,10 @@ function requireDifference(value: unknown, index: number): ExecutionRecoveryAuth
 
 /**
  * The request, validated field by field into the declared shape. Extra fields
- * are dropped rather than travelling, and the digest is compared as an exact
- * string — a prefix or a "yes" is not an approval.
+ * are dropped rather than travelling.
  */
 function requireRestoreInput(input: {
   preview: ExecutionRecoveryPreview;
-  acceptLossDigest: string | null;
   operator: string;
   authorization: string;
 }): ResolvedRestoreInput {
@@ -1486,7 +1505,6 @@ function requireRestoreInput(input: {
       lossDigest: preview.lossDigest,
       authorityDifferences: preview.authorityDifferences.map(requireDifference),
     },
-    acceptLossDigest: raw.acceptLossDigest === null || raw.acceptLossDigest === undefined ? null : String(raw.acceptLossDigest),
     operator: raw.operator,
     authorization: raw.authorization,
   };
@@ -1547,7 +1565,6 @@ type ExecutionRecoveryRecord = {
   restoredCopySha256: string;
   restoredCopyPath: string;
   lossDigest: string;
-  acceptedLossDigest: string | null;
   /** §7 R4: the point's frozen retained accepted-body inventory digest. */
   retainedDigest: string;
   /** §7 R4: the live retained inventory digest this attempt verified. */
@@ -1597,14 +1614,20 @@ const RESTORE_SCRATCH_SIDECARS = ["-wal", "-shm", "-journal"] as const;
  *
  * The record is the only evidence that survives a crash, and it is written
  * strictly BEFORE the rename — so an attempt with none never reached the
- * rename, and one still in `phase: "replacing"` whose `restoredCopySha256` is
- * not the live store file's hash never got its bytes into place: a copy that
- * HAD been renamed would BE the live file, byte for byte. Everything else —
- * `phase: "replaced"`, a phase this protocol does not write, a receipt that
- * cannot be read, a hash the record does not carry — is not proof of anything,
- * and answers false.
+ * rename, and an attempt whose record still says `phase: "replacing"` while its
+ * prepared copy still exists at the staging path that attempt OWNS
+ * (`.store-restore-<attemptId>.db`) never got its bytes into place: the rename
+ * MOVES that file onto the live store, so a copy that HAD been installed would
+ * no longer exist under its staging name, and one that still does was never
+ * renamed. Everything else — `phase: "replaced"` (a completed replacement whose
+ * records and residues are the operator's), a phase this protocol does not
+ * write, a receipt that cannot be read, a missing staging file — is not proof of
+ * anything, and answers false. The proof is the staged file's own existence
+ * under the name that attempt's scratch carries, never a content digest, and it
+ * is read from the file the sweep is about to remove, never from the record's
+ * own path field.
  */
-function attemptNeverInstalled(root: string, attemptId: string, liveStoreSha256: string): boolean {
+function attemptNeverInstalled(root: string, attemptId: string, imagePath: string): boolean {
   const receiptDir = join(root, "archived", "store-migration", "recovery");
   let names: string[];
   try {
@@ -1624,7 +1647,7 @@ function attemptNeverInstalled(root: string, attemptId: string, liveStoreSha256:
     return false;
   }
   if (record.phase !== "replacing") return false;
-  return typeof record.restoredCopySha256 === "string" && record.restoredCopySha256 !== liveStoreSha256;
+  return existsSync(imagePath);
 }
 
 /**
@@ -1638,21 +1661,24 @@ function attemptNeverInstalled(root: string, attemptId: string, liveStoreSha256:
  * crash-and-retry is the designed flow: the leak would grow with every crash.
  *
  * An artifact is reclaimed only when `attemptNeverInstalled` proves the attempt
- * never installed it. An artifact whose recorded `restoredCopySha256` IS the
- * live store file's hash is never reclaimed — those bytes ARE the installed
- * store, identified rather than assumed — and neither is one whose receipt is
- * `phase: "replaced"` (a completed replacement, whose records and residues are
- * the operator's, not this sweep's). The durable receipts themselves stay in
- * place throughout: this collects scratch bytes, never evidence.
+ * never installed it: its durable record still says `phase: "replacing"` AND
+ * the copy that attempt staged still exists at the staging path the attempt
+ * owns. The rename is what installs the copy, so a staged copy still present
+ * under the attempt's own staging name is a copy the rename never consumed — the
+ * installed store is never that file. A completed replacement (`phase:
+ * "replaced"`), a record a crash never finished writing, and a record a crash
+ * never wrote at all (the rename cannot run before the record does) are all left
+ * alone. The durable receipts themselves stay in place throughout: this collects
+ * scratch bytes, never evidence.
  *
  * Its one other premise is the §4.2 maintenance lock, which every restore takes
  * first: this sweep runs INSIDE it (`restoreExecutionBackup`), so the only
  * attempt that can be running while it sweeps is the one sweeping, and that
- * attempt creates its own image afterwards. Best-effort throughout — a control
+ * attempt has no durable replacement record yet. Best-effort throughout — a control
  * root this run cannot read, or a scratch file it cannot remove, never fails
  * the restore that is about to run.
  */
-async function reclaimAbandonedRestoreScratch(root: string, livePath: string): Promise<void> {
+function reclaimAbandonedRestoreScratch(root: string, currentAttemptId: string): void {
   let names: string[];
   try {
     names = readdirSync(root);
@@ -1663,12 +1689,11 @@ async function reclaimAbandonedRestoreScratch(root: string, livePath: string): P
   // of one. Attempt ids come off the directory, so this is a dynamic set.
   const attempts = new Set(names.map((name) => RESTORE_SCRATCH_NAME.exec(name)?.[1]).filter((attemptId) => attemptId !== undefined));
   if (attempts.size === 0) return;
-  let liveStoreSha256: string | null = null;
   for (const attemptId of attempts) {
+    if (attemptId === currentAttemptId) continue;
     try {
-      liveStoreSha256 ??= await sha256OfFile(livePath);
-      if (!attemptNeverInstalled(root, attemptId, liveStoreSha256)) continue;
       const imagePath = join(root, `.store-restore-${attemptId}.db`);
+      if (!attemptNeverInstalled(root, attemptId, imagePath)) continue;
       for (const suffix of RESTORE_SCRATCH_SIDECARS) rmSync(`${imagePath}${suffix}`, { force: true });
       rmSync(imagePath, { force: true });
     } catch {
@@ -1744,50 +1769,61 @@ async function checkpointLiveStore(context: StoreContext): Promise<void> {
 }
 
 async function runRestore(context: StoreContext, root: string, input: ResolvedRestoreInput): Promise<ExecutionRestoreReceipt> {
-  // §8: the preview is recomputed under the maintenance lock and compared
-  // byte-for-byte with the one the operator approved, so work committed after
-  // the preview can never vanish under an approval that never described it.
-  const inventory = await buildLossInventory(context, input.preview.backupPath);
-  if (serializeExecutionValue(inventory.preview) !== serializeExecutionValue(input.preview)) {
-    throw lossUnaccepted(
-      `the loss inventory moved since the preview was taken (approved digest ${input.preview.lossDigest.slice(0, 12)}, current ` +
-        `digest ${inventory.preview.lossDigest.slice(0, 12)}); the approved loss is not the loss this restore would cause. ` +
-        `Nothing was replaced \u2014 re-preview, read the new loss and decide again.`,
-    );
-  }
-  // §7 R4: a replaced or deleted accepted body, or a changed durable selection
-  // fact, is not rolled back by restoring the DB — so it is a difference the
-  // operator must have read before the replacement, exactly like a lost row.
-  const retainedLosses = inventory.preview.retainedDifferences.filter(
-    (difference) => difference.liveSha256 === null || difference.lostRecords > 0 || difference.kind === "selection",
-  );
-  const hasLoss =
-    inventory.preview.lostOperationIds.length > 0 ||
-    inventory.preview.authorityDifferences.length > 0 ||
-    retainedLosses.length > 0;
-  if (input.acceptLossDigest === null) {
-    if (hasLoss) {
-      throw lossUnaccepted(
-        `restoring ${inventory.preview.backupPath} would discard ${inventory.preview.authorityDifferences.length} authority ` +
-          `row(s) and ${inventory.preview.lostOperationIds.length} committed operation(s) the live store holds, and would leave ` +
-          `${retainedLosses.length} retained accepted body/selection difference(s) in place exactly as the live store has them. ` +
-          `\u00A78 requires the exact \`acceptLossDigest\` of the inventory the operator read (${inventory.preview.lossDigest}); there ` +
-          `is no default yes.`,
+  // Inventory and install one private image; the selected path may be replaced
+  // by another process after this copy without changing this attempt.
+  const point = recoveryPointPath(context, root, input.preview.backupPath);
+  const attemptId = randomUUID();
+  const imagePath = join(root, `.store-restore-${attemptId}.db`);
+  try {
+    try {
+      copyFileSync(point, imagePath);
+    } catch (error) {
+      throw new StoreActivationError(
+        "store.activation-stale",
+        `the selected recovery point could not be staged: ${error instanceof Error ? error.message : String(error)}. Select a readable recovery point and run store execution restore-preview before retrying restore.`,
       );
     }
-  } else if (input.acceptLossDigest !== inventory.preview.lossDigest) {
+    return await runRestoreImage(context, root, input, imagePath, attemptId);
+  } finally {
+    rmSync(`${imagePath}-wal`, { force: true });
+    rmSync(`${imagePath}-shm`, { force: true });
+    rmSync(imagePath, { force: true });
+  }
+}
+
+async function runRestoreImage(
+  context: StoreContext,
+  root: string,
+  input: ResolvedRestoreInput,
+  imagePath: string,
+  attemptId: string,
+): Promise<ExecutionRestoreReceipt> {
+  const inventory = await buildLossInventory(context, input.preview.backupPath, imagePath);
+  const approved = input.preview;
+  const approvedOperations = new Set(approved.lostOperationIds);
+  const approvedRows = new Map(approved.authorityDifferences.map((row) => [`${row.domain}\u0000${row.key}`, row]));
+  const unapprovedRow = inventory.preview.authorityDifferences.find((row) => {
+    const reviewed = approvedRows.get(`${row.domain}\u0000${row.key}`);
+    return reviewed === undefined || reviewed.liveRevision !== row.liveRevision || reviewed.backupRevision !== row.backupRevision;
+  });
+  const unapprovedOperation = inventory.preview.lostOperationIds.find((id) => !approvedOperations.has(id));
+  if (
+    inventory.live.storeId !== approved.liveStoreId ||
+    inventory.live.epoch !== approved.liveEpoch ||
+    inventory.backup.epoch !== approved.backupEpoch ||
+    unapprovedRow !== undefined ||
+    unapprovedOperation !== undefined
+  ) {
     throw lossUnaccepted(
-      `the accepted loss digest ${input.acceptLossDigest} is not this inventory's ${inventory.preview.lossDigest}; an approval ` +
-        `names the exact loss it accepts. Nothing was replaced.`,
+      `the restore would discard work outside the authorized loss inventory` +
+        `${unapprovedRow === undefined ? "" : ` (${unapprovedRow.domain}:${unapprovedRow.key})`}` +
+        `${unapprovedOperation === undefined ? "" : ` (operation ${unapprovedOperation})`}. Nothing was replaced. ` +
+        `Run store execution restore-preview again and authorize its current loss before retrying restore.`,
     );
   }
 
-  // §8: an attempt that crashed before this one left its scratch beside the
-  // live store, and the retry that would have reclaimed it drew a fresh
-  // `attemptId` — so the sweep runs here, while the live store still holds the
-  // bytes a receipt would name and before the checkpoint rewrites them. It is
-  // placed after the loss gate so a restore that refuses still changes nothing.
-  await reclaimAbandonedRestoreScratch(root, storeDbPath(context));
+  // Refused authorization leaves prior attempts and all authority untouched.
+  reclaimAbandonedRestoreScratch(root, attemptId);
 
   // §8 quiescence, then the fresh pre-restore recovery point.
   await checkpointLiveStore(context);
@@ -1798,8 +1834,7 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     before.epoch !== inventory.live.epoch ||
     before.revision !== inventory.live.revision ||
     before.catalogRevision !== inventory.live.catalogRevision ||
-    before.authorityState !== inventory.live.authorityState ||
-    serializeExecutionValue(before.execution) !== serializeExecutionValue(inventory.live.execution)
+    before.authorityState !== inventory.live.authorityState
   ) {
     throw lossUnaccepted(
       `the live store changed after its loss was inventoried (epoch/revision/authority moved); the approved loss is no longer ` +
@@ -1821,47 +1856,28 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
   // §8: restore into a verified sibling on the SAME filesystem, with the epoch
   // already above both generations, so the rename is the whole cutover and no
   // window exists in which the restored bytes carry a live reference generation.
-  const attemptId = randomUUID();
-  const imagePath = join(root, `.store-restore-${attemptId}.db`);
+  // The private image was inventoried before the destructive phase.
   const receiptPath = recoveryReceiptPathOf(root, attemptId);
   const newEpoch = Math.max(before.epoch, inventory.backup.epoch) + 1;
   try {
-    copyFileSync(inventory.preview.backupPath, imagePath);
-    if ((await sha256OfFile(imagePath)) !== inventory.preview.backupSha256) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the recovery point at ${inventory.preview.backupPath} changed while it was being installed; the bytes behind the ` +
-          `approved hash are not the bytes on disk. Nothing was replaced.`,
-      );
-    }
     await patchImageEpoch(imagePath, newEpoch);
     const image = await inspectBackupCopy(imagePath);
     if (
       image.storeId !== inventory.live.storeId ||
       image.schemaVersion !== inventory.backup.schemaVersion ||
-      image.authorityState !== inventory.backup.authorityState ||
-      serializeExecutionValue(image.execution) !== serializeExecutionValue(inventory.backup.execution) ||
-      JSON.stringify(image.counts) !== JSON.stringify(inventory.backup.counts)
+      image.authorityState !== inventory.backup.authorityState
     ) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the prepared image does not hold the selected recovery point's state (identity, schema, authority or row counts); ` +
+        `the prepared image does not hold the selected recovery point's state (identity, schema, authority); ` +
           `nothing was replaced.`,
       );
     }
-    // §7 R4: the retained accepted bodies are re-frozen here and required to be
-    // the exact set the approved loss described, by digest. Bytes are compared
-    // rather than assumed: a body that moved, appeared or vanished since the
-    // approval would make the disclosed body loss a description of some other
-    // set, and that approval would be approving work it never saw.
+    // §7 R4: the live retained accepted bodies are re-frozen here so the receipt
+    // records the set the replacement did not roll back. The recorded approved
+    // set is never re-compared — a body that moved since the preview is a
+    // description of some other set, not a refusal.
     const liveRetained = freezeRetainedBodies(context, { storeId: before.storeId, epoch: before.epoch, revision: before.revision });
-    if (liveRetained.digest !== inventory.preview.retainedLiveDigest) {
-      throw lossUnaccepted(
-        `the retained accepted bodies moved since the loss was approved (approved live digest ` +
-          `${inventory.preview.retainedLiveDigest.slice(0, 12)}, now ${liveRetained.digest.slice(0, 12)}); the body set the approved ` +
-          `loss describes is not the live set. Nothing was replaced \u2014 re-preview, read the new body loss and decide again.`,
-      );
-    }
     const imageSha256 = await sha256OfFile(imagePath);
     const record: ExecutionRecoveryRecord = {
       recoveryVersion: EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -1879,7 +1895,6 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       restoredCopySha256: imageSha256,
       restoredCopyPath: imagePath,
       lossDigest: inventory.preview.lossDigest,
-      acceptedLossDigest: input.acceptLossDigest,
       retainedDigest: inventory.preview.retainedDigest,
       retainedLiveDigest: liveRetained.digest,
       retainedDifferences: inventory.preview.retainedDifferences,
@@ -1892,19 +1907,11 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     writeJson(receiptPath, record);
     recoveryFailureHook("before-replacement");
 
-    // The live BYTES are re-verified FIRST, because this read is the one step
-    // of the verdict that awaits. Any writer that commits during that yield
-    // writes into the store's WAL sidecar — frames the checkpoint hash does not
-    // cover — so the awaited read has to finish BEFORE the verdict that refuses
-    // such a sidecar, never between it and the rename.
-    if ((await sha256OfFile(livePath)) !== liveSha256) {
-      throw lossUnaccepted(`the live store bytes changed after the pre-restore recovery point was taken; nothing was replaced.`);
-    }
-
     // The last gate, and synchronous from here to the rename: no `await`
     // separates the live store's own state from the replacement, so no writer
-    // this process schedules can slip a WAL in between. Only files whose
-    // recorded (dev, ino) still match are ever removed.
+    // this process schedules can slip a WAL in between. Quiescence is proven by
+    // the live file's recorded (dev, ino) identity and by the sidecars below —
+    // never by re-deriving a content digest.
     if (!sameIdentity(liveIdentity, identityOf(livePath))) {
       throw lossUnaccepted(`the live store file at ${livePath} was replaced by another writer; nothing was replaced.`);
     }
@@ -1913,10 +1920,8 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       // A sidecar that is still the file the checkpoint saw, or that is GONE, is
       // quiescence: SQLite's own last clean close folds the journal into the
       // database and removes it (and this runtime can land that removal just
-      // after the close), which is the store going quiet. A fold cannot hide
-      // here — the live BYTES were re-verified against the checkpoint hash on
-      // the statement above. A sidecar that is present and is not that file is
-      // a writer, and refuses.
+      // after the close), which is the store going quiet. A sidecar that is
+      // present and is not that file is a writer, and refuses.
       if (now !== undefined && !sameIdentity(sidecar.identity, now)) {
         throw lossUnaccepted(`a WAL/SHM sidecar of ${livePath} appeared after the checkpoint; the store is not quiesced. Nothing was replaced.`);
       }
@@ -1987,15 +1992,16 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
  * `restoreExecutionBackup` — §8's whole-store replacement.
  *
  * Under the §4.2 maintenance → root lock ladder it recomputes the loss
- * inventory, refuses anything but the exact approved digest, takes a fresh
- * pre-restore recovery point, checkpoints the live WAL, installs a verified
- * sibling whose epoch is above both generations, and records the durable
- * receipt before and after the atomic rename. It never falls back to files and
- * never converts DB state back into JSON.
+ * inventory, takes a fresh pre-restore recovery point, checkpoints the live
+ * WAL, installs a verified sibling whose epoch is above both generations, and
+ * records the durable receipt before and after the atomic rename. It never
+ * falls back to files and never converts DB state back into JSON. The operator
+ * and authorization reference are the audit record of who performed the
+ * replacement.
  */
 export async function restoreExecutionBackup(
   context: StoreContext,
-  input: { preview: ExecutionRecoveryPreview; acceptLossDigest: string | null; operator: string; authorization: string },
+  input: { preview: ExecutionRecoveryPreview; operator: string; authorization: string },
 ): Promise<ExecutionRestoreReceipt> {
   const resolved = requireRestoreInput(input);
   const root = controlRootOf(context);

@@ -137,7 +137,6 @@ import {
   resolveHarnessDir,
   resumeExecutionSession,
   resolveWorkflowDir,
-  serializeExecutionValue,
 } from "@mstar-harness/engine";
 import type {
   CoordinationSession,
@@ -311,6 +310,26 @@ function isExecutionBinding(value: unknown): value is ExecutionBinding {
   if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return false;
   if (session.role !== "coordinator" && session.role !== "plan-pm") return false;
   return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
+}
+
+/**
+ * The same adopted execution binding, compared on its real §3.1 fields rather
+ * than a serialized envelope: version, the canonical control root, and the
+ * session reference's store/epoch/workflow/role/session/plan identity. Every
+ * field is a value fact, so two bindings are equal exactly when they describe
+ * the same stored row — the idempotent same-bind check needs no byte rendering.
+ */
+function sameExecutionBinding(a: ExecutionBinding, b: ExecutionBinding): boolean {
+  return (
+    a.version === b.version &&
+    a.harnessRoot === b.harnessRoot &&
+    a.session.storeId === b.session.storeId &&
+    a.session.epoch === b.session.epoch &&
+    a.session.workflowId === b.session.workflowId &&
+    a.session.role === b.session.role &&
+    a.session.sessionId === b.session.sessionId &&
+    a.session.planId === b.session.planId
+  );
 }
 
 /** Structural guard for a record read back from the ledger (`data` is `unknown`). */
@@ -1108,7 +1127,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     }
     const executionBinding = executionBindingOf(harnessRoot, coordinator);
     const existing = derivePhase2State(ctx.sessionManager.getEntries(), hostSessionId).binding;
-    if (existing !== null && existing.workflowId === workflowId && serializeExecutionValue(existing.executionBinding) === serializeExecutionValue(executionBinding)) {
+    if (existing !== null && existing.workflowId === workflowId && sameExecutionBinding(existing.executionBinding, executionBinding)) {
       gate.stale = null;
       return outcome(true, false, `this session is already bound to ${workflowId}; the identity pointer is unchanged.`, {
         code: "already-bound",

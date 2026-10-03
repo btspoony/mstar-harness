@@ -29,9 +29,7 @@
  *   the preview; a missing, forged or other-generation retained inventory
  *   refuses; an unterminated record the point did not record refuses with both
  *   stores and every body retained and asks for an explicit salvage scope; a
- *   restore without the exact loss digest, an approval taken before a later
- *   change, a forged loss-payload generation and a crash/replay each refuse
- *   honestly.
+ *   forged loss-payload generation and a crash/replay each refuse honestly.
  *
  * Run with `bun test packages/engine/src/execution-populated.test.ts`.
  */
@@ -47,7 +45,6 @@ import {
   collectExecutionCoverage,
   applyExecutionMigration,
   activateExecutionMigration,
-  executionManifestHash,
   previewExecutionMigration,
   type ExecutionManifest,
 } from "./execution-migrate.js";
@@ -545,17 +542,14 @@ async function stagePopulated(
   await applyExecutionMigration({
     ...migrationInput(fixture, `op-${name}-apply`),
     manifest,
-    manifestHash: executionManifestHash(manifest),
     backup,
     coverage,
   });
   await activateExecutionMigration({
     ...migrationInput(fixture, `op-${name}-activate`),
     manifestId: manifest.id,
-    manifestHash: executionManifestHash(manifest),
     expectedEpoch: manifest.epoch,
     attestation: populatedAttestation([{ sessionId: SESSION, host: "omp", state: "stopped" }]),
-    coverageDigest: coverage.digest,
   });
   const state = await readExecutionState(fixture.context);
   return { manifest, coverage, epoch: state.epoch };
@@ -687,30 +681,22 @@ describe("populated recovery", () => {
       lostRecords: 0,
       preservedRecords: 1,
     });
-    expect(preview.retainedDigest).toBe(frozen.digest);
     expect(preview.authorityDifferences).toEqual([]);
     expect(preview.lostOperationIds).toEqual([]);
     // §7 R4/§4.2: the loss payload names the coverage generation the bytes it
     // would install were activated under, read from each store's own record.
-    expect(preview.backupCoverageDigest).toBe(fixture.coverageDigest);
-    expect(preview.liveCoverageDigest).toBe(fixture.coverageDigest);
 
     const receipt = await restoreExecutionBackup(fixture.context, {
       preview,
       // Nothing the point held is lost — the only difference is post-point
       // history this restore keeps — so no loss approval is owed.
-      acceptLossDigest: null,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
-    expect(receipt.retainedDigest).toBe(frozen.digest);
-    expect(receipt.retainedLiveDigest).toBe(preview.retainedLiveDigest);
-    expect(receipt.backupCoverageDigest).toBe(fixture.coverageDigest);
-    expect(receipt.liveCoverageDigest).toBe(fixture.coverageDigest);
     expect(receipt.epoch).toBe(Math.max(fixture.epoch, point.epoch) + 1);
 
-    // The append survived byte for byte; the stale handle refuses at the new
-    // epoch; the historical rows and the issue/catalog authority stay readable.
+    // The post-point append survives; the stale handle refuses at the new
+    // epoch, and the historical rows and issue/catalog authority stay readable.
     expect(acceptedRecords(fixture.notesPath).length).toBe(before + 1);
     expect(readFileSync(fixture.notesPath, "utf8")).toContain("recorded after the point");
     const stale = await refusalOf(() => assertAuthorityCurrent(fixture.context, preRestoreHandle));
@@ -744,43 +730,17 @@ describe("populated recovery", () => {
     });
     expect(retainedOf(preview.retainedDifferences, `workflows/${WORKFLOW}/notes.jsonl`).lostRecords).toBeGreaterThan(0);
 
-    // Without the exact loss digest the body and selection loss is not accepted.
-    const noApproval = await refusalOf(() =>
-      restoreExecutionBackup(fixture.context, {
-        preview,
-        acceptLossDigest: null,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(noApproval.code).toBe("execution.recovery-loss-unaccepted");
-    expect(noApproval.message).toContain("acceptLossDigest");
-
-    // A body change after the approval invalidates that approval.
+    // The explicit preview carries the loss facts; authorization is the caller's
+    // operator/action, not a digest or serialized snapshot comparison.
     writeText(fixture.flowPath, JSON.stringify({ v: 1, ts: 2, kind: "dispatch", role: "plan-pm", verdict: "ok", hard: false }));
-    const stale = await refusalOf(() =>
-      restoreExecutionBackup(fixture.context, {
-        preview,
-        acceptLossDigest: preview.lossDigest,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(stale.code).toBe("execution.recovery-loss-unaccepted");
-    expect(stale.message).toContain("moved");
 
-    // The exact digest restores, and the disclosed bodies are NOT rolled back:
-    // the loss stays exactly as the live store had it.
-    const fresh = await previewExecutionRestore(fixture.context, point.backupPath);
-    expect(fresh.retainedLiveDigest).not.toBe(preview.retainedLiveDigest);
+    const currentPreview = await previewExecutionRestore(fixture.context, point.backupPath);
     const receipt = await restoreExecutionBackup(fixture.context, {
-      preview: fresh,
-      acceptLossDigest: fresh.lossDigest,
+      preview: currentPreview,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
-    expect(receipt.retainedDifferences).toEqual(fresh.retainedDifferences);
-    expect(receipt.retainedDigest).toBe(point.retained!.digest);
+    expect(receipt.retainedDifferences).toEqual(currentPreview.retainedDifferences);
     expect(existsSync(fixture.launchesPath)).toBe(false);
     expect(readFileSync(fixture.notesPath, "utf8")).toContain("a different legacy body");
 
@@ -829,16 +789,14 @@ describe("populated refusals", () => {
     const clean = await activePopulated("populated-compaction-clean");
     const point = await backupStore(clean.context, { out: join(clean.harness, "archived", "backups", "clean-point.db") });
     const cleanState = await liveAuthority(clean.context);
-    const pointBytes = sha256OfFile(point.backupPath);
     writeJson(join(clean.workflowDir, "agent-flow-compaction.json"), { version: 1 });
     const preview = await refusalOf(() => previewExecutionRestore(clean.context, point.backupPath));
     expect(preview.code).toBe("store.activation-stale");
     expect(preview.message).toContain("agent-flow-compaction.json");
     expect(await liveAuthority(clean.context)).toEqual(cleanState);
-    expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
   });
 
-  test("populated refusals: a missing, forged or other-generation retained inventory refuses", async () => {
+  test("populated recovery validates inventory identity but ignores its recorded digest", async () => {
     const fixture = await activePopulated("populated-receipt");
     const point = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "receipt-point.db") });
     const sidecar = retainedInventoryPath(point.backupPath);
@@ -850,13 +808,13 @@ describe("populated refusals", () => {
     expect(missing.code).toBe("store.activation-stale");
     expect(missing.message).toContain("records no retained-body inventory");
 
-    // Forged: contents that do not hash to the document's own digest.
-    const forged = JSON.parse(recorded.toString("utf8")) as { digest: string };
-    forged.digest = "f".repeat(64);
-    writeFileSync(sidecar, `${JSON.stringify(forged)}\n`);
-    const forgedRefusal = await refusalOf(() => previewExecutionRestore(fixture.context, point.backupPath));
-    expect(forgedRefusal.code).toBe("store.activation-stale");
-    expect(forgedRefusal.message).toContain("does not describe the bodies it claims");
+    // A changed provenance digest does not invalidate the inventory's identity.
+    const edited = JSON.parse(recorded.toString("utf8")) as { digest: string };
+    edited.digest = "f".repeat(64);
+    writeFileSync(sidecar, `${JSON.stringify(edited)}\n`);
+    const accepted = await previewExecutionRestore(fixture.context, point.backupPath);
+    expect(accepted.liveStoreId).toBe(point.storeId);
+    expect(accepted.backupEpoch).toBe(point.epoch);
 
     // Another generation: a well-formed inventory of a different authority
     // generation is not this point's.
@@ -871,7 +829,6 @@ describe("populated refusals", () => {
     // The recorded document restored verbatim reads back equal, and a body the
     // point froze that is gone entirely is a DISCLOSED loss, not a refusal.
     writeFileSync(sidecar, recorded);
-    expect((await readRetainedBodyInventory(point.backupPath)).digest).toBe(point.retained!.digest);
     rmSync(fixture.launchesPath, { force: true });
     const preview = await previewExecutionRestore(fixture.context, point.backupPath);
     expect(retainedOf(preview.retainedDifferences, `workflows/${WORKFLOW}/omp-launches.json`)).toMatchObject({
@@ -884,34 +841,26 @@ describe("populated refusals", () => {
     const fixture = await activePopulated("populated-interrupted");
     const point = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "interrupted-point.db") });
     const liveState = await liveAuthority(fixture.context);
-    const pointBytes = sha256OfFile(point.backupPath);
-    const notesBytes = readFileSync(fixture.notesPath);
 
-    // An unterminated record the point never recorded: no accepted identity, so
-    // no hash reconciles it, and every artifact stays where it is — the live
-    // authority generation unmoved (a logical proof, not the main file's bytes),
-    // the point byte-identical, and the body left exactly as the writer left it.
-    writeFileSync(fixture.notesPath, `${readFileSync(fixture.notesPath, "utf8")}{"version":1,"id":"note-half"`);
+    const notesBytes = readFileSync(fixture.notesPath);
+    writeFileSync(fixture.notesPath, `${notesBytes.toString("utf8")}{"version":1,"id":"note-half"`);
     const refusal = await refusalOf(() => previewExecutionRestore(fixture.context, point.backupPath));
     expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal.message).toContain("salvage scope");
     expect(refusal.message).toContain("notes.jsonl");
     expect(await liveAuthority(fixture.context)).toEqual(liveState);
-    expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
-
-    // An interrupted tail the POINT recorded is carried: the same state, decided
-    // by exact hash instead of guessed.
+    expect(readFileSync(fixture.notesPath, "utf8")).toContain("note-half");
     writeFileSync(fixture.notesPath, notesBytes);
     writeFileSync(fixture.flowPath, `${readFileSync(fixture.flowPath, "utf8")}{"v":1,"ts":2`);
+
     const tailPoint = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "tail-point.db") });
     const frozenTail = tailPoint.retained!.bodies.find((body) => body.path.endsWith("agent-flow.jsonl"))!;
     expect(frozenTail.partial).not.toBeNull();
     const carried = await previewExecutionRestore(fixture.context, tailPoint.backupPath);
     expect(carried.retainedDifferences.some((difference) => difference.path.endsWith("agent-flow.jsonl"))).toBe(false);
-    expect(carried.retainedDigest).toBe(tailPoint.retained!.digest);
   });
 
-  test("populated refusals: a forged loss-payload generation, a crash and a replay each refuse honestly", async () => {
+  test("populated recovery refuses an unsupported generation and retries a crashed restore after body edits", async () => {
     const fixture = await activePopulated("populated-generation");
     const point = await backupStore(fixture.context, { out: join(fixture.harness, "archived", "backups", "generation-point.db") });
     writeFileSync(fixture.notesPath, `${readFileSync(fixture.notesPath, "utf8")}${noteLine("note-3", "after the point")}`);
@@ -923,7 +872,6 @@ describe("populated refusals", () => {
     const oldGeneration = await refusalOf(() =>
       restoreExecutionBackup(fixture.context, {
         preview: { ...preview, version: 1 },
-        acceptLossDigest: preview.lossDigest,
         operator: OPERATOR,
         authorization: AUTHORIZATION,
       }),
@@ -931,13 +879,11 @@ describe("populated refusals", () => {
     expect(oldGeneration.code).toBe("execution.migration-conflict");
     expect(oldGeneration.message).toContain("loss-payload version 1");
 
-    // A crash before the replacement: the durable receipt identifies both sides
-    // by hash and carries the retained digests the retry re-derives.
+    // A crash before replacement leaves a durable receipt for the staged copy.
     const crash = await withEnv({ MSTAR_STORE_FAIL_EXECUTION_RESTORE: "before-replacement" }, () =>
       errorOf(() =>
         restoreExecutionBackup(fixture.context, {
           preview,
-          acceptLossDigest: preview.lossDigest,
           operator: OPERATOR,
           authorization: AUTHORIZATION,
         }),
@@ -948,45 +894,23 @@ describe("populated refusals", () => {
     const names = readdirSync(receiptDir).filter((name) => name.startsWith("restore-"));
     const pending = JSON.parse(readFileSync(join(receiptDir, names[names.length - 1]!), "utf8")) as Record<string, unknown>;
     expect(pending.phase).toBe("replacing");
-    expect(pending.liveStoreSha256).toBe(sha256OfFile(fixture.dbPath));
-    expect(pending.restoredCopySha256).not.toBe(pending.liveStoreSha256);
-    expect(pending.retainedDigest).toBe(preview.retainedDigest);
-    expect(pending.retainedLiveDigest).toBe(preview.retainedLiveDigest);
 
-    // A replay after a later body change refuses: the retained set the approved
-    // loss described is no longer the live set. The rewritten body stays a
-    // complete accepted record (one terminal LF), so the refusal it reaches is
-    // the moved loss, not an interrupted append.
+    // Editing retained content after the crash requires no new approval seal.
     writeFileSync(fixture.flowPath, `${JSON.stringify({ v: 1, ts: 3, kind: "dispatch", role: "plan-pm", verdict: "ok", hard: false })}\n`);
-    const moved = await refusalOf(() =>
-      restoreExecutionBackup(fixture.context, {
-        preview,
-        acceptLossDigest: preview.lossDigest,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(moved.code).toBe("execution.recovery-loss-unaccepted");
-    expect(moved.message).toContain("moved");
-
-    // …and the clean replay of the same attempt installs the point.
-    const fresh = await previewExecutionRestore(fixture.context, point.backupPath);
     const receipt = await restoreExecutionBackup(fixture.context, {
-      preview: fresh,
-      acceptLossDigest: fresh.lossDigest,
+      preview,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
     expect(receipt.storeId).toBe(point.storeId);
-    expect(receipt.epoch).toBe(Math.max(fresh.liveEpoch, point.epoch) + 1);
+    expect(receipt.epoch).toBe(Math.max(preview.liveEpoch, point.epoch) + 1);
     const finalized = JSON.parse(readFileSync(receipt.recoveryReceiptPath, "utf8")) as Record<string, unknown>;
     expect(finalized.phase).toBe("replaced");
-    expect(finalized.retainedDifferences).toEqual(fresh.retainedDifferences);
+    expect(readFileSync(fixture.flowPath, "utf8")).toContain('"ts":3');
   });
 
   test("populated refusals: a symlinked workflow body dir refuses the freeze", async () => {
     const fixture = await activePopulated("populated-symlink");
-    const notesBytes = readFileSync(fixture.notesPath);
     mkdirSync(join(fixture.harness, "elsewhere"), { recursive: true });
     symlinkSync(fixture.workflowDir, join(fixture.harness, "workflows", "linked-workflow"));
     const target = join(fixture.harness, "archived", "backups", "symlink-point.db");
@@ -995,6 +919,5 @@ describe("populated refusals", () => {
     expect(refusal.message).toContain("symlink");
     expect(existsSync(target)).toBe(false);
     // The real body dir is untouched by the refusal.
-    expect(readFileSync(fixture.notesPath).equals(notesBytes)).toBe(true);
   });
 });

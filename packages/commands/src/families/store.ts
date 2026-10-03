@@ -25,7 +25,6 @@ import {
   upgradeStore,
   upgradeStoreWithRecoveryPoint,
   validateActivationAttestation,
-  executionManifestHash,
   type ActivationAttestation,
   type MigrationManifest,
   type StagedStoreUpgrade,
@@ -163,7 +162,7 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
     "store.not-active": { blocker: "The store is not active for the requested authority transition.", recovery: "Run or resume the supported `store safe-upgrade --operator <name> --attestation <file>` workflow before retiring sources." },
     "store.busy": { blocker: "Another store writer currently holds the database.", recovery: "Wait for that writer to finish, then retry the requested upgrade." },
     "store.corrupt": { blocker: "The store database is unreadable or structurally invalid.", recovery: "A restore preview requires inventory of the live database, so `store execution restore-preview` cannot recover an unreadable live store. No online operator restore is available in this state. If no verified backup can be restored through a supported recovery process, rebuild the store with `store init` only after preserving the corrupt database and legacy sources; rebuilding loses SQLite-only catalog/execution data." },
-    "store.schema-drift": { blocker: "Applied schema history is inconsistent with this build.", recovery: "Install the harness build that owns this store schema with `npm i -g @mstar-harness/cli@latest` and retry. If the live store remains readable and the schema owner confirms restore is appropriate, run `store execution restore-preview --backup <backup-file> --out <preview-file>`, review its loss inventory, then `store execution restore --preview <preview-file> --accept-loss-digest <loss-digest> --operator <name> --authorization <ref>`." },
+    "store.schema-drift": { blocker: "Applied schema history is inconsistent with this build.", recovery: "Install the harness build that owns this store schema with `npm i -g @mstar-harness/cli@latest` and retry. If the live store remains readable and the schema owner confirms restore is appropriate, run `store execution restore-preview --backup <backup-file> --out <preview-file>`, review its loss inventory, then `store execution restore --preview <preview-file> --operator <name> --authorization <ref>`." },
     "store.upgrade-staged-record-missing": { blocker: "A staged execution migration is missing its complete saved record.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and is not reachable for a missing saved record. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
     "store.upgrade-staged-record-malformed": { blocker: "The saved staged migration manifest or coverage JSON is malformed.", recovery: "Do not edit or delete the live store or workflow files. Preserve the entire harness store before rebuilding; the archive-first recovery path is required to retain the malformed record and all SQLite-only data." },
     "store.upgrade-staged-record-inconsistent": { blocker: "The saved staged migration identity does not verify.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and cannot repair an inconsistent saved identity. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
@@ -387,7 +386,6 @@ async function runStoreUpgrade(
       operator: required(input.operator, "--operator"),
       operationId: randomUUID(),
       manifestId: state.manifestId!,
-      manifestHash: state.executionManifestHash!,
     });
     return ok(id, { verdict: "upgraded", schemaVersion: state.schemaVersion, authorityState: "active", sourcesRetired: receipt.phase === "retired" });
   }
@@ -480,7 +478,6 @@ async function runStoreUpgrade(
               operationId: randomUUID(),
               operator,
               manifestId: staged.manifest.id,
-              manifestHash: executionManifestHash(staged.manifest),
               reason: "Changed evidence; operator confirmed abandonment through store safe-upgrade",
             });
           } catch {

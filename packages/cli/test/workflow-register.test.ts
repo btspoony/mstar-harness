@@ -3,20 +3,19 @@
  * producer (mstar-artifacts/references/plan-workflow-lifecycle-contract.md seam S1; engine-backed).
  *
  * Thin wrapper over engine `registerPlanWorkflow` (create-only `type: plan`
- * snapshot + root `workflows[]` entry under one lock, mirroring the
- * audit-promotion primitive sequence). Contract pinned here:
+ * snapshot + root `workflows[]` entry under one lock).
+ * Contract pinned here:
  * - exit 0: a standalone development plan registers before execution — the
  *   root entry appears in `status.json`, the snapshot lands on disk with the
  *   recorded delivery kind / project / branches / single Todo plan row, and
  *   both documents pass `mstar status validate`.
- * - exit 1: a duplicate registration refuses fail-loud with NO byte change
- *   (snapshot AND root); a development registration without branches and a
- *   verification registration without a completion policy refuse before any
- *   write; a hostile workflow id is rejected by the shared guard.
+ * - exit 1: a different registration for an existing workflow id refuses;
+ *   development registration without branches and verification registration
+ *   without a completion policy refuse before any write; a hostile workflow
+ *   id is rejected by the shared guard.
  * - exit 2: usage — missing required flags, an unknown delivery kind.
  * - a verification/report-only workflow registers without branch fields,
- *   recording its completion policy instead (contract §1 — no implicit
- *   escape hatch, an explicit recorded policy).
+ *   recording its completion policy instead.
  *
  * Every case runs the real CLI as a subprocess against an isolated temp
  * fixture harness — no live harness is ever touched.
@@ -179,19 +178,33 @@ describe("mstar workflow register", () => {
       expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     });
   });
-
-  test("duplicate registration refuses fail-loud without mutating bytes (exit 1)", async () => {
+  test("a distinct operation cannot register an already-registered workflow id", async () => {
     await setupHarness((harness, { root, snapshot }) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
       const beforeSnapshot = readFileSync(snapshot, "utf8");
       const beforeRoot = readFileSync(root, "utf8");
 
-      // R1/R6/A09: the repeat of a registration that already fully holds is a
-      // successful no-op — the recorded receipt, no byte churn.
       const duplicate = runCli(registerArgs(harness));
-      expect(duplicate.exitCode).toBe(0);
+      expect(duplicate.exitCode).toBe(1);
+      expect(commandOutput(duplicate).status).toBe("refused");
+      expect(commandMessage(duplicate)).toContain("[catalog.registration-conflict]");
       expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
       expect(readFileSync(root, "utf8")).toBe(beforeRoot);
+    });
+  });
+  test("a distinct-operation retry after a lost root entry refuses without restoring bytes", async () => {
+    await setupHarness((harness, { root, snapshot }) => {
+      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
+      const snapshotBytes = readFileSync(snapshot, "utf8");
+      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
+      const lostRootBytes = readFileSync(root, "utf8");
+
+      const retry = runCli(registerArgs(harness));
+      expect(retry.exitCode).toBe(1);
+      expect(commandOutput(retry).status).toBe("refused");
+      expect(commandMessage(retry)).toContain("[catalog.registration-conflict]");
+      expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
+      expect(readFileSync(root, "utf8")).toBe(lostRootBytes);
     });
   });
 
@@ -298,28 +311,4 @@ describe("mstar workflow register", () => {
     });
   });
 
-  test("a retry after a lost root write refuses through the journal and preserves bytes (exit 1)", async () => {
-    await setupHarness((harness, { root, snapshot }) => {
-      // Round 1: a successful registration whose root write is then lost
-      // (simulating the crash between snapshot creation and registration).
-      expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const snapshotBytes = readFileSync(snapshot, "utf8");
-      writeFileSync(root, JSON.stringify({ version: 2, updated_at: "2026-09-01", workflows: [] }, null, 2));
-
-      // Round 2: under the registration journal (contract §3) the workflow is
-      // already registered/bound, so re-running the verb REFUSES instead of
-      // advertising recovery — the bytes are preserved verbatim and the
-      // refusal points at `catalog reconcile` as the recovery path.
-      const retry = runCli(registerArgs(harness));
-      expect(retry.exitCode).toBe(1);
-      expect(commandOutput(retry).status).toBe("refused");
-      expect(commandMessage(retry)).toContain("reconcile");
-      expect(readFileSync(snapshot, "utf8")).toBe(snapshotBytes);
-      // The diverged-journal refusal writes nothing: the root register keeps
-      // the caller's ghost bytes verbatim, and `catalog reconcile` owns the
-      // repair (a replayed success must never invent the lost root entry).
-      const rootDoc = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootDoc.workflows).toEqual([]);
-    });
-  });
 });
