@@ -10,8 +10,8 @@ description: Morning Star lifecycle and authorization authority — source prior
 ## 与其它 `mstar-*` skill 的加载契约
 
 - 本 skill 是 harness 的**生命周期 / 授权语义权威**（状态机、Done 权限、门禁、路由以本 skill 为准）；加载**选择**权威是 **`mstar-roles`**（hub bootstrap → 角色身份 → Assignment `Skill presets:` 决策，见其 § Load Order）。本 skill 不维护第二份全局必读角色表。
-- Directly invoked harness lifecycle topics require `mstar-harness-core` first in their Load Order / First action section. The `mstar-roles` hub bootstraps role-preset selection without requiring core-first. Under explicit `none`, role identity and the shared leaf boundary still carry authorization, anti-recursion, and evidence obligations.
-- Load lifecycle topics only as selected by `mstar-roles` and the relevant topic index; do not read all topics as a precaution. These load declarations govern harness procedures, not general engineering guidance.
+- Directly invoked `mstar-*` topics declare `mstar-harness-core` first in Load Order / First action unless `lintLoadOrder` exempts their exact identity. The existing `mstar-roles` hub bootstraps role-preset selection; explicit `none` still retains identity and shared-leaf authorization, anti-recursion, and evidence obligations.
+- Load only topics selected by `mstar-roles` and the relevant topic index; do not read all topics as a precaution. General-engineering wording is not a load-order exemption.
 - **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是**条件契约档案**（engine-absent fallback）。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为找回被 engine 校验接管的 contract 全文而读取（触发契约见其 description）。
 
 ## Standalone harness（`mstar-*` 自洽）

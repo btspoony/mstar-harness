@@ -24,6 +24,8 @@ Start from the user's original outcome, not from the machinery already built.
 - Never add imagined future features, extension frameworks, configuration knobs, compatibility wrappers, or speculative error handling. Each addition must answer a current requirement or a demonstrated risk in a supported workflow.
 - Do not add validation, confirmation, or preflight gates for unsupported or hypothetical conditions. Retain required authorization, security, data-loss protection, and project safeguards; simplicity is not permission to bypass them.
 - Prefer direct control flow and existing built-ins or dependencies over needless nesting, indirection, and repeated wrappers. Centralize and reuse sources of truth for prompts, contracts, and data instead of copying them; do not invent a new abstraction framework to do so.
+- Before adding a dependency, check existing code and built-ins, package maintenance and size; state why it is needed in one sentence.
+- Mark a deliberate bounded shortcut with `simplify:` and its ceiling/upgrade path. For an unavoidable workaround, explain why, label it `simplify:` or `temporary`, and record its removal path in the existing plan/status artifact before claiming completion. Temporary markers must cite that artifact.
 
 ### Agent-facing products
 

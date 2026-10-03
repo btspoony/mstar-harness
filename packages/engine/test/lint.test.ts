@@ -4,16 +4,15 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces;
  * roadmap §8.5 C2 — engine unit tests cite the source section as spec):
- * - simplify:/temporary markers: `mstar-coding-behavior` SKILL.md § Simplicity
- * First → "Simplification markers": a deliberate shortcut with a known
+ * - simplify:/temporary markers: `mstar-coding-behavior` SKILL.md § Decision
+ * Rules: a deliberate shortcut with a known
  * ceiling is marked with a `simplify:` comment naming the ceiling and the
  * upgrade path; a workaround is labeled `simplify:` / `temporary` and the
  * removal path is recorded in the plan/status artifact before the task is
  * claimed complete.
- * - SDD TDD triple: `mstar-coding-behavior` SKILL.md § Integration Notes —
- * SDD implementer reports carry the TDD triple (test file(s), command,
- * output) in `task-N-report.md`; `mstar-sdd/references/file-handoffs.md` —
- * fix subagents append covering test file(s), command run, output.
+ * - SDD verification evidence: `mstar-sdd/references/file-handoffs.md`
+ * § Verification evidence — completion and fix reports retain the affected
+ * test file(s), command and actual output, or applicable scoped-check evidence.
  * - Plan quality bar: `mstar-artifacts/references/plan-quality-bar.md`
  * § Quality checklist + `templates/plan.main.md` self-review
  * ("Placeholder scan: no TBD").
@@ -387,7 +386,7 @@ Slice 4.
 `;
 
 // ---------------------------------------------------------------------------
-// findSimplifyMarkers — mstar-coding-behavior § Simplification markers
+// findSimplifyMarkers — mstar-coding-behavior § Decision Rules
 // ---------------------------------------------------------------------------
 
 describe("findSimplifyMarkers", () => {
@@ -423,7 +422,7 @@ describe("findSimplifyMarkers", () => {
 });
 
 // ---------------------------------------------------------------------------
-// findTemporaryMarkers — mstar-coding-behavior § Simplification markers
+// findTemporaryMarkers — mstar-coding-behavior § Decision Rules
 // ("record the removal path in the plan/status artifact")
 // ---------------------------------------------------------------------------
 
@@ -643,8 +642,8 @@ describe("findProvenanceCitations", () => {
 });
 
 // ---------------------------------------------------------------------------
-// assertSddTddTriple — mstar-coding-behavior § Integration Notes +
-// mstar-sdd/references/file-handoffs.md (test file(s) + command + output)
+// assertSddTddTriple — mstar-sdd/references/file-handoffs.md
+// § Verification evidence (test file(s) + command + output)
 // ---------------------------------------------------------------------------
 
 describe("assertSddTddTriple", () => {
