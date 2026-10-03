@@ -1670,10 +1670,10 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
     expect(codesOf(unpushed)).toContain("push-unverified");
   }, 120_000);
 
-  test("a missing ordered specialist return refuses review-evidence-missing", async () => {
+  test("a missing writing-specialist return refuses review-evidence-missing", async () => {
     const f = await buildActiveFixture();
-    const missing: Phase1CompletionInput = { ...f.input, reviews: f.input.reviews.slice(1) as never };
-    const readiness = await inspectPhase1Readiness(f.binding, missing);
+    const missingWriter: Phase1CompletionInput = { ...f.input, reviews: f.input.reviews.slice(0, -1) as never };
+    const readiness = await inspectPhase1Readiness(f.binding, missingWriter);
     expect(readiness.ready).toBe(false);
     expect(codesOf(readiness)).toContain("review-evidence-missing");
   }, 120_000);
