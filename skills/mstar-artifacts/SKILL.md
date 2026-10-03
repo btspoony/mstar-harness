@@ -56,7 +56,7 @@ Field semantics, severity mapping, findings cleanup modes, archive flow, and `jq
 - residual **severity** 是机器字段 SSOT（`references/status-and-residuals.md`）；每条新 finding 捕获为 **issue**（计划内 `mstar plan issue-add`，计划外 `mstar issue add`；重复出现追加 occurrence）；register 与 v1 根级 `residual_findings` 都是 legacy/迁移只读，**禁止**双写。
 - **`Findings cleanup: allow-residual`** 默认（迭代 Phase 2）：open issue 先捕获（计划链接）再披露（清单 + severity + 跟踪位置；close 面另含 blocker-defer 标记）；unresolved `critical` 仍阻断 Approve；`zero-residual` 为显式 opt-in —— 细则 → **`references/status-and-residuals.md`**「Findings cleanup modes」。
 - 捕获前必须过 engine 域校验（fail-loud handoff）；迁移 register 文档过 `validateResidual` / `validateProjectRegister` / `validateStatus`；malformed → reject + rewrite。
-- **计划行 / issue 只经 domain call 修改**：scoped 路线使用 `mstar plan …` 动词（active：`--session-ref` + 完整执行令牌 `--expect` + `--operation`，在独立获取的身份下；pre-activation：`--session` 与 revision `--expect`），手写 snapshot / 写 register 会被拒（`coordination.direct-write-refused` / `coordination.scoped-writer-required` / `coordination.store`）；只读校验器（`mstar lease verify` / `mstar worktree check`）是检查而非修改替代。**reference 与令牌都不是凭据**：reference 是查表，令牌是 CAS 值，二者都不下发给 leaf。
+- **计划行 / issue 只经 domain call 修改**：scoped 路线使用 `mstar plan …` 动词（active：独立获取的 own-binding 身份；`--session-ref` / 完整执行令牌 `--expect` / `--operation` 可省略，显式值仍是校验约束；pre-activation：`--session` 与 revision `--expect`），手写 snapshot / 写 register 会被拒（`coordination.direct-write-refused` / `coordination.scoped-writer-required` / `coordination.store`）；只读校验器（`mstar lease verify` / `mstar worktree check`）是检查而非修改替代。**reference 与令牌都不是凭据**：reference 是查表，令牌是 CAS 值，二者都不下发给 leaf。
 
 ## Evidence
 

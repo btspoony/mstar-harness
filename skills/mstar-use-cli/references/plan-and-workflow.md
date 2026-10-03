@@ -46,6 +46,11 @@ For example: `mstar issue link --id <issue-id> --actor project-manager --operati
 - A resume is read-only on **both** transports — `mstar plan bind --execution --resume-ref <wire>` (active; the reference carries its own whole scope and the call takes no `--expect`) or `mstar plan bind --resume <absolute-json>` (pre-activation). It reports the current context; it never reacquires a released lease, never restarts execution, and never re-identifies the caller. **Resume is never recovery.**
 - A fresh **bind** reads, checks and claims atomically against current ownership. A fresh **active** bind states the independently acquired session identity and the addressed workflow plus its own seat selector (`--coordinator`, or `--plan <id>` for a plan session); the caller-owned operation id and the scope's execution token may equally be omitted — the CLI generates one fresh id and the engine reads the current token (the workflow's for a coordinator, the plan's for a plan-pm), while an explicitly supplied `--expect` remains the checked constraint. The **pre-activation** bind is the token-free form that names a session envelope instead.
 
+**Missing Assignment after an ACTIVE plan-pm bind:** ordinary progress still needs the reviewed content; read-only resume does not repair that prerequisite. A current plan-pm holder with no submitted/accepted handoff or integration attempt has two public paths:
+
+- Continue: `mstar plan release` under its own bound plan scope → explicit same-holder `mstar plan bind --execution --workflow <id> --plan <id>` **before** restoring content → restore the reviewed Assignment → coordinator `plan prepare` / holder `plan progress`. Release retains history and never writes Done; no new workflow or routine token copying is required.
+- Stop truthfully: own `plan release` → coordinator `mstar workflow lifecycle --workflow <id> --status stopped --reason <text>`. Stopped is not successful delivery. A foreign held claim cannot be released; an accepted handoff uses its valid coordinator return/completion path, and `plan release` never releases an integration claim.
+
 ## Recovery (active coordinator replacement)
 
 While the execution authority is active, an abandoned or unreachable coordinator is replaced by exactly one verb, under an independently acquired coordinator identity:
@@ -64,7 +69,7 @@ mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reaso
 | Session | Verbs |
 |---|---|
 | plan session | `mstar plan show`, `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close`, `mstar plan handoff` |
-| plan session, **ACTIVE holder only** | `mstar plan release` — releases only the caller's own held execution claim (either seat may release a claim it genuinely holds); continue through an explicit same-holder `plan bind` |
+| acquired **ACTIVE holder** (either seat) | `mstar plan release` — releases only the caller's own held execution claim; continue through an explicit same-holder `plan bind` |
 | coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow evidence` |
 | either (active bootstrap / read / claim) | `mstar plan bind` |
 
