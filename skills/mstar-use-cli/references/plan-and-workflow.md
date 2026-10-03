@@ -120,9 +120,7 @@ The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvi
 | `coordination.merge-lease-foreign` | a merge lease claims another plan/source attempt and must not be reused or released |
 | `coordination.merge-lease-stopped-owner` | a merge lease belongs to an inactive/stopped session; only reconcile may act |
 | `coordination.findings-open` | completion or transition is blocked because findings remain open |
-| `coordination.completion-frozen` | completion delivery fulfilment is frozen after an owned plan reaches Done |
 | `coordination.git-unavailable` | a Git-derived fact the verb needs cannot be established |
-| `coordination.expected-version-required` / `coordination.version-conflict` | a coordinate write without a token, or with one that no longer matches the bytes |
 | shared lock failure | another writer holds the same-host lock |
 
 ## Completion sequence
@@ -139,7 +137,7 @@ Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (
 
 | Step | Session | What it records | Notes |
 |---|---|---|---|
-| handoff | plan | the immutable pinned handoff; the row stays InReview | the plan's finish line; execution ownership has not moved yet |
+| handoff | plan | the submitted handoff identity/state record, with recorded Git facts and evidence provenance; the row stays InReview | the plan's finish line; execution ownership has not moved yet |
 | accept | coordinator | execution ownership transfers to the coordinator | no merge happens here; this is ownership, not integration acceptance |
 | integration-start | coordinator | the integration attempt and its pinned base, before any Git runs | **iteration route only**; reads the clean recorded integration checkout and refuses a foreign merge lease — the attempt is pinned *before* Git so a crash mid-merge stays reconcilable |
 | merge | operator | the merge itself | **iteration route only**; an explicit pinned merge in the recorded integration worktree |
@@ -147,11 +145,11 @@ Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (
 | completion evidence | coordinator | the fulfilment of the registered `completion_policy` (policy + evidence) | **report-only route only**, and it comes *before* Done: the completion step refuses an absent, empty or nonmatching fulfilment, so the row cannot be marked Done on a policy nothing fulfilled |
 | complete | coordinator | Done, atomically | the last step of **every** route: it releases only the row's execution lease on both standalone routes, and both leases on the iteration route |
 | return / reconcile | coordinator | a failed attempt / crash recovery | `return` restores the plan owner; `reconcile` observes Git and finishes the iteration attempt without a second merge — on either standalone route it only replays an already-completed row |
-| repair-delivery-source | coordinator | a corrected `branch.source` only | **not a normal step**: a pre-fix-snapshot exception for a registered source that wrongly equals the target, derived from the sealed accepted handoff, never replayable |
+| repair-delivery-source | coordinator | a corrected `branch.source` only | **not a normal step**: a pre-fix-snapshot exception for a registered source that wrongly equals the target, derived from the accepted handoff's Git source facts, never replayable |
 
 A retried start never moves the recorded base; that is what makes the pinned attempt, not the retry, the unit of recovery.
 
-The handoff is a **byte-level pin**, not just a pointer: the digest of every report it names is taken at submission, so a cited report that changes afterwards — even by appending a section — refuses the completion step with a stale-evidence code. Finalize the QC and QA reports before handing off. When a report genuinely must change after a handoff, `return` the handoff, re-sign it against the new bytes, and let the coordinator `accept` again; there is no way to complete against the old pin.
+The handoff records evidence paths and digests as provenance; it does not freeze report bytes. Editing or appending a cited report does not cause a digest-freshness refusal or require return/re-signing. Current semantic QC/QA, acceptance, ownership and evidence-path requirements remain; Git branch/ref/commit and integration proofs remain actual delivery constraints.
 
 ### Intent-first walkthrough
 
@@ -161,53 +159,9 @@ The failure object at any step names the code; the row is unchanged, so the retr
 
 ## Retired file-route operations
 
-Pre-activation file-route forms (prepare amendments, coordinator recovery, session envelopes, byte-version tokens) are not supported operating procedures in this release: when `mstar status validate` reports `state: legacy`, use only `mstar store safe-upgrade` (or the init-then-safe-upgrade sequence); do not invoke pre-activation file forms. The sections below are the pre-activation contract for workspaces that are not yet on the active authority.
+Pre-activation file-route forms (Prepare amendments, coordinator recovery and session envelopes) are not supported operating procedures in this release: when `mstar status validate` reports `state: legacy`, use only `mstar store safe-upgrade` (or the init-then-safe-upgrade sequence); do not invoke retired file forms.
 
-The amendment family is the only lawful way to register an approved scope expansion on a workflow that already exists. It is not a scheduler and not a general document replacement. It belongs to the **pre-activation** side of the contract together with the JSON coordinator recovery below: `workflow show-prepare` and `workflow amend-prepare` are file-route forms whose byte tokens are document versions, not execution tokens, and an ACTIVE execution authority refuses them (`execution.direct-write-refused`, naming DB recovery where that is the repair).
-
-- The read verb is read-only: no lock, no write. It returns both byte versions — the snapshot's and the reviewed compass Markdown's — plus an admission view. An inadmissible lifecycle state is reported as data (`allowed: false` with one reason line per blocker), not as an error, so a workflow can be inspected before deciding.
-- The amend verb requires **both** byte versions, even on the first amendment. They are byte versions, never row revisions; the bare hex form is also accepted.
-- The patch names the main worktree branch and the rows to append, and may record the integration checkout and the plan parallelism. Appended rows are constructed by the engine — a patch never carries runtime row fields. Every existing row and unknown field survives by value; nothing is created, switched, fetched or cleaned.
-- It may also **correct the plan pointer of existing rows**: `correctPlanFiles` takes entries of exactly `{id, expectedFile, file}` and is the only way to repair a malformed stored pointer without hand-editing the snapshot. `appendPlans` stays present — a correction-only call passes an empty append array. A correction moves only the addressed row's `file` (plus the ordinary `updated_at`); metadata, frozen catalog pins, other rows and the review documents are untouched.
-- **One pointer contract.** An appended or corrected `file` must resolve to that plan's canonical configured `{PLAN_DIR}/<plan-id>.md` with an unambiguous matching declared `plan_id`, under the same resolver registration uses. A canonical absolute path or a normalized **harness-relative** path is accepted; the repository-relative `.mstar/plans/<id>.md` spelling is refused before anything is written (it is a declared input form, not a fallback search base), and the canonical **absolute** pointer is what registration emits. A correction must additionally prove the pointer it replaces: `expectedFile` must equal the row's current `file` byte-for-byte **and** identify that same plan — either a form the resolver accepts or the exact repository-relative spelling derived from this control root's configured plan directory. Foreign absolute paths, same-basename guesses, unrelated directory prefixes, copied documents with a matching header and a no-op pointer all refuse.
-- Refusals are specific and action-local to the amend: by the amend contract stated below, a refusal from the amend step leaves every document byte-identical — a stale token, a workflow that is not in Prepare or whose root entry is not running, evidence that execution has already started, a duplicate or malformed appended plan, an unknown or no-op patch key, a plan set or integration branch the reviewed compass does not declare, or a supplied integration checkout that fails validation. Auth and scope refusals reuse the shared codes above.
-- Stop condition: a stale token is recovered by reading again and reviewing the new bytes, then amending with the fresh tokens. There is no force, replace, init or fallback flag, and no replacement-document path.
-
-Walkthrough with synthetic ids:
-
-```sh
-# pre-activation (file route) only — an ACTIVE execution authority refuses these forms
-# coordinator: read the admission view and both byte versions (no lock, no write)
-mstar workflow show-prepare --session <coordinator-session.json> --json
-# -> {..., "snapshot_version": "sha256:<hex>", "compass_version": "sha256:<hex>",
-#     "plan_ids": ["plan-a"], "allowed": true, "blockers": []}
-
-# coordinator: apply the approved delta with exactly those tokens
-mstar workflow amend-prepare --session <coordinator-session.json> \
-  --expect-snapshot sha256:<hex> --expect-compass sha256:<hex> --input patch.json --json
-```
-
-A read that reports `allowed: false` is an answer, not a failure: fix the blocker (or abandon the amendment) before spending the tokens. A refusal from the amend step leaves every document byte-identical, so the next attempt starts from a new read.
-
-## Prepare coordinator recovery (pre-activation, JSON only)
-
-`mstar workflow recover-coordinator` replaces the recorded coordinator binding of one Prepare workflow with an explicitly acquired session — the state a cancelled or unreachable owner leaves behind. It is **not** an alias for the active recovery (§ Recovery): that one runs against the execution authority under a full execution token and a stop attestation, while this one is file/JSON, Prepare-only, and narrows the effect to the top-level binding plus one audit record — no prepared-plan takeover, no lease transfer, no raw session rewrite and no force flag. Each authority keeps its own recovery; **resume is never recovery** on either.
-
-- Flags: `--prior-session <absolute-json>` — **an input flag, never a projection**: the operator names the envelope the workflow records now, and it is also what supplies the workflow address. The host route resolves that stored envelope itself instead of taking a path; neither route ever accepts a credential path for the **replacement** session from the caller. Then `--session-id <id>` (the replacement, never generated) · `--expect-snapshot` / `--expect-compass` (both byte versions from `workflow show-prepare`) · `--operation-id` (the replay key) · `--reason` · `--authorization-ref` · `--stopped <session-id…>` (must name the recorded coordinator). A relative `--prior-session`, a malformed version token, a missing field or an empty stop assertion is a usage error (exit `2`) before any engine I/O.
-- Guards, all inside the snapshot write lock: the prior envelope must still authenticate the **exact** recorded coordinator; the new identity must address this workflow's coordinator seat; the workflow must be a named, registered, running Prepare with a committed registration; every row must pass the original whole-workflow no-execution admission; both byte versions must be current; the stop assertion must name that holder. An **active execution authority** refuses and names the existing DB recovery instead of running this writer.
-- Effect: the binding replaced, one immutable `coordination.identity_recoveries` audit record appended, `updated_at` refreshed. Rows, branch anchors, evidence and sibling workflows stay byte-identical; the prior envelope's bytes remain as history and stop authorizing because the binding moved.
-- Replay: the same operation id with the same request against the current binding returns the recorded receipt (`replay: true`) without version churn; a changed request, a stale token or a superseded binding refuses. A failure between the envelope write and the snapshot commit is reported as a failure — never a success receipt — and reclaims only the exact envelope that operation created.
-- **Output projection** — a different thing from the input flag above: the success JSON carries the workflow id, the old/new **public** session ids, the operation id, the replay flag and both byte versions only. It echoes **no** envelope path, envelope bytes or credential — an envelope path is coordinator-owned transport, never a public diagnostic. Naming the recorded envelope on the way *in* is required; reading one *out* of this verb is not part of its contract.
-
-```sh
-# pre-activation (JSON) Prepare recovery only
-# coordinator: read both byte versions, then replace a binding its prior owner cannot authenticate
-mstar workflow show-prepare --session <coordinator-session.json> --json
-mstar workflow recover-coordinator --prior-session <recorded-coordinator-session.json> \
-  --session-id <explicitly-acquired-id> --operation-id op-2026-09-21-1 --reason "<why the prior owner cannot authenticate>" \
-  --authorization-ref "<operator authorization>" --stopped <recorded-session-id> \
-  --expect-snapshot sha256:<hex> --expect-compass sha256:<hex> --json
-```
+Historical snapshot/compass versions and recovery audit digests are informational records, not admission tokens. The retained Prepare contracts concern current coordinator authorization, a registered running Prepare workflow with no execution ownership, canonical plan pointers, permitted append/correction deltas, and compass plan-id set/branch/path declarations. Set membership is order-insensitive. Recovery concerns the named prior holder, explicit replacement identity, authorization and stop assertion; it transfers no lease. Same operation id with a different request remains a replay conflict; receipt replay does not depend on current output-byte equality. No snapshot/compass hash preflight or byte-restoration recipe applies.
 
 ## Standalone plan registration and delivery evidence
 

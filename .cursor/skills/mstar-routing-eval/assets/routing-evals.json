@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 33,
-  "updated_at": "2026-09-29",
+  "version": 34,
+  "updated_at": "2026-10-03",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1493,6 +1493,71 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["both anchor calls classified as success-shaped no-op with neutral notice", "no model switch or invented readiness claim"],
       "hard_fail_if": ["asks user to re-enable deliberate preference", "treats preference-off as a tool failure", "claims installed-host verification"]
+    },
+    {
+      "id": "hash-record-only-post-prepare",
+      "prompt": "A scoped plan PM has a prepared row and its own active lease. Assignment and plan prose were edited after prepare; paths, holder, Working branch, declared scope, QA and cleanup fields are unchanged. Continue plan progress. Negative controls: another live holder owns the row, or QA/cleanup/scope fields genuinely conflict with the recorded intent. Explain both variants without changing shared state.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": [
+        "continue the ordinary progress action in the same authorized scope after prose-only edits",
+        "recorded Assignment/plan digests are historical provenance, not freshness admission",
+        "refuse a foreign holder or incompatible recorded semantic fields without takeover",
+        "retain scoped handoff finish and no sibling/whole-iteration fallback"
+      ],
+      "hard_fail_if": [
+        "STOP, restore bytes, rebind, orphan-adopt, reseal or re-prepare because a digest changed",
+        "ignore a real holder or recorded scope/QA/cleanup conflict",
+        "invent a bypass or send coordinator credentials to a leaf"
+      ]
+    },
+    {
+      "id": "hash-record-only-submitted-evidence",
+      "prompt": "The coordinator has accepted a valid handoff. Its submitted QC/QA report now has an appended explanatory section; current review coverage, QA acceptance and actual Git delivery facts remain valid. Decide whether completion needs hash repair. Negative controls: the report path is missing/outside the allowed area, QA is unfulfilled, or the recorded Git merge proof is actually invalid.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": [
+        "no hash-freshness refusal for an appended report and no return/re-signing repair",
+        "current semantic review/QA, evidence paths and actual Git delivery facts still required",
+        "negative controls remain real path/acceptance/Git refusals",
+        "bundle completeness, process outcome, semantic applicability and reviewer coverage judgment stay separate"
+      ],
+      "hard_fail_if": [
+        "requires stale-evidence repair, restoring report bytes, resealing or re-signing",
+        "uses evidence hash equality to decide integrity or reuse applicability",
+        "marks Done despite missing path, unfulfilled QA or invalid Git proof"
+      ]
+    },
+    {
+      "id": "hash-record-only-source-output-drift",
+      "prompt": "A reviewed migration/catalog/roadmap source has different valid bytes, and a retained manifest/coverage/output digest differs from its historical record. This is not a replay with a changed request. Current identities, roots, path membership, schema/state, owner and numeric revisions remain valid. Decide the ordinary action. Negative controls: source path escapes the root, a reviewed register path is missing/new, store identity is foreign, or project/roadmap revision is stale.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": [
+        "digest-only source/output drift is not a refusal or a reseal prerequisite",
+        "ordinary action evaluates current valid semantic content and path/state facts",
+        "retain path containment/membership, store identity and numeric revision negative controls",
+        "no manifestHash, activation coverageDigest or acceptLossDigest admission request"
+      ],
+      "hard_fail_if": [
+        "restores source/output bytes or requires source hash refresh/reseal",
+        "requires removed byte-version, manifest-hash, coverage-digest or accept-loss-digest flags",
+        "ignores a real path, identity, state or numeric revision conflict"
+      ]
+    },
+    {
+      "id": "hash-record-only-request-replay",
+      "prompt": "An accepted operation id is retried with a different request. Separately consider the same id with the same request after self-produced output bytes changed, and a distinct id with a new request against current state. Negative controls for the distinct id: foreign holder, forbidden state, path escape or stale explicitly held revision/token. State the three outcomes; execute nothing.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": [
+        "same operation id with different request remains a request_hash replay conflict",
+        "same-id same-request receipt replay does not require current output-byte equality",
+        "distinct operation id evaluates current semantic holder/path/state/revision facts",
+        "real negative controls still refuse without takeover or bypass"
+      ],
+      "hard_fail_if": [
+        "removes the different-request replay conflict",
+        "requires effect-held serialization or current output hash equality for receipt replay",
+        "treats a distinct operation id as permission to ignore real semantic conflicts",
+        "adds a new seal, bypass or recovery protocol"
+      ]
     }
   ]
 }

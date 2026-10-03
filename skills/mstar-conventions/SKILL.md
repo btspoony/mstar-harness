@@ -127,7 +127,7 @@ Issue 身份、证据、影响、处置、occurrences、关系与 provenance，�
 ### 职责：discover / import / register / query
 
 - **discover** — `mstar catalog discover` 只读提案：配置根的 tracked 正文 + legacy 索引行的 dry-run，写出 nothing，带 reviewed source hash、显式 `unknowns` 与拟退役索引节。
-- **import** — `mstar catalog import` 应用**已 review** 的 mapping；冲突或 reviewed source 漂移**整单拒绝**；不创建 workflow session、不退役索引。
+- **import** — `mstar catalog import` applies the reviewed mapping with current semantic identity/path/revision checks. Source hashes are provenance; reviewed source-byte drift alone does not refuse import. It creates no workflow session and retires no index.
 - **register / update / link** — 单行登记与元数据/关系变更走 catalog 域边界（`mstar catalog register` / `mstar catalog update` / `mstar catalog link`；identity 不可改，revision 守卫与可改字段见 help）。
 - **query** — `mstar catalog list` / `mstar catalog show`。
 - **reconcile** — 执行注册中断的收口（pending 状态 `catalog.registration-pending`，contract §3；只读列出见 help）。
