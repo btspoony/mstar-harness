@@ -1,6 +1,6 @@
 ---
 name: mstar-harness-core
-description: Morning Star (晨星) harness **生命周期 / 授权语义权威与全局入口** —— 信息源优先级、最小交付循环、状态机与 Done 权限、Task category 路由（含 quick 禁豁免）、@explore 边界、长任务纪律、核心研发守则、护栏不变量、Morning Star Skill 索引与宿主入口。加载**选择**权威在 **`mstar-roles`**（hub § Load Order 按 Assignment `Skill presets:` 决策；本 skill 不另设全局必读表）：PM 与标准路线仍以本 skill 为全局入口；独立直接调用专题时本 skill 是首个依赖；explicit `none` 角色路线以身份 + 角色自有方法自洽（唯一 hub bootstrap 例外）。`@project-manager` 开轮必读 + `mstar-dispatch-gates` / `mstar-phase-gates` / `mstar-conventions` 等；实现/审查/QA 按其角色 preset 清单加载。Prepare/派发/Git/residual/QC 细则在专题 skill，不在此重复。版本漂移（version drift）/ CLI 与插件版本不一致 / 提示更新插件或 CLI → 按「版本对齐」节处理（doctor 检查 + 定向更新提示）。
+description: Morning Star lifecycle and authorization authority — source priority, delivery loop, state machine, Done ownership, task-category routing, engineering safeguards, and topic index. Load selection belongs to mstar-roles; PM and standard routes retain this global entry. Harness lifecycle topics require core-first; the roles hub bootstraps preset selection. Explicit none retains role identity and role-owned methods without waiving authority. Use for lifecycle, authorization, status, Done, routing, or CLI/plugin version drift; detailed Prepare, dispatch, Git, residual, and QC procedures remain in their owning topics.
 ---
 
 # Morning Star Harness Core（晨星核心）
@@ -10,8 +10,8 @@ description: Morning Star (晨星) harness **生命周期 / 授权语义权威�
 ## 与其它 `mstar-*` skill 的加载契约
 
 - 本 skill 是 harness 的**生命周期 / 授权语义权威**（状态机、Done 权限、门禁、路由以本 skill 为准）；加载**选择**权威是 **`mstar-roles`**（hub bootstrap → 角色身份 → Assignment `Skill presets:` 决策，见其 § Load Order）。本 skill 不维护第二份全局必读角色表。
-- **独立直接调用专题**（不经角色 hub bootstrap）时，`mstar-harness-core` 仍是首个依赖：各专题 SKILL.md 的 Load Order / First action 节须声明 core-first。**唯一例外**是 `mstar-roles` hub bootstrap —— explicit `none` 下角色以身份 + 角色自有方法自洽，不强制读任何专题（含本 skill）；此时授权、反递归、证据诚实等 load-bearing 语义由角色引用与其 leaf 边界承接。
-- 各专题 SKILL.md 含 **Load order**；按 **`mstar-roles`** 的加载选择 + 本 skill 专题索引按需加载，**禁止**为「保险」通读全部专题。
+- Directly invoked harness lifecycle topics require `mstar-harness-core` first in their Load Order / First action section. The `mstar-roles` hub bootstraps role-preset selection without requiring core-first. Under explicit `none`, role identity and the shared leaf boundary still carry authorization, anti-recursion, and evidence obligations.
+- Load lifecycle topics only as selected by `mstar-roles` and the relevant topic index; do not read all topics as a precaution. These load declarations govern harness procedures, not general engineering guidance.
 - **加载条件（`mstar-engine-legacy`）**：`mstar-engine-legacy` 是**条件契约档案**（engine-absent fallback）。**engine 约束激活（或宿主含 engine 能力）时不加载**——engine-present 宿主以运行时 skills 的 engine-check 指针 + engine 校验为权威；仅 engine-absent 宿主（无 `mstar` CLI / engine import）为找回被 engine 校验接管的 contract 全文而读取（触发契约见其 description）。
 
 ## Standalone harness（`mstar-*` 自洽）
@@ -44,7 +44,7 @@ description: Morning Star (晨星) harness **生命周期 / 授权语义权威�
 
 | 角色 | 始终 | 按任务追加（典型） |
 |------|------|-------------------|
-| **全部** | 加载选择 → **`mstar-roles`**（hub § Load Order；本 skill = 生命周期/授权权威，`mstar-roles` hub bootstrap 是 core-first 的唯一例外） | — |
+| **All harness roles** | Load selection → **`mstar-roles`** (§ Load Order); this skill owns lifecycle/authorization. The hub bootstraps role selection without requiring core-first. | — |
 | **`@project-manager`** | 本 skill | `mstar-dispatch-gates`、`mstar-phase-gates`、`mstar-conventions`、`mstar-roles`；implement 波次 `mstar-sdd`；派 QC 前 `mstar-review-qc`；并行/审查 `mstar-branch-worktree`；plan/status/review bundle `mstar-artifacts`；UI 类 plan Prepare 阶段 `mstar-design-md`（DESIGN.md 门禁）；新建/大改 skill 时 `mstar-skill-authoring`；迭代管理 `mstar-iteration`（Phase 1–5）；战略性工作 `mstar-strategy`；`audit` 类请求 `mstar-audit`（执行归 `@code-reviewer`）；跑/解读 CLI 命令时 `mstar-use-cli`。**不**读 `mstar-coding-behavior` |
 | **实现/审查/运维** | 本 skill + `mstar-coding-behavior` + 角色 ref | 有 git 写：`mstar-branch-worktree`；有 plan 路径：`mstar-conventions`；**PM** 派 QC 前：`mstar-review-qc`；**`qc-specialist*`**：`mstar-roles` → `references/qc-specialist/`；`qa-engineer`：`references/qa-engineer/`；改 status/residual：`mstar-artifacts`；UI：`mstar-design-md`；知识库：`mstar-compound`（PM）；跑/解读 CLI 命令时（各 leaf 角色按任务）：`mstar-use-cli` |
 | **leaf 承接方** | 上栏 + **`mstar-dispatch-gates`**（反递归节） | — |
@@ -105,7 +105,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
-| `mstar-coding-behavior` | Think / Simplicity / Surgical / Debugging / Review Feedback / Goal-Driven |
+| `mstar-coding-behavior` | Requirement-first simplicity, surgical diagnosis/review, agent-facing interfaces, and scoped evidence |
 | `mstar-compound` | 知识结晶 —— 已解决问题→结构化知识文档，双轨（Bug/Knowledge），「是否值得结晶」自检清单，重叠检测，可发现性检查，CONCEPTS.md 协同 |
 | `mstar-compound-refresh` | 知识维护 —— 审查/更新/合并/删除 `{KNOWLEDGE_DIR}` 文档；**项目知识 bootstrap**（无/残旧 STRATEGY.md、CONCEPTS.md、`{KNOWLEDGE_DIR}`）→ `references/project-knowledge-bootstrap.md` |
 | `mstar-strategy` | `STRATEGY.md` 全局战略方向 —— 产品愿景、技术方向、决策原则 |
@@ -143,7 +143,7 @@ Read **`mstar-host`** after this skill; it detects the active host and routes to
 
 ## 核心研发守则
 
-全局工程不变量，适用于所有角色；实现级操作细节（The Ladder、surgical、debugging 等）→ **`mstar-coding-behavior`**。
+Global engineering invariants apply to all harness roles; implementation and review practice → **`mstar-coding-behavior`**.
 
 - Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
 - Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.

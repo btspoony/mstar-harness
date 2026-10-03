@@ -105,6 +105,8 @@ Better：`Use when a non-trivial task has a spec or requirements and needs a wri
 
 Keep `SKILL.md` focused on the main execution path. Move long examples, templates, schemas, and detailed variants into `references/`, `templates/`, or `scripts/`.
 
+The trigger/exclusion contract belongs in frontmatter. Use a Load Order section for actual dependencies, not as a mandatory preflight for dependency-free engineering guidance; retain the four execution/evidence/reference sections.
+
 ## Skill-relative script and asset paths
 
 When a skill ships executables or assets under `scripts/` / `templates/` / `references/`, name them as **skill → relative path**：

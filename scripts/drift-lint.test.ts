@@ -772,6 +772,18 @@ describe("checkFiveQuestionCorpus — Guard 5 five-question runtime smoke", () =
     expect(checked).toBe(mstarSkillCount - 2);
     expect(failures).toEqual([]);
   });
+  test("standalone load-heading exemption retains corpus coverage and the other heading checks", () => {
+    const rel = "skills/mstar-coding-behavior/SKILL.md";
+    const sample = realCorpus().find((entry) => entry.rel === rel);
+    expect(sample).toBeDefined();
+    expect(checkFiveQuestionCorpus([sample!])).toEqual({ checked: 1, failures: [] });
+    const gapped = dropHeading([sample!], rel, /^#{1,6}\s+Evidence\s*$/);
+    const result = checkFiveQuestionCorpus(gapped);
+    expect(result.checked).toBe(1);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toContain("five-question.evidence");
+  });
+
 
   test("removing an alias-covered heading (mstar-audit ## Output format) fails the guard", () => {
     const corpus = realCorpus();

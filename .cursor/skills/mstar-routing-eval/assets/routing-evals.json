@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 33,
-  "updated_at": "2026-09-29",
+  "version": 34,
+  "updated_at": "2026-10-03",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -1493,6 +1493,27 @@
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["both anchor calls classified as success-shaped no-op with neutral notice", "no model switch or invented readiness claim"],
       "hard_fail_if": ["asks user to re-enable deliberate preference", "treats preference-off as a tool failure", "claims installed-host verification"]
+    },
+    {
+      "id": "coding-behavior-standalone-load",
+      "prompt": "Use mstar-coding-behavior directly to fix a CSV parser regression in an ordinary project with no Morning Star workflow or role Assignment.",
+      "expected_route": ["direct mstar-coding-behavior invocation"],
+      "must_have_artifacts": ["requirement-first scoped diagnosis and consumer-behavior evidence", "no mandatory load of another Morning Star skill"],
+      "hard_fail_if": ["requires core, roles, branch or dispatch skills solely to use coding behavior", "creates a harness lifecycle or engine preflight for this standalone invocation"]
+    },
+    {
+      "id": "coding-behavior-harness-authority",
+      "prompt": "A fullstack-dev leaf with Skill presets: standard and Delegation: forbidden is assigned a harness bug fix. It calls mstar-coding-behavior standalone and proposes to ignore its assigned worktree, dispatch a sibling, and mark Done itself.",
+      "expected_route": ["assigned fullstack-dev leaf", "existing roles preset and harness authorities"],
+      "must_have_artifacts": ["retain assigned worktree and verification scope", "no delegation or Done authority gained from standalone coding behavior", "report evidence through the assigned handoff"],
+      "hard_fail_if": ["standalone exception waives standard preset or Assignment authority", "leaf changes branch policy, dispatches, or marks Done", "creates new gates instead of applying existing authorities"]
+    },
+    {
+      "id": "coding-behavior-exact-load-exemption",
+      "prompt": "Validate a skill corpus containing mstar-coding-behavior without Load Order, the roles hub with its complete bootstrap contract, and mstar-other-topic claiming standalone use without Load Order.",
+      "expected_route": ["existing roles load-order validator"],
+      "must_have_artifacts": ["accept exact mstar-coding-behavior without load declaration", "retain roles hub decision matrix checks", "reject the other topic's missing Load Order"],
+      "hard_fail_if": ["requires Load Order or core-first for exact coding behavior", "exempts arbitrary topics by standalone wording or name prefix", "adds a coding-behavior wording scanner or waives hub checks"]
     }
   ]
 }

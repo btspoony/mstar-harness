@@ -86,10 +86,10 @@ function collectHeadings(bodyText: string): string[] {
   return headings;
 }
 
-/** Lint mode: `authoring` (canonical headings only — greenfield / strict)
- * or `runtime` (canonical plus the locked `RUNTIME_HEADING_ALIASES` table
- * — shipped `mstar-*` topic skills). */
-export type FiveQuestionMode = "authoring" | "runtime";
+/** Lint mode: `authoring` uses canonical headings; `runtime` also accepts
+ * the locked aliases. `standalone` keeps canonical headings but omits
+ * mandatory Load Order for exact `mstar-coding-behavior`. */
+export type FiveQuestionMode = "authoring" | "runtime" | "standalone";
 
 /** Skill-lint profile kind (spec A4): `core` = the `mstar-harness-core` hub
  * (five-question exempt), `runtime` = shipped `mstar-*` topic skills, and
@@ -109,6 +109,8 @@ export type SkillLintProfile = { kind: SkillLintKind; mode: FiveQuestionMode | n
  * design — hub headings; frontmatter + ephemeral checks still run);
  * - exact `mstar-skill-authoring` → `authoring` (the standard's own
  * definition stays strict despite the `mstar-` prefix);
+ * - exact `mstar-coding-behavior` → `runtime` / `standalone` (only the
+ * mandatory Load Order heading is exempt; triggers remain in frontmatter);
  * - any other `mstar-*` → `runtime` (locked alias table applies);
  * - unknown / non-`mstar-*` / missing identity → `authoring` (strict
  * default — greenfield inputs are never loosened).
@@ -121,6 +123,7 @@ export function classifySkillLint(skillId: string | undefined): SkillLintProfile
   const id = skillId ?? "";
   if (id === "mstar-harness-core") return { kind: "core", mode: null };
   if (id === "mstar-skill-authoring") return { kind: "authoring", mode: "authoring" };
+  if (id === "mstar-coding-behavior") return { kind: "runtime", mode: "standalone" };
   if (id.startsWith("mstar-")) return { kind: "runtime", mode: "runtime" };
   return { kind: "authoring", mode: "authoring" };
 }
@@ -130,9 +133,9 @@ export function classifySkillLint(skillId: string | undefined): SkillLintProfile
  * for shipped topic skills, verified against the shipped-skill corpus. Tokens are
  * case-insensitive heading substrings (any heading level); the `decision-rules`
  * breadth is bounded by the corpus regression test pinning current state.
- * `load-order` has no aliases — the canonical label covers 15/16 skills and
- * `mstar-host` closes its gap with a corpus edit instead. Chinese tokens are
- * `\uXXXX` escapes (ASCII-only src literals; runtime value is identical).
+ * `load-order` has no aliases. Exact standalone coding behavior omits that
+ * heading requirement without changing the alias table. Chinese tokens
+ * use `\uXXXX` escapes (ASCII-only literals; runtime values are identical).
  */
 export const RUNTIME_HEADING_ALIASES: Readonly<Record<string, readonly string[]>> = {
   workflow: ["process", "playbook"],
@@ -160,8 +163,8 @@ export const RUNTIME_HEADING_ALIASES: Readonly<Record<string, readonly string[]>
  * "## Load Order (Required)" and "### Workflow — main path" both match).
  * `mode: "runtime"` additionally accepts the locked `RUNTIME_HEADING_ALIASES`
  * synonyms for shipped topic skills; `authoring` (default) stays canonical-
- * only — greenfield skills still must use the canonical headings. Content
- * judgment (whether the answer is actually narrow / procedural) stays prompt.
+ * only. `standalone` omits only the mandatory Load Order heading; all
+ * remaining headings stay canonical. Content judgment stays prompt.
  * Advisory: violations are `low` severity (v1 non-blocking).
  *
  * Violations: `skill-authoring.five-question.<key>` for each uncovered
@@ -171,6 +174,7 @@ export function lintFiveQuestion(bodyText: string, mode: FiveQuestionMode = "aut
   const headings = collectHeadings(bodyText);
   const violations: ValidationResult[] = [];
   for (const section of FIVE_QUESTION_SECTIONS) {
+    if (mode === "standalone" && section.key === "load-order") continue;
     const label = section.label.toLowerCase();
     const aliases = mode === "runtime" ? (RUNTIME_HEADING_ALIASES[section.key] ?? []) : [];
     const covered = headings.some(

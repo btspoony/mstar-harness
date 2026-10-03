@@ -1,0 +1,13 @@
+---
+category: Harness
+packages: root, engine
+---
+
+- **Standalone coding behavior:** compact `mstar-coding-behavior` around original user outcomes, first principles, Occam/YAGNI, surgical diagnosis, and scoped evidence. Remove mandatory harness loading, repeated templates, simplification markers, and engine preflights; retain conditional workflow authority.
+- **Agent-facing design:** prioritize discoverable commands and recovery, minimal required input with safe defaults, revisable public mutations, and faithful errors and partial outcomes; reject speculative features and gates without weakening required safeguards.
+- **Narrow load contract:** exempt only exact `mstar-coding-behavior` from mandatory Load Order/core-first validation. Preserve other topic and roles-hub checks, add behavior regressions, and align Cursor load/routing scenarios.
+
+<!-- CN -->
+- **独立编码行为技能：** 将 `mstar-coding-behavior` 压缩为围绕原始用户目标、第一性原理、奥卡姆剃刀/YAGNI、根因修复及定向证据的工作流；移除强制 harness 加载、重复模板、简化标记与引擎预检，仅保留按需工作流权威引用。
+- **Agent 产品设计：** 优先保证命令与恢复路径可发现、必要输入最少且默认安全、公开操作可修订、错误与部分结果保真；禁止臆测功能和门禁，同时保留必要安全护栏。
+- **精确加载例外：** 仅豁免名称完全匹配的 `mstar-coding-behavior` 的强制 Load Order/core-first 校验；其它专题及角色 hub 校验保持不变，补充行为回归并同步 Cursor 加载/路由场景。
