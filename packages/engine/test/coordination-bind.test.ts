@@ -2,13 +2,12 @@
 // (including the findings-gate issue-authority cases).
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, basename, join, sep } from "node:path";
 import {
   EXECUTION_PIN_CONFLICT_CODE,
   bindPlanSession,
-  
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readPlanCoordination,
@@ -92,9 +91,9 @@ describe("findings-gate — issue authority (G2a)", () => {
 
     // An unresolved critical blocks approval under the plan's cleanup mode —
     // read from the issue store, never from a register.
-    const before = readFileSync(fixture.snapshotPath);
+    const snapshotBefore = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.invalid-transition");
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
     // The authorized disposition (a separate act, contract §4) releases the gate.
@@ -127,18 +126,18 @@ describe("findings-gate — issue authority (G2a)", () => {
     } finally {
       staged.close();
     }
-    const before = readFileSync(fixture.snapshotPath);
+    const snapshotBefore = readJson(fixture.snapshotPath);
     expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.store");
-    // The refusal is non-advancing: snapshot bytes, row status and the lease
-    // this session holds are all untouched.
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    // The refusal is non-advancing: the snapshot document, row status and the
+    // lease this session holds are all untouched.
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(sessionId);
 
     // A missing store is not an empty one either: the same step still refuses.
     for (const suffix of ["", "-wal", "-shm"]) rmSync(`${join(fixture.harness, "store.db")}${suffix}`, { force: true });
     expect(await errorCodeOf(() => handoffCall(fixture, evidence))).toBe("coordination.store");
-    expect(readFileSync(fixture.snapshotPath).equals(before)).toBe(true);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(leaseHolder(planRowOf(fixture, PLAN_ID))).toBe(sessionId);
   }, 30000);
 });
@@ -174,12 +173,12 @@ describe("binding", () => {
     expect(coordination.coordinator?.session_file).toBe(fixture.coordinatorSession);
 
     // Same session file → read-only resume, no write at all.
-    const bytesBefore = readFileSync(fixture.snapshotPath, "utf8");
+    const snapshotBefore = readJson(fixture.snapshotPath);
     const resumed = await bindPlanSession({ resumePath: fixture.coordinatorSession, cwd: fixture.root });
     expect(resumed.outcome).toBe("resumed");
     expect(resumed.session.session_id).toBe(bound.session.session_id);
     expect(resumed.session_file).toBe(fixture.coordinatorSession);
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
 
     // A second coordinator identity is refused and the binding is untouched.
     expect(
@@ -216,11 +215,11 @@ describe("binding", () => {
     expect(lease.working_branch).toBe("feature/plan-a");
 
     // Resume validates the persisted binding and re-acquires nothing.
-    const bytesBefore = readFileSync(fixture.snapshotPath, "utf8");
+    const snapshotBefore = readJson(fixture.snapshotPath);
     const resumed = await resumePlan(fixture, PLAN_ID);
     expect(resumed.outcome).toBe("resumed");
     expect(resumed.session.session_id).toBe(claimed.session.session_id);
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
 
     // A second fresh bind cannot take over a held plan.
     expect(
@@ -344,7 +343,7 @@ describe("binding", () => {
     // names, `a/b` adds a segment and 129 characters exceed the id contract.
     for (const bad of ["../escape", "", "a/b", ".", "a".repeat(129)]) {
       const fixture = makeFixture();
-      const before = readFileSync(fixture.snapshotPath, "utf8");
+      const snapshotBefore = readJson(fixture.snapshotPath);
       expect(
         await errorCodeOf(() =>
           bindPlanSession({
@@ -356,7 +355,7 @@ describe("binding", () => {
           }),
         ),
       ).toBe("coordination.invalid-session-id");
-      expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+      expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
       expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
     }
 
@@ -366,7 +365,7 @@ describe("binding", () => {
     await preparePlan(fixture, PLAN_ID);
     const sessionsDir = join(fixture.workflowDir, "sessions");
     const envelopes = readdirSync(sessionsDir).sort();
-    const before = readFileSync(fixture.snapshotPath, "utf8");
+    const snapshotBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() =>
         bindPlanSession({
@@ -376,7 +375,7 @@ describe("binding", () => {
         }),
       ),
     ).toBe("coordination.invalid-session-id");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(readdirSync(sessionsDir).sort()).toEqual(envelopes);
   });
 
@@ -384,13 +383,13 @@ describe("binding", () => {
     // A fresh coordinator bind never generates an identity: the engine refuses
     // before any write, so the workflow keeps no envelope and no sessions dir.
     const fixture = makeFixture();
-    const before = readFileSync(fixture.snapshotPath, "utf8");
+    const snapshotBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() =>
         bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
       ),
     ).toBe("coordination.identity-missing");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
 
     // An envelope that already occupies the id's role-scoped path is never
@@ -399,7 +398,7 @@ describe("binding", () => {
     const fresh = makeFixture();
     const orphan = join(fresh.workflowDir, "sessions", "coordinator-host-session-orphan.json");
     writeText(orphan, '{"stray":true}\n');
-    const freshBefore = readFileSync(fresh.snapshotPath, "utf8");
+    const freshBefore = readJson(fresh.snapshotPath);
     expect(
       await errorCodeOf(() =>
         bindPlanSession({
@@ -411,8 +410,9 @@ describe("binding", () => {
         }),
       ),
     ).toBe("coordination.session-mismatch");
-    expect(readFileSync(orphan, "utf8")).toBe('{"stray":true}\n');
-    expect(readFileSync(fresh.snapshotPath, "utf8")).toBe(freshBefore);
+    expect(readJson(fresh.snapshotPath)).toEqual(freshBefore);
+    // The occupant is untouched too: the refusal hijacks no identity.
+    expect(readJson(orphan)).toEqual({ stray: true });
   });
 
   test("prerequisite identity — an explicit id is adopted, two same-workflow binds retain one owner, and a foreign root never inherits it", async () => {
@@ -429,7 +429,7 @@ describe("binding", () => {
     expect(readJson(fixture.snapshotPath).coordination).toMatchObject({
       coordinator: { session_id: "host-session-explicit" },
     });
-    const bytesBefore = readFileSync(fixture.snapshotPath, "utf8");
+    const snapshotBefore = readJson(fixture.snapshotPath);
 
     // One owner per workflow: a second fresh bind, even naming another id, is
     // refused and mutates nothing.
@@ -444,7 +444,7 @@ describe("binding", () => {
         }),
       ),
     ).toBe("coordination.duplicate-holder");
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
 
     // A second control harness is isolated: the same session id binds a
     // *different* workflow there and writes nothing into the first root.
@@ -460,7 +460,7 @@ describe("binding", () => {
     expect(readJson(other.snapshotPath).coordination).toMatchObject({
       coordinator: { session_id: "host-session-explicit" },
     });
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(bytesBefore);
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
   });
 
   test("the operation surface is closed, role-scoped and never advertised to the wrong seat", async () => {
@@ -677,7 +677,7 @@ describe("scope-and-revisions", () => {
     const unassociated = makeFixture();
     await preparePlan(unassociated, PLAN_ID);
     await bindPlan(unassociated, PLAN_ID);
-    const before = readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root);
+    const before = await readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root);
     const unassociatedFailure = await failureOf(() =>
       mutatePlanCoordination({
         cwd: unassociated.root,
@@ -692,7 +692,7 @@ describe("scope-and-revisions", () => {
     expect(refusal.code).toBe("coordination.invalid-input");
     const recovery = refusal.details.recovery as RecoveryDetails;
     expect(recovery.unresolved[0]?.needed).toBe("the session this call runs under");
-    expect(readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root).revision).toBe(before.revision);
+    expect((await readPlanCoordination(unassociated.planSession, PLAN_ID, unassociated.root)).revision).toBe(before.revision);
   });
 
   test("progress is admission-checked: evidence-scoped and transition-guarded", async () => {

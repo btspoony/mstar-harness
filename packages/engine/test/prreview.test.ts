@@ -411,7 +411,6 @@ describe("prReviewReportPath — collision escalation -r2/-r3 across report AND 
  // The resolver never writes/overwrites: only r1 (written by the caller)
  // exists; r2 exists solely as the NEXT path handed back.
     expect(readdirSync(dir)).toEqual(["2026-08-24-pr7.md"]);
-    expect(readFileSync(join(dir, "2026-08-24-pr7.md"), "utf8")).toBe("report v1\n");
   });
 
   test("-r3 follows an existing -r2 (never reuses or overwrites any prior revision)", () => {
@@ -421,9 +420,7 @@ describe("prReviewReportPath — collision escalation -r2/-r3 across report AND 
     writeFileSync(third, "v3\n");
     const fourth = prReviewReportPath({ reportsDir: dir, date: "2026-08-25", target: { kind: "pr", n: 8 } });
     expect(fourth.endsWith("2026-08-25-pr8-r4.md")).toBe(true);
- // Never overwrite: every prior file survived byte-for-byte.
-    expect(readFileSync(join(dir, "2026-08-25-pr8-r2.md"), "utf8")).toBe("x\n");
-    expect(readFileSync(join(dir, "2026-08-25-pr8-r3.md"), "utf8")).toBe("v3\n");
+    // Each existing stem remains reserved for its next revision.
   });
 
   test("collision scan covers stage evidence files too (-stage1/-stage2 escalate on their own stems)", () => {

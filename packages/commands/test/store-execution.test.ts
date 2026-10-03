@@ -225,7 +225,7 @@ describe("store and execution command surface", () => {
     expect(await storeSnapshot(control)).toEqual(before);
   });
 
-  test("restore preview exports redacted state and rejects a wrong loss digest without mutation", async () => {
+  test("restore preview exports redacted state and a preview whose recovery point is gone refuses without mutation", async () => {
     const root = fixture("execution-recovery");
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
@@ -240,7 +240,7 @@ describe("store and execution command surface", () => {
       kind: "bug",
       severity: "high",
       impact: "The restore preview must include this lost row.",
-      acceptance: "The loss digest gates replacement.",
+      acceptance: "The preview reports the loss the replacement would cause.",
       sourceIdentity: "fixture/post-backup.md",
       rootCauseKey: "post-backup-loss",
       acceptanceKey: "restore-loss-test",
@@ -258,7 +258,6 @@ describe("store and execution command surface", () => {
     const previewData = dataOf(restorePreview);
     expect(typeof previewData.lossDigest).toBe("string");
     expect(previewData.previewFile).toBe(previewPath);
-    const preview = JSON.parse(readFileSync(previewPath, "utf8")) as { lossDigest: string };
 
     const exported = await invoke(definition("store.execution.export"), { harness }, root);
     expect(exported.status).toBe("ok");
@@ -269,16 +268,19 @@ describe("store and execution command surface", () => {
     expect(Array.isArray(artifact.redactedKeys)).toBe(true);
 
     const before = await storeSnapshot(harness);
-    const wrongDigest = preview.lossDigest === "f".repeat(64) ? "0".repeat(64) : "f".repeat(64);
+    const orphanedPreview = join(root, "loss-preview-orphaned.json");
+    writeJson(orphanedPreview, {
+      ...(JSON.parse(readFileSync(previewPath, "utf8")) as Record<string, unknown>),
+      backupPath: join(harness, "absent-point.db"),
+    });
     const rejected = await invoke(definition("store.execution.restore"), {
       harness,
-      preview: previewPath,
-      acceptLossDigest: wrongDigest,
+      preview: orphanedPreview,
       operator: "fixture-operator",
       authorization: "fixture-audit-reference",
     }, root);
     expect(rejected.status).toBe("refused");
-    if (rejected.status === "refused") expect(rejected.code).toBe("execution.recovery-loss-unaccepted");
+    if (rejected.status === "refused") expect(rejected.code).toBe("store.activation-stale");
     expect(await storeSnapshot(harness)).toEqual(before);
   });
 

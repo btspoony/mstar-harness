@@ -82,6 +82,7 @@ import {
   PLAN_PARALLELISM_VALUES,
   gitRead,
   prepareAmendmentComponent,
+  revalidateGitProofWitness,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
@@ -696,13 +697,14 @@ async function readCloseEvidence(context: ExecutionContext, workflowId: string):
  * directory, because nothing records a checkout that is no longer there.
  */
 function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
-  if (evidence.worktree !== undefined) {
-    const { path, branch } = evidence.worktree;
+  const checkout = evidence.worktree ?? evidence.checkout;
+  if (checkout !== undefined && checkout.branch !== null) {
+    const { path, branch } = checkout;
     if (!existsSync(path) || !statSync(path).isDirectory()) {
       throw new CoordinationError(
-        "coordination.evidence-stale",
-        `the integration checkout ${path} disappeared after it was validated \u2014 nothing records a checkout ` +
-          `that is no longer there`,
+        "coordination.integration-unresolved",
+        `the integration checkout ${path} disappeared after it was validated; restore the checkout at the registered path ` +
+          `and retry the workflow transition`,
         { path },
       );
     }
@@ -715,6 +717,9 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
         { path, expected: branch },
       );
     }
+  }
+  for (const proof of evidence.completions ?? []) {
+    if (proof.gitWitness !== undefined) revalidateGitProofWitness(proof.gitWitness);
   }
 }
 
@@ -1348,7 +1353,7 @@ function assertHeaderValid(workflowId: string, header: Record<string, unknown>):
  * §3 the `phase` transition: the requested phase must be the transition the
  * lifecycle's own compass and its committed plan rows produce RIGHT NOW. The
  * gate is evaluated inside the transaction over the rows the commit will see,
- * with the compass bytes revalidated immediately before it — so a phase that
+ * with current checkout branch facts revalidated immediately before it — so a phase that
  * was skipped (the gate still says `phase-2-execute`) is refused, and no
  * caller-supplied verdict can enter the decision.
  */
@@ -1368,9 +1373,9 @@ function applyPhaseTransition(input: {
       : null;
     if (registeredPath !== checkout.path) {
       throw new CoordinationError(
-        "coordination.evidence-stale",
+        "coordination.path-mismatch",
         `the integration checkout of workflow ${workflowId} changed after its branch was probed (${String(checkout.path)} -> ` +
-          `${String(registeredPath)}) \u2014 the \u00A73.5 branch probe belongs to the registered checkout`,
+          `${String(registeredPath)}); retry the phase transition against the current registered checkout`,
         { workflow_id: workflowId, expected: registeredPath, actual: checkout.path },
       );
     }
@@ -1587,12 +1592,14 @@ function applyDeliveryEvidence(input: {
   }
   const stored = (isPlainObject(header.delivery) ? header.delivery : {}) as Record<string, unknown>;
   const incomingPr = isPlainObject(delivery.pr) ? delivery.pr : undefined;
-  // §4d the recorded PR identity must BE the registered delivery: the branch
-  // anchors the lifecycle registered are the semantic authority, so an identity
-  // that contradicts them is refused by field value below. Re-recording a
-  // delivery is a revisable mutation under a new operation id — a tampered
-  // replay of the SAME operation id is still refused by the request-hash
-  // conflict — so the previously recorded pair is not a second authority.
+  const recordedPr = isPlainObject(stored.pr) ? stored.pr : undefined;
+  if (recordedPr !== undefined && incomingPr !== undefined &&
+      (recordedPr.repo !== incomingPr.repo || recordedPr.head !== incomingPr.head || recordedPr.target !== incomingPr.target)) {
+    throw invalidWorkflowTransition(
+      `workflow ${workflowId} records a different PR identity; use the registered delivery identity or a separate workflow`,
+      { workflow_id: workflowId },
+    );
+  }
   const branch = isPlainObject(header.branch) ? header.branch : {};
   if (incomingPr !== undefined) {
     if (isNonEmptyString(branch.source) && incomingPr.head !== branch.source) {
@@ -1618,11 +1625,19 @@ function applyDeliveryEvidence(input: {
   // complete evidence (`consultDeliveryEvidence`) against rows it has completed —
   // so the ordering is bookkeeping rather than a caller ceremony.
   //
-  // Recording the report-only `completion` fulfilment is the same revisable
-  // mutation as any other delivery member: a re-record under a new operation id
-  // replaces it, and a tampered replay of the same operation id is refused by
-  // the request-hash conflict. The recorded reference is data the close
-  // consults, never a second authority over this writer.
+  // Completion freezes its accepted policy/reference, not the document body.
+  if (members.includes("completion") && rows.some((row) => rowStatusOf(row) === "Done")) {
+    const incoming = isPlainObject(delivery.completion) ? delivery.completion : undefined;
+    const recorded = isPlainObject(stored.completion) ? stored.completion : undefined;
+    if (recorded === undefined || incoming === undefined ||
+        recorded.policy !== incoming.policy || recorded.evidence !== incoming.evidence) {
+      throw new CoordinationError(
+        "coordination.completion-frozen",
+        `workflow ${workflowId} is Done against its recorded completion policy/reference; edit the referenced document normally; a different completed intent uses its own workflow`,
+        { workflow_id: workflowId },
+      );
+    }
+  }
   return { ...stored, ...delivery } as WorkflowDeliveryEvidence;
 }
 

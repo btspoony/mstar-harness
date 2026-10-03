@@ -611,7 +611,7 @@ describe("withStatusWriteLock", () => {
       const [a, b] = await Promise.all([writer("a"), writer("b")]);
       expect(a).toBe("a");
       expect(b).toBe("b");
-      expect(readFileSync(counterPath, "utf8")).toBe("2");
+      expect(Number(readFileSync(counterPath, "utf8"))).toBe(2);
  // Lock directory removed after the critical section (all exit paths).
       expect(existsSync(join(dir, ".status-write.lockdir"))).toBe(false);
     } finally {

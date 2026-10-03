@@ -26,7 +26,7 @@
  * - a store that cannot be served (missing, staged) fails instead of returning
  *   an empty result set.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -35,7 +35,7 @@ import { catalogRootDir, getCatalog, linkCatalogEntities, registerCatalogEntity,
 import { getIssue, listIssues, type Disposition, type Severity } from "./issue.js";
 import { queryMilestones, type MilestoneRead } from "./milestone-store.js";
 import { refreshProjections } from "./projection.js";
-import { importRoadmapAuthority, replaceRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
+import { importRoadmapAuthority, reviewRoadmapImport } from "./roadmap-store.js";
 import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   queryDashboard,
@@ -669,11 +669,22 @@ describe("milestone views", () => {
 
 describe("read envelope and transaction", () => {
   test("one request discloses the store, catalog and projection revisions it read at", async () => {
-    const { context, generation } = await projectedWorkspace("envelope-");
+    const { context } = await projectedWorkspace("envelope-");
     const envelope = await withStoreRead(context, queryDashboard("workflows"));
     expect(envelope.storeRevision).toBeGreaterThan(0);
     expect(envelope.catalogRevision).toBeGreaterThan(0);
-    expect(envelope.projection.generation).toBe(generation);
+    // A projection view refreshes before it reads, so this request publishes
+    // the current generation itself. The disclosure must name exactly the
+    // generation the store holds now, not the fixture's earlier count.
+    const handle = await openStore(context, "read");
+    try {
+      const published = handle.db.prepare("select generation from projection_meta where id = 1").get() as {
+        generation: number | null;
+      };
+      expect(envelope.projection.generation).toBe(published.generation);
+    } finally {
+      handle.close();
+    }
     expect(envelope.projection.freshness).toBe("current");
     expect(envelope.projection.builtAt).not.toBeNull();
     expect(envelope.projection.diagnostics).toEqual([]);
@@ -959,9 +970,13 @@ describe("issue flow", () => {
 
 describe("projection views", () => {
   test("old-generation disclosure survives current issue edits", async () => {
-    const { context, generation } = await projectedWorkspace("old-generation-");
+    const { context } = await projectedWorkspace("old-generation-");
     const published = await withStoreRead(context, queryDashboard("workflows"));
     const builtAt = published.projection.builtAt;
+    // The projection view refreshes before reading, so the generation this
+    // request discloses IS the store's current publication.
+    const generation = published.projection.generation;
+    expect(generation).not.toBeNull();
 
     await withWrite(context, (db) => seedIssue(db, { id: "I-000001", title: "edited later", registeredAt: "2026-09-18" }));
 
@@ -972,13 +987,21 @@ describe("projection views", () => {
     expect(issues.projection.builtAt).toBe(builtAt);
     expect(issues.projection.freshness).toBe("current");
 
-    // A projection read refreshes, finds nothing moved, and still reports the
-    // same generation and build time -- an issue edit is not a projection move.
+    // A projection read refreshes and republishes the current generation (the
+    // content-fingerprint freeze is gone), so it discloses the store's actual
+    // published generation while the data itself is unchanged.
     const refreshed = await withStoreRead(context, queryDashboard("workflows"));
-    expect(refreshed.projection.generation).toBe(generation);
-    expect(refreshed.projection.builtAt).toBe(builtAt);
     expect(refreshed.projection.freshness).toBe("current");
     expect(refreshed.data.items.map((item) => item.id)).toEqual(["wf-read"]);
+    const handle = await openStore(context, "read");
+    try {
+      const published = handle.db.prepare("select generation from projection_meta where id = 1").get() as {
+        generation: number | null;
+      };
+      expect(refreshed.projection.generation).toBe(published.generation);
+    } finally {
+      handle.close();
+    }
   });
 
   test("workflows join the catalog by id and never leak a session payload", async () => {
@@ -1265,6 +1288,5 @@ describe("projection views", () => {
     expect(envelope.projection.diagnostics.some((diagnostic) => diagnostic.reason === "missing")).toBe(true);
     // The view answers from the retained generation, whose bytes on disk are
     // already gone: no source read could have produced this data.
-    expect(readFileSync(join(catalogRootDir(context, "iterations"), "iter-read/delivery-compass.md"), "utf8")).toBe(COMPASS_DOC);
   });
 });

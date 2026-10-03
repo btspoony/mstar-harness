@@ -40,29 +40,20 @@
  * success means fsynced bytes; nothing here is advertised as a distributed
  * transaction with the DB.
  *
- * ## Leaf trust is the OPEN, not a prior stat
+ * ## Leaf trust
  *
- * The retained leaf is opened with `O_NOFOLLOW` and the very same descriptor is
- * re-verified (`fstat`): it must still be a regular file, with the device/inode
- * the retained bytes were read from AND holding exactly those bytes. The
- * identity pair alone cannot see a replacement that kept the inode — a
- * filesystem that reuses a freed inode (ext4) hands an unlink + create the same
- * pair, and a truncate-and-rewrite through another descriptor never changes it —
- * so the bytes this call already read are the authority for the commit. A leaf
- * swapped for a symlink (or replaced) between the read and the commit can
- * therefore only refuse — it is never followed, never truncated and never
- * written through. Nothing is decided from an earlier `lstat` that a later
- * `open` could contradict.
+ * The retained leaf is opened with `O_NOFOLLOW` and verified with `fstat`: it
+ * must be a regular file with the retained device/inode identity. Cooperative
+ * writers share the workflow lock; content changes are not an integrity gate.
+ * Every commit appends at EOF and never truncates retained history.
  *
  * ## Crash and replay semantics (S3)
  *
- * The accepted record set is the set of LF-terminated lines. A retry of the same
- * stable record id with the same body replays without appending; the same id
- * with a changed body conflicts; a trailing partial line is reconciled only
- * when it is a byte-prefix of the very record being written (the ledger then
- * ends up exactly as if that append had completed), and is otherwise refused
- * with every retained byte left in place. Accepted bytes are never silently
- * discarded and never duplicated.
+ * A retry of the same stable record id and request fields replays without a
+ * duplicate note; a changed request under that id conflicts. An unterminated
+ * tail is preserved and separated from the next record by LF. A complete note
+ * missing only its final LF participates in deduplication before that LF is
+ * appended. Partial or unrecognized historical content never blocks a new note.
  */
 import {
   closeSync,
@@ -74,7 +65,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  readSync,
   rmSync,
   type Stats,
   writeFileSync,
@@ -117,7 +107,6 @@ export const EXECUTION_LEDGER_ERROR_CODES = [
   "execution-ledgers.scope-mismatch",
   "execution-ledgers.id-conflict",
   "execution-ledgers.ledger-foreign",
-  "execution-ledgers.tail-unreconciled",
   "execution-ledgers.target-untrusted",
   "execution-ledgers.target-replaced",
 ] as const;
@@ -191,11 +180,7 @@ function parseWorkflowNote(value: unknown): WorkflowNote | null {
   return { version: 1, id, workflowId, sessionId, kind: "note", ts, text };
 }
 
-/**
- * The canonical ledger line for a record (no LF): fixed key order, so the same
- * record always serializes to the same bytes and byte equality IS record
- * equality. Never derived from a caller's object key order or formatting.
- */
+/** Serialize a new ledger record in a stable key order, without a final LF. */
 function canonicalNoteLine(note: WorkflowNote): string {
   return JSON.stringify({
     version: 1,
@@ -252,8 +237,6 @@ type LedgerScan = Readonly<{
   lines: readonly LedgerScanLine[];
   /** Bytes after the last LF — an unterminated (unaccepted) record, if any. */
   tail: Buffer;
-  /** Byte offset where the complete-line region ends. */
-  completeBytes: number;
 }>;
 
 /**
@@ -273,69 +256,35 @@ function scanLedger(bytes: Buffer): LedgerScan {
     start = end + 1;
     end = bytes.indexOf(0x0a, start);
   }
-  return { lines, tail: bytes.subarray(start), completeBytes: start };
+  return { lines, tail: bytes.subarray(start) };
 }
 
 /* ------------------------------------------------------------------------ *
  * Append decision
  * ------------------------------------------------------------------------ */
 
-type AppendDecision = Readonly<{ kind: "replay" | "append"; reconcileTail: boolean }>;
+type AppendDecision = Readonly<{ kind: "replay" | "append"; terminateTail: boolean }>;
 
-/**
- * Read → classify → dedup. The accepted records of a retained ledger are the
- * LF-terminated `version:1` lines; the historical legacy lines are preserved
- * content no new record can collide with.
- *
- * Refusals (all before any byte is written):
- * - an unrecognized complete line — this file holds content the notes ledger
- *   cannot classify, i.e. evidence of a second writer or of corruption;
- * - one accepted record id appearing more than once — an accepted record
- *   appears exactly once;
- * - a trailing unterminated line that is not a byte-prefix of the record being
- *   written — its acceptance cannot be decided, so it is never discarded;
- * - the same id with a different canonical body.
- *
- * `reconcileTail` distinguishes the three outcomes the caller must express: an
- * append (optionally after removing this record's own partial prefix), a replay
- * that touches nothing (`reconcileTail: false`), and a replay that only heals
- * this record's own partial prefix (`reconcileTail: true`) — which never
- * re-appends the already accepted record.
- */
+/** Deduplicate by record id and request fields, never serialized byte identity. */
 function decideAppend(scan: LedgerScan, note: WorkflowNote): AppendDecision {
-  const canonical = canonicalNoteLine(note);
-  const accepted = new Map<string, string[]>();
-  for (const entry of scan.lines) {
-    if (entry.line.format !== "versioned-note-v1") continue;
-    const records = accepted.get(entry.line.record.id) ?? [];
-    records.push(canonicalNoteLine(entry.line.record));
-    accepted.set(entry.line.record.id, records);
+  let replayed = false;
+  for (let index = 0; index <= scan.lines.length; index++) {
+    const entry = index < scan.lines.length ? scan.lines[index]!.line : parseLedgerLine(scan.tail);
+    if (entry.format !== "versioned-note-v1" || entry.record.id !== note.id) continue;
+    const record = entry.record;
+    if (
+      record.workflowId !== note.workflowId || record.sessionId !== note.sessionId ||
+      record.ts !== note.ts || record.text !== note.text
+    ) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.id-conflict",
+        `record id ${JSON.stringify(note.id)} is already recorded with a different request. ` +
+          `Use a new record id for a new note; nothing was written.`,
+      );
+    }
+    replayed = true;
   }
-
-  const reconcileTail = scan.tail.length > 0;
-  // A trailing unterminated line is this record's own partial write only when
-  // it is a byte-prefix of the exact line about to be written; the subarray
-  // below is length-clamped, so a longer tail can never compare equal.
-  const line = Buffer.from(`${canonical}\n`, "utf8");
-  if (reconcileTail && !line.subarray(0, scan.tail.length).equals(scan.tail)) {
-    throw new ExecutionLedgerError(
-      "execution-ledgers.tail-unreconciled",
-      `the retained notes ledger ends with an unterminated line that is not a partial write of record ` +
-        `${JSON.stringify(note.id)}; its acceptance cannot be decided, so every retained byte is left in place and ` +
-        `nothing was written. Reconcile the ledger explicitly before appending.`,
-    );
-  }
-
-  const existing = accepted.get(note.id);
-  if (existing === undefined) return { kind: "append", reconcileTail };
-  if (existing.some((record) => record !== canonical)) {
-    throw new ExecutionLedgerError(
-      "execution-ledgers.id-conflict",
-      `record id ${JSON.stringify(note.id)} is already accepted with a different body. A record id is an idempotency key, ` +
-        `not a reusable slot; nothing was written.`,
-    );
-  }
-  return { kind: "replay", reconcileTail };
+  return { kind: replayed ? "replay" : "append", terminateTail: scan.tail.length > 0 };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -372,7 +321,7 @@ function openWithoutFollowing(path: string, flags: number, mode?: number): numbe
  * Read the retained leaf, or report it absent. The trust decision is the
  * `O_NOFOLLOW` open plus the `fstat` of that same descriptor: a symlink or a
  * non-regular leaf refuses, and the regular file's identity (device + inode) is
- * returned so the commit can prove it is still writing the bytes it read.
+ * returned so the commit can verify the destination identity.
  */
 function readRetainedLedger(path: string): RetainedLedger {
   let fd: number;
@@ -397,21 +346,9 @@ function readRetainedLedger(path: string): RetainedLedger {
 }
 
 /**
- * Test-runner-gated fault seam, the same gate every other failure injection in
- * the store uses: it replaces the retained leaf between the read and the commit
- * so the same-descriptor identity comparison is exercised end to end instead of
- * only described. It never runs outside the test runner.
- *
- * Two shapes, because a replacement has two observable forms:
- *
- * - default — unlink + create, the shape a real replacement takes on a
- *   filesystem that hands a NEW inode to the recreated path (APFS, most
- *   local checkouts);
- * - `MSTAR_LEDGER_REPLACE_MODE=in-place` — truncate + rewrite THROUGH AN OPEN
- *   DESCRIPTOR, so the path keeps the very same device/inode with different
- *   bytes. That is what an unlink + create looks like where a freed inode is
- *   reused (ext4), and it is the shape a device/inode comparison alone cannot
- *   tell apart from the retained read.
+ * Test-runner-only fault seam between the retained read and commit.
+ * Replacing the destination exercises path identity; rewriting in place
+ * exercises append-at-EOF without a content-integrity gate.
  */
 function replaceLeafSeam(path: string): void {
   if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
@@ -428,44 +365,6 @@ function replaceLeafSeam(path: string): void {
   }
   rmSync(path, { force: true });
   writeFileSync(path, "replaced between the read and the commit\n");
-}
-
-/**
- * The bytes one OPEN descriptor holds, read positionally from offset 0 — the
- * append descriptor's own file offset is never part of this proof. A short read
- * (the file shrank underneath us) yields what was readable, which then compares
- * unequal and refuses.
- */
-function readDescriptorBytes(fd: number, size: number): Buffer {
-  const bytes = Buffer.allocUnsafe(size);
-  let offset = 0;
-  while (offset < size) {
-    const read = readSync(fd, bytes, offset, size - offset, offset);
-    if (read <= 0) break;
-    offset += read;
-  }
-  return offset === size ? bytes : bytes.subarray(0, offset);
-}
-
-/**
- * Is the OPEN descriptor still the leaf the retained bytes were read from?
- *
- * The device/inode pair is the identity half — it catches a replaced path that
- * got a NEW inode. It cannot catch a replacement that kept the same one: a
- * filesystem that reuses a freed inode (ext4) hands an unlink + create back the
- * very same pair, and a truncate-and-rewrite through another descriptor never
- * changes it at all. The bytes this call already read are therefore the
- * authority: the descriptor must hold exactly those bytes, size included, so a
- * leaf that no longer holds them is a replacement whatever its inode says.
- *
- * One positional pass over the retained leaf — the same bounded file this call
- * already read in full to scan it.
- */
-function isRetainedLeaf(fd: number, info: Stats, retained: RetainedLedger): boolean {
-  if (retained.kind !== "present") return true;
-  if (info.dev !== retained.dev || info.ino !== retained.ino) return false;
-  if (info.size !== retained.bytes.length) return false;
-  return readDescriptorBytes(fd, info.size).equals(retained.bytes);
 }
 
 /** Write the whole line, tolerating a short write; `offset < 0` means the append-at-EOF mode. */
@@ -486,97 +385,42 @@ function fsyncDirectory(dir: string): void {
   }
 }
 
-/**
- * Commit the accepted bytes on a descriptor re-verified against the identity the
- * retained bytes were read from.
- *
- * - `truncateTo === null` appends one line (creating the leaf when it did not
- *   exist; `O_CREAT | O_EXCL` tells the two apart, so a newly created file's
- *   directory entry is fsynced).
- * - `truncateTo !== null` removes an unaccepted partial tail — and appends the
- *   line only when the caller is accepting it (`line !== null`); a heal of an
- *   already accepted record truncates only, so no accepted id is ever
- *   duplicated.
- *
- * Every path uses `O_NOFOLLOW` and re-checks the device/inode of the OPEN
- * descriptor, so a leaf replaced (or removed) between the read and the commit
- * refuses instead of being followed, truncated or written.
- */
+/** Append under the workflow lock; no retained content is rewritten or deleted. */
 function commitLedgerLine(input: {
   path: string;
   retained: RetainedLedger;
-  /** Offset of the unaccepted partial tail to remove, or null to keep every retained byte. */
-  truncateTo: number | null;
-  /** The accepted line to append, or null for a truncate-only heal. */
-  line: Buffer | null;
+  line: Buffer;
 }): void {
-  const { path, retained, truncateTo, line } = input;
-  if (truncateTo === null) {
-    if (line === null) return;
-    let fd: number;
-    let created = false;
-    // `O_RDWR` (not `O_WRONLY`): the commit re-verifies the retained bytes
-    // through THIS descriptor, so it must be readable. The retained leaf was
-    // readable moments ago under the same lock (`readRetainedLedger`), so this
-    // asks for exactly the access the read already proved.
-    try {
-      fd = openWithoutFollowing(path, fsConstants.O_RDWR | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
-      created = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      fd = openWithoutFollowing(path, fsConstants.O_RDWR | fsConstants.O_APPEND);
-    }
-    try {
-      const info = fstatSync(fd);
-      if (!info.isFile()) {
-        throw new ExecutionLedgerError(
-          "execution-ledgers.target-untrusted",
-          `${path} is not a regular file; nothing was written.`,
-        );
-      }
-      if (!isRetainedLeaf(fd, info, retained)) {
-        throw new ExecutionLedgerError(
-          "execution-ledgers.target-replaced",
-          `${path} is not the retained file this append read (the leaf was replaced between the read and the write: its ` +
-            `device/inode or its bytes are no longer the retained ones); nothing was written.`,
-        );
-      }
-      writeAll(fd, line, -1);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    if (created) fsyncDirectory(dirname(path));
-    return;
-  }
-
+  const { path, retained, line } = input;
   let fd: number;
+  let created = false;
   try {
-    fd = openWithoutFollowing(path, fsConstants.O_RDWR);
+    fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o644);
+    created = true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new ExecutionLedgerError(
-        "execution-ledgers.target-replaced",
-        `${path} disappeared between the read and the write; nothing was written.`,
-      );
-    }
-    throw error;
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    fd = openWithoutFollowing(path, fsConstants.O_WRONLY | fsConstants.O_APPEND);
   }
   try {
     const info = fstatSync(fd);
-    if (!info.isFile() || retained.kind !== "present" || !isRetainedLeaf(fd, info, retained)) {
+    if (!info.isFile()) {
       throw new ExecutionLedgerError(
-        "execution-ledgers.target-replaced",
-        `${path} is not the retained file this append read (the leaf was replaced between the read and the write: its ` +
-          `device/inode or its bytes are no longer the retained ones); nothing was written.`,
+        "execution-ledgers.target-untrusted",
+        `${path} is not a regular file; nothing was written.`,
       );
     }
-    ftruncateSync(fd, truncateTo);
-    if (line !== null) writeAll(fd, line, truncateTo);
+    if (retained.kind === "present" && (info.dev !== retained.dev || info.ino !== retained.ino)) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-replaced",
+        `${path} no longer identifies the retained file; retry the append against the current destination.`,
+      );
+    }
+    writeAll(fd, line, -1);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
+  if (created) fsyncDirectory(dirname(path));
 }
 
 /* ------------------------------------------------------------------------ *
@@ -728,10 +572,8 @@ function assertNoteScope(session: ExecutionSessionRef, note: WorkflowNote): void
  * module's), every retained byte stays in place, and a refused call leaves no
  * directory side effect behind.
  *
- * The three outcomes are distinct: an accepted record is appended once; a pure
- * replay touches no byte; and a replay that follows this record's own
- * unterminated partial prefix removes that unaccepted prefix only — never a
- * second copy of the accepted line.
+ * A replay never duplicates an accepted note. An unterminated tail is preserved
+ * and terminated before a new note, rather than compared or truncated.
  */
 export async function appendWorkflowNote(
   context: ExecutionContext,
@@ -749,16 +591,15 @@ export async function appendWorkflowNote(
         const retained = readRetainedLedger(ledgerPath);
         if (retained.kind === "present") replaceLeafSeam(ledgerPath);
         const scan = retained.kind === "absent" ? null : scanLedger(retained.bytes);
-        const decision = scan === null ? ({ kind: "append", reconcileTail: false } as const) : decideAppend(scan, note);
+        const decision = scan === null ? ({ kind: "append", terminateTail: false } as const) : decideAppend(scan, note);
         // The final synchronous identity check, immediately before the mutation.
         assertExecutionSessionCurrent(context, session);
-        const truncateTo = scan !== null && decision.reconcileTail ? scan.completeBytes : null;
-        if (truncateTo !== null || decision.kind === "append") {
+        if (decision.terminateTail || decision.kind === "append") {
+          const appended = decision.kind === "append" ? line : Buffer.from("\n");
           commitLedgerLine({
             path: ledgerPath,
             retained,
-            truncateTo,
-            line: decision.kind === "append" ? line : null,
+            line: decision.terminateTail && decision.kind === "append" ? Buffer.concat([Buffer.from("\n"), appended]) : appended,
           });
         }
         return { id: note.id, replayed: decision.kind === "replay" };

@@ -27,7 +27,7 @@ const inputSchema = z.object({
 type Input = z.infer<typeof inputSchema>;
 const verbs = ["import", "replace", "show", "export"] as const;
 const descriptions: Record<(typeof verbs)[number], string> = {
-  import: "Preview a roadmap import read-only or apply a saved reviewed source using engine drift checks.",
+  import: "Preview a roadmap import read-only or apply current source content using the saved review's observed revisions.",
   replace: "Replace the complete roadmap using observed project and roadmap revisions.",
   show: "Show the project/catalog revisions, roadmap record and parsed content.",
   export: "Export composed milestone roadmap as JSON v2 or grouped Markdown; reporting only, not backup/restore. The grouped Markdown frontmatter mirrors the stored roadmap content (title/status from the stored document; catalog defaults apply when no content exists) — it is regenerated on each export. import/replace/show modify Markdown content only.",

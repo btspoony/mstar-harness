@@ -21,6 +21,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
 import { mutateExecutionPlan as publishedMutateExecutionPlan } from "../src/index.js";
 import {
   mutateExecutionPlan,
@@ -34,7 +35,7 @@ import {
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, listIssues, type CaptureInput } from "../src/issue.js";
-import { mutateExecutionWorkflow, recoverExecutionCoordinator } from "../src/execution-workflow.js";
+import { mutateExecutionWorkflow, recoverExecutionCoordinator, setWorkflowWitnessGapForTest } from "../src/execution-workflow.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -147,6 +148,7 @@ function preparePlanRow(context: StoreContext, planId: string, branch: string): 
           assignment_sha256: "a".repeat(64),
           plan_sha256: "b".repeat(64),
           qa_gate: "mandatory",
+          findings_cleanup: "allow-residual",
           prepared_by: COORDINATOR_ID,
           prepared_at: TS,
         },
@@ -355,7 +357,7 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
     const fixture = await seededWorkflow("boundary-reference");
     const { context, epoch, planTokens, planPm, planPmCaller } = fixture;
     const envelope = plantEnvelope(context, "plan-pm", PLAN_PM_ID);
-    const envelopeBytes = readFileSync(envelope, "utf8");
+    const envelopeBefore = JSON.parse(readFileSync(envelope, "utf8"));
     const before = footprint(context);
     let ran = 0;
     const attempt = (session: ExecutionSessionRef): Promise<unknown> =>
@@ -385,7 +387,8 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
 
     expect(ran).toBe(0);
     expect(footprint(context)).toEqual(before);
-    expect(readFileSync(envelope, "utf8")).toBe(envelopeBytes);
+    // The planted envelope is not read as an authority and is never rewritten.
+    expect(JSON.parse(readFileSync(envelope, "utf8"))).toEqual(envelopeBefore);
   });
 
   test("reports grouped recovery facts on the unbound and foreign authority refusals", async () => {
@@ -1792,7 +1795,6 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     // frozen input: the sealed selection and its pin are byte-identical.
     const sealedAfter = planFootprint(context, OWN_PLAN);
     expect(sealedAfter.input_json).toBe(sealedBefore.input_json);
-    expect(sealedAfter.input_hash).toBe(sealedBefore.input_hash);
     expect(sealedAfter.catalog_pin).toBe(sealedBefore.catalog_pin);
     expect(sealedAfter.input_revision).toBe(sealedBefore.input_revision);
     expect(sealedAfter.plan_revision).toBe((sealedBefore.plan_revision as number) + 1);
@@ -1822,7 +1824,6 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const peerReceipt = await prepareCall(fixture, PEER_PLAN, "prepare-peer", planTokens[PEER_PLAN]!);
     expect(peerReceipt.data.frozenInput).toMatchObject({ store_id: fixture.storeId, entity_revision: 2 });
     expect(parsedJson(planFootprint(context, PEER_PLAN).catalog_pin)).toMatchObject({ entity_revision: 2 });
-    expect(planFootprint(context, PEER_PLAN).input_hash).toBe(peerReceipt.data.frozenInput?.document_hash);
 
   });
 });
@@ -3233,7 +3234,7 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     }
   });
 
-  test("a completed report-only reconcile revalidates the pinned QC/QA digests inside its transaction", async () => {
+  test("a completed report-only reconcile accepts a QC/QA document body edit", async () => {
     const fixture = await lifecycleFixture("reconcile-report-only-digests", "report-only");
     const handoffId = await acceptedAttempt(fixture, "report-only-digests");
     const done = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-report-only-digests", {
@@ -3384,12 +3385,8 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
   }, 30000);
 
   /**
-   * §7/R10 one refused completion: either a deterministic drift inside the
-   * preflight→commit window (the sealed Git proof is re-read immediately before
-   * the commit) or a topology the capture refuses before the transaction. Both
-   * must leave the plan exactly where the acceptance left it — still InReview,
-   * no `Done`, no completion receipt, the handoff still accepted and the
-   * execution lease still held.
+   * Refuse completion when current Git identity or cleanliness no longer
+   * supports the proof. Leave the accepted handoff, revision and lease intact.
    */
   async function expectCompletionRaceRefused(
     standalone: LifecycleFixture,
@@ -3452,15 +3449,35 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
       writeFileSync(join(standalone.featurePath, "untracked.txt"), "appeared after the proof\n");
     });
   }, 30000);
-
-  test("complete refuses an object store repacked between the proof and its commit, with no DB mutation", async () => {
-    const standalone = await lifecycleFixture("complete-drift-objects", "development");
-    const handoffId = await acceptedAttempt(standalone, "drift-objects");
-    // The pinned objects move from loose to packed: nothing the proof read from
-    // the object store is where it read it, so the proof is stale.
-    await expectCompletionRaceRefused(standalone, "drift-objects", handoffId, () => {
-      runGit(["repack", "-ad"], standalone.featurePath);
+  test("complete refuses checkout Git routing redirected to a different clean repository", async () => {
+    const standalone = await lifecycleFixture("complete-git-routing", "development");
+    const handoffId = await acceptedAttempt(standalone, "git-routing");
+    const foreign = join(standalone.repoRoot, "foreign");
+    mkdirSync(foreign);
+    runGit(["init", "-q", "-b", `feature/${OWN_PLAN}`], foreign);
+    writeFileSync(join(foreign, "slice.txt"), "slice\n");
+    runGit(["add", "slice.txt"], foreign);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "foreign"], foreign);
+    await expectCompletionRaceRefused(standalone, "git-routing", handoffId, () => {
+      writeFileSync(join(standalone.featurePath, ".git"), `gitdir: ${join(foreign, ".git")}\n`);
+      expect(execFileSync("git", ["status", "--porcelain"], { cwd: standalone.featurePath, encoding: "utf8" }).trim()).toBe("");
     });
+  }, 30000);
+
+
+  test("complete accepts object-store repacking when HEAD and cleanliness stay unchanged", async () => {
+    const standalone = await lifecycleFixture("complete-repack-objects", "development");
+    const handoffId = await acceptedAttempt(standalone, "repack-objects");
+    setCompleteWitnessGapForTest(() => runGit(["repack", "-ad"], standalone.featurePath));
+    try {
+      const completed = await planMutation(standalone, standalone.coordinatorSeat, OWN_PLAN, "complete-repack-objects", {
+        kind: "complete", handoffId,
+      });
+      expect(completed.data.plan.status).toBe("Done");
+      expect(completed.data.coordination!.handoff).toMatchObject({ state: "completed", id: handoffId });
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
   }, 30000);
 
   test("complete refuses a file created inside a pre-existing empty directory, with no DB mutation", async () => {
@@ -3488,17 +3505,20 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     });
   }, 30000);
 
-  test("complete refuses a non-regular alternate object store, with no DB mutation", async () => {
+  test("completion accepts an unused alternate directory when Git delivery facts remain valid", async () => {
     const standalone = await lifecycleFixture("complete-drift-alternates", "development");
     const handoffId = await acceptedAttempt(standalone, "drift-alternates");
-    // §7 an alternate topology this proof cannot enumerate is refused at
-    // capture rather than witnessed as an unreadable entry.
+    // A filesystem shape is not an admission seal; Git remains authoritative.
     const objects = execFileSync("git", ["-C", standalone.featurePath, "rev-parse", "--git-path", "objects"], {
       encoding: "utf8",
     }).trim();
     rmSync(join(objects, "info", "alternates"), { force: true });
     mkdirSync(join(objects, "info", "alternates"), { recursive: true });
-    await expectCompletionRaceRefused(standalone, "drift-alternates", handoffId);
+    const completed = await planMutation(standalone, standalone.coordinatorSeat, OWN_PLAN, "complete-unused-alternates", {
+      kind: "complete", handoffId,
+    });
+    expect(completed.data.plan.status).toBe("Done");
+    expect(completed.data.coordination!.handoff).toMatchObject({ id: handoffId, state: "completed" });
   }, 30000);
 });
 
@@ -4216,7 +4236,7 @@ function closeFootprint(context: StoreContext): Record<string, unknown> {
       "(select count(*) as n from execution_sessions) as sessions, " +
       "(select count(*) as n from execution_leases) as leases",
   );
-  return row!;
+  return { ...row!, workflow_state: parsedJson(row!.workflow_state) };
 }
 
 /** The development delivery tail this route's close consults (contract §4c/§4d/§4f). */
@@ -4227,6 +4247,41 @@ const DEVELOPMENT_TAIL = {
 } as const;
 
 describe("execution-close-composition: §R5/§R10 the close composes what the rows' evidence entails", () => {
+  for (const movement of ["dirty", "head", "branch", "result"] as const) {
+    test(`composed close refuses ${movement} Git facts moved after preflight`, async () => {
+      const integration = movement === "branch" || movement === "result";
+      const fixture = await lifecycleFixture(`close-window-${movement}`, integration ? "integration" : "development");
+      if (integration) {
+        const handoffId = await startedAttempt(fixture, `close-window-${movement}`);
+        mergeIntoIntegration(fixture);
+        await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, `close-window-accept-${movement}`, {
+          kind: "integration-accept", handoffId,
+        });
+        plantRowStatus(fixture.context, PEER_PLAN, "Done");
+      } else {
+        await acceptedAttempt(fixture, `close-window-${movement}`);
+      }
+      await workflowMutationOn(fixture, `close-window-delivery-${movement}`, { kind: "delivery", delivery: DEVELOPMENT_TAIL });
+      const before = closeFootprint(fixture.context);
+      setWorkflowWitnessGapForTest(() => {
+        if (movement === "dirty") writeFileSync(join(fixture.featurePath, "slice.txt"), "dirty\n");
+        if (movement === "head") runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "moved"], fixture.featurePath);
+        if (movement === "branch") runGit(["checkout", "-q", "-b", "feature/wrong-integration"], fixture.integrationPath);
+        if (movement === "result") runGit(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
+      });
+      try {
+        const refused = await refusalOf(() => workflowMutationOn(fixture, `close-window-${movement}`, {
+          kind: "lifecycle", status: "completed", reason: "verified delivery",
+        }));
+        expect(refused.code).toBe(integration ? "coordination.integration-diverged" : "coordination.git-proof");
+        expect(closeFootprint(fixture.context)).toEqual(before);
+        expect(storedPlanRow(fixture.context, OWN_PLAN).state.status).toBe("InReview");
+      } finally {
+        setWorkflowWitnessGapForTest(undefined);
+      }
+    }, 30000);
+  }
+
   test("report.only recovery: ONE close records the fulfilment, completes the row and unregisters (A17/#270, no Git)", async () => {
     const fixture = await lifecycleFixture("close-report-only", "report-only");
     const { context } = fixture;

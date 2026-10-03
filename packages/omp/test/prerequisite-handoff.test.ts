@@ -37,7 +37,6 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -60,7 +59,6 @@ import {
   initializeStore,
   registerShippedCatalogExecution,
   setArtifactStore,
-  showPrepareWorkflow,
   writeWorkflowSnapshot,
 } from "@mstar-harness/engine";
 import type { WorkflowSnapshot } from "@mstar-harness/engine";
@@ -106,11 +104,6 @@ function text(path: string): string {
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-/** CAS version of a file's current bytes, computed independently of the writer. */
-function sha256(path: string): string {
-  return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
 }
 
 function codesOf(readiness: Phase1Readiness): readonly string[] {
@@ -218,13 +211,10 @@ async function buildFixture(options: FixtureOptions = {}): Promise<Fixture> {
   }
   // The Prepare phase is the one projection the ordinary snapshot writer may
   // change; the recorded integration checkout below belongs to the Prepare
-  // amendment, exactly as the lifecycle records it.
+  // amendment, exactly as the lifecycle records it. The writer takes no CAS
+  // token: record-only byte digests no longer gate a snapshot write.
   const workflowDir = dirname(snapshotPath);
-  await writeWorkflowSnapshot(
-    { ...registeredSnapshot, phase: "phase-1-prepare" },
-    workflowDir,
-    { expectedVersion: sha256(snapshotPath) },
-  );
+  await writeWorkflowSnapshot({ ...registeredSnapshot, phase: "phase-1-prepare" }, workflowDir);
 
   // The engine's own coordinator bind: the envelope, the role and the recorded
   // top-level binding all come from `bindPlanSession`.
@@ -270,12 +260,9 @@ async function buildFixture(options: FixtureOptions = {}): Promise<Fixture> {
   // The guarded Prepare amendment records the integration checkout the
   // reviewed compass declares — the only route that may write that field.
   const envelopePath = envelopePathOf(harness, boundSession);
-  const prepareView = await showPrepareWorkflow({ sessionPath: envelopePath, cwd: main });
   await amendPrepareWorkflow({
     sessionPath: envelopePath,
     cwd: main,
-    expectedSnapshotVersion: prepareView.view.snapshotVersion,
-    expectedCompassVersion: prepareView.view.compassVersion,
     patch: { mainWorktreeBranch: "main", appendPlans: [], integrationWorktreePath: integration },
   });
 
@@ -519,8 +506,6 @@ describe("prerequisite handoff — readiness integration", () => {
     const recovered = await host.runTool({
       operation: "recover",
       workflowId: WORKFLOW_ID,
-      expectedSnapshotVersion: details.snapshotVersion,
-      expectedCompassVersion: details.compassVersion,
       operationId: "op-prerequisite-recover-1",
       reason: "the prior host handoff of this workflow was cancelled",
       authorizationRef: "PM-authorization-prerequisite",

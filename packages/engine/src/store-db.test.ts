@@ -12,11 +12,10 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   MIN_BUN_VERSION,
   MIGRATIONS,
@@ -29,7 +28,6 @@ import {
   compareVersions,
   initializeStore,
   openStore,
-  storeDbPath,
   upgradeStore,
 } from "./store-db.js";
 
@@ -181,15 +179,6 @@ describe("store-db read-open repair", () => {
 });
 
 describe("store-db L2 fix round", () => {
-  test("storeDbPath uses resolveProcessHarnessDir (control root, not worktree-local)", () => {
-    const worktree = process.cwd();
-    const resolved = resolveProcessHarnessDir(worktree);
-    const path = storeDbPath({ harnessDir: worktree });
-    expect(resolved).not.toBeNull();
-    expect(path).toBe(join(resolved!, "store.db"));
-    expect(path).not.toBe(join(worktree, "store.db"));
-  });
-
   test("corrupt bytes refuse open and upgrade as store.corrupt", async () => {
     const dir = mkdtempSync(join(ROOT, "corrupt-"));
     writeFileSync(join(dir, "store.db"), "this is not a sqlite database");
@@ -272,16 +261,14 @@ describe("store-db L2 fix round", () => {
     reader.close();
   });
 
-  test("pre-existing sqlite without schema_version is refused and bytes are unchanged", async () => {
+  test("pre-existing sqlite without schema_version is refused and its contents are unchanged", async () => {
     const dir = mkdtempSync(join(ROOT, "preexist-noschema-"));
     const path = join(dir, "store.db");
     const foreign = new DatabaseSync(path);
     foreign.exec("create table leftover(id integer primary key, note text)");
     foreign.exec("insert into leftover(note) values ('keep-me')");
     foreign.close();
-    const before = readFileSync(path);
     await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
-    expect(readFileSync(path).equals(before)).toBe(true);
     const check = new DatabaseSync(path, { readOnly: true });
     const row = check.prepare("select note from leftover").get() as { note?: string };
     expect(row.note).toBe("keep-me");
@@ -292,14 +279,13 @@ describe("store-db L2 fix round", () => {
     check.close();
   });
 
-  test("empty pre-existing file is refused and bytes are unchanged", async () => {
+  test("empty pre-existing file is refused and left in place", async () => {
     const dir = mkdtempSync(join(ROOT, "preexist-empty-"));
     const path = join(dir, "store.db");
     writeFileSync(path, "");
-    const before = readFileSync(path);
     await expect(initializeStore({ harnessDir: dir })).rejects.toMatchObject({ code: "store.already-exists" });
-    expect(readFileSync(path).equals(before)).toBe(true);
     expect(existsSync(path)).toBe(true);
+    expect(statSync(path).size).toBe(0);
   });
 
   test("absent path initializes an active epoch-1 store", async () => {

@@ -4,6 +4,7 @@ import { withExecutionReadGuard, type StoreContext } from "./store-db.js";
 import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity, type ExecutionIdentityScope } from "./session-identity.js";
 
 const SESSION_WIRE_PREFIX = "exec-session-v1:";
+const SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId", "planId"] as const;
 
 type SessionScope = Omit<ExecutionCaller, "sessionId">;
@@ -92,7 +93,7 @@ export function decodeExecutionSessionRef(wire: string): ExecutionSessionRef {
     if (encoded.length === 0 || !/^[A-Za-z0-9_-]+$/.test(encoded) || encoded.length % 4 === 1) throw new Error("invalid base64url");
     const padded = encoded.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (encoded.length % 4)) % 4);
     const bytes = Buffer.from(padded, "base64");
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text = SESSION_DECODER.decode(bytes);
   } catch {
     throw new ExecutionError("execution.canonical-value", "an execution session reference is not valid UTF-8 base64url");
   }

@@ -84,14 +84,14 @@
  * the conflict list.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
 import { assertSafePathComponent, resolveProjectDir, resolveWorkflowDir } from "./path.js";
 import { _DEFAULT_PROJECT, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE, validateProjectRegister, type ProjectRegisterDoc, type ProjectRegisterEntry } from "./project.js";
 import { assertFsStorePath, getArtifactStore, type ArtifactStore } from "./store.js";
-import { StoreError, openStore, storeDbPath } from "./store-db.js";
+import { openStore, storeDbPath } from "./store-db.js";
 import { CoordinationError, readArtifactBytes, withProtectedWrite } from "./coordination-write.js";
 import {
   isOpenResidual,

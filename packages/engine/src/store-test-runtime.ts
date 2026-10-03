@@ -12,7 +12,7 @@
  *
  * Usage: node|bun <bundle> <scenario> <root-dir>
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { StoreError as StoreErrorClass } from "./store-db.js";
 
@@ -155,16 +155,20 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     return `init created active empty store (epoch 1, schema ${MIGRATIONS.length}); reads are query-only`;
   },
 
-  /** `initializeStore` is create-only: an existing store refuses and keeps its bytes. */
+  /** `initializeStore` is create-only: an existing store refuses and keeps its authority. */
   async "double-init"(rootDir) {
     const first = await initializeStore({ harnessDir: rootDir });
+    const created = { storeId: first.storeId, epoch: first.epoch, schemaVersion: first.schemaVersion };
     first.close();
-    const dbPath = join(rootDir, "store.db");
-    const before = readFileSync(dbPath);
     await expectStoreErrorAsync("store.already-exists", () => initializeStore({ harnessDir: rootDir }));
-    const after = readFileSync(dbPath);
-    if (!before.equals(after)) throw new Error("a refused re-init modified the store bytes");
-    return "double init refused without touching the store";
+    // The refused re-init created nothing: the store still opens and reports the
+    // SAME authority generation and schema it was created with.
+    const reopened = await openStore({ harnessDir: rootDir }, "read");
+    const unchanged =
+      reopened.storeId === created.storeId && reopened.epoch === created.epoch && reopened.schemaVersion === created.schemaVersion;
+    reopened.close();
+    if (!unchanged) throw new Error("a refused re-init replaced the store's authority generation");
+    return "double init refused, the original authority generation stands";
   },
 
   /** A version gap refuses (rollback preserved) and never silently migrates. */

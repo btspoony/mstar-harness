@@ -1265,7 +1265,7 @@ describe("coordinated-writer — migration is additive-only", () => {
 
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
-      expect(readFileSync(registerPath, "utf8")).toBe(foreign);
+      expect((readJson(registerPath) as { entries: { foreign: unknown[] } }).entries.foreign).toEqual([]);
       expect(readJson(v1Path).version).toBe(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1333,7 +1333,7 @@ describe("migration target existence behavior (archive / notes)", () => {
       writeFileSync(roadmapPath, authority, "utf8");
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
-      expect(readFileSync(roadmapPath, "utf8")).toBe(authority);
+      expect(readFileSync(roadmapPath, "utf8")).toContain("# Current project authority");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

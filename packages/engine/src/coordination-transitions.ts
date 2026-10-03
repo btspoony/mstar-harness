@@ -25,12 +25,14 @@ import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
+  evidenceRefOf,
   isNonEmptyString,
   isPlainObject,
   validatePlanHandoff,
   validateRowCoordination,
   type CoordinatorBinding,
   type HandoffIntegration,
+  type EvidenceRef,
   type PlanHandoff,
   type RowCoordination,
   type RowValidationRoute,
@@ -38,6 +40,7 @@ import {
 import { unresolvedRecovery, type RecoveryProblem } from "./recovery-intent.js";
 import type { ValidationResult } from "./core.js";
 import { assertSafePathComponent } from "./path.js";
+import { validateExecutionLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
 import { _DEFAULT_PROJECT } from "./project.js";
 import { rowPlanIds, type PlanRow } from "./status.js";
 import { isStandaloneDevelopmentWorkflow, type WorkflowSnapshot } from "./workflow.js";
@@ -326,8 +329,7 @@ export function assertExecutionHolder(row: PlanRow, holder: string, planId: stri
  * §D `prepare` admission — the shared half of both transports. The seat gate,
  * the coordinator binding (a file envelope, or a DB session row) and the
  * catalog registration gate stay with the transport that owns them; what a row
- * must look like to be prepared is the same rule on either route, so a prepared
- * row can never be sealed a second time or given a second owner.
+ * must look like to be prepared is the same rule on either route.
  */
 export function assertPrepareAdmission(input: {
   planId: string;
@@ -358,7 +360,7 @@ export function assertPrepareAdmission(input: {
   if (input.sessionBound && input.rowClaimant !== true) {
     throw new CoordinationError(
       "coordination.prepare-session-bound",
-      `plan ${planId} already has a bound plan session \u2014 preparation precedes the bind`,
+      `plan ${planId} already has a bound plan session — preparation precedes the bind`,
       { plan_id: planId },
     );
   }

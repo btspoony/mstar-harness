@@ -43,7 +43,6 @@ import {
   executionInputSelection,
   leaseFailure,
   type CatalogExecutionPin,
-  type ResealReceiptDetails,
 } from "./coordination.js";
 import {
   CoordinationError,
@@ -85,7 +84,6 @@ import {
   type StoreDb,
 } from "./store-db.js";
 import {
-  WORKFLOW_TERMINAL_STATUSES,
   isTerminalSnapshot,
   rowValidationRoute,
   validateWorkflowSnapshot,
@@ -156,8 +154,8 @@ export type ExecutionSessionRef = {
   planId: string | null;
 };
 
-/** Immutable previous-seal provenance carried by a prepare action's sidecar. */
-export type ExecutionReceiptRecovery = RecoveryDetails & { readonly details?: ResealReceiptDetails };
+/** Recovery outcome and commit boundary carried by an execution action. */
+export type ExecutionReceiptRecovery = RecoveryDetails;
 
 /** §3: one consistent authority read, optionally carrying a committed action's sidecar. */
 export type ExecutionRead<T> = {
@@ -349,6 +347,7 @@ const TOKEN_PREFIX = "exec-v1";
 const STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DECIMAL_RE = /^(0|[1-9][0-9]*)$/;
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+const TOKEN_KEY_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 /** §3.1: the grammar-checked contents of an `exec-v1` token. */
 export type ParsedExecutionToken = {
@@ -415,7 +414,7 @@ function decodeTokenKey(key64: string, kind: ExecutionKind): readonly string[] {
   if (!BASE64URL_RE.test(key64)) throw tokenRefusal("a token key must be unpadded base64url");
   let decoded: unknown;
   try {
-    decoded = JSON.parse(Buffer.from(key64, "base64url").toString("utf8"));
+    decoded = JSON.parse(TOKEN_KEY_DECODER.decode(Buffer.from(key64, "base64url")));
   } catch {
     throw tokenRefusal("a token key must be base64url-wrapped UTF-8 JSON");
   }
@@ -424,9 +423,6 @@ function decodeTokenKey(key64: string, kind: ExecutionKind): readonly string[] {
   }
   const key = decoded as string[];
   assertKeyShape(kind, key);
-  // Canonical encoding, checked by reconstruction: padding, embedded whitespace,
-  // non-minimal base64 and reordered output all disagree with the input here.
-  if (encodeTokenKey(key) !== key64) throw tokenRefusal("a token key must be the canonical encoding of its key array");
   return key;
 }
 

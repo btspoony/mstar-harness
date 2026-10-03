@@ -260,7 +260,7 @@ function fakeRecovery(): {
           requestHash: "c".repeat(64),
           replay: false,
           snapshotVersion: SNAPSHOT_VERSION,
-          compassVersion: input.expectedCompassVersion,
+          compassVersion: COMPASS_VERSION,
           recoveredAt: "2026-09-21T10:00:00.000Z",
         },
       } as unknown as RecoverPrepareCoordinatorResult;
@@ -276,13 +276,11 @@ function fakeRecovery(): {
   return { shown, recovered, deps };
 }
 
-/** One reviewed `recover` request (tokens and proof only). */
+/** One reviewed `recover` request (audited operation fields and stop proof). */
 function recoverRequest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     operation: "recover",
     workflowId: "wf-a",
-    expectedSnapshotVersion: SNAPSHOT_VERSION,
-    expectedCompassVersion: COMPASS_VERSION,
     operationId: "op-1",
     reason: "the prior host session was cancelled",
     authorizationRef: "PM-authorization-1",
@@ -325,8 +323,6 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     expect([...COORDINATOR_RECOVER_INPUT_KEYS]).toEqual([
       "operation",
       "workflowId",
-      "expectedSnapshotVersion",
-      "expectedCompassVersion",
       "operationId",
       "reason",
       "authorizationRef",
@@ -341,6 +337,11 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
       recoverRequest({ priorSessionId: PRIOR_SESSION }),
       recoverRequest({ harnessRoot: "/elsewhere/.mstar" }),
       recoverRequest({ force: true }),
+      // The removed byte-version gate inputs are no longer accepted fields: the
+      // boundary refuses them by name like any other forgery, so a stale caller
+      // cannot smuggle a digest back into the recovery request.
+      recoverRequest({ expectedSnapshotVersion: SNAPSHOT_VERSION }),
+      recoverRequest({ expectedCompassVersion: COMPASS_VERSION }),
     ]) {
       const engine = fakeRecovery();
       const show = forged.operation === "show-recovery";
@@ -412,8 +413,6 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
         identity: { source: "host", sessionId: "native-session-a", workflowId: "wf-a", role: "coordinator", planId: null },
         priorSessionPath: `${FACTS.harnessRoot}/workflows/wf-a/sessions/coordinator-${PRIOR_SESSION}.json`,
         priorSessionId: PRIOR_SESSION,
-        expectedSnapshotVersion: SNAPSHOT_VERSION,
-        expectedCompassVersion: COMPASS_VERSION,
         operationId: "op-1",
         reason: "the prior host session was cancelled",
         authorizationRef: "PM-authorization-1",
@@ -430,7 +429,6 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
       recoverRequest({ reason: "" }),
       recoverRequest({ operationId: "" }),
       recoverRequest({ authorizationRef: "" }),
-      recoverRequest({ expectedCompassVersion: "" }),
       recoverRequest({ workflowId: "  " }),
       { operation: "show-recovery", workflowId: "  " },
     ]) {

@@ -699,23 +699,6 @@ describe("execution-coverage", () => {
     validate(fixture);
   });
 
-  test("execution-coverage-hashes-are-provenance-only", () => {
-    const fixture = materialize(buildRows());
-    const original = fixture.coverage.receipts[rowIndex(fixture, "workflow-notes-ledger", WORKFLOW_A)].resultHash;
-    const alteredHash = "0".repeat(64);
-    expect(alteredHash).not.toBe(original);
-    patchReceipt(fixture, "workflow-notes-ledger", WORKFLOW_A, (receipt) => ({ ...receipt, resultHash: alteredHash }));
-    expect(() => validate(fixture)).not.toThrow();
-    const coreIndex = rowIndex(fixture, "core-execution", null);
-    setReceipt(fixture, coreIndex, {
-      ...fixture.coverage.receipts[coreIndex],
-      manifestHash: fakeHex(51),
-      sources: fixture.coverage.receipts[coreIndex].sources.map((witness) => ({ ...witness, sha256: fakeHex(52) })),
-    });
-    fixture.manifest = { ...fixture.manifest, manifestHash: fakeHex(53) };
-    fixture.coverage = { ...fixture.coverage, manifestHash: fakeHex(54), digest: fakeHex(55) };
-    expect(() => validate(fixture)).not.toThrow();
-  });
 
   test("execution-coverage-generic-shapes-are-not-coverage", () => {
     const valid = materialize(buildRows());
@@ -1281,7 +1264,6 @@ describe("execution-coverage", () => {
     const coreIndex = rowIndex(unordered, "core-execution", null);
     const reordered = [...unordered.coverage.receipts];
     reordered[coreIndex] = { ...reordered[coreIndex], sources: [...reordered[coreIndex].sources].reverse() };
-    expect(executionCoverageDigest(reordered)).toBe(executionCoverageDigest([...reordered].reverse()));
     unordered.coverage = { ...unordered.coverage, receipts: reordered.reverse(), digest: safeDigest(reordered) };
     unordered.manifest = {
       ...unordered.manifest,

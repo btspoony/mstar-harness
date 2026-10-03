@@ -819,7 +819,6 @@ function validateLimits(limits: unknown, requestTimeoutMs: number | null, out: V
 }
 
 function validateSnapshot(snapshot: unknown, what: string, environmentKeys: string[] | null, out: ValidationResult[]): void {
-  const snapshotMark = out.length;
   if (!isPlainObject(snapshot)) {
     out.push(violation(CODE_SCHEMA, `${what} must be a JSON object or null`));
     return;
@@ -1086,7 +1085,6 @@ function verifyValidatedRecord(
   }
 
   for (const slot of ["stdout.log", "stderr.log"] as const) {
-    const logKey = slot === "stdout.log" ? "stdout" : "stderr";
     const facts = bySlot.get(slot) ?? [];
     if (facts.length === 0) {
       out.push(violation(CODE_ARTIFACT_MISSING, `missing artifact fact for the fixed ${slot} slot`));

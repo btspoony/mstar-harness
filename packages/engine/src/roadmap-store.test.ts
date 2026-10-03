@@ -13,7 +13,6 @@ import {
   upgradeStore,
   type StoreContext,
 } from "./index.js";
-import { RoadmapError } from "./roadmap-store.js";
 
 const fixtures: string[] = [];
 const content = (projectId: string, description: string): string =>
@@ -84,7 +83,7 @@ describe("roadmap-authority transactional domain", () => {
     expect(afterCounts).toEqual(beforeCounts);
 
     const replaced = content("project-reviewed", "Replacement with nested task.");
-    const replacement = await replaceRoadmapAuthority(context, {
+    await replaceRoadmapAuthority(context, {
       projectId: "project-reviewed", expectedProjectRevision: 1, expectedRoadmapRevision: 1, contentMarkdown: replaced,
     }, { operationId: "op-replace" });
     const beforeStale = await openStore(context, "read");
@@ -146,7 +145,7 @@ describe("roadmap-authority transactional domain", () => {
       projectId: "project-mismatch", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: content("other-project", "Wrong identity."),
     }, { operationId: "op-mismatch" })).rejects.toMatchObject({ code: "roadmap.project-mismatch" });
     const accepted = content("project-mismatch", "Correct identity.");
-    const receipt = await replaceRoadmapAuthority(context, {
+    await replaceRoadmapAuthority(context, {
       projectId: "project-mismatch", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: accepted,
     }, { operationId: "op-domain" });
     const handle = await openStore(context, "write");
@@ -162,7 +161,6 @@ describe("roadmap-authority transactional domain", () => {
     await expect(replaceRoadmapAuthority(context, {
       projectId: "project-mismatch", expectedProjectRevision: 1, expectedRoadmapRevision: "absent", contentMarkdown: accepted,
     }, { operationId: "op-domain" })).rejects.toMatchObject({ code: "roadmap.operation-conflict" });
-    expect((await readRoadmapAuthority(context, "project-mismatch")).roadmap?.contentHash).toBe(receipt.contentHash);
     expect(await listRoadmapAuthority(context)).toHaveLength(1);
   });
 });

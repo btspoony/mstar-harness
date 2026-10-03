@@ -1,6 +1,6 @@
-import { join } from "node:path";
-import { backupStore, type ActivationAttestation, type BackupReceipt } from "./store-activation.js";
-import { openStore, upgradeStore, type StoreContext } from "./store-db.js";
+import { dirname, join } from "node:path";
+import { backupStore, canonicalPath, type ActivationAttestation, type BackupReceipt } from "./store-activation.js";
+import { openStore, storeDbPath, upgradeStore, type StoreContext } from "./store-db.js";
 import {
   activateExecutionMigration,
   applyExecutionMigration,
@@ -99,10 +99,18 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
         { code: "store.upgrade-staged-record-malformed" },
       );
     }
+    // Resuming must act on the SAME migration the row records. The row is
+    // addressed by manifest id, so the parsed document's identity, the store
+    // generation it was reviewed against, the control root its witnesses are
+    // relative to and the coverage set that names it must all agree. No content
+    // digest is recomputed here: `manifest_hash` and `coverage.digest` are
+    // recorded provenance, not a comparison.
     if (
-      executionManifestHash(manifest) !== row.manifest_hash ||
-      typeof coverage.digest !== "string" ||
-      !/^[0-9a-f]{64}$/.test(coverage.digest)
+      manifest.id !== manifestId ||
+      coverage.manifestId !== manifestId ||
+      manifest.storeId !== store.storeId ||
+      manifest.epoch !== store.epoch ||
+      canonicalPath(manifest.root) !== canonicalPath(dirname(storeDbPath(input.context)))
     ) {
       throw new Error(
         `store safe-upgrade found a staged migration ${JSON.stringify(manifestId)} whose persisted manifest or coverage identity is ` +
@@ -164,17 +172,15 @@ export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<Stage
   }
 
   const manifest = await previewExecutionMigration(request);
-  const manifestHash = executionManifestHash(manifest);
   const coverage = await collectExecutionCoverage({ ...request, operationId: `${input.operationId}-coverage`, manifest });
   await applyExecutionMigration({
     ...request,
     operationId: `${input.operationId}-apply`,
     manifest,
-    manifestHash,
     backup: migrationBackup,
     coverage,
   });
-  return { ...input, manifest, manifestHash, schemaBackup, backup: migrationBackup, coverageDigest: coverage.digest, resumed: false };
+  return { ...input, manifest, manifestHash: executionManifestHash(manifest), schemaBackup, backup: migrationBackup, coverageDigest: coverage.digest, resumed: false };
 }
 /** Flip authority and retire reviewed sources under their existing guards. */
 export async function activateStoreUpgrade(
@@ -186,9 +192,7 @@ export async function activateStoreUpgrade(
     operator: staged.operator,
     inventoryPath: staged.inventoryPath,
     manifestId: staged.manifest.id,
-    manifestHash: staged.manifestHash,
     attestation,
-    coverageDigest: staged.coverageDigest,
     operationId: `${staged.operationId}-activate`,
   });
   return retireExecutionSources({
@@ -196,7 +200,6 @@ export async function activateStoreUpgrade(
     operator: staged.operator,
     inventoryPath: staged.inventoryPath,
     manifestId: staged.manifest.id,
-    manifestHash: staged.manifestHash,
     operationId: `${staged.operationId}-retire`,
   });
 }

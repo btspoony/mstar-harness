@@ -82,7 +82,7 @@ function schema() {
     operation: z.string().min(1).optional(), file: z.string().min(1).optional(), declareKind: z.string().min(1).optional(),
     at: z.string().min(1).optional(), session: z.string().min(1).optional(), sessionRef: z.string().min(1).optional(),
     sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(), reason: z.string().min(1).optional(),
-    stopped: z.array(z.string()).optional(), expectSnapshot: z.string().min(1).optional(), expectCompass: z.string().min(1).optional(),
+    stopped: z.array(z.string()).optional(),
     operationId: z.string().min(1).optional(), authorizationRef: z.string().min(1).optional(), input: z.unknown().optional(),
     phase: z.string().min(1).optional(), status: z.string().min(1).optional(), path: z.string().min(1).optional(),
     compass: z.string().min(1).optional(), policy: z.unknown().optional(), json: z.boolean().optional(),
@@ -202,12 +202,18 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
       try { if (input.session === undefined) return usage("workflow.show-prepare", "session is required"); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return refused("workflow.show-prepare", error); }
     }),
-    makeDefinition("workflow.amend-prepare", "Append approved Prepare rows using legacy snapshot/compass byte-version CAS.", "write", ["session", "expectSnapshot", "expectCompass", "input"], async (input, context) => {
-      try { if (input.session === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.input === undefined) return usage("workflow.amend-prepare", "session, both expected versions and input patch are required"); const sessionPath = absolute(input.session, "session"); const envelope = readSessionEnvelope(sessionPath); await assertLegacyRoute(envelope.harness_root, "workflow amend-prepare"); return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, expectedSnapshotVersion: input.expectSnapshot, expectedCompassVersion: input.expectCompass, patch: object(input.input, "input") as never })); } catch (error) { return refused("workflow.amend-prepare", error); }
-    }),
-    makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "expectSnapshot", "expectCompass", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
+    makeDefinition("workflow.amend-prepare", "Append approved Prepare rows under the current coordinator and row state.", "write", ["session", "input"], async (input, context) => {
       try {
-        if (input.session === undefined || input.expectSnapshot === undefined || input.expectCompass === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return usage("workflow.recover-coordinator", "all prior-session recovery assertions are required");
+        if (input.session === undefined || input.input === undefined) return usage("workflow.amend-prepare", "session and input patch are required");
+        const sessionPath = absolute(input.session, "session");
+        const envelope = readSessionEnvelope(sessionPath);
+        await assertLegacyRoute(envelope.harness_root, "workflow amend-prepare");
+        return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, patch: object(input.input, "input") as never }));
+      } catch (error) { return refused("workflow.amend-prepare", error); }
+    }),
+    makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
+      try {
+        if (input.session === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return usage("workflow.recover-coordinator", "session, operationId, reason, authorizationRef and stopped are required");
         if (context.sessionId === undefined || context.sessionId.trim() === "") return usage("workflow.recover-coordinator", "recovery requires the main conversation session identity");
         const priorSessionPath = absolute(input.session, "session");
         const prior = readSessionEnvelope(priorSessionPath);
@@ -218,8 +224,6 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           identity: { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
           priorSessionPath,
           priorSessionId: prior.session_id,
-          expectedSnapshotVersion: input.expectSnapshot,
-          expectedCompassVersion: input.expectCompass,
           operationId: input.operationId,
           reason: input.reason,
           authorizationRef: input.authorizationRef,

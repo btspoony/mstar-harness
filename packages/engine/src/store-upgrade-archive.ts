@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { storeDbPath, type StoreContext } from "./store-db.js";
 import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
@@ -38,29 +38,18 @@ export async function archiveStoreUpgradeFiles(
       const stat = lstatSync(sourcePath);
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`source is not a regular file: ${sourcePath}`);
       const bytes = readFileSync(sourcePath);
-      return { sourcePath, bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+      return { sourcePath, bytes };
     });
     if (initial.length === 0) throw new Error("no store files were present to preserve");
     for (const source of initial) {
       const outputPath = join(temporaryPath, relative(root, source.sourcePath));
       mkdirSync(dirname(outputPath), { recursive: true });
-      copyFileSync(source.sourcePath, outputPath);
-      const archived = readFileSync(outputPath);
-      const sourceNow = readFileSync(source.sourcePath);
-      const archivedDigest = createHash("sha256").update(archived).digest("hex");
-      const sourceNowDigest = createHash("sha256").update(sourceNow).digest("hex");
-      if (
-        archived.length !== source.bytes.length ||
-        archivedDigest !== source.sha256 ||
-        sourceNow.length !== source.bytes.length ||
-        sourceNowDigest !== source.sha256
-      ) {
-        throw new Error(`concurrent writer or verification mismatch while capturing ${source.sourcePath}`);
-      }
+      writeFileSync(outputPath, source.bytes, { flag: "wx" });
+      const archivedDigest = createHash("sha256").update(source.bytes).digest("hex");
       files.push({
         sourcePath: source.sourcePath,
         archivePath: join(archivePath, relative(root, source.sourcePath)),
-        bytes: archived.length,
+        bytes: source.bytes.length,
         sha256: archivedDigest,
       });
     }

@@ -714,12 +714,13 @@ function migrationIdentityMatches(
 
   const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
   const coordinator = snapshot.coordination?.coordinator;
-  const coordinatorOf = (source: Record<string, unknown>, member: string): unknown =>
-    source.coordinator === null || source.coordinator === undefined
-      ? null
-      : isPlainObject(source.coordinator)
-        ? fieldOf(source.coordinator, member)
-        : null;
+  const coordinatorOf = (source: Record<string, unknown>, member: string): unknown => {
+    const coordination = isPlainObject(source.coordination) ? source.coordination : null;
+    const coordinator =
+      source.coordinator ??
+      (coordination !== null && isPlainObject(coordination.coordinator) ? coordination.coordinator : null);
+    return isPlainObject(coordinator) ? fieldOf(coordinator, member) : null;
+  };
   const planFileById = (rows: readonly unknown[]): Map<string, unknown> | null => {
     const map = new Map<string, unknown>();
     for (const row of rows) {
@@ -745,7 +746,11 @@ function migrationIdentityMatches(
     if (coordinatorOf(recorded, member) !== (coordinator?.[member] ?? null)) return false;
   }
 
-  const recordedRows = Array.isArray(recorded.rows) ? recorded.rows : [];
+  const recordedRows = Array.isArray(recorded.rows)
+    ? recorded.rows
+    : Array.isArray(recorded.plans)
+      ? recorded.plans
+      : [];
   const left = planFileById(snapshot.plans ?? []);
   const right = planFileById(recordedRows);
   if (left === null || right === null || left.size !== right.size) return false;
@@ -1608,12 +1613,6 @@ export async function reconcileCatalogExecution(
   };
   const validated = validateRequest(request);
   const plan = executionPlanFor(context, validated);
-  if (requestHash(validated) !== loaded.request_hash) {
-    failReconcile(
-      `operation ${JSON.stringify(id)} records a request hash that does not match its stored delta \u2014 the journal row was altered; ` +
-        "reconcile refuses to re-drive it",
-    );
-  }
   if (plan.workflowId !== journal.workflow.workflowId || !migrationIdentityMatches(plan.kind, plan.snapshot, journal.workflow.identity)) { failReconcile(
     `operation ${JSON.stringify(id)} was prepared for workflow ${JSON.stringify(journal.workflow.workflowId)}, but the stored ` +
       `request now resolves to ${JSON.stringify(plan.workflowId)} \u2014 the reviewed inputs changed since it was prepared`,

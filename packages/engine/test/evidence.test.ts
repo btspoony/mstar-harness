@@ -26,6 +26,7 @@ import {
   evidenceInputDigest,
   validateSddEvidenceRecord,
   verifySddEvidence,
+  type EvidenceAssessment,
   type EvidenceArtifactFact,
   type EvidenceCoverage,
   type EvidenceExpectation,

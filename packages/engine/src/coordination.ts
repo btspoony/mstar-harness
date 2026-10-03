@@ -51,6 +51,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { readJson, type GateResult } from "./core.js";
 import {
   ASSIGNMENT_INTENT_FIELDS,
@@ -76,7 +77,6 @@ import {
   type RowCoordination,
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
-  type SnapshotCoordination,
 } from "./coordination-write.js";
 import {
   selectSemanticFields,
@@ -142,7 +142,7 @@ import {
 import { findingsCleanupGate, _DEFAULT_PROJECT } from "./project.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
-import { PlanPathError, planDeclaredHeaders, planDeclaredHeadersFromContent, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
+import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
@@ -158,7 +158,6 @@ import {
 import {
   IssueError,
   assertIssueProvenanceSchema,
-  assertCaptureRequest,
   assertPlanIssueSession,
   captureIssue,
   closeIssue,
@@ -509,13 +508,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Local calendar date `YYYY-MM-DD` (harness docs use local dates). */
-function todayString(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${now.getFullYear()}-${month}-${day}`;
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -2326,14 +2318,6 @@ function assertStoredArtifact(kind: string, payload: unknown, path: string, harn
   );
 }
 
-/* ------------------------------------------------------------------------ *
- * § bindPlanSession
- * ------------------------------------------------------------------------ */
-
-type BindContext = {
-  harnessRoot: string;
-  workflowId: string;
-};
 
 /**
  * Root register check (spec §C1): the workflow must be an active entry. The
@@ -3470,6 +3454,14 @@ async function mutatePrepare(
           );
         }
       }
+      const prepared = context.coordination?.prepared;
+      if (
+        prepared?.assignment_intent !== undefined &&
+        canonicalTarget(prepared.assignment_path) === canonicalTarget(scope.assignmentPath) &&
+        isDeepStrictEqual(prepared.assignment_intent, assignmentIntentOf(assignment))
+      ) {
+        return { field: "coordination.prepared", source: "the row's prepared Assignment fields" };
+      }
       assertPrepareAdmission({
         planId: scope.planId,
         row: context.row,
@@ -3527,7 +3519,7 @@ async function mutatePrepare(
     session,
     session_file: sessionPath,
     outcome: result.satisfied === null ? "prepared" : "already-satisfied",
-    recovery,
+    recovery: result.recovery,
     view: buildView(
       scope.harnessRoot,
       scope.workflowId,
@@ -3626,7 +3618,7 @@ async function mutateProgress(
       // Already-recorded field values are current success; compare the named
       // progress fields directly rather than serializing the whole projection.
       const recorded = context.coordination?.progress;
-      const rowBranches = context.row.metadata?.track_branches;
+      const rowBranches = isPlainObject(context.row.metadata) ? context.row.metadata.track_branches : undefined;
       const sameEvidencePaths =
         recorded !== undefined &&
         recorded.evidence_paths.length === progress.evidence_paths.length &&
@@ -4291,13 +4283,6 @@ export type GitCheckout = { head: string; clean: boolean; operation: string | un
  */
 const GIT_READ_TIMEOUT_MS = 10_000;
 
-/**
- * How much of one path-list read the witness keeps. The sealed proof reads the
- * whole tracked/ignored list, which exceeds the 1 MiB `execFileSync` default on
- * a large repository; a read past this ceiling still refuses rather than
- * producing a partial path list.
- */
-const GIT_READ_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
  * One own property of an unknown thrown value, read without asserting a shape.
@@ -4342,9 +4327,9 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
  * exit status means `git` itself never answered, which is refused rather than
  * folded into `undefined` (see `gitUnavailable`).
  *
- * The DB transport reads its Git evidence through the same helpers, but only
- * BEFORE it takes SQLite ownership (§4.1): these reads spawn a process, and a
- * write transaction never does.
+ * DB proofs run before SQLite ownership. Final synchronous, read-only Git
+ * identity/branch/status probes at commit retain actual checkout facts without
+ * file-byte witnesses; they never await or take a harness lock.
  */
 export function gitRead(cwd: string, args: readonly string[]): string | undefined {
   try {
@@ -4382,6 +4367,101 @@ function gitCheckout(path: string): GitCheckout | undefined {
     }
   }
   return { head, clean: dirty.length === 0, operation };
+}
+
+/** Current Git identity, not a seal of repository or document bytes. */
+export type GitProofWitness = Readonly<{
+  repository: string;
+  refusal: "coordination.git-proof" | "coordination.integration-diverged";
+  gitDir: string;
+  commonDir: string;
+  gitIdentity: readonly [number, number];
+  commonIdentity: readonly [number, number];
+  head: string;
+  ref: string | null;
+}>;
+
+function gitDirectoryIdentity(path: string): readonly [number, number] {
+  const stat = statSync(path);
+  return [Number(stat.dev), Number(stat.ino)];
+}
+
+function currentGitHead(gitDir: string, commonDir: string): { head: string; ref: string | null } {
+  const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+  if (!head.startsWith("ref: ")) return { head, ref: null };
+  const ref = head.slice(5);
+  for (const root of [gitDir, commonDir]) {
+    const path = join(root, ref);
+    if (existsSync(path)) return { head: readFileSync(path, "utf8").trim(), ref };
+  }
+  const packed = join(commonDir, "packed-refs");
+  const entry = existsSync(packed)
+    ? readFileSync(packed, "utf8").split("\n").find((line) => line.split(" ")[1] === ref)
+    : undefined;
+  return { head: entry?.split(" ")[0] ?? "", ref };
+}
+
+/** Capture identity before SQLite ownership; no document contents are retained. */
+export function captureGitProofWitness(
+  cwd: string,
+  refusal: GitProofWitness["refusal"] = "coordination.git-proof",
+): GitProofWitness {
+  const repository = canonicalTarget(resolve(cwd));
+  const gitDir = gitRead(repository, ["rev-parse", "--absolute-git-dir"]);
+  const common = gitRead(repository, ["rev-parse", "--git-common-dir"]);
+  const head = gitRead(repository, ["rev-parse", "HEAD"]);
+  if (gitDir === undefined || common === undefined || head === undefined) {
+    throw new CoordinationError(refusal, `cannot read Git checkout ${repository}; restore the recorded checkout and retry`, { repository });
+  }
+  const commonDir = canonicalTarget(resolve(repository, common));
+  const current = currentGitHead(gitDir, commonDir);
+  if (current.head !== head) {
+    throw new CoordinationError(refusal, `Git HEAD moved at ${repository}; retry against the current checkout`, { repository, expected: head, actual: current.head });
+  }
+  return {
+    repository, refusal, gitDir, commonDir,
+    gitIdentity: gitDirectoryIdentity(gitDir),
+    commonIdentity: gitDirectoryIdentity(commonDir),
+    head, ref: current.ref,
+  };
+}
+
+/** Verify checkout identity, branch, HEAD and unfinished operations, never file hashes. */
+export function revalidateGitProofWitness(witness: GitProofWitness): void {
+  let current: ReturnType<typeof currentGitHead>;
+  try {
+    const routing = gitRead(witness.repository, [
+      "--no-optional-locks", "rev-parse", "--path-format=absolute", "--absolute-git-dir", "--git-common-dir",
+    ])?.split("\n");
+    if (routing?.length !== 2 ||
+        canonicalTarget(routing[0]!) !== canonicalTarget(witness.gitDir) ||
+        canonicalTarget(routing[1]!) !== witness.commonDir) {
+      throw new CoordinationError(
+        witness.refusal,
+        `Git checkout routing moved at ${witness.repository}; restore the recorded checkout or retry against its current repository`,
+        { repository: witness.repository },
+      );
+    }
+    const gitIdentity = gitDirectoryIdentity(witness.gitDir);
+    const commonIdentity = gitDirectoryIdentity(witness.commonDir);
+    current = currentGitHead(witness.gitDir, witness.commonDir);
+    if (
+      gitIdentity[0] === witness.gitIdentity[0] && gitIdentity[1] === witness.gitIdentity[1] &&
+      commonIdentity[0] === witness.commonIdentity[0] && commonIdentity[1] === witness.commonIdentity[1] &&
+      current.ref === witness.ref && current.head === witness.head &&
+      gitRead(witness.repository, ["--no-optional-locks", "status", "--porcelain"]) === "" &&
+      !UNFINISHED_GIT_OPERATIONS.some(([marker]) =>
+        existsSync(join(witness.gitDir, marker)) || existsSync(join(witness.commonDir, marker)))
+    ) return;
+  } catch (error) {
+    if (error instanceof CoordinationError) throw error;
+    throw new CoordinationError(witness.refusal, `cannot re-read Git identity at ${witness.repository}; restore the recorded checkout and retry`, { repository: witness.repository });
+  }
+  throw new CoordinationError(
+    witness.refusal,
+    `Git checkout identity, branch, HEAD, cleanliness or operation state moved at ${witness.repository}; restore a clean recorded checkout or retry the proof against its current state`,
+    { repository: witness.repository, expected: witness.head, actual: current.head },
+  );
 }
 
 
@@ -8793,6 +8873,15 @@ function readPrepareAmendment(
       continue;
     }
     if (existing.length === 1) {
+      const prior = existing[0]!;
+      if (
+        prior.title === row.title && prior.file === row.file &&
+        isDeepStrictEqual(prior.metadata ?? {}, row.metadata ?? {})
+      ) {
+        held.push(component);
+        resolvedIds.push(rowId);
+        continue;
+      }
       unresolved.push(
         componentProblem({
           component,
@@ -9045,7 +9134,7 @@ export async function amendPrepareWorkflow(
   const cwd = input.cwd ?? process.cwd();
   const scope = prepareWorkflowScope(input.sessionPath, cwd, anchor.session);
   const committed = await withStatusWriteLock(scope.snapshotPath, async () => {
-    const { snapshot, version, phaseDerived } = readPrepareSnapshot(scope.snapshotPath);
+    const { snapshot, phaseDerived } = readPrepareSnapshot(scope.snapshotPath);
     assertCoordinatorBinding(scope.session, scope.sessionPath, snapshot);
     // The Git-derived main worktree is READ here, but it only gates the
     // components that consume an owned checkout/branch fact: an unreadable Git

@@ -241,7 +241,7 @@ describe("mstar catalog import", () => {
     expect((jsonOf(runCli(["catalog", "list"], workspace)).data as { total: number }).total).toBe(0);
   });
 
-  test("source drift since review is refused and writes nothing", async () => {
+  test("edited source remains importable after review without a content seal", async () => {
     const { workspace, harness } = await populatedFixture("drift-");
     const planPath = join(workspace, "plan.json");
     expect(runCli(["catalog", "discover", "--out", planPath], workspace).exitCode).toBe(0);
@@ -252,15 +252,21 @@ describe("mstar catalog import", () => {
     expect(dryRun.exitCode).toBe(0);
     expect(jsonOf(dryRun)).toMatchObject({ command: "catalog.import", status: "ok" });
     const verification = jsonOf(dryRun).data as { importable: boolean; drift: { sourceKey: string; state: string }[] };
-    expect(verification.importable).toBe(false);
+    expect(verification.importable).toBe(true);
     expect(verification.drift).toEqual([
       expect.objectContaining({ sourceKey: "knowledge:patterns/guard.md", state: "changed" }),
     ]);
 
-    const refused = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION], workspace);
-    expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused)).toMatchObject({ command: "catalog.import", status: "refused", code: "catalog.import-source-drift" });
-    expect((jsonOf(runCli(["catalog", "list"], workspace)).data as { total: number }).total).toBe(0);
+    const imported = runCli(["catalog", "import", "--plan", planPath, ...IMPORT_OPERATION], workspace);
+    expect(imported.exitCode).toBe(0);
+    expect(jsonOf(imported)).toMatchObject({ command: "catalog.import", status: "ok" });
+    const listed = jsonOf(runCli(["catalog", "list"], workspace)).data as {
+      items: { rootKind: string; relativePath: string; documentKind: string | null }[];
+    };
+    expect(listed.items).toContainEqual(expect.objectContaining({
+      rootKind: "knowledge", relativePath: "patterns/guard.md", documentKind: "knowledge",
+    }));
+    expect(readFileSync(join(harness, "knowledge/patterns/guard.md"), "utf8")).toContain("Edited after the review.");
   });
 });
 

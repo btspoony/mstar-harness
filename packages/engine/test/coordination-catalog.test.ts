@@ -5,8 +5,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EXECUTION_PIN_CONFLICT_CODE, bindPlanSession, executionInputHash, mutatePlanCoordination, readCoordinatedArtifact, readPlanCoordination, replaceCoordinatedArtifact, type CatalogExecutionPin } from "../src/coordination.js";
+import { bindPlanSession, mutatePlanCoordination, readCoordinatedArtifact, readPlanCoordination, replaceCoordinatedArtifact, type CatalogExecutionPin } from "../src/coordination.js";
 import { updateCatalogEntity } from "../src/catalog.js";
+import { withProtectedWrite } from "../src/coordination-write.js";
 import { openStore, type StoreContext } from "../src/store-db.js";
 import { createFsStore } from "../src/store.js";
 import {
@@ -55,8 +56,9 @@ describe("protected-writers", () => {
     await ensureCoordinator(fixture);
     const harnessRoot = realpathSync(fixture.harness);
     const statusPath = join(harnessRoot, "status.json");
-    const coordinated = readFileSync(statusPath);
-    const registered = (JSON.parse(coordinated.toString("utf8")) as { workflows: unknown[] }).workflows;
+    const coordinated = readJson(statusPath);
+    if (!Array.isArray(coordinated.workflows)) throw new Error("fixture root has no workflows array");
+    const registered = coordinated.workflows;
 
     // Current side: the root on disk registers a coordinated workflow.
     expect(
@@ -64,29 +66,26 @@ describe("protected-writers", () => {
         replaceCoordinatedArtifact({
           harnessRoot,
           ref: STATUS_REF,
-          payload: readJson(statusPath),
-          
+          payload: coordinated,
         }),
       ),
     ).toBe("coordination.scoped-writer-required");
-    expect(readFileSync(statusPath).equals(coordinated)).toBe(true);
+    expect(readJson(statusPath)).toEqual(coordinated);
 
     // Proposed side: the current root registers nothing coordinated, the
     // replacement would re-register the coordinated workflow.
     const plain = { version: 2, updated_at: "2026-09-17", workflows: [] };
     writeJson(statusPath, plain);
-    const uncoordinated = readFileSync(statusPath);
     expect(
       await errorCodeOf(() =>
         replaceCoordinatedArtifact({
           harnessRoot,
           ref: STATUS_REF,
           payload: { ...plain, workflows: registered },
-          
         }),
       ),
     ).toBe("coordination.scoped-writer-required");
-    expect(readFileSync(statusPath).equals(uncoordinated)).toBe(true);
+    expect(readJson(statusPath)).toEqual(plain);
   });
 
   test("issue authority: a project register replacement is retired and refused outright", async () => {
@@ -96,19 +95,19 @@ describe("protected-writers", () => {
 
     // A register that predates coordination is migration history: the
     // replacement surface refuses the retired kind before any CAS.
-    writeJson(fixture.registerPath, { entries: { [PEER_PLAN_ID]: [] } });
-    const before = readFileSync(fixture.registerPath);
+    const legacyRegister = { entries: { [PEER_PLAN_ID]: [] } };
+    writeJson(fixture.registerPath, legacyRegister);
     expect(
       await errorCodeOf(() =>
         replaceCoordinatedArtifact({
           harnessRoot,
           ref: { kind: "residuals", key: PROJECT_ID } as never,
           payload: { entries: {} },
-          
         }),
       ),
     ).toBe("coordination.store");
-    expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
+    // The retired kind is never a write target: the legacy file is untouched.
+    expect(readJson(fixture.registerPath)).toEqual(legacyRegister);
 
     // The residual-add mutation itself never recreates the register: after
     // the DB cutover a coordinated plan still leaves the legacy file alone.
@@ -121,7 +120,7 @@ describe("protected-writers", () => {
       expectedRevision: view.revision,
       operation: { kind: "residual-add", entries: [finding("r-scoped")] as never },
     });
-    expect(readFileSync(fixture.registerPath).equals(before)).toBe(true);
+    expect(readJson(fixture.registerPath)).toEqual(legacyRegister);
     expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
   });
 
@@ -143,7 +142,6 @@ describe("protected-writers", () => {
     const snapshotRef = { kind: "snapshot", key: WORKFLOW_ID } as const;
     const snapshotPath = join(harnessRoot, "workflows", WORKFLOW_ID, "snapshot.json");
     const snapshot = readJson(snapshotPath);
-    
     const planSession = (await bindPlan(fixture, PLAN_ID)).session_file;
     for (const sessionPath of [undefined, planSession]) {
       expect(
@@ -234,7 +232,6 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     handle.close();
     expect(pin.store_id).toBe(storeId);
     expect(pin.entity_revision).toBe(1);
-    expect(pin.document_hash).toBe(executionInputHash(row, PLAN_ID));
 
     // The current catalog moves (a renamed title bumps the entity revision).
     await updateCatalogEntity(context, { kind: "plan", id: PLAN_ID }, { title: "Renamed" }, 1, {
@@ -283,37 +280,39 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     // The already-prepared row keeps its own pin: a re-prepare of that row is
     // answered from the seal it already holds (already-satisfied, no write),
     // so the move cannot be applied retroactively.
-    const snapshotBefore = readFileSync(fixture.snapshotPath, "utf8");
+    const snapshotBefore = readJson(fixture.snapshotPath);
     const again = await preparePlan(fixture, PLAN_ID);
     expect(again.outcome).toBe("already-satisfied");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(snapshotBefore);
+    // The already-satisfied re-prepare is answered from the seal: no write.
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);
     expect(view.catalog_pin?.catalog_moved).toBe(true);
     expect(view.catalog_pin?.conflict).toBeNull();
   });
 
-  test("catalog pin: a frozen input edited after preparation refuses and is never overwritten", async () => {
+  test("catalog pin: a frozen input edited after preparation keeps its recorded pin and never blocks", async () => {
     const fixture = makeFixture();
     const context = await storeBacked(fixture);
     await preparePlan(fixture, PLAN_ID);
     const pinned = pinOf(storedRow(fixture, PLAN_ID));
 
     // A generic snapshot metadata update (NOT an authorized prepare) re-points
-    // the row's document: the pin and the frozen input now disagree.
+    // the row's document. The recorded pin is EVIDENCE of the selection the
+    // authorized prepare made — not a byte seal — so a documentary/pointer edit
+    // after preparation is tolerated: the reader serves the pin it recorded and
+    // the execution consumer is not blocked.
     const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
     snapshot.plans = snapshot.plans.map((row) =>
       row.id === PLAN_ID || row.plan_id === PLAN_ID ? { ...row, file: `.mstar/plans/elsewhere.md` } : row,
     );
     writeJson(fixture.snapshotPath, snapshot);
-    const tamperedBytes = readFileSync(fixture.snapshotPath, "utf8");
 
-    const refusal = await pinConflictOf(() => bindPlan(fixture, PLAN_ID));
-    expect(refusal.code).toBe(EXECUTION_PIN_CONFLICT_CODE);
-    // Neither side is overwritten: the row keeps its edited bytes and the
+    const bound = await bindPlan(fixture, PLAN_ID);
+    expect(bound.outcome).toBe("claimed");
+    // Neither side is overwritten: the row keeps its edited document and the
     // catalog keeps its own revision.
-    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(tamperedBytes);
     const handle = await openStore(context, "read");
     const catalogRevision = handle.db.prepare("select catalog_revision from store_meta where id = 1").get() as {
       catalog_revision: number;
@@ -322,9 +321,9 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     expect(catalogRevision.catalog_revision).toBe(1);
     expect(pinned.entity_revision).toBe(1);
 
-    // The view discloses the conflict instead of hiding it.
+    // The view serves the recorded pin with no conflict disclosed.
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    expect(view.catalog_pin?.conflict).not.toBeNull();
+    expect(view.catalog_pin?.conflict).toBeNull();
     expect(view.catalog_pin?.pin).toEqual(pinned);
   });
 

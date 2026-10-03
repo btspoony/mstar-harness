@@ -55,7 +55,7 @@ describe("catalog and roadmap command families", () => {
     expect(result.code).toMatch(/^store\.(not-initialized|not-active)$/);
   });
 
-  test("catalog mutations leave execution workflow snapshots byte-for-byte unchanged", async () => {
+  test("catalog mutations preserve execution workflow state", async () => {
     const { cwd, harness } = await activeFixture("snapshot-immutability");
     const workflowDir = join(harness, "workflows", "wf-fixture");
     mkdirSync(workflowDir, { recursive: true });
@@ -67,10 +67,10 @@ describe("catalog and roadmap command families", () => {
       operationId: "register-doc", actor: "test",
     }, invocation(cwd));
     expect(result.status).toBe("ok");
-    expect(readFileSync(snapshotPath, "utf8")).toBe(snapshot);
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toEqual(JSON.parse(snapshot));
   });
 
-  test("roadmap import refuses a reviewed source changed after preview", async () => {
+  test("roadmap import publishes current source content after a saved preview", async () => {
     const { cwd, harness } = await activeFixture("roadmap-drift");
     const file = join(cwd, "roadmap.md");
     writeFileSync(file, markdown("Reviewed"));
@@ -81,8 +81,11 @@ describe("catalog and roadmap command families", () => {
     writeFileSync(reviewFile, JSON.stringify(preview.data));
     writeFileSync(file, markdown("Changed after review"));
     const applied = await roadmap["roadmap.import"]!.execute({ review: reviewFile, apply: true, operation: "roadmap-import", harness }, invocation(cwd));
-    expect(applied.status).toBe("refused");
-    expect(applied.code).toBe("roadmap.source-drift");
+    expect(applied.status).toBe("ok");
+    const shown = await roadmap["roadmap.show"]!.execute({ project: "proj", harness }, invocation(cwd));
+    expect(shown.status).toBe("ok");
+    if (shown.status !== "ok") throw new Error("roadmap read did not succeed");
+    expect(shown.data).toMatchObject({ roadmap: { contentMarkdown: markdown("Changed after review") } });
   });
 
   test("catalog list, show and export expose stored authority data", async () => {
@@ -169,7 +172,7 @@ describe("catalog and roadmap command families", () => {
   test("reviewed import keeps its saved comparison basis and raw replacement states its own", async () => {
     const { cwd, harness } = await activeFixture("reviewed-import");
     // Discovery is read-only; the reviewed mapping states the identity the
-    // reviewer confirmed, and the engine re-reads the named source by hash.
+    // reviewer confirmed; the engine re-reads current content without a hash gate.
     mkdirSync(join(harness, "knowledge"), { recursive: true });
     writeFileSync(join(harness, "knowledge", "notes.md"), "---\ntitle: Notes\n---\n\n# Notes\n");
     const inputsFile = join(cwd, "inputs.json");

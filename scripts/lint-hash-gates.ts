@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 /**
  * lint-hash-gates.ts — bounded TypeScript-AST architecture lint for issue #362
- * (plan 20261003-engine-hash-gates, acceptance A1).
  *
  * Rule: a content-hash (`sha256`/`sha1`/`digest`/`checksum`) or
  * canonical-serialized (`stableJson`, `serializeExecutionValue`,
@@ -18,9 +17,9 @@
  *      ternary branch, a bun/node assertion call, or a local variable / local
  *      helper (same file, at most two lexical call hops) that such a context
  *      consumes;
- *   3. allow `request_hash` equality only when the enclosing function names an
- *      operation id or is a known replay helper. The allowlist is per site and
- *      is printed in full — never per file, never per helper name.
+ *   3. allow `request_hash` equality only when its recorded operand is bound
+ *      to an operation-id lookup, directly or through bounded local helpers.
+ *      The per-site allowlist is printed in full.
  *
  * Limitations (documented in the task report; the reviewed manual inventory is
  * complementary evidence and is not replaced by this command):
@@ -73,16 +72,6 @@ const VIOLATION_CLASSES: Readonly<Record<string, true>> = {
   "helper-hash-gate": true,
 };
 
-/** Same-operation-id request-hash replay helpers: the single sanctioned
- * comparison site family. Membership still requires the operation-id anchor
- * check below, so a same-named helper cannot excuse an unrelated comparison. */
-const REPLAY_HELPERS: Readonly<Record<string, true>> = {
-  replayOperation: true,
-  replayOrConflict: true,
-  readOperationReplay: true,
-  lookupOperation: true,
-  recordOperation: true,
-};
 
 /** Callee names that raise or record a refusal. A branch containing one is a
  * gate for the purposes of this lint. */
@@ -94,10 +83,11 @@ const ASSERTION_CALL = /^(?:expect|assert|assertEquals?|strictEqual|notStrictEqu
 const DEFAULT_DIRS = ["packages/engine/src", "packages/engine/test"];
 
 /** Names of value kinds this lint tracks. */
-type ValueKind = "hash" | "canonical";
+type ValueKind = "hash" | "canonical" | "bytes";
 
 interface AliasDecl {
   name: string;
+  kind: ValueKind;
   owner: ts.Node | undefined;
 }
 
@@ -180,7 +170,8 @@ function producerName(name: string): boolean {
 
 function canonicalCallName(path: string): boolean {
   const last = lastSegment(path);
-  return path === "JSON.stringify" || last === "stableJson" || last === "serializeExecutionValue";
+  return path === "JSON.stringify" || last === "stableJson" || last === "serializeExecutionValue" ||
+    last === "canonicalJson" || last === "encodeTokenKey" || last === "encodeExecutionSessionRef";
 }
 
 function ownerOf(node: ts.Node): ts.Node | undefined {
@@ -278,7 +269,7 @@ function scanComparisons(sf: ts.SourceFile): Comparison[] {
       return;
     }
     if (ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "equals" && n.arguments.length === 1) {
-      out.push({ node: n, operands: [n.expression.expression, n.arguments[0]!], rawBytes: true, assertion: false });
+      out.push({ node: n, operands: [n.expression.expression, n.arguments[0]!], rawBytes: false, assertion: false });
       return;
     }
     // `expect(<value>).toBe(<other>)` and its strict siblings: the equality is
@@ -286,7 +277,8 @@ function scanComparisons(sf: ts.SourceFile): Comparison[] {
     if (!ts.isPropertyAccessExpression(n.expression)) return;
     const matcher = n.expression.name.text;
     if (!/^to(?:Be|Equal|StrictEqual)$/.test(matcher) || n.arguments.length !== 1) return;
-    const receiver = n.expression.expression;
+    let receiver = n.expression.expression;
+    if (ts.isPropertyAccessExpression(receiver) && receiver.name.text === "not") receiver = receiver.expression;
     if (
       ts.isCallExpression(receiver) &&
       lastSegment(calleePath(receiver.expression)) === "expect" &&
@@ -303,44 +295,11 @@ function scanComparisons(sf: ts.SourceFile): Comparison[] {
   return out;
 }
 
-/** A digest producer, a raw file/descriptor read, or a Buffer equality call
- * nested in an expression — the evidence half of a byte-identity assertion. */
-function hasProducerEvidence(expr: ts.Expression): boolean {
-  let found = false;
-  walk(expr, (n) => {
-    if (found) return;
-    if (ts.isCallExpression(n)) {
-      const path = calleePath(n.expression);
-      const name = lastSegment(path);
-      if (producerName(name) || name === "readFileSync" || name === "readDescriptorBytes" || name === "readFileDescriptor") {
-        found = true;
-        return;
-      }
-      if (path === "Buffer.compare") {
-        found = true;
-        return;
-      }
-      if (ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "equals") found = true;
-      return;
-    }
-    if (ts.isNewExpression(n) && lastSegment(calleePath(n.expression)) === "Buffer") found = true;
-  });
-  return found;
-}
 
 function literalOperand(node: ts.Expression): boolean {
   const n = strip(node);
-  return (
-    n.kind === ts.SyntaxKind.NullKeyword ||
-    ts.isTypeOfExpression(n) ||
-    ts.isStringLiteral(n) ||
-    ts.isNumericLiteral(n) ||
-    n.kind === ts.SyntaxKind.TrueKeyword ||
-    n.kind === ts.SyntaxKind.FalseKeyword ||
-    ts.isArrayLiteralExpression(n) ||
-    ts.isObjectLiteralExpression(n) ||
-    (ts.isIdentifier(n) && n.text === "undefined")
-  );
+  return n.kind === ts.SyntaxKind.NullKeyword || ts.isTypeOfExpression(n) ||
+    (ts.isIdentifier(n) && n.text === "undefined");
 }
 
 function valueKind(expr: ts.Expression, aliases: AliasDecl[]): ValueKind | null {
@@ -350,8 +309,14 @@ function valueKind(expr: ts.Expression, aliases: AliasDecl[]): ValueKind | null 
     const path = calleePath(n.expression);
     if (canonicalCallName(path)) return "canonical";
     if (producerName(lastSegment(path))) return "hash";
+    if (/^(?:readFileSync|readDescriptorBytes|readFileDescriptor|protectedBytes|registerBytes)$/.test(lastSegment(path)) || path === "Buffer.from" || path === "Buffer.alloc" || path === "Buffer.allocUnsafe") return "bytes";
+    if (ts.isPropertyAccessExpression(n.expression) && /^(?:equals|toString|subarray|slice)$/.test(n.expression.name.text)) {
+      return valueKind(n.expression.expression, aliases);
+    }
+    if (path === "Buffer.compare") return "bytes";
     return null;
   }
+  if (ts.isNewExpression(n) && /^(?:Buffer|Uint8Array)$/.test(calleePath(n.expression))) return "bytes";
   // `\`sha256:${sha256OfFile(path)}\`` — a digest interpolated into a string
   // literal is the same byte identity as the digest itself.
   if (ts.isTemplateExpression(n)) {
@@ -362,19 +327,22 @@ function valueKind(expr: ts.Expression, aliases: AliasDecl[]): ValueKind | null 
     });
     return hashed ? "hash" : null;
   }
+  if (ts.isPropertyAccessExpression(n) && ts.isCallExpression(n.expression) &&
+    /^(?:protectedBytes|registerBytes)$/.test(lastSegment(calleePath(n.expression.expression)))) return "bytes";
   const name = valueName(n);
   if (name === null) return null;
   if (hashFieldName(name)) return "hash";
   if (ts.isIdentifier(n)) {
     const owner = ownerOf(n);
-    if (aliases.some((a) => a.name === name && a.owner === owner)) return "hash";
+    const alias = aliases.find((a) => a.name === name && a.owner === owner);
+    if (alias !== undefined) return alias.kind;
   }
   return null;
 }
 
 /** Simple local alias propagation: `const h = sha256Bytes(x)` marks `h`. */
 function collectAliases(sf: ts.SourceFile): AliasDecl[] {
-  const raw: Array<AliasDecl & { init: ts.Expression }> = [];
+  const raw: Array<Omit<AliasDecl, "kind"> & { init: ts.Expression }> = [];
   walk(sf, (n) => {
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
       raw.push({ name: n.name.text, owner: ownerOf(n), init: n.initializer });
@@ -385,8 +353,9 @@ function collectAliases(sf: ts.SourceFile): AliasDecl[] {
     let grew = false;
     for (const decl of raw) {
       if (aliases.some((a) => a.name === decl.name && a.owner === decl.owner)) continue;
-      if (valueKind(decl.init, aliases) !== null) {
-        aliases.push({ name: decl.name, owner: decl.owner });
+      const kind = valueKind(decl.init, aliases);
+      if (kind !== null) {
+        aliases.push({ name: decl.name, owner: decl.owner, kind });
         grew = true;
       }
     }
@@ -487,23 +456,86 @@ function insideAssertionCall(node: ts.Node, sf: ts.SourceFile): boolean {
   );
 }
 
-/** The replay allowlist: a `request_hash` comparison whose enclosing function
- * names an operation id (or is a known replay helper). Per site, not per file,
- * and never a content digest: a checksum or content hash on either side of the
- * comparison disqualifies the site. */
+/**
+ * Replay allowance requires the recorded operand to come from an operation-id
+ * lookup. Local lookup/replay helpers are followed for at most two hops; names,
+ * comments and an unrelated operationId parameter never authorize an exception.
+ */
 function isReplayAllowed(node: ts.Node, sf: ts.SourceFile): boolean {
-  const text = node.getText(sf);
-  if (!/request_hash|requestHash/.test(text)) return false;
-  if (/typeof/.test(text)) return false;
-  const withoutRequestHash = text.replace(/request_hash|requestHash/g, "");
-  if (/(?:sha1|sha256|digest|checksum|contentHash|sourceHash|manifestHash|document_hash|input_hash)/i.test(withoutRequestHash)) {
-    return false;
-  }
-  const fn = ownerOf(node);
-  if (fn === undefined) return false;
-  const name = enclosingFunctionName(node);
-  if (name !== undefined && REPLAY_HELPERS[name] === true) return true;
-  return /operation[_]?id/i.test(fn.getText(sf));
+  if (!ts.isBinaryExpression(node)) return false;
+  if (/(?:sha1|sha256|digest|checksum|contentHash|sourceHash|manifestHash|document_hash|input_hash)/i.test(node.getText(sf))) return false;
+  const field = [strip(node.left), strip(node.right)].find((operand) =>
+    ts.isPropertyAccessExpression(operand) && /^(?:request_hash|requestHash)$/.test(operand.name.text),
+  );
+  if (field === undefined || !ts.isPropertyAccessExpression(field) || !ts.isIdentifier(field.expression)) return false;
+  const recordedName = field.expression.text;
+  const locals = collectLocalFunctions(sf);
+  const declarations: ts.VariableDeclaration[] = [];
+  walk(sf, (part) => { if (ts.isVariableDeclaration(part)) declarations.push(part); });
+  const lookup = (expression: ts.Expression, scope: ts.Node, depth: number): boolean => {
+    if (depth > 2) return false;
+    const current = strip(expression);
+    if (ts.isIdentifier(current)) {
+      const declaration = declarations.find((part) =>
+        ts.isIdentifier(part.name) && part.name.text === current.text && ownerOf(part) === scope &&
+        part.getStart(sf) < expression.getStart(sf),
+      );
+      return declaration?.initializer !== undefined && lookup(declaration.initializer, scope, depth);
+    }
+    if (ts.isObjectLiteralExpression(current)) {
+      const property = current.properties.find((part) => ts.isPropertyAssignment(part) && /^(?:request_hash|requestHash)$/.test(part.name.getText(sf)));
+      if (property !== undefined && ts.isPropertyAssignment(property)) {
+        let value = strip(property.initializer);
+        if (ts.isCallExpression(value) && calleePath(value.expression) === "storedText" && value.arguments[0] !== undefined) value = strip(value.arguments[0]);
+        if (ts.isPropertyAccessExpression(value) && /^(?:request_hash|requestHash)$/.test(value.name.text)) return lookup(value.expression, scope, depth);
+      }
+      return false;
+    }
+    if (!ts.isCallExpression(current)) return false;
+    const method = ts.isPropertyAccessExpression(current.expression) ? current.expression.name.text : "";
+    if (method === "get" && current.arguments.some((arg) => /operation_?id/i.test(arg.getText(sf)))) {
+      const receiver = current.expression as ts.PropertyAccessExpression;
+      const preparation = strip(receiver.expression);
+      return ts.isCallExpression(preparation) && ts.isPropertyAccessExpression(preparation.expression) &&
+        preparation.expression.name.text === "prepare" &&
+        preparation.arguments.some((arg) => /where[\s\S]*\boperation_id\s*=\s*\?/i.test(arg.getText(sf)));
+    }
+    if (method === "find") {
+      return current.arguments.some((arg) => ts.isArrowFunction(arg) &&
+        ts.isBinaryExpression(arg.body) &&
+        /\.operation_id$/.test(arg.body.left.getText(sf)) &&
+        /operation_?id$/i.test(arg.body.right.getText(sf)) &&
+        arg.body.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken);
+    }
+    const helper = locals[calleePath(current.expression)];
+    if (helper === undefined || !current.arguments.some((arg) => /operation_?id/i.test(arg.getText(sf)))) return false;
+    let verified = false;
+    walk(helper, (part) => {
+      if (ts.isReturnStatement(part) && part.expression !== undefined && lookup(part.expression, helper, depth + 1)) verified = true;
+    });
+    return verified;
+  };
+  const scope = ownerOf(node);
+  if (scope === undefined) return false;
+  const recordedDeclaration = declarations.find((part) =>
+    ts.isIdentifier(part.name) && part.name.text === recordedName && ownerOf(part) === scope &&
+    part.getStart(sf) < node.getStart(sf),
+  );
+  if (recordedDeclaration?.initializer !== undefined) return lookup(recordedDeclaration.initializer, scope, 0);
+  // A replay helper's parameter is permitted only when every local caller
+  // passes a receipt obtained by the same operation-id lookup.
+  if (!ts.isFunctionDeclaration(scope) || scope.name === undefined) return false;
+  const parameterIndex = scope.parameters.findIndex((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === recordedName);
+  if (parameterIndex < 0) return false;
+  const calls: ts.CallExpression[] = [];
+  walk(sf, (part) => {
+    if (ts.isCallExpression(part) && calleePath(part.expression) === scope.name!.text) calls.push(part);
+  });
+  return calls.length > 0 && calls.every((call) => {
+    const argument = call.arguments[parameterIndex];
+    const callerScope = ownerOf(call);
+    return argument !== undefined && callerScope !== undefined && lookup(argument, callerScope, 0);
+  });
 }
 
 function classifyReason(classification: HashGateClassification, kind: ValueKind, fn: string | undefined, extra: string): string {
@@ -562,37 +594,36 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
 
   for (const candidate of scanComparisons(sf)) {
     const kinds = candidate.operands.map((operand) => valueKind(operand, aliases));
-    const kind: ValueKind = candidate.rawBytes ? "hash" : kinds.find((k) => k !== null) ?? "hash";
-    const hashBearing = candidate.rawBytes || kinds.some((k) => k !== null);
-    if (!hashBearing) continue;
-    if (candidate.assertion && !hasProducerEvidence(candidate.operands[0]!) && !hasProducerEvidence(candidate.operands[1]!)) continue;
+    const rawBytes = candidate.rawBytes || kinds.some((value) => value === "bytes");
+    const kind: ValueKind = rawBytes ? "bytes" : kinds.find((value) => value !== null) ?? "hash";
+    if (!rawBytes && kinds.every((value) => value === null)) continue;
 
     const node = candidate.node;
+    if (!rawBytes && candidate.operands.some((operand) => literalOperand(operand))) {
+      add(node, "record-only", kind, "presence/shape");
+      continue;
+    }
     if (isReplayAllowed(node, sf)) {
       add(node, "replay-allowed", kind, "same-operation-id replay");
       continue;
     }
     if (candidate.assertion) {
-      add(node, equalityClass(kind, candidate.rawBytes, "assertion"), kind, "");
-      continue;
-    }
-    if (!candidate.rawBytes && candidate.operands.some((operand) => literalOperand(operand))) {
-      add(node, "record-only", kind, "presence/shape");
+      add(node, equalityClass(kind, rawBytes, "assertion"), kind, "");
       continue;
     }
 
     const direct = contexts.nodes.some((context) => containsNode(context, node));
     if (direct) {
-      add(node, equalityClass(kind, candidate.rawBytes, "gate"), kind, "");
+      add(node, equalityClass(kind, rawBytes, "gate"), kind, "");
       continue;
     }
     if (insideAssertionCall(node, sf)) {
-      add(node, equalityClass(kind, candidate.rawBytes, "assertion"), kind, "");
+      add(node, equalityClass(kind, rawBytes, "assertion"), kind, "");
       continue;
     }
     const target = initializerTarget(node);
     if (target !== null && nameReadIn(target.name, [...contexts.nodes, ...contexts.assertions], target.decl)) {
-      add(node, equalityClass(kind, candidate.rawBytes, "gate"), kind, `via local ${target.name}`);
+      add(node, equalityClass(kind, rawBytes, "gate"), kind, `via local ${target.name}`);
       continue;
     }
     const fnName = enclosingFunctionName(node);

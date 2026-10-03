@@ -988,7 +988,6 @@ describe("execution-catalog-pin", () => {
     };
     expect(pin.store_id).toBe(fixture.storeId);
     expect(pin.entity_revision).toBe(2);
-    expect(pin.document_hash).toBe(sealed!.input_hash);
   });
 });
 
@@ -1070,7 +1069,6 @@ describe("execution-cross-domain", () => {
     // narrowed union member once instead of casting at every field read.
     const pinnedView = pinned.data as ExecutionPlanView;
     expect(pinnedView.frozenInput?.entity_revision).toBe(1);
-    expect(pinnedView.frozenInput?.document_hash).toBe(sealed!.input_hash);
     expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(sealed);
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(binding);
 

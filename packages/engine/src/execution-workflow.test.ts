@@ -548,6 +548,23 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(state.phase).toBe("phase-4-pr-delivery");
   });
 
+  test("phase entry refuses an integration branch switched after preflight", async () => {
+    const fixture = await workflowFixture("phase-branch-window");
+    const before = await workflowFootprint(fixture.context);
+    setWorkflowWitnessGapForTest(() => {
+      runGit(["checkout", "-q", "-b", "feature/phase-window"], fixture.integrationPath);
+    });
+    try {
+      const refused = await refusalOf(() => workflowMutation(fixture, "phase-branch-window", {
+        kind: "phase", phase: "phase-2-execute", compassPath: fixture.compassPath,
+      }));
+      expect(refused.code).toBe("coordination.integration-diverged");
+      expect(await workflowFootprint(fixture.context)).toEqual(before);
+    } finally {
+      setWorkflowWitnessGapForTest(undefined);
+    }
+  });
+
   test("a compass edited between the gate read and the commit does not refuse the phase (record, not seal)", async () => {
     const fixture = await workflowFixture("phase-edited");
     // The phase is decided by the compass the preflight read, which the gate
@@ -743,20 +760,13 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     });
     expect(identityAnchors(state)).toEqual(identityAnchors(before));
 
-    // §4d/§365 a re-recorded PR identity is a revisable mutation under a new
-    // operation id. The retained semantic constraint is the registered delivery
-    // branch anchors, so the re-record keeps head/target and moves only the
-    // identity fields the anchors do not govern.
-    const rewritten = await workflowMutation(fixture, "op-delivery-rewrite", {
+    // PR identity is protected by its named values, not serialized bytes.
+    const refusal = await refusalOf(() => workflowMutation(fixture, "op-delivery-rewrite", {
       kind: "delivery",
       delivery: { pr: { repo: "o/other", head: SOURCE_BRANCH, target: "main" } },
-    });
-    expect(rewritten.replayed).toBe(false);
-    expect(rewritten.data.workflows[0]!.state.delivery).toMatchObject({
-      compound: { outcome: "created" },
-      pr: { repo: "o/other", head: SOURCE_BRANCH, target: "main" },
-      merge: { evidence: "PR #255 merged" },
-    });
+    }));
+    expect(refusal.code).toBe("coordination.invalid-transition");
+    expect((await readExecutionState(fixture.context)).data.workflows[0]!.state.delivery).toEqual(receipt.data.workflows[0]!.state.delivery);
 
     // The branch anchors remain the authority: a head that contradicts the
     // registered source is still refused by field value.

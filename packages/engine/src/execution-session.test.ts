@@ -28,7 +28,6 @@ import {
   assertExecutionSessionCurrent,
   createLocalExecutionIdentity,
   decodeExecutionSessionRef,
-  encodeExecutionSessionRef,
   executionContextFor,
   resumeExecutionSession,
 } from "./execution-session.js";

@@ -190,7 +190,7 @@ import {
 } from "./coordination.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { storedCoordinationViolations } from "./coordination-transitions.js";
-import { validateExecutionLease, withStatusWriteLock, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
+import { validateExecutionLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import {
   rowPlanId,
   validatePlanRow,
@@ -493,7 +493,7 @@ function digestOf(value: unknown): string {
   return createHash("sha256").update(serializeExecutionValue(value), "utf8").digest("hex");
 }
 
-/** SHA-256 of raw bytes — the only correctness token used for source bytes. */
+/** SHA-256 of raw bytes retained as source provenance, never an admission token. */
 function sha256Of(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -770,14 +770,14 @@ function canonicalWitnessList(witnesses: readonly CoverageWitness[], what: strin
   return sorted;
 }
 
-function executionSourceLocationKey(source: ExecutionSourceWitness, roots: ExecutionMigrationRoots): string {
+function executionSourceLocation(source: ExecutionSourceWitness, roots: ExecutionMigrationRoots): {
+  root: string; path: string; kind: ExecutionSourceWitness["kind"];
+} {
   const path = source.path.replaceAll("\\", "/");
   if (!isAbsolute(source.path) && source.kind === "session-envelope") {
     const segments = path.split("/");
-    if (path.length > 0 && !segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
-      return JSON.stringify(["control", path, source.kind]);
-    }
-    return JSON.stringify(["invalid-relative", path, source.kind]);
+    const valid = path.length > 0 && !segments.some((segment) => segment === "" || segment === "." || segment === "..");
+    return { root: valid ? "control" : "invalid-relative", path, kind: source.kind };
   }
   if (isAbsolute(source.path)) {
     const absolute = canonicalPath(source.path);
@@ -786,26 +786,29 @@ function executionSourceLocationKey(source: ExecutionSourceWitness, roots: Execu
       .sort((a, b) => b[1].length - a[1].length);
     if (matchingRoots.length > 0) {
       const [name, root] = matchingRoots[0]!;
-      return JSON.stringify([name, relative(canonicalPath(root), absolute).replaceAll("\\", "/"), source.kind]);
+      return { root: name, path: relative(canonicalPath(root), absolute).replaceAll("\\", "/"), kind: source.kind };
     }
-    return JSON.stringify(["absolute", absolute, source.kind]);
+    return { root: "absolute", path: absolute, kind: source.kind };
   }
-  return JSON.stringify(["relative", path, source.kind]);
+  return { root: "relative", path, kind: source.kind };
 }
 
-function executionSourceOrderKey(source: ExecutionSourceWitness, roots: ExecutionMigrationRoots): string {
-  return `${executionSourceLocationKey(source, roots)}\u0000${source.sha256.toLowerCase()}`;
+function compareExecutionSourceLocations(
+  left: ReturnType<typeof executionSourceLocation>,
+  right: ReturnType<typeof executionSourceLocation>,
+): number {
+  for (const field of ["root", "path", "kind"] as const) {
+    if (left[field] !== right[field]) return left[field] < right[field] ? -1 : 1;
+  }
+  return 0;
 }
 
 function orderedExecutionSources(
   sources: readonly ExecutionSourceWitness[],
   roots: ExecutionMigrationRoots,
 ): ExecutionSourceWitness[] {
-  return [...sources].sort((a, b) => {
-    const aKey = executionSourceOrderKey(a, roots);
-    const bKey = executionSourceOrderKey(b, roots);
-    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
-  });
+  return [...sources].sort((a, b) =>
+    compareExecutionSourceLocations(executionSourceLocation(a, roots), executionSourceLocation(b, roots)));
 }
 
 /** The configured root one explicit inventory path belongs to. */
@@ -2638,11 +2641,10 @@ async function withAllLocks<T>(paths: readonly string[], fn: () => Promise<T>): 
 }
 
 /**
- * §6 the reviewed manifest against ONE locked discovery: the witness set
- * (count, path, kind, bytes), the core digest, the deferred coverage
- * classification and the pending catalog journal. `apply` and `activate` must
- * both refuse the same drift, so both run this one rule rather than two
- * drifting copies of it.
+ * §6 the reviewed manifest against ONE locked discovery: source root/path/kind
+ * membership, deferred coverage classification and pending catalog operations.
+ * Source order and recorded content digests are not admission predicates.
+ * Apply and activate use the same semantic rule.
  *
  * `selfHeldLockDirs` are the legacy write-lock paths THIS caller holds for the
  * duration of its own transaction: they occupy a discovered surface without the
@@ -2668,6 +2670,16 @@ function assertReviewedManifestHolds(input: {
   }
   if (manifest.inventoryPath !== discovered.inventoryPath) {
     throw conflict("the selected inventory path changed since preview; nothing was written.");
+  }
+  const foundSources = discovered.witnesses.map((source) => executionSourceLocation(source, discovered.roots))
+    .sort(compareExecutionSourceLocations);
+  const reviewedSources = manifest.sources.map((source) => executionSourceLocation(source, manifest.roots))
+    .sort(compareExecutionSourceLocations);
+  if (foundSources.length !== reviewedSources.length || foundSources.some((source, index) => {
+    const reviewed = reviewedSources[index]!;
+    return source.root !== reviewed.root || source.path !== reviewed.path || source.kind !== reviewed.kind;
+  })) {
+    throw conflict("the source root/path/kind membership changed since preview; re-preview the current source set and retry; nothing was written.");
   }
   const foundDeferred = discovered.deferred.map((surface) =>
     surface.surface === LEGACY_LOCK_SURFACE
@@ -2866,12 +2878,10 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
   // that actually happened.
   const recoveries = snapshot.coordination?.identity_recoveries;
   if (recoveries !== undefined) header.identity_recoveries = recoveries;
-  // The same rule for the file route's admission self-amendments (spec §D2): a
-  // bind that adopted a drifted pin recorded who did it and both digests, and
-  // the DB transport has no pin recheck to re-derive that. Projected verbatim
-  // for the coordinator's post-hoc read; nothing enforces on it.
-  const selfAmendments = snapshot.coordination?.self_amendments;
-  if (selfAmendments !== undefined) header.self_amendments = selfAmendments;
+  // Historical self-amendments are retained as audit data, never admission.
+  if (snapshot.coordination !== undefined && "self_amendments" in snapshot.coordination) {
+    header.self_amendments = snapshot.coordination.self_amendments;
+  }
   const headerGate = validateWorkflowSnapshot({ ...header, plans: [] });
   if (!headerGate.ok) {
     throw conflict(
@@ -4135,26 +4145,19 @@ async function assertRetirableAuthority(context: StoreContext, record: Migration
 }
 
 /**
- * `retireExecutionSources` — the §6 item 4 step: move the EXACT unchanged core
- * sources of one activated manifest into manifest-addressed read-only history
- * under `<harness>/archived/execution/<manifestId>/`.
+ * `retireExecutionSources` — move the declared core sources of one activated
+ * manifest into manifest-addressed history under
+ * `<harness>/archived/execution/<manifestId>/`.
  *
- * It runs only behind the recorded active receipt and re-verifies the store
- * identity, the advanced epoch, every item's manifest-addressed destination and
- * every source's exact bytes BEFORE anything moves, so a changed source or a
- * redirected destination refuses with the live tree untouched. Then, per
- * item, a same-filesystem `rename` plus a checksum check of the destination,
- * each item's result written durably into the archive's own
- * `retirement.json`; the DB receipt is the LAST write. A crash after a rename
- * and before the receipt therefore resumes from the destination hash, a source
- * that is absent while its archive copy holds the reviewed bytes is already
- * done, and a source/destination disagreement refuses without overwriting
- * either. A durable ledger is a claim about this manifest and never a source of
- * addressing: its envelope and every item field are reconciled against the
- * reviewed manifest first, and the resume moves the manifest's items. Partial
- * retirement is recoverable and NEVER returns authority to
- * JSON: the store stays `active` throughout, and this verb writes no authority
- * row of its own.
+ * The active receipt, store identity, advanced epoch and declared source and
+ * destination paths authorize retirement. Each same-filesystem rename is
+ * recorded in `retirement.json`; the DB receipt is the last write. Resume
+ * recognizes an absent live source with its archive present, and refuses
+ * conflicting presence without overwriting either path. Digests record what
+ * was observed; they do not authorize moves or determine completion.
+ * The durable ledger is reconciled to the manifest's addressing before moving
+ * its items. Partial retirement stays recoverable and never returns authority
+ * to JSON: the store remains active throughout.
  */
 export async function retireExecutionSources(input: ExecutionMigrationRetireInput): Promise<ExecutionMigrationReceipt> {
   // The shared request still names the reviewed inventory (one request, one
@@ -4240,7 +4243,6 @@ export async function retireExecutionSources(input: ExecutionMigrationRetireInpu
         renameSync(item.path, item.archivePath);
         migrationFailureHook(MIGRATION_FAILURE_ENV.retirement, "after-rename");
       }
-      const archived = readIfExists(item.archivePath);
       if (readIfExists(item.archivePath) === undefined) {
         throw conflict(`the moved copy of ${item.relativePath} is missing; it was NOT overwritten.`);
       }

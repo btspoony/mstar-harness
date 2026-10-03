@@ -359,7 +359,7 @@ describe("planWorktreeCleanup", () => {
         target({ kind: "local-branch", ref: "feature/orphan", branch: "feature/orphan", owner: null }),
       ],
     };
-    const before = JSON.stringify(facts);
+    const before = structuredClone(facts);
     const decisions = planWorktreeCleanup(iterParent, facts);
     expect(decisions.map((d) => `${d.kind}:${d.ref}:${d.verdict}:${d.reason}`)).toEqual([
       `worktree:/repo/.worktrees/plan-1:remove:cleanup.remove.merged`,
@@ -367,6 +367,6 @@ describe("planWorktreeCleanup", () => {
       `worktree:/repo:keep:cleanup.keep.main-worktree`,
       `local-branch:feature/orphan:refuse:cleanup.refuse.foreign-branch`,
     ]);
-    expect(JSON.stringify(facts)).toBe(before);
+    expect(facts).toEqual(before);
   });
 });

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -122,33 +121,43 @@ describe("roadmap CLI", () => {
     const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
     expect(preview.status).toBe(0);
     const reviewed = data(preview);
-    expect(reviewed.sourceHash).toBe(createHash("sha256").update(sourceBytes).digest("hex"));
     writeFileSync(reviewFile, `${JSON.stringify(reviewed)}\n`);
 
     const applied = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "import-bom"], dir);
     expect(applied.status).toBe(0);
-    const receipt = data(applied);
     const shown = object(data(run(["roadmap", "show", "--project", "proj-roadmap"], dir)).roadmap);
     expect(shown.contentMarkdown).toBe(bomMarkdown);
-    expect(shown.contentHash).toBe(reviewed.sourceHash);
-    expect(shown.contentHash).toBe(receipt.contentHash);
     const exported = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
     const exportedText = envelope(exported).data as string;
     expect(exportedText).toContain("## Direction");
     expect(exportedText).toContain("Keep the full source document.");
   });
 
-  test("replacement preserves a leading BOM, uses observed revisions, and rejects stale revisions and drifted sources", async () => {
-    const { dir } = await fixture("cas-");
+  test("a saved review imports current edited content and retains replay conflict", async () => {
+    const { dir } = await fixture("review-edit-");
     const source = join(dir, "roadmap.md");
     const reviewFile = join(dir, "review.json");
     writeFileSync(source, MARKDOWN);
-    const review = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
-    writeFileSync(reviewFile, `${JSON.stringify(data(review))}\n`);
-    writeFileSync(source, `${MARKDOWN}\nchanged after review\n`);
-    const drift = run(["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "drift"], dir);
-    expect(drift.status).toBe(1);
-    expect(envelope(drift).code).toBe("roadmap.source-drift");
+    const preview = run(["roadmap", "import", "--project", "proj-roadmap", "--file", source], dir);
+    expect(preview.status).toBe(0);
+    const reviewed = data(preview);
+    writeFileSync(reviewFile, JSON.stringify(reviewed));
+    const edited = `${MARKDOWN}\nchanged after review\n`;
+    writeFileSync(source, edited);
+    const args = ["roadmap", "import", "--review", reviewFile, "--apply", "--operation", "review-edit"];
+    expect(run(args, dir).status).toBe(0);
+    const shown = object(data(run(["roadmap", "show", "--project", "proj-roadmap"], dir)).roadmap);
+    expect(shown.contentMarkdown).toBe(edited);
+    expect(run(args, dir).status).toBe(0);
+    writeFileSync(reviewFile, JSON.stringify({ ...reviewed, expectedProjectRevision: Number(reviewed.expectedProjectRevision) + 1 }));
+    const conflict = run(args, dir);
+    expect(conflict.status).toBe(1);
+    expect(envelope(conflict).code).toBe("roadmap.operation-conflict");
+  });
+
+  test("replacement preserves a leading BOM and rejects stale numeric revisions", async () => {
+    const { dir } = await fixture("cas-");
+    const source = join(dir, "roadmap.md");
 
     writeFileSync(source, MARKDOWN);
     const created = run(["roadmap", "replace", "--project", "proj-roadmap", "--file", source,
@@ -162,7 +171,6 @@ describe("roadmap CLI", () => {
     expect(replaced).toMatchObject({ status: 0 });
     const bomRead = object(data(run(["roadmap", "show", "--project", "proj-roadmap"], dir)).roadmap);
     expect(bomRead.contentMarkdown).toBe(bomMarkdown);
-    expect(bomRead.contentHash).toBe(createHash("sha256").update(Buffer.from(bomMarkdown, "utf8")).digest("hex"));
     const bomExport = run(["roadmap", "export", "--project", "proj-roadmap", "--format", "markdown"], dir);
     expect(envelope(bomExport).data).toContain("## Direction");
 

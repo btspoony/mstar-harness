@@ -223,7 +223,7 @@ function text(value: unknown): string | null {
 }
 
 /** Read one source's bytes and classify the outcome. */
-function readSource(spec: { relativePath: string; absolutePath: string }): SourceRead {
+function readSource(spec: Extract<SourceSpec, { source: "file" }>): SourceRead {
   let content: string;
   try {
     content = readFileSync(spec.absolutePath, "utf8");
@@ -935,7 +935,7 @@ async function captureFileProjectionSources(context: StoreContext): Promise<Proj
 
   // --- workflow sources (root-declared, then retained history) --------------
   const declaredIds = new Set(declaredEntries.map((entry) => entry.id));
-  const workflowSpecs: SourceSpec[] = declaredEntries.map((entry) => {
+  const workflowSpecs: Array<Extract<SourceSpec, { source: "file" }>> = declaredEntries.map((entry) => {
     const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
     return {
       source: "file",
@@ -1053,7 +1053,7 @@ type ProjectionMetaRow = {
 
 type SourceFingerprint = { sourceKey: string; state: string; sha256: string | null };
 
-type Movement = { kind: "catalog" };
+type Movement = { kind: "catalog" } | { kind: "sources"; keys: readonly string[] };
 type PublishAttempt = { kind: "report"; report: RefreshReport } | { kind: "source-stale"; movement: Movement };
 const PROJECTION_TABLES: readonly string[] = [
   "projection_sources",
@@ -1296,6 +1296,13 @@ function recordRetainedHealth(
  */
 function movementDiagnostics(movement: Movement | null, attempts: number): SourceDiagnostic[] {
   if (movement === null) return [];
+  if (movement.kind === "sources") {
+    return movement.keys.map((sourceKey) => ({
+      sourceKey,
+      reason: "source-changing",
+      message: `the execution authority or numeric store revision moved while publishing (${attempts} capture attempt(s)); capture again against current authority`,
+    }));
+  }
   return [{
     sourceKey: "catalog",
     reason: "source-changing",
@@ -1444,7 +1451,7 @@ export async function publishProjectionCapture(context: StoreContext, capture: P
   if (attempt.kind === "source-stale") {
     throw new ProjectionError(
       "projection.source-stale",
-      "The numeric catalog revision moved after capture. Nothing was published; capture again before publishing.",
+      `The ${attempt.movement.kind === "catalog" ? "numeric catalog revision" : "execution authority or numeric store revision"} moved after capture. Nothing was published; capture again before publishing.`,
     );
   }
   return attempt.report;

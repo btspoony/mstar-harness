@@ -27,6 +27,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import {
   CoordinationError,
@@ -1105,27 +1106,107 @@ function assertCoordinatedSnapshotWriter(
 }
 
 /**
- * Apply the field-scoped delta contract against the stored document: only
  * `phase` + `updated_at` are taken from the incoming snapshot (spec §C4 line
- * 152). Every other field - plan rows, leases, the coordination block, branch
- * anchors, lifecycle scalars - is taken from disk by construction, so this
- * writer can never drop or rewrite them implicitly, and lifecycle terminal
- * changes stay on `closeWorkflow`. A caller that supplies differing values for
- * those fields simply has them ignored, because the stored document is the
- * authority for everything outside the delta.
+ * 152). The stored document remains the source for every other field, while
+ * semantic identity, scope, state and authority fields are checked against
+ * their stored values before projection. Documentary content and provenance
+ * metadata are not sealed by this writer.
  */
 function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
   if (!isPlainObject(stored)) {
     throw new CoordinationError(
       "coordination.store",
-      "stored workflow snapshot is not an object \u2014 refusing a field-scoped rewrite over it",
+      "stored workflow snapshot is not an object — refusing a field-scoped rewrite over it",
       {},
     );
   }
-  const allowed: string[] = ["phase", "updated_at"];
+  const protectedFields = [
+    "schema_version", "id", "type", "status", "started_at", "ended_at",
+    "branch", "integration_worktree_path", "compass_ref", "execution_policy",
+    "integration_merge_lease", "delivery_kind", "project",
+    "completion_policy",
+  ] as const;
+  const candidate = incoming as unknown as Record<string, unknown>;
+  for (const field of protectedFields) {
+    if (candidate[field] !== undefined && !isDeepStrictEqual(candidate[field], stored[field])) {
+      throw new CoordinationError(
+        "coordination.direct-write-refused",
+        `snapshot replacement cannot change workflow ${field}; use its authorized lifecycle operation`,
+        { field },
+      );
+    }
+  }
+  const incomingCoordination = isPlainObject(candidate.coordination) ? candidate.coordination : {};
+  const storedCoordination = isPlainObject(stored.coordination) ? stored.coordination : {};
+  if (incomingCoordination.coordinator !== undefined &&
+      !isDeepStrictEqual(incomingCoordination.coordinator, storedCoordination.coordinator)) {
+    throw new CoordinationError("coordination.direct-write-refused", "snapshot replacement cannot change the coordinator; use workflow recover-coordinator", { field: "coordination.coordinator" });
+  }
+  const rows = Array.isArray(stored.plans) ? stored.plans : [];
+  const incomingRows = Array.isArray(candidate.plans) ? candidate.plans : [];
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    if (isPlainObject(row) && typeof row.id === "string") byId.set(row.id, row);
+  }
+  if (incomingRows.length !== rows.length) {
+    throw new CoordinationError(
+      "coordination.direct-write-refused",
+      "snapshot replacement cannot add or remove plan rows; use the authorized workflow amendment operation",
+      { field: "plans" },
+    );
+  }
+  const rowFields = ["id", "plan_id", "file", "status", "progress", "revision", "execution_lease"] as const;
+  const seenRows = new Set<string>();
+  for (const row of incomingRows) {
+    if (!isPlainObject(row) || typeof row.id !== "string" || seenRows.has(row.id)) {
+      throw new CoordinationError("coordination.direct-write-refused", "snapshot replacement contains an unidentified or duplicate plan row", { field: "plans" });
+    }
+    seenRows.add(row.id);
+    const prior = byId.get(row.id);
+    if (prior === undefined) {
+      throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot add plan row ${row.id}`, { field: "plans", plan_id: row.id });
+    }
+    for (const field of rowFields) {
+      if (row[field] !== undefined && !isDeepStrictEqual(row[field], prior[field])) {
+        throw new CoordinationError(
+          "coordination.direct-write-refused",
+          `snapshot replacement cannot change plan row ${row.id} ${field}; use its authorized lifecycle operation`,
+          { field: `plans.${field}`, plan_id: row.id },
+        );
+      }
+    }
+    const incomingAuthority = isPlainObject(row.coordination) ? row.coordination : {};
+    const storedAuthority = isPlainObject(prior.coordination) ? prior.coordination : {};
+    for (const field of ["revision", "session"] as const) {
+      if (incomingAuthority[field] !== undefined && !isDeepStrictEqual(incomingAuthority[field], storedAuthority[field])) {
+        throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} coordination.${field}; use its authorized plan operation`, { field: `plans.coordination.${field}`, plan_id: row.id });
+      }
+    }
+    for (const [block, fields] of [
+      ["prepared", ["assignment_path", "assignment_intent", "qa_gate", "findings_cleanup", "prepared_by", "prepared_at"]],
+      ["handoff", ["id", "attempt", "state", "submitted_by", "source_branch", "source_sha", "worktree_path", "review_base", "review_head", "accepted_by", "integration", "completed_at"]],
+      ["progress", ["status", "summary", "evidence_paths", "track_branches"]],
+    ] as const) {
+      const proposed = isPlainObject(incomingAuthority[block]) ? incomingAuthority[block] : {};
+      const held = isPlainObject(storedAuthority[block]) ? storedAuthority[block] : {};
+      for (const field of fields) {
+        if (proposed[field] !== undefined && !isDeepStrictEqual(proposed[field], held[field])) {
+          throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} coordination.${block}.${field}; use its authorized plan operation`, { field: `plans.coordination.${block}.${field}`, plan_id: row.id });
+        }
+      }
+    }
+    const incomingMetadata = isPlainObject(row.metadata) ? row.metadata : {};
+    const storedMetadata = isPlainObject(prior.metadata) ? prior.metadata : {};
+    for (const field of ["iteration_refs", "spec_integration_branch", "merge_target"] as const) {
+      if (incomingMetadata[field] !== undefined && !isDeepStrictEqual(incomingMetadata[field], storedMetadata[field])) {
+        throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} metadata.${field}`, { field: `plans.metadata.${field}`, plan_id: row.id });
+      }
+    }
+  }
+  const allowed = ["phase", "updated_at"];
   const next: Record<string, unknown> = { ...stored };
   for (const key of allowed) {
-    const value = (incoming as unknown as Record<string, unknown>)[key];
+    const value = candidate[key];
     if (value === undefined) delete next[key];
     else next[key] = value;
   }
@@ -1716,25 +1797,60 @@ export async function recordWorkflowDelivery(
       );
     }
     const stored = isPlainObject(snapshot.delivery) ? snapshot.delivery : {};
-    // §4d the registered branch anchors are the delivery identity: an incoming
-    // payload that contradicts them is refused on the DB route's field checks
-    // (`applyDeliveryEvidence`). Recording delivery evidence is a revisable
-    // mutation — the compound disposition, the PR record and the merge record
-    // may all evolve — so the previously recorded pair is data, never a second
-    // authority over this writer.
+    // A submitted PR is the registered delivery identity and is immutable;
+    // report-only completion basis is frozen once a row is Done.
+    const doneRows = snapshot.plans.some((row) => row.status === "Done");
+    const previousPr = isPlainObject(stored.pr) ? stored.pr : undefined;
+    const nextPr = isPlainObject(evidence.pr) ? evidence.pr : undefined;
+    const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
+    if (nextPr !== undefined && isNonEmptyString(branch.source) && nextPr.head !== branch.source) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `workflow ${workflowId} records delivery.pr.head ${JSON.stringify(nextPr.head)}, but the registered delivery source is ${JSON.stringify(branch.source)}`,
+        { workflow_id: workflowId },
+      );
+    }
+    if (nextPr !== undefined && isNonEmptyString(branch.target) && nextPr.target !== branch.target) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `workflow ${workflowId} records delivery.pr.target ${JSON.stringify(nextPr.target)}, but the registered delivery target is ${JSON.stringify(branch.target)}`,
+        { workflow_id: workflowId },
+      );
+    }
+    if (
+      previousPr !== undefined &&
+      nextPr !== undefined &&
+      (previousPr.repo !== nextPr.repo || previousPr.head !== nextPr.head || previousPr.target !== nextPr.target)
+    ) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `workflow ${workflowId} records PR identity ${JSON.stringify(previousPr)} once at submission — ${JSON.stringify(nextPr)} is a different delivery, not an evidence update`,
+        { workflow_id: workflowId },
+      );
+    }
+    const previousCompletion = isPlainObject(stored.completion) ? stored.completion : undefined;
+    const nextCompletion = isPlainObject(evidence.completion) ? evidence.completion : undefined;
+    if (
+      snapshot.delivery_kind === "verification/report-only" &&
+      doneRows &&
+      nextCompletion !== undefined &&
+      (previousCompletion === undefined ||
+        previousCompletion.policy !== nextCompletion.policy ||
+        previousCompletion.evidence !== nextCompletion.evidence)
+    ) {
+      throw new CoordinationError(
+        "coordination.completion-frozen",
+        `workflow ${workflowId} is Done against completion policy ${String(previousCompletion?.policy ?? snapshot.completion_policy)} and reference ${String(previousCompletion?.evidence ?? "(none)")}; keep the recorded reference and edit that document normally; a different completed intent uses its own workflow`,
+        { workflow_id: workflowId },
+      );
+    }
     const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;
-    if (stableJson(snapshot.delivery ?? null) === stableJson(merged)) {
+    if (isDeepStrictEqual(snapshot.delivery, merged)) {
       return { snapshot, written: false };
     }
-    // §R5/A19 the delivery tail (compound / PR identity / verified-merge
-    // record) is captured whenever it is observed: the row's `Done` projection
-    // is not its ordering prerequisite, because the close composes that
-    // projection from the same evidence. There is deliberately NO write-time
-    // row-Done gate here - the semantic boundary is the close, which consults
-    // the declared kind's complete evidence (`consultDeliveryEvidence`) against
-    // the rows it has completed. The DB route's `applyDeliveryEvidence` states
-    // the same rule, and the report-only `completion` fulfilment is recorded
-    // the same revisable way (a re-record under a new operation id replaces it).
+    // Delivery-tail evidence may arrive before Done. Once a row is Done, PR
+    // identity and report-only completion basis are immutable; other evidence
+    // remains recorded through the same merge operation.
     const next: WorkflowSnapshot = { ...snapshot, delivery: merged, updated_at: at };
     await validateAndPutWorkflowSnapshot(store, next, snapshotPath);
     return { snapshot: next, written: true };

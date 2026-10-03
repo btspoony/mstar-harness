@@ -237,6 +237,15 @@ export type CatalogImportRetirementSection = {
   /** Lines outside the retired section, preserved verbatim. */
   preservedLines: number;
   sourceKey: string;
+  /** The recognized family of this table; a row identity is only valid inside it. */
+  family: IndexFamily;
+  /**
+   * The normalized catalog locations of the reviewed rows inside THIS table,
+   * in row order. The retirement reader associates a live table with a
+   * reviewed section by these values, so a table is never selected by a
+   * file-wide union of ids and paths.
+   */
+  rows: string[];
 };
 
 export type CatalogImportPlan = {
@@ -348,7 +357,8 @@ type PathResolution = { ok: true; relativePath: string } | { ok: false; reason: 
  * Non-throwing core of `normalizeRelativePath`. A reviewed import input still
  * fails hard on a bad path; a legacy index row may legitimately carry a
  * cross-root/history reference (`../../plans/<id>.md`) that the caller retains
- * as a disclosed unknown instead of losing the whole proposal (§4).
+ * as a disclosed unknown instead of losing the whole proposal (§4). It is the
+ * ONE definition of a catalog location's normalized form.
  */
 function resolveRelativePath(raw: unknown, label: string): PathResolution {
   if (typeof raw !== "string" || raw.trim() === "") return { ok: false, reason: `${label} must be a nonblank relative path` };
@@ -938,6 +948,39 @@ function lineCountOf(text: string): number {
   return lines.length;
 }
 
+/**
+ * The catalog identity of ONE recognized index row, as the reviewed parser
+ * itself records it: an iteration row is identified by its own id, and a
+ * document/package row by its normalized catalog location — resolved through
+ * `resolveRelativePath`, the ONE definition of that normalized form, including
+ * the package owner. An id is never compared against a location: the two are
+ * different kinds of fact and cross-matching them selects an unrelated row.
+ *
+ * `null` when the row declares no usable identity (no backticked iteration id,
+ * no reference, or a reference that leaves its catalog root).
+ */
+export function indexRowIdentity(family: IndexFamily, cells: string[], owner: string | null): string | null {
+  if (family === "iteration-rows") return cellBacktickToken(cells[0] ?? "");
+  const reference = cellReference(cells[0] ?? "");
+  if (reference === null) return null;
+  const trimmed = reference.replace(/^\.\//, "").replace(/\/+$/, "");
+  const resolved = resolveRelativePath(
+    family === "package-documents" && owner !== null ? `${owner}/${trimmed}` : trimmed,
+    "index row path",
+  );
+  return resolved.ok ? resolved.relativePath : null;
+}
+
+/** One recognized table's reviewed row identities, in row order. */
+function reviewedRowIdentities(family: IndexFamily, rows: { cells: string[] }[], owner: string | undefined): string[] {
+  const identities: string[] = [];
+  for (const row of rows) {
+    const identity = indexRowIdentity(family, row.cells, owner ?? null);
+    if (identity !== null) identities.push(identity);
+  }
+  return identities;
+}
+
 /** One index file: recognized tables become proposals, everything else stays. */
 function parseIndexFile(acc: Accumulator, context: StoreContext, source: IndexSource): void {
   const read = readForEvidence(acc, context, source.rootKind, source.relativePath);
@@ -948,6 +991,7 @@ function parseIndexFile(acc: Accumulator, context: StoreContext, source: IndexSo
     const family = detectIndexFamily(table.header);
     if (family === null) continue;
     const header = table.header.map((cell) => cellText(cell)).join(" | ");
+    const reviewedRowIds = reviewedRowIdentities(family, table.rows, source.owner);
     acc.sections.push({
       rootKind: source.rootKind,
       relativePath: source.relativePath,
@@ -957,6 +1001,8 @@ function parseIndexFile(acc: Accumulator, context: StoreContext, source: IndexSo
       sha256: sha256(read.text),
       preservedLines: Math.max(0, lineCount - (table.lastLine - table.firstLine + 1)),
       sourceKey: read.sourceKey,
+      family,
+      rows: reviewedRowIds,
     });
     for (const row of table.rows) {
       if (family === "iteration-rows") parseIterationRow(acc, context, source, read.sourceKey, row, table.header);

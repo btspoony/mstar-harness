@@ -428,7 +428,6 @@ describe("fresh-clone tracked bodies", () => {
       expect(proposal.idAssigned).toBe(true);
       const codes = plan.unknowns.filter((unknown) => unknown.key === `${proposal.kind}:${proposal.id}`).map((unknown) => unknown.code);
       expect(codes.sort()).toEqual(["identity", "membership"]);
-      expect(proposal.sourceHash).toBe(plan.sourceDigests.find((digest) => digest.sourceKey === `${proposal.rootKind}:${proposal.relativePath}`)!.sha256);
     }
 
     const receipt = await importCatalog(fixture.context, plan, { operationId: "imp-fresh", actor: "project-manager" });

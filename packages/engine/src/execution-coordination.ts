@@ -18,6 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
 import {
   CoordinationError,
@@ -43,14 +44,17 @@ import {
   assertViolationFree,
   assignmentIntentOf,
   catalogPinFactsOn,
+  captureGitProofWitness,
   gitObjectExists,
   gitRead,
   integrationProof,
   parseAssignmentFile,
   planAreaRoots,
   proofRepository,
+  revalidateGitProofWitness,
   selectCatalogPinOn,
   type AssignmentHeaders,
+  type GitProofWitness,
 } from "./coordination.js";
 import {
   IMPLEMENTED_OPERATIONS,
@@ -103,7 +107,6 @@ import {
   resolvePlanRead,
   resolveTokenFreshness,
   semanticRequestHash,
-  serializeExecutionValue,
   transferExecutionLease,
   withExecutionTransaction,
   writeExecutionInputPin,
@@ -137,7 +140,6 @@ import {
   storeRevisionOn,
   IssueError,
   type CaptureInput,
-  type ClosureEvidence,
   type ComposedTransactionRevision,
 } from "./issue.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
@@ -150,12 +152,10 @@ import {
   type RecoveryDetails,
   type RecoveryProblem,
   type ResolutionSource,
-  type SemanticSelection,
 } from "./recovery-intent.js";
 import { findingsCleanupGate } from "./project.js";
 import { StoreError, storeDbPath } from "./store-db.js";
 import {
-  WORKFLOW_TERMINAL_STATUSES,
   consultDeliveryEvidence,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
@@ -164,7 +164,7 @@ import {
 } from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
 import type { PlanHandoff, RowCoordination } from "./coordination-write.js";
-import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
+import type { IntegrationMergeLease } from "./lease.js";
 import type { PlanRow } from "./status.js";
 
 /**
@@ -719,6 +719,7 @@ function withExecutionPlanOperation<T>(
   resolved: ResolvedPlanOperation<CoordinationOperation>,
   requestHash: string,
   run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<T>,
+  alreadySatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<T> | undefined,
 ): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
@@ -779,6 +780,26 @@ function withExecutionPlanOperation<T>(
     // record this operation writes, so it is refused with the exact facts instead
     // of overwritten.
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
+    const satisfiedReceipt = alreadySatisfied?.(witness, tx);
+    if (satisfiedReceipt !== undefined) {
+      const receipt = satisfiedReceipt;
+      const recovery = planRecovery({
+        witness,
+        kind: request.operation.kind,
+        outcome: "already-satisfied",
+        commitState: "none",
+        resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
+      });
+      writePlanOperationReceipt(tx, {
+        operationId: request.operationId,
+        requestHash,
+        workflowId: witness.workflowId,
+        planId: witness.planId,
+        receipt: { ...receipt, operationRecovery: recovery },
+        now: new Date().toISOString(),
+      });
+      return { ...receipt, operationId: request.operationId, replayed: false, recovery };
+    }
     const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
     // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
@@ -1002,6 +1023,14 @@ export async function prepareExecutionPlan(
     return {
       data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch,
     };
+  }, (witness, tx) => {
+    const prepared = witness.view.coordination?.prepared;
+    const satisfied = prepared !== undefined &&
+      canonicalTarget(prepared.assignment_path) === inputs.assignment.assignmentPath &&
+      isDeepStrictEqual(prepared.assignment_intent, assignmentIntentOf(inputs.assignment));
+    return satisfied
+      ? { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch }
+      : undefined;
   });
 }
 
@@ -1032,7 +1061,7 @@ export async function progressExecutionPlan(
   const progress = operation.progress;
   assertViolationFree(validatePlanProgress(progress), "progress");
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  const { planId, workflowId } = resolved.read;
+  const { planId } = resolved.read;
   // §D the areas a plan's own evidence may live in: derived from the harness
   // root this store lives in, never from a caller-supplied path.
   const planAreas = planAreaRoots(controlHarnessRoot(context), planId);
@@ -1087,8 +1116,6 @@ export type ResidualAddOperation = Extract<CoordinationOperation, { kind: "resid
 /** §3 the `residual-close` member of the closed union, unchanged. */
 export type ResidualCloseOperation = Extract<CoordinationOperation, { kind: "residual-close" }>;
 
-/** One residual entry: the issue contract's capture input minus the project. */
-type ResidualEntry = ResidualAddOperation["entries"][number];
 
 /**
  * §3.1 the plan-revision advance of one accepted plan operation whose body does
@@ -1832,7 +1859,6 @@ export async function returnExecutionPlan(
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
     const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
     requireHandoffState(handoff, ["submitted", "accepted"], planId, "return");
-    const plan = witness.view.plan as unknown as PlanRow;
     if (handoff.state === "accepted") {
       // The receiving holder must be the plan's ACTIVE plan-pm session: moving
       // the lease onto a session the store no longer holds would leave the row
@@ -1966,8 +1992,9 @@ export async function integrationAcceptExecutionPlan(
   const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
   const checkout = assertIntegrationCheckout(anchors, planId);
   const proof = integrationProof(anchors.worktreePath, checkout.head, attempt.base_sha, named.source_sha);
+  const gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
   if (proof.kind === "diverged") {
-    throw integrationDiverged(`plan ${planId} integration cannot be proven \u2014 ${proof.reason}`, {
+    throw integrationDiverged(`plan ${planId} integration cannot be proven — ${proof.reason}`, {
       plan_id: planId,
       base: attempt.base_sha,
       source: named.source_sha,
@@ -1975,7 +2002,7 @@ export async function integrationAcceptExecutionPlan(
   }
   if (proof.kind === "pending") {
     throw integrationUnresolved(
-      `plan ${planId} integration shows no merge of ${named.source_sha} onto ${attempt.base_sha} yet \u2014 run the coordinator merge, then accept`,
+      `plan ${planId} integration shows no merge of ${named.source_sha} onto ${attempt.base_sha} yet — run the coordinator merge, then accept`,
       { plan_id: planId, base: attempt.base_sha, source: named.source_sha },
     );
   }
@@ -1986,6 +2013,7 @@ export async function integrationAcceptExecutionPlan(
     requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "integration-accept", { still: true });
     assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-accept");
     assertMergeLeaseOwn(witness, tx, handoff, "integration-accept");
+    revalidateGitProofWitness(gitWitness);
     const recorded = requireIntegration(handoff, planId);
     writeCoordinationBlock(tx, witness, {
       block: {
@@ -2461,6 +2489,8 @@ export type EntailedRowCompletion = {
   completesRow: boolean;
   fulfilment: { policy: string; evidence: string } | null;
   resultSha: string | null;
+  /** Current source/result checkout facts, not filesystem content seals. */
+  gitWitness?: GitProofWitness;
 };
 
 /**
@@ -2491,7 +2521,7 @@ function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: str
  * §R5/§R10 the fulfilment of a report-only completion policy, RESOLVED from the
  * facts the workflow already records: the policy it registered at registration
  * (§1) and the acceptance report its accepted decision was recorded against
- * (the handoff's own QA report reference, sealed with its digest). Nothing is
+ * (the handoff's own QA report reference). Nothing is
  * invented — a workflow that registered no policy, or recorded a fulfilment of
  * a DIFFERENT policy (a re-pointed completion), is refused with that fact.
  */
@@ -2602,6 +2632,7 @@ export async function readEntailedRowCompletion(
     assertStandaloneBranchIdentity(row, planId, handoff, anchors, "close");
     const worktree = planScopeOf(row, planId).worktreePath;
     assertStandaloneSourceGitProof(worktree, handoff, anchors.source, "close", planId);
+    const gitWitness = captureGitProofWitness(worktree);
     await assertFindingsClosed(context, planId, prepared, "close");
     assertExecutionHolder(planRowOf(row), context.caller.sessionId, planId, "close");
     return {
@@ -2610,6 +2641,7 @@ export async function readEntailedRowCompletion(
       completesRow: true,
       fulfilment: null,
       resultSha: null,
+      gitWitness,
     };
   }
   // The integration route: a PROVEN merge is reused, never re-run. The attempt
@@ -2621,6 +2653,7 @@ export async function readEntailedRowCompletion(
   const anchors = integrationAnchors(snapshot, planId);
   const checkout = assertIntegrationCheckout(anchors, planId);
   const resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, handoff.source_sha, checkout.head);
+  const gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
   await assertFindingsClosed(context, planId, prepared, "close");
   assertExecutionHolder(planRowOf(row), context.caller.sessionId, planId, "close");
   return {
@@ -2629,6 +2662,7 @@ export async function readEntailedRowCompletion(
     completesRow: true,
     fulfilment: null,
     resultSha,
+    gitWitness,
   };
 }
 
@@ -2803,6 +2837,7 @@ export async function completeExecutionPlan(
   // re-reads the header and refuses if either moved in the window.
   const pinned = { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
   let resultSha: string | null = null;
+  let gitWitness: GitProofWitness | undefined;
   if (reportOnly) {
     assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
     requireHandoffState(named, ["accepted"], planId, "complete");
@@ -2818,12 +2853,14 @@ export async function completeExecutionPlan(
     assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
     const worktree = planScopeOf(before.data, planId).worktreePath;
     assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
+    gitWitness = captureGitProofWitness(worktree);
   } else {
     requireHandoffState(named, ["merged"], planId, "complete");
     const attempt = requireIntegration(named, planId);
     const anchors = integrationAnchors(snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
     resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, named.source_sha, checkout.head);
+    gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
   }
   await assertFindingsClosed(context, planId, prepared, "complete");
   assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "complete");
@@ -2854,6 +2891,7 @@ export async function completeExecutionPlan(
       assertMergeLeaseOwn(witness, tx, handoff, "complete");
       assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
     }
+    if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
     applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
     const settled = readExecutionPlanWitness(tx, resolved.read);
     return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
