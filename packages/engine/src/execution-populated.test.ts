@@ -545,17 +545,14 @@ async function stagePopulated(
   await applyExecutionMigration({
     ...migrationInput(fixture, `op-${name}-apply`),
     manifest,
-    manifestHash: executionManifestHash(manifest),
     backup,
     coverage,
   });
   await activateExecutionMigration({
     ...migrationInput(fixture, `op-${name}-activate`),
     manifestId: manifest.id,
-    manifestHash: executionManifestHash(manifest),
     expectedEpoch: manifest.epoch,
     attestation: populatedAttestation([{ sessionId: SESSION, host: "omp", state: "stopped" }]),
-    coverageDigest: coverage.digest,
   });
   const state = await readExecutionState(fixture.context);
   return { manifest, coverage, epoch: state.epoch };
