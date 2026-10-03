@@ -1026,7 +1026,7 @@ export async function reservePlanLaunch(
       if (live.length > 0) {
         return refuse(
           "launch.plan-occupied",
-          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}) from coordinator ${live[0]!.coordinatorSessionId}; inspect its native transport evidence, then use record-launch with observation submitted, refused or uncertain to record the observed outcome before reserving again`,
+          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}) from coordinator ${live[0]!.coordinatorSessionId}; inspect native transport evidence and use record-launch for a permitted submitted/refused outcome before reserving again. Recording uncertain preserves occupancy and does not permit retry; an existing bound child must finish through mstar plan handoff to discharge that occupancy`,
         );
       }
 

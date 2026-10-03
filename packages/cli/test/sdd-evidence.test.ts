@@ -1437,6 +1437,16 @@ describe("verify — target applicability", () => {
         const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
         const result = await captureDirect(f, counterArgv(f), { env });
 
+        // A content edit under the same declared path does not change source
+        // membership or acquire a digest admission gate.
+        const unchangedTarget = targetFileFor(root, f.feature, f.head);
+        writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'edited-in-place';\n");
+        const edited = verifyCli(f, result.record.runId, { target: unchangedTarget, env });
+        expect(edited.exitCode).toBe(0);
+        const editedAssessment = dataOf(edited) as { applicability: string; changedInputs: string[] };
+        expect(editedAssessment.applicability).toBe("candidate");
+        expect(editedAssessment.changedInputs).toEqual([]);
+
         // Known membership change inside a declared root: a new test file under
         // the declared `tests/` directory is a semantic source-set difference
         // (a same-path content edit alone is no longer a difference).

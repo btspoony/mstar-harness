@@ -105,14 +105,12 @@
  *
  * Two preconditions are the barrier rather than decoration:
  *
- * - **the §4.1 coverage must be CLOSED and unchanged.** The barrier recomputes
- *   every surface receipt from the named bytes, closes the set through C2's
- *   validator (the per-row source assignment, the host/consumer discovery
- *   proofs and the operator attestation's stopped/reloaded coverage) and
- *   requires it to be BOTH the digest the operator approved and the set
- *   recorded at staging. A populated surface is activated on VALIDATED
- *   coverage instead of being blocked for being populated; there is no
- *   allow-incomplete flag, and none is accepted;
+ * - **the §4.1 current coverage must be CLOSED.** The barrier recomputes
+ *   every surface receipt from current named sources and closes the set through
+ *   C2's validator (per-row assignment, host/consumer discovery proofs and
+ *   stopped/reloaded owner coverage). Coverage digests remain recorded
+ *   provenance, not approval or staging freshness seals. Populated surfaces
+ *   activate on VALIDATED coverage; there is no allow-incomplete flag;
  * - **the attestation must cover the frozen owner inventory.** The owners the
  *   import recorded (the session envelopes it witnessed) are exactly the
  *   sessions the attestation must name as stopped/reloaded — a missing one is
@@ -3611,12 +3609,11 @@ function replayActivation(record: MigrationRecord): ExecutionMigrationReceipt {
  *
  * It re-reads the recorded staged manifest (never a caller-supplied document),
  * takes the §4.2 maintenance → root → sorted-workflow lock ladder, and inside
- * ONE transaction rechecks source membership and ownership, refreshes current rows, the
- * RECOMPUTED coverage of every discovered surface, an empty pending catalog
- * journal, the store identity, the reviewed schema, the `expectedEpoch` CAS,
- * the operator's own identity, the attestation's coverage of the frozen owner
- * inventory and the staged graph against the reviewed import. Then it advances
- * the store-wide epoch ONCE, flips the execution authority to `active`, revokes
+ * ONE transaction validates current source membership, coverage closure, the
+ * empty pending catalog journal, store identity, schema and `expectedEpoch`
+ * CAS, plus the operator identity, attestation's coverage of the owner inventory
+ * and staged graph membership/ownership; it refreshes the current imported rows.
+ * Then it advances the store-wide epoch ONCE, flips execution authority to `active`, revokes
  * the imported sessions at their own epoch, leaves every imported lease
  * REPRESENTED (never adopted) and records the activation receipt naming the
  * reconciliation that remains.
@@ -3624,10 +3621,10 @@ function replayActivation(record: MigrationRecord): ExecutionMigrationReceipt {
  * The activation precondition is the VALIDATED COVERAGE, not the absence of
  * populated surfaces: a `deferred` (2b) surface is no longer a barrier input —
  * it is diagnostic evidence produced by discovery, while the barrier closes the
- * coverage set through the pure validator (whose per-surface bytes must decode)
- * and requires that set to be the operator-approved digest and the set recorded
- * at staging. There is no allow-incomplete flag and none is accepted; a
- * populated surface that cannot be validated refuses as incomplete coverage.
+ * coverage set through the pure validator (whose current per-surface sources
+ * must decode). Digests are recorded as provenance, never compared with an old
+ * approval or staging value. There is no allow-incomplete flag; a populated
+ * surface that cannot be validated refuses as incomplete coverage.
  *
  * A crash before the commit leaves the staged (JSON-live) authority untouched;
  * a retry of the same pair returns the recorded receipt instead of a second
@@ -3749,10 +3746,9 @@ export async function activateExecutionMigration(
               pendingCatalogOperations: pending,
             });
             // §4.1/§4.2 the coverage boundary replaces "populated means blocked":
-            // the barrier recomputes the whole coverage from the named bytes,
-            // closes it through C2's validator (which re-checks the host proof's
-            // stopped/reloaded attestation) and requires it to be BOTH the digest
-            // the operator approved and the set recorded at staging.
+            // The barrier closes current-source coverage through C2's validator
+            // and rechecks stopped/reloaded owner attestation. Digests are
+            // recorded only; neither preview nor staging seals current content.
             const barrierCoverage = coverageFromDiscovery({ discovered, manifest, manifestHash: record.manifestHash });
             assertAttestationCoversOwners(discovered.owners, attestation);
             refreshStagedImport(tx, discovered);
