@@ -626,11 +626,9 @@ function refusalCodeOf(action: () => unknown): string {
 }
 
 /**
- * Evidence stays at the configured SDD roots as FILES with byte hashes, across
- * an authority switch: the bodies a plan wrote before its store was activated
- * are still the bytes its handoff record pins afterwards, and the acceptance
- * gates (containment, existence, digest) are the ones that decide whether that
- * evidence can be an accepted approval.
+ * Evidence remains in files across an authority switch. Current containment
+ * and existence checks decide whether the submitted evidence is usable;
+ * recorded digests are provenance, not content seals.
  */
 describe("retained evidence path checks across the authority switch", () => {
   test("handoff evidence stays in files and path containment remains enforced", async () => {
@@ -638,6 +636,9 @@ describe("retained evidence path checks across the authority switch", () => {
     // yet: the evidence bodies are created before activation.
     const context = await legacyStore("retained-evidence-switch");
     const bodies = retainedBodies(context.harnessDir);
+    writeBody(bodies.qc, QC_BODY);
+    writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+    writeBody(bodies.qa, QA_BODY);
 
     // The switch: the fixture's execution authority becomes ACTIVE.
     await initializeExecutionAuthority(context);

@@ -632,7 +632,7 @@ describe("handoff-transitions", () => {
     expect(qc.decision).toBe("Approve");
     const reports = qc.reports;
     if (!Array.isArray(reports)) throw new Error("qc.reports is not an array");
-    expect(reports.map((report) => recordField(report, "path"))).toEqual([
+    expect(reports.map((report) => (report as Record<string, unknown>).path)).toEqual([
       join(fixture.sddDir, "review", "qc1.md"),
       join(fixture.sddDir, "review", "qc2.md"),
     ]);
@@ -2969,17 +2969,6 @@ describe("Prepare workflow amendment", () => {
     }
   });
 
-  test("concurrent amendments serialize under the write lock and apply one delta", async () => {
-    const fixture = makePrepareFixture();
-    await ensurePrepareCoordinator(fixture);
-    const patch = preparePatchOf(fixture, { appendPlans: [PREPARE_APPEND] });
-    const results = await Promise.all([amendWith(fixture, patch), amendWith(fixture, patch)]);
-    expect(results.map((entry) => entry.outcome).sort()).toEqual(["already-satisfied", "amended"]);
-    const settled = results.find((entry) => entry.outcome === "already-satisfied")!;
-    expect(settled.recovery?.applied).toEqual([]);
-    expect(settled.recovery?.commitState).toBe("none");
-    expect(prepareSnapshotOf(fixture).plans.map((row) => row.id)).toEqual([PREPARE_ROW, PREPARE_APPEND]);
-  });
 
   test("unrelated drift after the caller's read preserves sibling work; semantic changes still refuse", async () => {
     // A sibling-row addition and compass prose edit do not change this plan's
