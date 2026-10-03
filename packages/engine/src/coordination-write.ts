@@ -853,6 +853,7 @@ export function validateSnapshotCoordination(value: unknown, what = "coordinatio
   if (!isPlainObject(value)) return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations: ValidationResult[] = [];
   const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
