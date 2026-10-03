@@ -1264,7 +1264,9 @@ export function assessSddEvidenceReuse(
 
   const after = rec.after;
   const beforeAfterPaths = after !== null ? diffEntryPaths(rec.before.entries, after.entries) : [];
-  const beforeAfterMoved = beforeAfterPaths.length > 0;
+  const beforeAfterToolMoved = after !== null && !toolEquals(rec.before.tool, after.tool);
+  const beforeAfterEnvironmentMoved = after !== null && !environmentEquals(rec.before.environment, after.environment);
+  const beforeAfterMoved = beforeAfterPaths.length > 0 || beforeAfterToolMoved || beforeAfterEnvironmentMoved;
 
   let lane = unusableTargetLane;
   if (target !== undefined) {
@@ -1282,6 +1284,8 @@ export function assessSddEvidenceReuse(
   // an unusable target discloses only record-derived movement.
   if (target !== undefined) {
     for (const path of beforeAfterPaths) changedInputs.add(path);
+    if (beforeAfterToolMoved) changedInputs.add("$tool");
+    if (beforeAfterEnvironmentMoved) changedInputs.add("$environment");
     if (lane.usable) {
       for (const path of lane.paths) changedInputs.add(path);
       if (lane.toolDiffers) changedInputs.add("$tool");

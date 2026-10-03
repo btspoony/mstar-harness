@@ -600,6 +600,19 @@ describe("assessSddEvidenceReuse", () => {
     expect(assessment.changedInputs).toContain("src/alpha.ts");
   });
 
+  test("before/after selected environment and runtime metadata movement stays uncertain when target matches after", () => {
+    const before = snapshot();
+    const after = snapshot({
+      environment: { CI: "1", NODE_ENV: "production" },
+      tool: tool({ runnerRuntimeVersion: "bun/2.1.0" }),
+    });
+    const rec = record({ before, after });
+    const assessment = assessSddEvidenceReuse(rec, fullFacts(), EXPECTED, after);
+    expect(assessment.applicability).toBe("uncertain");
+    expect(assessment.reasons).toContain("input.concurrent-change");
+    expect(assessment.changedInputs).toEqual(["$environment", "$tool"]);
+  });
+
   test("unknown target plus digest-only drift reports uncertainty without a changed-content claim", () => {
     const target = snapshot({
       unknowns: ["target git probe failed"],
