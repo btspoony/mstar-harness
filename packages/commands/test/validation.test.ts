@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createExecutionWorkflow, initializeExecutionAuthority, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import { createExecutionWorkflow, initializeExecutionAuthority, initializeStore, openStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -88,6 +89,8 @@ describe("validation command family", () => {
 
   test("ACTIVE worktree check reads registered workflows from the execution graph", async () => {
     const cwd = tempRoot();
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd });
+    execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-q", "--allow-empty", "-m", "initial"], { cwd });
     const harness = path.join(cwd, ".mstar");
     mkdirSync(harness, { recursive: true });
     const storeContext = { harnessDir: harness };
@@ -102,21 +105,48 @@ describe("validation command family", () => {
       snapshot: {
         schema_version: 1, id: "workflow-synthetic", type: "plan", status: "running",
         started_at: "2026-09-26T00:00:00Z", updated_at: "2026-09-26T00:00:00Z",
-        branch: { base: "main", source: "feature/synthetic", target: "main" },
+        branch: { base: "expected-main", source: "feature/synthetic", target: "release/synthetic" },
         plans: [{ id: "plan-synthetic", title: "Synthetic plan", file: "plans/plan-synthetic.md", status: "InProgress" }],
         delivery_kind: "development",
       },
       expected: initialized.token,
       operationId: "workflow-synthetic",
     });
+    const leaseStore = await openStore(storeContext, "write");
+    try {
+      leaseStore.db.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)")
+        .run("workflow-synthetic", "plan-synthetic", initialized.epoch, JSON.stringify({
+          holder: "dev-synthetic", claimed_at: "2026-09-26T00:00:00Z",
+          worktree_path: path.join(cwd, "wrong-feature-worktree"), working_branch: "feature/synthetic",
+        }));
+      leaseStore.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { leaseStore.close(); }
     const result = await definition("worktree.check").execute(
-      { planId: "plan-synthetic", workflow: "workflow-synthetic", harness },
+      { planId: "plan-synthetic", workflow: "workflow-synthetic", harness, mainBranch: "main" },
       context(cwd, async ({ argv }) => argv[1] === "worktree"
         ? { exitCode: 0, signal: null, stdout: `worktree ${cwd}\nbranch main\n`, stderr: "" }
         : { exitCode: 0, signal: null, stdout: "main", stderr: "" }),
     );
     expect(result.status).toBe("refused");
-    expect(result.message).toContain("active execution authority graph");
+    expect(violationsOf(result).some(({ code, message }) => /lease|worktree/i.test(`${code} ${message}`))).toBe(true);
+    const featureWorktree = path.join(cwd, "feature-worktree");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/synthetic", featureWorktree], { cwd });
+    const leaseUpdate = await openStore(storeContext, "write");
+    try {
+      leaseUpdate.db.prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify({
+          holder: "dev-synthetic", claimed_at: "2026-09-26T00:00:00Z",
+          worktree_path: featureWorktree, working_branch: "feature/synthetic",
+        }), "workflow-synthetic", "plan-synthetic");
+      leaseUpdate.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    } finally { leaseUpdate.close(); }
+    const matching = await definition("worktree.check").execute(
+      { planId: "plan-synthetic", workflow: "workflow-synthetic", harness, mainBranch: "main" },
+      context(cwd, async ({ argv }) => argv[1] === "worktree"
+        ? { exitCode: 0, signal: null, stdout: `worktree ${cwd}\nbranch main\n`, stderr: "" }
+        : { exitCode: 0, signal: null, stdout: "main", stderr: "" }),
+    );
+    expect(matching.status).toBe("ok");
     const missing = await definition("worktree.check").execute(
       { planId: "plan-synthetic", workflow: "workflow-unregistered", harness },
       context(cwd),

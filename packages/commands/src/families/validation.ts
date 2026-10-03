@@ -225,7 +225,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness });
           const planView = input.planId === undefined
             ? registered.plans.length === 1 ? registered.plans[0] : undefined
-            : registered.plans.find(({ plan }) => plan.id === plan);
+            : registered.plans.find((candidate) => candidate.plan.id === plan);
           if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness });
           const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
           if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed");
