@@ -30,7 +30,7 @@ import {
   type ExecutionReadSelection,
 } from "./execution-read.js";
 import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
-import { IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
+import { assertIssueProvenanceSchema, IssueError, type Disposition, type IssueDetail, type IssueFilter, type IssueKind, type IssuePage, type Severity } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
 import { parseRoadmapContent, type RoadmapContent } from "./roadmap-content.js";
@@ -744,6 +744,7 @@ function parseEvidenceText(json: string): string[] {
 
 function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   // Same pre-migration-7 tolerance as the page read above.
+  assertIssueProvenanceSchema(db);
   const milestoneColumn = issuesMilestoneColumn(db) ? ", milestone_id" : "";
   const issue = db
     .prepare(
@@ -846,13 +847,14 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   const provenance = (
     db
       .prepare(
-        "select id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
+        "select id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
       )
       .all(id) as Array<{
       id: number;
       kind: string;
       target: string;
       source_hash: string;
+      origin: "scoped" | "unscoped";
       legacy_project: string | null;
       legacy_bucket: string | null;
       legacy_entry_id: string | null;
@@ -863,6 +865,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     id: row.id,
     kind: row.kind,
     target: row.target,
+    origin: row.origin,
     sourceHash: row.source_hash,
     legacyProject: row.legacy_project,
     legacyBucket: row.legacy_bucket,

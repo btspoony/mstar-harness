@@ -27,8 +27,15 @@ The execution route is selected by `execution_meta.authority_state`, not by `sto
 - On a harness whose execution authority is **active**, the pre-activation forms are retired rather than reinterpreted: they refuse with `execution.consumer-not-ready`, whose message names the active form of the same verb. `mstar plan show --workflow <id> --plan <id>` stays the public authoritative read against that authority, and `mstar status validate` reports the root and per-workflow execution tokens the active writes consume as their CAS — on plan mutations a caller states `--expect` only when holding the token as an explicit constraint — otherwise the engine reads it itself; workflow-level active writes state the scope's full token, and an invented token is never valid.
 - `mstar status validate` reports the root and per-workflow tokens when state is active; `mstar plan show` reports the addressed plan token. Use the token matching the mutation scope.
 - Legacy file-form operation routes are retired; their flags are not a supported alternative to the active route.
+
 - The **reference is a lookup, not a bearer credential**: it names a stored session row, grants no authority by itself, and the engine compares the independently acquired caller inside its own transaction — so a copied reference under another identity refuses without writing.
 - Launching: `mstar session run --workflow <id> --role <coordinator|plan-pm> [--plan <id>] [--harness <absolute-path>] -- <argv>` mints **one** local identity for the child, overwrites the identity channel, deletes the legacy one, and propagates the child's exit code (or re-raises the signal that killed it). Repeated CLI invocations inside that child share the identity; a **new** launcher is a new identity and cannot claim the old one — a stopped owner needs the explicit recovery verb (→ § Recovery), never a copied id.
+
+## Issue-store writes
+
+Unscoped `mstar issue` writes are actor-only store mutations: every write verb (`add`, `occurrence`, `triage`, `close`, `waive`, `duplicate`, `supersede`, and `link`) requires `--actor` + `--operation-id` and a payload via `--payload` or `--file`. `--expect` is required for `triage`, each terminal disposition (`close`, `waive`, `duplicate`, `supersede`), and `link` row-CAS; omitting it refuses with `issue.revision-conflict`. They do not take a session, envelope, workflow, or execution-authority address. The plan-scoped `mstar plan issue-add` and `mstar plan issue-close` routes remain inside their plan session and retain the plan coordination protocol described below.
+
+For example: `mstar issue link --id <issue-id> --actor project-manager --operation-id link-1 --expect <revision> --payload '{"kind":"plan","target":"<id>"}'`. The target is recorded as a provenance label; the issue store does not verify that the plan or iteration exists. A future read-only `issue doctor` report for dangling provenance is deferred and would not gate writes.
 
 ## Session and address model
 

@@ -691,7 +691,6 @@ export { mutateExecutionPlan } from "./execution-coordination.js";
 // helpers stay module-scoped.
 export type { WorkflowExecutionOperation } from "./execution-workflow.js";
 export { mutateExecutionWorkflow, recoverExecutionCoordinator, workflowExecutionPolicyViolations } from "./execution-workflow.js";
-export { closeIssueExecution, linkIssueExecution, triageIssueExecution } from "./execution-coordination.js";
 export type {
   CaptureInput,
   ClosureEvidence,

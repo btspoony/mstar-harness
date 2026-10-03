@@ -12,7 +12,7 @@ import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "
 import type { CoordinatorBinding, RowCoordination } from "./coordination-write.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
 import { rowPlanIds } from "./status.js";
-import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import {
   WORKFLOW_SNAPSHOT_FILE,
   isTerminalSnapshot,
@@ -271,6 +271,7 @@ export type IssueProvenance = {
   kind: string;
   target: string;
   sourceHash: string;
+  origin: "scoped" | "unscoped";
   legacyProject: string | null;
   legacyBucket: string | null;
   legacyEntryId: string | null;
@@ -343,6 +344,7 @@ export type IssueErrorCode =
   | "issue.revision-conflict"
   | "issue.invalid-disposition"
   | "milestone.schema-outdated"
+  | "issue.schema-outdated"
   | "milestone.project-mismatch"
   | "milestone.invalid-input"
   | "milestone.not-found"
@@ -693,9 +695,20 @@ function insertOccurrence(
   return row.id;
 }
 
+export function assertIssueProvenanceSchema(db: StoreDb): void {
+  const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
+  if ((schema?.version ?? 0) < MIGRATIONS.length) {
+    throw new IssueError(
+      "issue.schema-outdated",
+      `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store safe-upgrade" first.`,
+    );
+  }
+}
+
 function insertCaptureProvenance(db: StoreDb, issueId: string, cols: OccurrenceColumns): void {
+  assertIssueProvenanceSchema(db);
   db.prepare(
-    "insert into provenance(issue_id, kind, target, source_hash) values (?, ?, ?, ?)",
+    "insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, 'unscoped')",
   ).run(issueId, "capture", cols.sourceIdentity, sha256(cols.occurrenceKey));
 }
 
@@ -1094,6 +1107,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
   const handle = await openStore(context, "read");
   try {
     const db = handle.db;
+    assertIssueProvenanceSchema(db);
     // FW-6: same stage gate as listIssues — a staged store is refused, never
     // served as read authority.
     assertIssueStoreActive(db);
@@ -1201,13 +1215,14 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
     const provenance = (
       db
         .prepare(
-          "select id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
+          "select id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at from provenance where issue_id = ? order by id asc",
         )
         .all(id) as Array<{
         id: number;
         kind: string;
         target: string;
         source_hash: string;
+        origin: "scoped" | "unscoped";
         legacy_project: string | null;
         legacy_bucket: string | null;
         legacy_entry_id: string | null;
@@ -1218,6 +1233,7 @@ export async function getIssue(context: StoreContext, id: string): Promise<Issue
       id: row.id,
       kind: row.kind,
       target: row.target,
+      origin: row.origin,
       sourceHash: row.source_hash,
       legacyProject: row.legacy_project,
       legacyBucket: row.legacy_bucket,
@@ -1272,12 +1288,9 @@ export function assertTerminalDisposition(disposition: TerminalDisposition): voi
 }
 
 /**
- * Seats an existing session envelope authorizes (contract §4: existing harness
- * authorization semantics, not a new local auth service). Both roles
- * `readSessionEnvelope` accepts are PM seats — `plan-pm` binds one plan,
- * `coordinator` binds the lifecycle — so a validated envelope proves the
- * `project-manager` seat. The requested actor stays an audit label: it must
- * match the seat the envelope proves and is never the authority.
+ * Shared role-to-seat mapping for session-authorized issue paths. The
+ * plan-scoped route uses the `plan-pm` mapping; milestone assignment separately
+ * validates its session against this seat vocabulary.
  */
 const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
   "plan-pm": "project-manager",
@@ -1292,13 +1305,7 @@ const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
  */
 const CAPTURE_SEAT = "project-manager";
 
-/**
- * The seat one bound session writes issues as. `ENVELOPE_SEATS` is the ONE
- * role → seat mapping: the file route derives the seat from the envelope it
- * validated, and the DB coordination route from its store-held session role, so
- * a DB `plan-pm` holds exactly the seat a file envelope proves and the audited
- * actor of an issue transition is the same value on both routes.
- */
+/** Derive the audited actor for plan-scoped issue capture and closure. */
 export function issueWriteSeat(role: string): string {
   if (!Object.hasOwn(ENVELOPE_SEATS, role)) {
     throw new IssueError("issue.scope-refused", `Session role ${JSON.stringify(role)} holds no issue-write seat`);
@@ -1318,44 +1325,10 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Bind the envelope that authorizes a privileged mutation to the engine's own
- * record (contract §4: existing harness authorization semantics, not a new
- * local auth service), then derive the seat from it.
- *
- * A JSON document that merely *parses* as an envelope is never a credential,
- * so the caller cannot choose the authority file. The envelope must be the one
- * the engine itself issues (`bindPlanSession`):
- *
- *  1. at the path the workflow's own record binds — `assertEngineIssuedSession`
- *     compares the presented file with the snapshot's recorded
- *     `coordination.session.session_file` / `coordination.coordinator.session_file`
- *     exactly (the same recorded-path rule the coordination writers enforce), and
- *     accepts that bound path in either engine-issued shape: the canonical
- *     `sessions/<role>-<session_id>.json` a current bind writes, or the pre-#264
- *     bare `sessions/<session_id>.json` that released 3.11.0 workflows record
- *     (both roles — 3.11.0 had no role prefix). A copy at any other path refuses
- *     even when byte-identical and fully bound;
- *  2. under the harness root that owns this store — an envelope issued for
- *     another control root refuses;
- *  3. for a **live** workflow — the workflow's snapshot must exist, validate,
- *     and not be terminal (`completed|failed|stopped`);
- *  4. and that workflow's own coordination record must point back at exactly
- *     this file and session id — the snapshot's `coordination.coordinator` for
- *     a `coordinator` envelope, the named plan row's `coordination.session` for
- *     a `plan-pm` envelope.
- *
- * Point 4 is the binding `assertCoordinatedSnapshotWriter` (`workflow.ts`)
- * already enforces against a snapshot's recorded session file, and the one the
- * scoped writers enforce through `assertCoordinatorBinding` /
- * `assertRowBinding` (`coordination.ts`); the store applies the same rule to
- * its own privileged verbs instead of inventing a signature scheme. It raises
- * the authority artifact from "a file the caller picked" to "the engine's
- * record for a live workflow": forging authority now requires rewriting the
- * workflow's validated, engine-owned coordination record, not just dropping a
- * plausible JSON file somewhere — the level of trust contract §4 accepts
- * ("do not claim security against a user who directly controls the DB file").
+ * Bind the session envelope for milestone assignment or plan-scoped issue coordination.
+ * Unscoped issue writes use `requireCaptureSeat` and do not call this function.
  */
-function authorizeMutation(context: StoreContext, mutation: MutationContext): CoordinationSession {
+function authorizeMutation(context: StoreContext, mutation: Pick<MutationContext, "actor" | "sessionFile">): CoordinationSession {
   const { session, sessionPath } = readScopedSession(mutation.sessionFile);
   assertEngineIssuedSession(context.harnessDir, sessionPath, session);
   const seat = ENVELOPE_SEATS[session.role];
@@ -1367,6 +1340,11 @@ function authorizeMutation(context: StoreContext, mutation: MutationContext): Co
     );
   }
   return session;
+}
+
+/** Re-check engine-issued session authority for plan-scoped issue coordination only. */
+export function assertPlanIssueSession(context: StoreContext, sessionFile: string): void {
+  authorizeMutation(context, { actor: "project-manager", sessionFile });
 }
 
 /**
@@ -1495,8 +1473,7 @@ function assertEngineIssuedSession(harnessDir: string, sessionPath: string, sess
 }
 
 /**
- * Plan/iteration provenance uses the existing coordination session envelope.
- * Credentials are never written into SQLite.
+ * Read the session envelope used by milestone assignment and plan-scoped coordination.
  */
 function readScopedSession(sessionFile: string | undefined): { session: CoordinationSession; sessionPath: string } {
   if (!sessionFile) {
@@ -1513,28 +1490,6 @@ function readScopedSession(sessionFile: string | undefined): { session: Coordina
   }
 }
 
-/** Identity for new plan/iteration links is the validated envelope's plan_id / workflow_id (no catalog table in this plan). */
-function assertPlanIterationIdentity(
-  kind: "plan" | "iteration",
-  target: string,
-  session: CoordinationSession,
-): void {
-  if (kind === "plan") {
-    if (session.role !== "plan-pm" || session.plan_id !== target) {
-      throw new IssueError(
-        "issue.scope-refused",
-        "New plan provenance must match the plan-pm session envelope plan_id; arbitrary targets are refused until catalog identity exists.",
-      );
-    }
-    return;
-  }
-  if (session.workflow_id !== target) {
-    throw new IssueError(
-      "issue.scope-refused",
-      "New iteration provenance must match the session envelope workflow_id; arbitrary targets are refused until catalog identity exists.",
-    );
-  }
-}
 
 function requireExpectedRevision(mutation: MutationContext, current: number): void {
   if (mutation.expectedRevision === undefined) {
@@ -1549,24 +1504,12 @@ function requireExpectedRevision(mutation: MutationContext, current: number): vo
 }
 
 /**
- * Disposition-specific evidence requirements (contract §4/§6).
+ * Disposition-specific payload requirements (contract §4/§6). The actor is
+ * audited separately; this validates evidence content, not execution authority.
  *
- * Who may close is decided by `authorizeMutation` before this runs: the
- * envelope proves the seat, and an actor string is never authority. That is
- * §4's whole execution route, because §6 makes the leaf QA seat an **evidence
- * authority**, not a second execution credential — "leaf audit/QC/QA seats
- * return evidence and never write the store". So when the QA gate is the
- * authority for a `resolved` closure, the QA seat's acceptance arrives as this
- * closure's evidence and the envelope-proven seat performs the write; the
- * store therefore declares no unreachable `qa-engineer` credential path.
- *
- * `resolved` requires both halves of that evidence: the verification
- * `references` (what was accepted) and the acceptance authority in
- * `alignmentRef` (who accepted it — the QA gate's acceptance or the PM
- * acceptance record). Recording the authority is what keeps a QA-gate-backed
- * closure distinguishable in the append-only history from one resting on no
- * acceptance evidence at all; without it, a `resolved` closure would record
- * nothing about which §4 authority it was made under.
+ * `resolved` requires both verification `references` and the acceptance
+ * authority in `alignmentRef`, keeping QA-gate-backed closure distinguishable
+ * in append-only history from a closure without acceptance evidence.
  */
 export function assertClosureAuthority(disposition: TerminalDisposition, evidence: ClosureEvidence): void {
   requireNonblank("reason", evidence.reason);
@@ -1598,8 +1541,9 @@ export function assertClosureAuthority(disposition: TerminalDisposition, evidenc
 }
 
 function linkedPlanTargets(db: StoreDb, issueId: string): string[] {
+  assertIssueProvenanceSchema(db);
   const rows = db
-    .prepare("select distinct target from provenance where issue_id = ? and kind = 'plan' order by target")
+    .prepare("select distinct target from provenance where issue_id = ? and kind = 'plan' and origin = 'scoped' order by target")
     .all(issueId) as Array<{ target: string }>;
   return rows.map((row) => row.target);
 }
@@ -1676,23 +1620,25 @@ export async function triageIssue(
   patch: IssueTriage,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
   requireNonblank("reason", patch.reason);
   assertIssueTriageVocabulary(patch);
-  authorizeMutation(context, mutation);
   return withWrite(context, (handle) => triageIssueOn(handle.db, issueId, patch, mutation, undefined, true));
 }
 
 /**
  * §4/§5 the plan-link gate of one closure: a plan may close only a finding
  * linked to ITS plan. Identity is the append-only `provenance` record
- * (`kind='plan'`, `target=<plan id>`, written by `linkIssue`), so a read-side
- * scope check cannot race an unlink — there is no unlink verb. Shared by both
+ * (`kind='plan'`, `target=<plan id>`, origin `scoped` or historical default,
+ * written by a plan-scoped operation), so a read-side scope check cannot
+ * race an unlink — there is no unlink verb. Shared by both
  * transports: the file route opens its own read handle for it, the DB route
  * reads through the transaction it already owns.
  */
 export function assertIssueLinkedToPlanOn(db: StoreDb, issueId: string, planId: string): void {
+  assertIssueProvenanceSchema(db);
   const linked = db
-    .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ?")
+    .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
     .get(issueId, planId) as { ok: number } | undefined;
   if (!linked) {
     throw new IssueError(
@@ -1797,8 +1743,8 @@ export async function closeIssue(
   evidence: ClosureEvidence,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
   assertTerminalDisposition(disposition);
-  authorizeMutation(context, mutation);
   assertClosureAuthority(disposition, evidence);
   return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
 }
@@ -1866,14 +1812,9 @@ export async function assignIssueMilestone(
 }
 
 /**
- * The link body on a handle the caller already owns and has already
- * authorized: it appends one relation or one provenance row and is idempotent
- * per `(issue, link)` as well as per operation id, so a retry converges instead
- * of duplicating a link. It reads no session file, opens no store and begins no
- * transaction — the link vocabulary and the plan/iteration identity of the
- * target belong to the transport's pre-transaction half — and a caller that owns
- * the transaction passes its own `ComposedTransactionRevision` so the link joins
- * the single store-revision advance instead of adding one of its own.
+ * Appends one relation or provenance row to a caller-owned transaction. It is
+ * idempotent per `(issue, link)` as well as per operation id; plan/iteration
+ * targets are recorded provenance labels, not catalog lookups.
  */
 export function linkIssueOn(
   db: StoreDb,
@@ -1882,9 +1823,32 @@ export function linkIssueOn(
   mutation: AuthorizedIssueMutation,
   composed?: ComposedTransactionRevision,
 ): IssueReceipt {
+  return linkIssueOnWithOrigin(db, issueId, link, mutation, composed, "unscoped");
+}
+
+/** Internal plan-scoped writer; callers must establish plan authority first. */
+export function linkIssueScopedOn(
+  db: StoreDb,
+  issueId: string,
+  link: IssueLink,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
+  return linkIssueOnWithOrigin(db, issueId, link, mutation, composed, "scoped");
+}
+
+function linkIssueOnWithOrigin(
+  db: StoreDb,
+  issueId: string,
+  link: IssueLink,
+  mutation: AuthorizedIssueMutation,
+  composed: ComposedTransactionRevision | undefined,
+  origin: "scoped" | "unscoped",
+): IssueReceipt {
   const hash = requestHash("linkIssue", {
     issueId,
     link,
+    origin,
     mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
   });
 
@@ -1929,10 +1893,11 @@ export function linkIssueOn(
   } else {
     const target = requireNonblank("target", link.target);
     const sourceHash = sha256(lengthDelimited([link.kind, target]));
-    const already = db
-      .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ?")
-      .get(issueId, link.kind, target) as { ok: number } | undefined;
-    if (already) {
+    assertIssueProvenanceSchema(db);
+    const existing = db
+      .prepare("select 1 as ok from provenance where issue_id = ? and kind = ? and target = ? and origin = ?")
+      .get(issueId, link.kind, target, origin) as { ok: number } | undefined;
+    if (existing) {
       const receipt: IssueReceipt = {
         issueId,
         revision: issue.revision,
@@ -1942,12 +1907,8 @@ export function linkIssueOn(
       recordOperation(db, mutation.operationId, hash, receipt, at);
       return receipt;
     }
-    db.prepare("insert into provenance(issue_id, kind, target, source_hash) values (?, ?, ?, ?)").run(
-      issueId,
-      link.kind,
-      target,
-      sourceHash,
-    );
+    db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values (?, ?, ?, ?, ?)")
+      .run(issueId, link.kind, target, sourceHash, origin);
   }
 
   const revision = issue.revision + 1;
@@ -1964,10 +1925,19 @@ export async function linkIssue(
   link: IssueLink,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
-  const session = authorizeMutation(context, mutation);
+  requireCaptureSeat(mutation.actor);
   assertIssueLinkVocabulary(link);
-  if ("kind" in link && (link.kind === "plan" || link.kind === "iteration")) {
-    assertPlanIterationIdentity(link.kind, requireNonblank("target", link.target), session);
-  }
   return withWrite(context, (handle) => linkIssueOn(handle.db, issueId, link, mutation));
+}
+
+/** Internal plan-scoped writer; the file transport verifies its plan session before calling. */
+export async function linkIssueScoped(
+  context: StoreContext,
+  issueId: string,
+  link: IssueLink,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
+  assertIssueLinkVocabulary(link);
+  return withWrite(context, (handle) => linkIssueOnWithOrigin(handle.db, issueId, link, mutation, undefined, "scoped"));
 }

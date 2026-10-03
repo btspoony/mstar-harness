@@ -46,7 +46,7 @@ export type { RoadmapValidation } from "./roadmap-content.js";
 export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { openStore, type StoreContext } from "./store-db.js";
-import { IssueError } from "./issue.js";
+import { assertIssueProvenanceSchema, IssueError } from "./issue.js";
 import {
   normalizeSeverity,
   validateResidual,
@@ -224,7 +224,8 @@ export function validateProjectRegister(doc: unknown): GateResult {
  * Findings cleanup gate (status-and-residuals.md § Findings cleanup modes;
  * issue-governance cutover G2a): the authoritative input is the issue store
  * (`store.db`) — every OPEN issue linked to the plan through `provenance`
- * (`kind='plan'`, `target=<plan-id>`, written by the core `linkIssue` verb).
+ * (`kind='plan'`, `target=<plan-id>`, `origin='scoped'`; historical rows
+ * retain the scoped default), recorded by a plan-scoped operation.
  * The legacy register is never consulted at runtime; `validateProjectRegister`
  * remains a migration-only validator.
  *
@@ -258,10 +259,11 @@ export async function findingsCleanupGate(
         `The issue store is ${meta && typeof meta.authorityState === "string" ? meta.authorityState : "unreadable"}; findings authority requires an active store.`,
       );
     }
+    assertIssueProvenanceSchema(db);
     const rows = db
       .prepare(
         "select issues.id as id, issues.severity as severity from issues " +
-          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
+          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
           "where issues.disposition = 'open' order by issues.id asc",
       )
       .all(planId) as Array<{ id: string; severity: string }>;

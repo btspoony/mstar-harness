@@ -842,8 +842,8 @@ function insertMigratedIssue(db: StoreDb, row: ImportRow, issueId: string, at: s
   );
   // Typed migration provenance with the full lossless record.
   db.prepare(
-    "insert into provenance(issue_id, kind, target, source_hash, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at) " +
-      "values (?, 'migration', ?, ?, ?, ?, ?, ?, ?)",
+    "insert into provenance(issue_id, kind, target, source_hash, origin, legacy_project, legacy_bucket, legacy_entry_id, legacy_json, imported_at) " +
+      "values (?, 'migration', ?, ?, 'unscoped', ?, ?, ?, ?, ?)",
   ).run(issueId, source.registerPath, createHash("sha256").update(mapping.legacyJson, "utf8").digest("hex"), source.project, source.bucket, source.entryId, mapping.legacyJson, at);
   // A closed row also carries its single imported terminal transition (§3).
   if (closed) {

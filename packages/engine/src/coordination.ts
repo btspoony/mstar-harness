@@ -162,10 +162,12 @@ import {
 } from "./store-db.js";
 import {
   IssueError,
+  assertIssueProvenanceSchema,
   assertCaptureRequest,
+  assertPlanIssueSession,
   captureIssue,
   closeIssue,
-  linkIssue,
+  linkIssueScoped,
   type CaptureInput,
   type ClosureEvidence,
   type TerminalDisposition,
@@ -390,7 +392,7 @@ export type CoordinationResult = {
  * core issue `CaptureInput` minus `projectId` — the scoped plan supplies the
  * project. Capture records evidence and never a disposition (contract §6);
  * the entry is captured as an issue and linked to the plan through
- * `provenance(kind='plan', target=<plan-id>)`.
+ * `provenance(kind='plan', target=<plan-id>, origin='scoped')`.
  */
 export type ResidualInput = Omit<CaptureInput, "projectId">;
 
@@ -4257,10 +4259,8 @@ async function mutateResidualAdd(
     },
     mutate: async (rowContext, reportExternalCommit) => {
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
-      // Issue mutations run under the snapshot lock (lock order: workflow
-      // ownership locks → SQLite transaction). The envelope authorizes the
-      // project-manager seat (ENVELOPE_SEATS); the core verbs re-verify the
-      // engine-issued session envelope on every privileged mutation.
+      // Issue mutations run under the snapshot lock, then re-check the
+      // engine-issued session against the live workflow at the issue boundary.
       //
       // Entries are deliberately NOT pre-validated before this loop: the first
       // thing that must hold is that this session may mutate this row at all, so
@@ -4291,7 +4291,8 @@ async function mutateResidualAdd(
         // must converge to the same linked state. Both verbs are operation-id
         // idempotent, so a retry after a partial failure heals instead of
         // leaving an unlinked issue the plan can never close.
-        const link = await linkIssue(
+        assertPlanIssueSession(context, sessionPath);
+        const link = await linkIssueScoped(
           context,
           capture.issueId,
           { kind: "plan", target: scope.planId },
@@ -4348,8 +4349,9 @@ async function mutateResidualAdd(
 async function assertIssueLinkedToPlan(context: StoreContext, issueId: string, planId: string): Promise<void> {
   const handle = await openStore(context, "read");
   try {
+    assertIssueProvenanceSchema(handle.db);
     const linked = handle.db
-      .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ?")
+      .prepare("select 1 as ok from provenance where issue_id = ? and kind = 'plan' and target = ? and origin = 'scoped'")
       .get(issueId, planId) as { ok: number } | undefined;
     if (!linked) {
       throw new IssueError(
@@ -4388,6 +4390,7 @@ async function mutateResidualClose(
     mutate: async (rowContext) => {
       assertNoHandoffTransition(rowContext.coordination, scope.planId);
       await assertIssueLinkedToPlan(context, request.issueId, scope.planId);
+      assertPlanIssueSession(context, sessionPath);
       const receipt = await closeIssue(
         context,
         request.issueId,

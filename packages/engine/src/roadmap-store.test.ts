@@ -130,6 +130,7 @@ describe("roadmap-authority transactional domain", () => {
       .all() as { type: string; name: string }[];
     for (const artifact of v7Residue) handle.db.exec(`drop ${artifact.type} if exists ${artifact.name}`);
     handle.db.exec("alter table issues drop column milestone_id");
+    handle.db.exec("alter table provenance drop column origin");
     handle.db.prepare("delete from schema_version where version>5").run();
     handle.db.exec("commit");
     handle.close();

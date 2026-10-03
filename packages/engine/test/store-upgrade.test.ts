@@ -76,6 +76,7 @@ describe("single-call store upgrade", () => {
     const f = fixture();
     const store = await initializeStore(f.context);
     store.db.exec("drop trigger issues_milestone_project_insert; drop trigger issues_milestone_project_update; drop trigger project_milestones_identity_immutable; drop index issues_milestone_disposition; drop table project_milestones; alter table issues drop column milestone_id; delete from schema_version where version=7");
+    store.db.exec("alter table provenance drop column origin; delete from schema_version where version=8");
     store.close();
 
     const old = new DatabaseSync(f.dbPath);

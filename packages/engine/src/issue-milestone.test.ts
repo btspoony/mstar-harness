@@ -9,7 +9,7 @@ import { withStoreRead, queryDashboard } from "./store-read.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, updateMilestone } from "./milestone-store.js";
 import { createFsStore, setArtifactStore } from "./store.js";
-import { initializeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import { initializeStore, upgradeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "issue-milestone-"));
 const harness = join(root, ".mstar");
@@ -136,7 +136,7 @@ describe("issue milestone association", () => {
   });
 });
 
-test("schema-4 stores list and read issue details without milestone columns", async () => {
+test("schema-4 stores list issues while provenance detail requires explicit upgrade", async () => {
   const oldHarness = join(mkdtempSync(join(tmpdir(), "issue-schema-4-")), ".mstar");
   mkdirSync(oldHarness, { recursive: true });
   const raw = new DatabaseSync(storeDbPath({ harnessDir: oldHarness }));
@@ -151,10 +151,13 @@ test("schema-4 stores list and read issue details without milestone columns", as
   raw.close();
   const oldContext: StoreContext = { harnessDir: oldHarness };
   expect((await listIssues(oldContext, { projectId: "old-project" })).items[0]?.milestoneId).toBeNull();
-  expect((await getIssue(oldContext, "old-issue")).milestoneId).toBeNull();
-  // The dashboard issues views share the same SQL surface and must serve the
-  // pre-migration-7 store too (no milestone_id column, no SQLite column error).
+  await expect(getIssue(oldContext, "old-issue")).rejects.toMatchObject({ code: "issue.schema-outdated" });
   expect(await withStoreRead(oldContext, queryDashboard("issues"))).toMatchObject({ data: { total: 1 } });
+  await expect(
+    withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
+  ).rejects.toMatchObject({ code: "issue.schema-outdated" });
+  await upgradeStore(oldContext);
+  expect((await getIssue(oldContext, "old-issue")).milestoneId).toBeNull();
   expect(
     await withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
   ).toMatchObject({ data: { id: "old-issue", milestoneId: null } });

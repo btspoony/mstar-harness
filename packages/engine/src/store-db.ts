@@ -971,6 +971,10 @@ begin
   select raise(abort, 'milestone.identity-immutable');
 end;
 `;
+/** Migration 8 — historical provenance predates actor-only link writes. */
+export const MIGRATION_8_SQL = `
+alter table provenance add column origin text not null default 'scoped' check (origin in ('scoped','unscoped'));
+`;
 
 
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
@@ -982,6 +986,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
   { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
   { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
+  { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
 ];
 
 /** Execution tables created by migration 4 — the executable form of §2.2. */

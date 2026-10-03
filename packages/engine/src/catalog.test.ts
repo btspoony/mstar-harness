@@ -619,6 +619,7 @@ describe("migration 2", () => {
     handle.db.exec(MIGRATION_1_ISSUES_SQL);
     handle.db.exec("create unique index issues_external_identity on issues(provider, external_id) where external_id is not null");
     handle.db.exec("create index issues_disposition on issues(project_id, disposition, severity)");
+    handle.db.exec("alter table provenance drop column origin");
     handle.close();
     expect((await openStore(context, "read")).schemaVersion).toBe(1);
 

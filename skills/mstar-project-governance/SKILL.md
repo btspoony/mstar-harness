@@ -50,8 +50,8 @@ description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_D
 
 > The seat that owns the confirmed outcome captures it: the PM seat (dispatch/consolidation, QC tri, iteration close) and the main agent of a PR-review round at Stage 3 synthesis. Leaf audit/QC/QA seats **return evidence and never write the store** (survey §7 step 4). Capture goes through the `mstar issue` verbs; flags live in `--help` and are never restated in skill texts.
 
-- 计划内捕获走 `mstar plan issue-add`（活跃 plan session），计划外确认发现走 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence —— **不**新开第二个 issue。动词与标志以各命令组 `--help` 为准，本 skill 不复述标志。
-- **捕获 ≠ 处置**：关闭是独立授权动作，只由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）；捕获席位**不**自授关闭权。
+- 计划内捕获走 `mstar plan issue-add`（仍在活跃 plan session 内），计划外确认发现走 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence —— **不**新开第二个 issue。所有 `mstar issue` 写动词（包括 `link`）均为 actor-only store write（`--actor` + `--operation-id`）；每个写入都要求 payload（`--payload` 或 `--file`），而 `triage`、终态处置和 `link` 的 row-CAS 均要求 `--expect`（缺失时 `issue.revision-conflict`）；具体选项以各命令组 `--help` 为准。
+- **捕获 ≠ 处置**：关闭是独立授权动作，只由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）；捕获席位**不**自授关闭权。`mstar issue link` 的 plan/iteration target 作为来源标签记录，不做目标存在性校验。
 - **激活边界**：store 接受普通捕获/查询、并作为唯一权威，以契约 §7 的 activation 完成为准 —— staged store 会被拒（`store.not-active`）。live 切换（apply → activate → retire）归 cutover plan 的授权 ops 任务，skill 文本不代替该门禁。
 - issue 与 plan 解耦（plan 外的确认发现同样可捕获）；store 的路径与权威分界 → **`mstar-conventions`**。
 

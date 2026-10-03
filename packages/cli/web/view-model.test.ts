@@ -167,6 +167,7 @@ const MIGRATION_PROVENANCE: IssueProvenance[] = [
     kind: "migration",
     target: "projects/proj-a/residuals.json",
     sourceHash: "0f1e2d",
+    origin: "scoped",
     legacyProject: "proj-a",
     legacyBucket: "closed",
     legacyEntryId: "R1",

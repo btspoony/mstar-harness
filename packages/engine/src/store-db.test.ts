@@ -377,15 +377,15 @@ describe("store-db L2 fix round", () => {
     handle.close();
   });
 });
-describe("migration 7 \u2014 project_milestones", () => {
-  test("milestone fresh install and retry retain schema 7", async () => {
+describe("migration 7 - project_milestones", () => {
+  test("milestone fresh install and retry retain the current schema", async () => {
     const dir = mkdtempSync(join(ROOT, "milestone-fresh-"));
     const handle = await initializeStore({ harnessDir: dir });
-    expect(handle.schemaVersion).toBe(7);
+    expect(handle.schemaVersion).toBe(MIGRATIONS.length);
     const columns = handle.db.prepare("pragma table_info(issues)").all() as Array<{ name?: string }>;
     expect(columns.some((column) => column.name === "milestone_id")).toBe(true);
     handle.close();
-    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: 7 });
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
   });
 
   test("milestone DDL scopes seeded rows and leaves existing issue membership null", async () => {
@@ -429,7 +429,7 @@ describe("migration 7 \u2014 project_milestones", () => {
     ).run();
     db.exec("commit");
     db.close();
-    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: 7 });
+    expect(await upgradeStore({ harnessDir: dir })).toEqual({ schemaVersion: MIGRATIONS.length });
     const upgraded = await openStore({ harnessDir: dir }, "read");
     expect(upgraded.db.prepare("select id, milestone_id from issues where id='I-000102'").get()).toEqual({
       id: "I-000102",
@@ -441,7 +441,7 @@ describe("migration 7 \u2014 project_milestones", () => {
     for (const [label, mutate, code] of [
       ["drift", "update schema_version set checksum='bad' where version=1", "store.schema-drift"],
       ["gap", "delete from schema_version where version=2", "store.schema-drift"],
-      ["newer", "insert into schema_version values(8, 'future', 'future', 'now')", "store.schema-unsupported"],
+      ["newer", "insert into schema_version values(9, 'future', 'future', 'now')", "store.schema-unsupported"],
     ] as const) {
       const dir = mkdtempSync(join(ROOT, `milestone-${label}-`));
       const handle = await initializeStore({ harnessDir: dir });

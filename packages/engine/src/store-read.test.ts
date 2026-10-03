@@ -833,7 +833,7 @@ describe("issue views", () => {
         "insert into occurrences(issue_id, occurrence_key, source_kind, source_identity, root_cause_key, acceptance_key, location, observed_behavior, evidence_json, discovered_at, recorded_at, imported) " +
           "values ('I-000001', 'occ-1', 'audit', 'src', 'rc', 'ac', 'loc', 'obs', '[\"a note\"]', '2026-09-01T00:00:00.000Z', ?, 0)",
       ).run(RECORDED_AT);
-      db.prepare("insert into provenance(issue_id, kind, target, source_hash) values ('I-000001', 'capture', 'audit/x.md', 'hash')").run();
+      db.prepare("insert into provenance(issue_id, kind, target, source_hash, origin) values ('I-000001', 'capture', 'audit/x.md', 'hash', 'unscoped')").run();
     });
     const envelope = await withStoreRead(context, queryDashboard("issue-detail", { id: "I-000001" }));
     expect(envelope.data).toEqual(await getIssue(context, "I-000001"));

@@ -376,6 +376,7 @@ describe("store-migrate apply", () => {
       // One capture occurrence per row; the closed row also carries its single
       // imported terminal transition.
       expect(sqlAll(handle, "select id from occurrences where imported = 1")).toHaveLength(3);
+      expect(sqlAll(handle, "select distinct origin from provenance where kind='migration'")).toEqual([{ origin: "unscoped" }]);
       const transitions = sqlAll(handle, "select to_disposition, occurred_at from issue_transitions where imported = 1");
       expect(transitions).toHaveLength(1);
       expect(transitions[0]!.to_disposition).toBe("resolved");

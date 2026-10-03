@@ -2,15 +2,15 @@
  * issue.test.ts — C2/C3 proof: capture, occurrences, reads, disposition.
  */
 import { spawn, spawnSync, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, test } from "bun:test";
-import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from "./coordination.js";
-import { createFsStore, setArtifactStore } from "./store.js";
-import { initializeStore, openStore, type StoreContext } from "./store-db.js";
+import { initializeExecutionAuthority } from "./execution-store.js";
+import { initializeStore, openStore, upgradeStore, type StoreContext } from "./store-db.js";
 import {
+  assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
   IssueError,
   assertCaptureRequest,
@@ -21,6 +21,7 @@ import {
   getIssue,
   linkIssue,
   listIssues,
+  linkIssueScoped,
   triageIssue,
   type CaptureInput,
   type Disposition,
@@ -77,6 +78,25 @@ function baseInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
 function mut(operationId: string, actor = "project-manager"): MutationContext {
   return { operationId, actor };
 }
+
+test("origin-dependent issue reads refuse schema 7 and work after safe upgrade", async () => {
+  const context = ctx("origin-schema-gate-");
+  await initializeStore(context).then((handle) => handle.close());
+  const created = await captureIssue(context, baseInput({ occurrenceKey: "schema-origin" }), mut("schema-origin-capture"));
+  const old = await openStore(context, "write");
+  old.db.exec("alter table provenance drop column origin; delete from schema_version where version=8");
+  old.close();
+
+  await expect(getIssue(context, created.issueId)).rejects.toMatchObject({
+    name: "IssueError",
+    code: "issue.schema-outdated",
+    message: expect.stringContaining("mstar store safe-upgrade"),
+  });
+
+  expect(await upgradeStore(context)).toEqual({ schemaVersion: 8 });
+  const detail = await getIssue(context, created.issueId);
+  expect(detail.disposition).toBe("open");
+});
 
 /** Observation half of `baseInput`; a recurrence differs only in these fields. */
 function occInput(overrides: Partial<OccurrenceInput> = {}): OccurrenceInput {
@@ -463,14 +483,9 @@ describe("failed capture leaves no partial finding", () => {
 });
 
 /* -------------------------------------------------------------------------
- * Live-workflow authority fixtures (contract §4)
- *
- * A privileged mutation is authorized only by the engine-issued session
- * envelope of a live workflow, so these fixtures build a real control root (a
- * Git repository, a running root register entry, a valid snapshot) and let the
- * engine itself issue every envelope through `bindPlanSession`. Nothing here
- * hand-writes a session file: a hand-written one is exactly what the refusal
- * cases below must reject.
+ * Workflow-backed fixtures used by provenance and closure behavior tests.
+ * Issue write authorization is actor-only and does not consult workflow
+ * snapshots or session envelopes.
  * ---------------------------------------------------------------------- */
 
 const LIVE_WORKFLOW_ID = "wf-issue";
@@ -478,15 +493,9 @@ const LIVE_PLAN_ID = "20260918-a";
 const LIVE_PEER_PLAN_ID = "20260918-b";
 
 type LiveAuthority = {
-  /** The harness dir that owns the fixture's store. */
   harness: string;
-  workflowId: string;
   planId: string;
   peerPlanId: string;
-  /** The engine-issued lifecycle (`coordinator`) envelope. */
-  coordinatorSession: string;
-  /** Engine-issued `plan-pm` envelopes by plan id (`{}` unless `bindPlans`). */
-  planSessions: Record<string, string>;
 };
 
 function git(args: string[], cwd: string): void {
@@ -498,66 +507,9 @@ function writeJsonFile(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function writeTextFile(path: string, text: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, text, "utf8");
-}
 
-/** Fixture JSON read (a JSON document written by the fixture or the engine). */
-function readJsonFile(path: string): Record<string, unknown> {
-  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-}
-
-/** The session id an envelope file records. */
-function sessionIdOf(path: string): string {
-  const sessionId = readJsonFile(path).session_id;
-  if (typeof sessionId !== "string" || sessionId === "") throw new Error(`fixture: no session_id in ${path}`);
-  return sessionId;
-}
-
-/** Fixture snapshot path of one authority. */
-function snapshotPathOf(authority: LiveAuthority): string {
-  return join(authority.harness, "workflows", authority.workflowId, "snapshot.json");
-}
-
-/** The pinned Assignment header block `parseAssignmentFile` accepts. */
-function assignmentText(input: {
-  harness: string;
-  workflowId: string;
-  planId: string;
-  planPath: string;
-  worktreePath: string;
-  sddDir: string;
-}): string {
-  return [
-    `# Assignment \u2014 ${input.planId}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: feature/fixture-plan`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Fixture plan.",
-    "",
-  ].join("\n");
-}
-
-/**
- * A live workflow in its own control root, with the envelopes the engine
- * issues for it: the lifecycle `coordinator` seat, plus each plan row's
- * `plan-pm` seat when `bindPlans` is set (a plan bind requires a prepared
- * plan). The store is initialized, so callers mutate it directly.
- */
-async function liveAuthority(name: string, options: { bindPlans?: boolean } = {}): Promise<LiveAuthority> {
+/** A real workflow snapshot fixture for issue-store behavior tests. */
+async function liveAuthority(name: string): Promise<LiveAuthority> {
   const root = realpathSync(mkdtempSync(join(ROOT, name)));
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
@@ -594,139 +546,16 @@ async function liveAuthority(name: string, options: { bindPlans?: boolean } = {}
     })),
   });
 
-  const planSessions: Record<string, string> = {};
-  let coordinatorSession = "";
-  setArtifactStore(createFsStore(harness));
-  try {
-    coordinatorSession = (
-      await bindPlanSession({ coordinator: true, workflowId, harnessDir: harness, cwd: root, sessionId: "fixture-coordinator" })
-    ).session_file;
-    if (options.bindPlans === true) {
-      for (const planId of planIds) {
-        const sddDir = join(harness, "sdd", planId);
-        const assignmentPath = join(sddDir, "assignment.md");
-        writeTextFile(
-          assignmentPath,
-          assignmentText({
-            harness,
-            workflowId,
-            planId,
-            planPath: join(harness, "plans", `${planId}.md`),
-            worktreePath: join(root, `wt-${planId}`),
-            sddDir,
-          }),
-        );
-        const view = await readPlanCoordination(coordinatorSession, planId, root);
-        await mutatePlanCoordination({
-          sessionPath: coordinatorSession,
-          planId,
-          expectedRevision: view.revision,
-          operation: { kind: "prepare", assignmentPath },
-        });
-        planSessions[planId] = (
-          await bindPlanSession({ scope: { workflowId, planId, harnessDir: harness }, cwd: root })
-        ).session_file;
-      }
-    }
-  } finally {
-    setArtifactStore(undefined);
-  }
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
-  return {
-    harness,
-    workflowId,
-    planId: LIVE_PLAN_ID,
-    peerPlanId: LIVE_PEER_PLAN_ID,
-    coordinatorSession,
-    planSessions,
-  };
+  return { harness, planId: LIVE_PLAN_ID, peerPlanId: LIVE_PEER_PLAN_ID };
 }
 
-/** Finish the fixture's lifecycle: a terminal workflow holds no live authority. */
-function retireWorkflow(authority: LiveAuthority): void {
-  const path = snapshotPathOf(authority);
-  writeJsonFile(path, {
-    ...readJsonFile(path),
-    status: "completed",
-    ended_at: "2026-09-18T23:00:00Z",
-    updated_at: "2026-09-18T23:00:00Z",
-  });
+function pmMut(_authority: LiveAuthority, operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
+  return { operationId, actor: "project-manager", ...extra };
 }
 
-/** Point the workflow's own coordinator record at another file (a tampered binding). */
-function rebindCoordinatorRecord(authority: LiveAuthority, sessionFile: string): void {
-  const path = snapshotPathOf(authority);
-  const snapshot = readJsonFile(path);
-  const coordination = snapshot.coordination;
-  if (typeof coordination !== "object" || coordination === null || !("coordinator" in coordination)) {
-    throw new Error(`fixture: ${path} carries no coordinator binding`);
-  }
-  const coordinator = coordination.coordinator;
-  if (typeof coordinator !== "object" || coordinator === null) {
-    throw new Error(`fixture: ${path} carries no coordinator binding`);
-  }
-  writeJsonFile(path, {
-    ...snapshot,
-    coordination: { ...coordination, coordinator: Object.assign({}, coordinator, { session_file: sessionFile }) },
-  });
-}
 
-/**
- * Point one plan row's recorded session binding at another file. Used to
- * reproduce a released-3.11.0 workflow: its plan row records the pre-#264
- * bare envelope name `sessions/<session-id>.json`.
- */
-function rebindPlanSessionRecord(authority: LiveAuthority, planId: string, sessionFile: string): void {
-  const path = snapshotPathOf(authority);
-  const snapshot = readJsonFile(path);
-  const plans = snapshot.plans;
-  if (!Array.isArray(plans)) throw new Error(`fixture: ${path} carries no plan rows`);
-  const row = plans.find(
-    (candidate) => (candidate as Record<string, unknown>).id === planId || (candidate as Record<string, unknown>).plan_id === planId,
-  );
-  if (row === undefined) throw new Error(`fixture: ${path} has no row for plan ${planId}`);
-  const source = row as Record<string, unknown>;
-  const coordination = source.coordination;
-  if (typeof coordination !== "object" || coordination === null || !("session" in coordination)) {
-    throw new Error(`fixture: plan ${planId} of ${path} carries no session binding`);
-  }
-  const session = (coordination as Record<string, unknown>).session;
-  if (typeof session !== "object" || session === null) {
-    throw new Error(`fixture: plan ${planId} of ${path} carries no session binding`);
-  }
-  const rebound = plans.map((candidate) =>
-    candidate === source
-      ? { ...source, coordination: { ...(coordination as Record<string, unknown>), session: Object.assign({}, session, { session_file: sessionFile }) } }
-      : candidate,
-  );
-  writeJsonFile(path, { ...snapshot, plans: rebound });
-}
-
-/**
- * A `project-manager` mutation authorized by one of the fixture's
- * engine-issued envelopes: the lifecycle coordinator seat by default, a plan
- * seat when `sessionFile` overrides it (plan provenance must match that seat's
- * plan id).
- */
-function pmMut(authority: LiveAuthority, operationId: string, extra: Partial<MutationContext> = {}): MutationContext {
-  return { operationId, actor: "project-manager", sessionFile: authority.coordinatorSession, ...extra };
-}
-
-/** A caller-written envelope, byte-shaped like the engine's, at any path. */
-function forgedEnvelope(dir: string, name: string, fields: Record<string, unknown>): string {
-  const path = join(dir, name);
-  writeJsonFile(path, {
-    schema_version: 1,
-    role: "plan-pm",
-    session_id: "11111111-1111-1111-1111-111111111111",
-    workflow_id: LIVE_WORKFLOW_ID,
-    plan_id: LIVE_PLAN_ID,
-    ...fields,
-  });
-  return path;
-}
-
-describe("capture authorization", () => {
+describe("capture actor auditing", () => {
   test("leaf seats cannot capture or append, and the PM seat captures without a plan", async () => {
     const context = ctx("capture-seat-");
     await initializeStore(context).then((h) => h.close());
@@ -745,7 +574,7 @@ describe("capture authorization", () => {
     expect((await getIssue(context, created.issueId)).occurrences).toHaveLength(1);
   });
 
-  test("the envelope proves the seat; the actor label is audited, never trusted", async () => {
+  test("only the PM actor can mutate; accepted mutations record that actor", async () => {
     const authority = await liveAuthority("authorization-seat-");
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-seat"));
@@ -755,7 +584,7 @@ describe("capture authorization", () => {
         context,
         created.issueId,
         { relation: "related", issueId: other.issueId },
-        { operationId: "link-wrong-seat", actor: "qa-engineer", sessionFile: authority.coordinatorSession, expectedRevision: created.revision },
+        { operationId: "link-wrong-seat", actor: "qa-engineer", expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(
@@ -763,7 +592,7 @@ describe("capture authorization", () => {
         context,
         created.issueId,
         { severity: "low", reason: "downgrade" },
-        { operationId: "triage-inherited", actor: "toString", sessionFile: authority.coordinatorSession, expectedRevision: created.revision },
+        { operationId: "triage-inherited", actor: "toString", expectedRevision: created.revision },
       ),
     ).rejects.toMatchObject({ code: "issue.scope-refused" });
     const after = await getIssue(context, created.issueId);
@@ -774,7 +603,7 @@ describe("capture authorization", () => {
       context,
       created.issueId,
       { severity: "low", reason: "downgrade" },
-      pmMut(authority, "triage-envelope", { expectedRevision: created.revision }),
+      pmMut(authority, "triage-actor-only", { expectedRevision: created.revision }),
     );
     expect(triaged.revision).toBe(created.revision + 1);
   });
@@ -801,7 +630,7 @@ describe("capture authorization", () => {
   });
 });
 
-describe("disposition revision relation authorization", () => {
+describe("issue dispositions, revisions, and relations", () => {
   test("stale revision leaves issue and history unchanged", async () => {
     const authority = await liveAuthority("revision-stale-");
     const context: StoreContext = { harnessDir: authority.harness };
@@ -821,63 +650,63 @@ describe("disposition revision relation authorization", () => {
     expect(detail.transitions).toEqual([]);
   });
 
-  test("unauthorized closure leaves issue and history unchanged", async () => {
-    const authority = await liveAuthority("authorization-close-");
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-2"));
-    const evidence = { reason: "looks good", references: ["note"], alignmentRef: "qa gate" };
-    // A claimed seat the envelope does not prove never closes the issue.
-    await expect(
-      closeIssue(context, created.issueId, "resolved", evidence, {
-        operationId: "close-leaf",
-        actor: "fullstack-dev",
-        sessionFile: authority.coordinatorSession,
-        expectedRevision: created.revision,
-      }),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    await expect(
-      closeIssue(context, created.issueId, "resolved", evidence, {
-        operationId: "close-arbitrary",
-        actor: "toString",
-        sessionFile: authority.coordinatorSession,
-        expectedRevision: created.revision,
-      }),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    // A forged `project-manager` claim with no envelope at all, and a missing
-    // envelope path, refuse as before.
-    await expect(
-      closeIssue(context, created.issueId, "resolved", evidence, {
-        operationId: "close-forged-pm",
-        actor: "project-manager",
-        expectedRevision: created.revision,
-      }),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    await expect(
-      closeIssue(context, created.issueId, "resolved", evidence, {
-        operationId: "close-missing-session",
-        actor: "project-manager",
-        sessionFile: join(context.harnessDir, "no-such-session.json"),
-        expectedRevision: created.revision,
-      }),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    // A hand-written envelope that parses, names the store's own harness root
-    // and this workflow, and lies under the harness root — but sits outside the
-    // engine's issued path and was issued by nobody.
-    const handWritten = forgedEnvelope(authority.harness, "hand-written-session.json", {
-      harness_root: authority.harness,
+  test("ACTIVE execution authority accepts actor-only issue writes without workflow or sessions", async () => {
+    const context = ctx("actor-only-active-");
+    await initializeStore(context).then((handle) => handle.close());
+    const activated = await initializeExecutionAuthority(context);
+    expect(activated.data.workflows).toEqual([]);
+    const store = await openStore(context, "read");
+    try {
+      expect(store.execution?.authorityState).toBe("active");
+      expect(store.db.prepare("select count(*) as count from execution_workflows").get()).toEqual({ count: 0 });
+      expect(store.db.prepare("select count(*) as count from execution_sessions").get()).toEqual({ count: 0 });
+    } finally {
+      store.close();
+    }
+
+    const resolvedIssue = await captureIssue(context, baseInput(), mut("actor-only-resolved"));
+    const resolved = await closeIssue(context, resolvedIssue.issueId, "resolved", {
+      reason: "acceptance verified", references: ["qa/run.md"], alignmentRef: "QA gate: Approve",
+    }, { operationId: "actor-only-close-resolved", actor: "project-manager", expectedRevision: resolvedIssue.revision });
+    expect((await getIssue(context, resolved.issueId)).disposition).toBe("resolved");
+
+    const target = await captureIssue(context, baseInput({ occurrenceKey: "target", rootCauseKey: "target" }), mut("actor-only-target"));
+    const issue = await captureIssue(context, baseInput({ occurrenceKey: "triage", rootCauseKey: "triage" }), mut("actor-only-triage-seed"));
+    const triaged = await triageIssue(context, issue.issueId, { severity: "medium", reason: "reclassified" }, {
+      operationId: "actor-only-triage", actor: "project-manager", expectedRevision: issue.revision,
     });
-    await expect(
-      closeIssue(context, created.issueId, "resolved", evidence, {
-        operationId: "close-hand-written",
-        actor: "project-manager",
-        sessionFile: handWritten,
-        expectedRevision: created.revision,
-      }),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    const detail = await getIssue(context, created.issueId);
-    expect(detail.disposition).toBe("open");
-    expect(detail.transitions).toEqual([]);
-    expect(detail.revision).toBe(created.revision);
+    const linked = await Reflect.apply(linkIssueFromIndex, undefined, [
+      context,
+      issue.issueId,
+      { kind: "plan", target: "unregistered-plan-label" },
+      { operationId: "actor-only-link", actor: "project-manager", expectedRevision: triaged.revision },
+      { origin: "scoped" },
+    ]);
+    const superseded = await closeIssue(context, issue.issueId, "superseded", {
+      reason: "replaced", references: [], canonicalIssueId: target.issueId,
+    }, { operationId: "actor-only-supersede", actor: "project-manager", expectedRevision: linked.revision });
+
+    expect(superseded.revision).toBe(issue.revision + 3);
+    const detail = await getIssue(context, issue.issueId);
+    expect(detail.disposition).toBe("superseded");
+    expect(detail.provenance).toContainEqual(expect.objectContaining({ kind: "capture", origin: "unscoped" }));
+    expect(detail.provenance).toContainEqual(expect.objectContaining({
+      kind: "plan",
+      target: "unregistered-plan-label",
+      origin: "unscoped",
+    }));
+    expect(detail.severity).toBe("medium");
+    expect(detail.transitions[0]?.actor).toBe("project-manager");
+  });
+
+  test("non-PM actor still cannot write an issue", async () => {
+    const context = ctx("actor-only-refusal-");
+    await initializeStore(context).then((handle) => handle.close());
+    const created = await captureIssue(context, baseInput(), mut("actor-only-seed"));
+    await expect(closeIssue(context, created.issueId, "resolved", {
+      reason: "looks good", references: ["note"], alignmentRef: "qa gate",
+    }, { operationId: "actor-only-leaf", actor: "fullstack-dev", expectedRevision: created.revision }))
+      .rejects.toMatchObject({ code: "issue.scope-refused" });
   });
 
   test("valid closure records the exact evidence", async () => {
@@ -1016,22 +845,20 @@ describe("disposition revision relation authorization", () => {
   });
 
   test("multi-plan obligation cannot be resolved from one linked plan alone", async () => {
-    const authority = await liveAuthority("relation-multiplan-", { bindPlans: true });
+    const authority = await liveAuthority("relation-multiplan-");
     const context: StoreContext = { harnessDir: authority.harness };
     const created = await captureIssue(context, baseInput(), mut("cap-mp"));
-    const sessionA = authority.planSessions[authority.planId]!;
-    const sessionB = authority.planSessions[authority.peerPlanId]!;
-    const afterPlan1 = await linkIssue(
+    const afterPlan1 = await linkIssueScoped(
       context,
       created.issueId,
       { kind: "plan", target: authority.planId },
-      pmMut(authority, "link-a", { expectedRevision: created.revision, sessionFile: sessionA }),
+      pmMut(authority, "link-a", { expectedRevision: created.revision }),
     );
-    const afterPlan2 = await linkIssue(
+    const afterPlan2 = await linkIssueScoped(
       context,
       created.issueId,
       { kind: "plan", target: authority.peerPlanId },
-      pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision, sessionFile: sessionB }),
+      pmMut(authority, "link-b", { expectedRevision: afterPlan1.revision }),
     );
     await expect(
       closeIssue(
@@ -1042,6 +869,7 @@ describe("disposition revision relation authorization", () => {
         pmMut(authority, "close-one-plan", { expectedRevision: afterPlan2.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+
     expect((await getIssue(context, created.issueId)).disposition).toBe("open");
 
     await closeIssue(
@@ -1055,6 +883,41 @@ describe("disposition revision relation authorization", () => {
         alignmentRef: "QA gate: Approve",
       },
       pmMut(authority, "close-all-plans", { expectedRevision: afterPlan2.revision }),
+    );
+    expect((await getIssue(context, created.issueId)).disposition).toBe("resolved");
+  });
+  test("unscoped plan label neither satisfies membership nor creates a multi-plan obligation", async () => {
+    const authority = await liveAuthority("relation-unscoped-plan-");
+    const context: StoreContext = { harnessDir: authority.harness };
+    const created = await captureIssue(context, baseInput(), mut("cap-unscoped-plan"));
+    const linked = await linkIssueScoped(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.planId },
+      pmMut(authority, "unscoped-primary", { expectedRevision: created.revision }),
+    );
+    await linkIssue(
+      context,
+      created.issueId,
+      { kind: "plan", target: authority.peerPlanId },
+      pmMut(authority, "unscoped-poison", { expectedRevision: linked.revision }),
+    );
+
+    const handle = await openStore(context, "read");
+    try {
+      assertIssueLinkedToPlanOn(handle.db, created.issueId, authority.planId);
+      expect(() => assertIssueLinkedToPlanOn(handle.db, created.issueId, authority.peerPlanId)).toThrow(
+        expect.objectContaining({ code: "issue.scope-refused" }),
+      );
+    } finally {
+      handle.close();
+    }
+    await closeIssue(
+      context,
+      created.issueId,
+      "resolved",
+      { reason: "single plan complete", references: [authority.planId], alignmentRef: "QA gate: Approve" },
+      pmMut(authority, "close-single-plan", { expectedRevision: linked.revision + 1 }),
     );
     expect((await getIssue(context, created.issueId)).disposition).toBe("resolved");
   });
@@ -1108,167 +971,6 @@ describe("disposition revision relation authorization", () => {
     expect(after.acceptance).toBe("runbook exists");
     expect(after.owner).toBe("ops");
     expect(after.identityKey).toBe(before.identityKey);
-  });
-
-  test("only the engine-issued envelope at its own path authorizes the mutation", async () => {
-    const authority = await liveAuthority("authority-binding-", { bindPlans: true });
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-authz"));
-    const planSession = authority.planSessions[authority.planId]!;
-    const sessionId = sessionIdOf(planSession);
-    expect(planSession).toBe(
-      join(authority.harness, "workflows", authority.workflowId, "sessions", `plan-pm-${sessionId}.json`),
-    );
-
-    // (1) A byte-identical copy of the engine's own envelope at another path.
-    const copy = join(authority.harness, "copied-session.json");
-    writeFileSync(copy, readFileSync(planSession, "utf8"));
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-copy", { expectedRevision: created.revision, sessionFile: copy }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-
-    // (2) A hand-written envelope that parses, names this workflow, this plan
-    // and the store's own harness root, and lies under the harness root.
-    const handWritten = forgedEnvelope(authority.harness, "hand-written.json", {
-      harness_root: authority.harness,
-    });
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-hand-written", { expectedRevision: created.revision, sessionFile: handWritten }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-
-    // (3) At the engine's own path, but for a session id the workflow never
-    // recorded: the workflow's own record does not point at it.
-    const unrecorded = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), "plan-pm-22222222-2222-2222-2222-222222222222.json", {
-      harness_root: authority.harness,
-      session_id: "22222222-2222-2222-2222-222222222222",
-    });
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-unrecorded", { expectedRevision: created.revision, sessionFile: unrecorded }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-
-    // (4) A hand-written envelope whose harness_root is a foreign root refuses,
-    // even at its own canonical path inside that root.
-    const foreignRoot = join(authority.harness, "other-root");
-    const foreign = forgedEnvelope(join(foreignRoot, "workflows", authority.workflowId, "sessions"), `plan-pm-${sessionId}.json`, {
-      harness_root: foreignRoot,
-      session_id: sessionId,
-    });
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-foreign-root", { expectedRevision: created.revision, sessionFile: foreign }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-
-    const refused = await getIssue(context, created.issueId);
-    expect(refused.provenance.every((row) => row.kind !== "plan")).toBe(true);
-    expect(refused.revision).toBe(created.revision);
-
-    // (5) The engine-issued `plan-pm` envelope for that same plan authorizes
-    // the very same action.
-    const linked = await linkIssue(
-      context,
-      created.issueId,
-      { kind: "plan", target: authority.planId },
-      pmMut(authority, "link-issued", { expectedRevision: created.revision, sessionFile: planSession }),
-    );
-    expect(linked.revision).toBe(created.revision + 1);
-    expect(
-      (await getIssue(context, created.issueId)).provenance.some(
-        (row) => row.kind === "plan" && row.target === authority.planId,
-      ),
-    ).toBe(true);
-  });
-
-  test("an envelope is refused when the workflow record or the lifecycle stops matching it", async () => {
-    // A finished lifecycle: the engine's own envelope holds no live authority.
-    const retired = await liveAuthority("authority-retired-");
-    const retiredContext: StoreContext = { harnessDir: retired.harness };
-    const retiredIssue = await captureIssue(retiredContext, baseInput(), mut("cap-retired"));
-    retireWorkflow(retired);
-    await expect(
-      triageIssue(
-        retiredContext,
-        retiredIssue.issueId,
-        { severity: "low", reason: "after the lifecycle ended" },
-        pmMut(retired, "triage-retired", { expectedRevision: retiredIssue.revision }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(retiredContext, retiredIssue.issueId)).severity).toBe("high");
-
-    // A live workflow whose own coordination record names another file.
-    const rebound = await liveAuthority("authority-rebound-");
-    const reboundContext: StoreContext = { harnessDir: rebound.harness };
-    const reboundIssue = await captureIssue(reboundContext, baseInput(), mut("cap-rebound"));
-    rebindCoordinatorRecord(rebound, join(rebound.harness, "elsewhere.json"));
-    await expect(
-      triageIssue(
-        reboundContext,
-        reboundIssue.issueId,
-        { severity: "low", reason: "rebound elsewhere" },
-        pmMut(rebound, "triage-rebound", { expectedRevision: reboundIssue.revision }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(reboundContext, reboundIssue.issueId)).revision).toBe(reboundIssue.revision);
-
-    // An envelope issued for a different control root never authorizes this
-    // store, even though that root's own workflow is live.
-    const other = await liveAuthority("authority-other-root-");
-    const second = await captureIssue(
-      reboundContext,
-      baseInput({ occurrenceKey: "other-root", rootCauseKey: "other-root" }),
-      mut("cap-other-root"),
-    );
-    await expect(
-      triageIssue(
-        reboundContext,
-        second.issueId,
-        { severity: "low", reason: "foreign root" },
-        pmMut(other, "triage-other-root", { expectedRevision: second.revision }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(reboundContext, second.issueId)).revision).toBe(second.revision);
-  });
-
-  test("plan target that does not match the session plan_id is refused", async () => {
-    const authority = await liveAuthority("authorization-identity-", { bindPlans: true });
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-id"));
-    const session = authority.planSessions[authority.planId]!;
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: "20260918-other" },
-        pmMut(authority, "link-mismatch", { expectedRevision: created.revision, sessionFile: session }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    // The same envelope stays authoritative for its own plan.
-    const linked = await linkIssue(
-      context,
-      created.issueId,
-      { kind: "plan", target: authority.planId },
-      pmMut(authority, "link-own-plan", { expectedRevision: created.revision, sessionFile: session }),
-    );
-    expect(linked.revision).toBe(created.revision + 1);
-    expect((await getIssue(context, created.issueId)).provenance.some((row) => row.target === "20260918-other")).toBe(false);
   });
 
   test("unsupported relation or provenance kind yields a domain refusal", async () => {
@@ -1349,9 +1051,8 @@ describe("disposition revision relation authorization", () => {
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
     expect((await getIssue(context, created.issueId)).disposition).toBe("open");
 
-    // The QA gate's acceptance (§4's `qa-engineer` authority, supplied as
-    // evidence per §6) is expressible: the envelope-proven seat writes the
-    // closure and the QA acceptance is recorded verbatim in the history.
+    // Acceptance provenance is recorded in the closure evidence; writing it
+    // does not establish or verify an execution-authority session.
     const qaAcceptance = "QA gate: Approve \u2014 .mstar/sdd/20260918-a/review/qa.md";
     await closeIssue(
       context,
@@ -1400,172 +1101,5 @@ describe("disposition revision relation authorization", () => {
     expect(typeof triageIssueFromIndex).toBe("function");
     expect(typeof closeIssueFromIndex).toBe("function");
     expect(typeof linkIssueFromIndex).toBe("function");
-  });
-});
-
-describe("legacy plan-pm envelope path (pre-#264 upgrade tolerance)", () => {
-  /**
-   * A released-3.11.0-shaped workflow: the plan-pm envelope file and the plan
-   * row's recorded `session_file` both use the pre-#264 bare name
-   * `sessions/<session-id>.json` (no role prefix) — exactly what
-   * `sessionFilePath` wrote before #264 renamed it. Every bound content
-   * field (workflow, plan, session id, harness root) is unchanged.
-   */
-  async function legacyBoundAuthority(name: string): Promise<{ authority: LiveAuthority; legacyPath: string }> {
-    const authority = await liveAuthority(name, { bindPlans: true });
-    const canonicalPath = authority.planSessions[authority.planId]!;
-    const legacyPath = join(dirname(canonicalPath), `${sessionIdOf(canonicalPath)}.json`);
-    renameSync(canonicalPath, legacyPath);
-    rebindPlanSessionRecord(authority, authority.planId, legacyPath);
-    return { authority, legacyPath };
-  }
-
-  test("a legacy-named envelope with fully bound content authorizes the mutation", async () => {
-    const { authority, legacyPath } = await legacyBoundAuthority("legacy-ok-");
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-ok"));
-    const linked = await linkIssue(
-      context,
-      created.issueId,
-      { kind: "plan", target: authority.planId },
-      pmMut(authority, "link-legacy-ok", { expectedRevision: created.revision, sessionFile: legacyPath }),
-    );
-    expect(linked.revision).toBe(created.revision + 1);
-    expect(
-      (await getIssue(context, created.issueId)).provenance.some(
-        (row) => row.kind === "plan" && row.target === authority.planId,
-      ),
-    ).toBe(true);
-  });
-
-  test("a legacy-named envelope whose content does not bind is still refused", async () => {
-    const { authority, legacyPath } = await legacyBoundAuthority("legacy-forged-");
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-forged"));
-    // The exact legacy name and path, but a session id the workflow never
-    // recorded: the legacy tolerance is path-shape only, the content
-    // binding (session_id against the workflow's record) is unchanged.
-    const sessionId = sessionIdOf(legacyPath);
-    const forged = forgedEnvelope(dirname(legacyPath), `${sessionId}.json`, {
-      harness_root: authority.harness,
-      session_id: "22222222-2222-2222-2222-222222222222",
-    });
-    expect(forged).toBe(legacyPath);
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-legacy-forged", { expectedRevision: created.revision, sessionFile: forged }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
-  });
-
-  test("the canonical plan-pm path still authorizes a current bind", async () => {
-    const authority = await liveAuthority("legacy-canonical-", { bindPlans: true });
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-canonical"));
-    const linked = await linkIssue(
-      context,
-      created.issueId,
-      { kind: "plan", target: authority.planId },
-      pmMut(authority, "link-legacy-canonical", {
-        expectedRevision: created.revision,
-        sessionFile: authority.planSessions[authority.planId]!,
-      }),
-    );
-    expect(linked.revision).toBe(created.revision + 1);
-  });
-
-  test("a legacy-named coordinator envelope with fully bound content authorizes the mutation", async () => {
-    const authority = await liveAuthority("legacy-coordinator-", { bindPlans: true });
-    // Released 3.11.0 issued the coordinator envelope at the SAME bare
-    // pre-#264 name (`sessions/<session-id>.json` — v3.11.0's
-    // `sessionFilePath` had no role parameter), so a legacy workflow's
-    // coordinator record names the bare path. Reproduce that shape.
-    const canonicalCoordinator = authority.coordinatorSession;
-    const legacyCoordinator = join(dirname(canonicalCoordinator), `${sessionIdOf(canonicalCoordinator)}.json`);
-    renameSync(canonicalCoordinator, legacyCoordinator);
-    rebindCoordinatorRecord(authority, legacyCoordinator);
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-coord"));
-    // A coordinator session is a valid issue-authorization surface:
-    // triageIssue/closeIssue/linkIssue take both roles and the seat map
-    // grants the coordinator the PM seat (plan-provenance links additionally
-    // demand plan-pm identity, so this pins the surface with a triage).
-    const triaged = await triageIssue(
-      context,
-      created.issueId,
-      { severity: "medium", reason: "coordinator legacy session re-triage" },
-      pmMut(authority, "triage-legacy-coord", { expectedRevision: created.revision, sessionFile: legacyCoordinator }),
-    );
-    expect(triaged.revision).toBe(created.revision + 1);
-    expect((await getIssue(context, created.issueId)).severity).toBe("medium");
-  });
-
-  test("a bare-named coordinator envelope with unbound content is still refused", async () => {
-    const authority = await liveAuthority("legacy-coordinator-forged-", { bindPlans: true });
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-coord-forged"));
-    // The bare pre-#264 SHAPE, but a session id the workflow never recorded:
-    // the tolerance covers the recorded path's shape, never its content.
-    const coordinatorId = sessionIdOf(authority.coordinatorSession);
-    const bare = forgedEnvelope(join(authority.harness, "workflows", authority.workflowId, "sessions"), `${coordinatorId}.json`, {
-      role: "coordinator",
-      harness_root: authority.harness,
-      session_id: "22222222-2222-2222-2222-222222222222",
-      plan_id: undefined,
-    });
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-legacy-coord-forged", { expectedRevision: created.revision, sessionFile: bare }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
-  });
-
-  test("a bound bare-named copy does not authorize a current (canonical-record) workflow", async () => {
-    const authority = await liveAuthority("legacy-cross-current-", { bindPlans: true });
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-cross-current"));
-    // F1 tie: a byte-identical copy of the engine's own canonical envelope
-    // at the legacy bare path must NOT authorize a workflow whose record
-    // names the canonical path — the presented file must be exactly the
-    // bound session file, in whichever single shape the record carries.
-    const canonicalPath = authority.planSessions[authority.planId]!;
-    const bareCopy = join(dirname(canonicalPath), `${sessionIdOf(canonicalPath)}.json`);
-    writeFileSync(bareCopy, readFileSync(canonicalPath, "utf8"));
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-legacy-cross-current", { expectedRevision: created.revision, sessionFile: bareCopy }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
-  });
-
-  test("a canonical-named copy does not authorize a legacy (bare-record) workflow", async () => {
-    const { authority, legacyPath } = await legacyBoundAuthority("legacy-cross-legacy-");
-    const context: StoreContext = { harnessDir: authority.harness };
-    const created = await captureIssue(context, baseInput(), mut("cap-legacy-cross-legacy"));
-    // Cross-shape pin in the other direction: the legacy workflow's record
-    // names the bare path, so a canonical-named copy refuses too.
-    const canonicalCopy = join(dirname(legacyPath), `plan-pm-${sessionIdOf(legacyPath)}.json`);
-    writeFileSync(canonicalCopy, readFileSync(legacyPath, "utf8"));
-    await expect(
-      linkIssue(
-        context,
-        created.issueId,
-        { kind: "plan", target: authority.planId },
-        pmMut(authority, "link-legacy-cross-legacy", { expectedRevision: created.revision, sessionFile: canonicalCopy }),
-      ),
-    ).rejects.toMatchObject({ code: "issue.scope-refused" });
-    expect((await getIssue(context, created.issueId)).revision).toBe(created.revision);
   });
 });

@@ -527,7 +527,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     expect((await projections(f)).meta.generation).toBe(initial.generation);
     expect(await projectedRows(f)).toEqual(lastGood);
   });
-  test("a released ACTIVE lease row is not projected as a current lease", async () => {
+  test("a completed ACTIVE plan with a released lease remains current without past ownership", async () => {
     const workflowId = "wf-released-lease";
     const planId = "plan-released-lease";
     const f = await activeWorkflowFixture("active-released-lease-", workflowId, planId);
@@ -542,6 +542,9 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       handle.db.prepare(
         "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
       ).run(workflowId, planId, leaseJson);
+      handle.db.prepare(
+        "update execution_plans set state_json = json_set(state_json, '$.status', 'Done', '$.done_at', ?) where workflow_id = ? and plan_id = ?",
+      ).run(STARTED_AT, workflowId, planId);
       handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     } finally { handle.close(); }
     const report = await refreshProjections(f.context);
@@ -549,6 +552,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const dashboard = await withStoreRead(f.context, queryDashboard("workflows"));
     const plan = dashboard.data.items.find((item) => item.id === workflowId)?.plans.find((plan) => plan.planId === planId);
     expect(plan).toBeDefined();
+    expect(plan?.status).toBe("Done");
     expect(plan?.leases).toEqual([]);
     const generation = (await projections(f)).meta.generation;
     // The tombstone row persists in the authority; a second refresh is stable.

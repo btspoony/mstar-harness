@@ -113,14 +113,8 @@ async function withEnv<T>(values: Record<string, string>, run: () => Promise<T>)
 function olderSchema(store: Awaited<ReturnType<typeof initializeStore>>): number {
   const priorVersion = store.schemaVersion - 1;
   store.db.exec(`
-    drop trigger issues_milestone_project_insert;
-    drop trigger issues_milestone_project_update;
-    drop trigger project_milestones_identity_immutable;
-    drop index project_milestones_order;
-    drop index issues_milestone_disposition;
-    drop table project_milestones;
-    alter table issues drop column milestone_id;
-    delete from schema_version where version = 7;
+    alter table provenance drop column origin;
+    delete from schema_version where version = 8;
   `);
   return priorVersion;
 }
@@ -393,17 +387,7 @@ describe("store.safe-upgrade unified entry", () => {
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     const store = await initializeStore({ harnessDir: harness });
-    const priorVersion = store.schemaVersion - 1;
-    store.db.exec(`
-      drop trigger issues_milestone_project_insert;
-      drop trigger issues_milestone_project_update;
-      drop trigger project_milestones_identity_immutable;
-      drop index project_milestones_order;
-      drop index issues_milestone_disposition;
-      drop table project_milestones;
-      alter table issues drop column milestone_id;
-      delete from schema_version where version = 7;
-    `);
+    const priorVersion = olderSchema(store);
     expect(store.db.prepare("select max(version) as version from schema_version").get()).toEqual({ version: priorVersion });
     store.close();
 
