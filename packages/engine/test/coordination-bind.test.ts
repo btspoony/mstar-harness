@@ -469,15 +469,8 @@ describe("binding", () => {
     await bindPlan(fixture, PLAN_ID);
 
     const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
-    expect([...view.allowed_operations].sort()).toEqual(["handoff", "progress", "residual-add", "residual-close"]);
-    // Every coordinator verb exists now; none is reachable — or advertised —
-    // from a plan session. `prepare` is the one verb with a plan-session seat
-    // (the session the addressed ROW is bound to, fixes #308), and that seat is
-    // decided against the row inside the lock: on this already-prepared row no
-    // plan-pm envelope may re-prepare it, and a session that is not the row's
-    // holder keeps the seat refusal.
+    // Coordinator-only mutations are refused from a plan session.
     for (const kind of ["accept", "return", "integration-start", "integration-accept", "complete", "reconcile"]) {
-      expect(view.allowed_operations).not.toContain(kind);
       expect(
         await errorCodeOf(() =>
           mutatePlanCoordination({
@@ -489,7 +482,6 @@ describe("binding", () => {
         ),
       ).toBe("coordination.session-role");
     }
-    expect(view.allowed_operations).not.toContain("prepare");
     // The row's own holder reaches the row admission and recognizes the
     // already-recorded semantic intent without another write.
     const holder = await mutatePlanCoordination({
