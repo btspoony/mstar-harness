@@ -150,7 +150,7 @@ import { executionBindingOf } from "./coordinator-identity";
 const STATUS_FILE = "status.json";
 /** Iteration compass file name inside `{ITERATION_DIR}/<iteration-id>/`. */
 const COMPASS_FILE = "delivery-compass.md";
-/** Frozen sequential Phase 1 specialist order (spec §Full Phase 1 handoff). */
+/** Valid Phase 1 reviewer order; optional product/architecture reviews precede the required writer. */
 const SPECIALIST_ROLES = ["product-manager", "architect", "writing-specialist"] as const;
 /** A native completion reference — the only accepted `resultRef` shape. */
 const NATIVE_RESULT_REF_RE = /^(?:agent|artifact):\/\/\S+$/;
@@ -675,11 +675,11 @@ export type Phase1CompletionInput = Readonly<{
    */
   coordinatorSessionPath?: string;
   mainWorktreeBranch: string;
-  reviews: readonly [
-    SpecialistReceipt<"product-manager">,
-    SpecialistReceipt<"architect">,
-    SpecialistReceipt<"writing-specialist">,
-  ];
+  reviews: readonly (
+    | SpecialistReceipt<"product-manager">
+    | SpecialistReceipt<"architect">
+    | SpecialistReceipt<"writing-specialist">
+  )[];
   plans: readonly Readonly<{
     planId: string;
     planPath: string;
@@ -1628,20 +1628,32 @@ export async function inspectPhase1Readiness(
     }
   }
 
-  // Review returns: frozen order, unique role/agent/reference tuple, native
-  // reference, present non-empty report copy inside this iteration's area.
+  // The selected reviewers may omit either specialist, but the writing
+  // specialist is required and final. Enforce membership, order and uniqueness
+  // before inspecting any receipt fields or report artifacts.
   const reviews = input.reviews;
-  if (!Array.isArray(reviews) || reviews.length !== SPECIALIST_ROLES.length) {
+  if (
+    !Array.isArray(reviews) ||
+    reviews.length === 0 ||
+    reviews.length > SPECIALIST_ROLES.length ||
+    reviews.at(-1)?.role !== "writing-specialist"
+  ) {
     fail("review-evidence-missing");
   } else {
     const tuples = new Set<string>();
     const reports = new Set<string>();
-    reviews.forEach((review, index) => {
-      const role = SPECIALIST_ROLES[index]!;
-      if (!isPlainObject(review) || review.role !== role) {
+    let previousIndex = -1;
+    reviews.forEach((review) => {
+      if (!isPlainObject(review)) {
         fail("review-evidence-missing");
         return;
       }
+      const index = SPECIALIST_ROLES.indexOf(review.role as (typeof SPECIALIST_ROLES)[number]);
+      if (index < 0 || index <= previousIndex) {
+        fail("review-evidence-missing");
+        return;
+      }
+      previousIndex = index;
       if (
         !isNonEmptyString(review.agentId) ||
         !isNonEmptyString(review.resultRef) ||
@@ -1650,7 +1662,7 @@ export async function inspectPhase1Readiness(
         fail("review-evidence-missing");
         return;
       }
-      const tuple = `${role}\u0000${review.agentId}\u0000${review.resultRef}`;
+      const tuple = `${review.role}\u0000${review.agentId}\u0000${review.resultRef}`;
       if (tuples.has(tuple)) fail("review-evidence-missing");
       tuples.add(tuple);
       const report = sample(review.reportPath, "review-evidence-missing", [iterationArea]);

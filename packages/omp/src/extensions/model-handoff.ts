@@ -1351,10 +1351,9 @@ export default function modelHandoff(pi: ExtensionAPI): void {
   /* -------------------------------------------------------------- fire --- */
 
   /**
-   * Completion input: the frozen E2 payload. Shape is checked here (three
-   * ordered returns, the bound plan evidence, the coordinator envelope path);
-   * role order, uniqueness and current bytes stay E2's mechanical checks, so the
-   * tuple is passed through unmodified rather than pre-filtered here.
+   * Completion input shape is checked here (one to three selected returns,
+   * bound plan evidence, and the coordinator envelope path); E2 verifies the
+   * selected role order, receipt authenticity and current artifact bytes.
    */
   const completionInputOf = (params: ToolParams, binding: HandoffBinding): Phase1CompletionInput | null => {
     const reviews = params.reviews;
@@ -1366,7 +1365,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const envelopePath = params.coordinatorSessionPath;
     if (
       reviews === undefined ||
-      reviews.length !== 3 ||
+      reviews.length < 1 ||
+      reviews.length > 3 ||
       plans === undefined ||
       plans.length === 0 ||
       typeof params.mainWorktreeBranch !== "string" ||
@@ -1467,8 +1467,8 @@ export default function modelHandoff(pi: ExtensionAPI): void {
         false,
         true,
         record.binding.executionBinding != null
-          ? "the completion checkpoint is incomplete: three ordered specialist returns and the bound plan evidence are required."
-          : "the completion checkpoint is incomplete: three ordered specialist returns, the bound plan evidence and the coordinator envelope path are required.",
+          ? "the completion checkpoint is incomplete: selected ordered specialist returns (including the final writing-specialist return) and the bound plan evidence are required."
+          : "the completion checkpoint is incomplete: selected ordered specialist returns (including the final writing-specialist return), the bound plan evidence and the coordinator envelope path are required.",
         { code: "invalid-completion-input" },
       );
     }

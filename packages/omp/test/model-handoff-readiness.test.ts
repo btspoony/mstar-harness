@@ -633,6 +633,15 @@ describe("E2 phase 1 readiness", () => {
     expect(after).toBe(sha256(report));
   });
 
+  test("selected reviewer subsets ending with writing-specialist are ready", async () => {
+    const f = await buildFixture();
+    const [product, architect, writer] = f.input.reviews;
+    for (const reviews of [[writer], [product, writer], [architect, writer], [product, architect, writer]]) {
+      const readiness = await inspectPhase1Readiness(f.binding, { ...f.input, reviews });
+      expect(readiness.ready).toBe(true);
+    }
+  });
+
   test("missing review or prepare proof refuses", async () => {
     const f = await buildFixture({ planIds: ["fixture-plan-a", "fixture-plan-b"] });
     const [pm, architect, writer] = f.input.reviews;
@@ -650,6 +659,20 @@ describe("E2 phase 1 readiness", () => {
     // Out-of-order return.
     const reordered = { ...f.input, reviews: [architect, pm, writer] } as unknown as Phase1CompletionInput;
     expect(codesOf(await inspect(reordered))).toContain("review-evidence-missing");
+    expect(codesOf(await inspect({ ...f.input, reviews: [pm, architect] } as unknown as Phase1CompletionInput))).toContain(
+      "review-evidence-missing",
+    );
+    expect(
+      codesOf(await inspect({ ...f.input, reviews: [pm, { ...pm }, writer] } as unknown as Phase1CompletionInput)),
+    ).toContain("review-evidence-missing");
+    expect(
+      codesOf(
+        await inspect({
+          ...f.input,
+          reviews: [pm, { ...writer, role: "code-reviewer" }],
+        } as unknown as Phase1CompletionInput),
+      ),
+    ).toContain("review-evidence-missing");
 
     // A return belonging to another workflow.
     const wrongWorkflow = { ...f.input, workflowId: f.siblingId } as Phase1CompletionInput;
