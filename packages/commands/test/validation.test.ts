@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createExecutionWorkflow, initializeExecutionAuthority, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -83,6 +84,45 @@ describe("validation command family", () => {
     expect(result).toMatchObject({ status: "refused", exitCode: 1, code: "worktree.main.residency-switched" });
     const violations = violationsOf(result);
     expect(violations.some((item) => item.code.includes("main") || item.message.toLowerCase().includes("main"))).toBe(true);
+  });
+
+  test("ACTIVE worktree check reads registered workflows from the execution graph", async () => {
+    const cwd = tempRoot();
+    const harness = path.join(cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const storeContext = { harnessDir: harness };
+    (await initializeStore(storeContext)).close();
+    const initialized = await initializeExecutionAuthority(storeContext);
+    await registerCatalogEntity(storeContext, { kind: "plan", id: "plan-synthetic", title: "Synthetic plan", rootKind: "plans", relativePath: "plans/plan-synthetic.md" }, { operationId: "catalog-synthetic", actor: "test" });
+    await createExecutionWorkflow({
+      ...storeContext,
+      caller: { sessionId: "coordinator-synthetic", role: "coordinator", workflowId: "workflow-synthetic", planId: null },
+    }, {
+      entry: { id: "workflow-synthetic", type: "plan", status: "running", started_at: "2026-09-26T00:00:00Z", dir: "workflows/workflow-synthetic" },
+      snapshot: {
+        schema_version: 1, id: "workflow-synthetic", type: "plan", status: "running",
+        started_at: "2026-09-26T00:00:00Z", updated_at: "2026-09-26T00:00:00Z",
+        branch: { base: "main", source: "feature/synthetic", target: "main" },
+        plans: [{ id: "plan-synthetic", title: "Synthetic plan", file: "plans/plan-synthetic.md", status: "InProgress" }],
+        delivery_kind: "development",
+      },
+      expected: initialized.token,
+      operationId: "workflow-synthetic",
+    });
+    const result = await definition("worktree.check").execute(
+      { planId: "plan-synthetic", workflow: "workflow-synthetic", harness },
+      context(cwd, async ({ argv }) => argv[1] === "worktree"
+        ? { exitCode: 0, signal: null, stdout: `worktree ${cwd}\nbranch main\n`, stderr: "" }
+        : { exitCode: 0, signal: null, stdout: "main", stderr: "" }),
+    );
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("active execution authority graph");
+    const missing = await definition("worktree.check").execute(
+      { planId: "plan-synthetic", workflow: "workflow-unregistered", harness },
+      context(cwd),
+    );
+    expect(missing).toMatchObject({ status: "refused", code: "worktree.l1.workflow-not-found" });
+    expect(missing.message).toContain("active execution authority graph");
   });
 
   test("derived scope uses the branch declared in the Assignment and preserves explicit conflicts", async () => {

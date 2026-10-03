@@ -52,6 +52,7 @@ import {
   resolveHarnessDir,
 } from "@mstar-harness/engine";
 import type {
+  ExecutionState,
   L1PreDispatchInput,
   MainWorktreeInfo,
   ValidationResult,
@@ -184,13 +185,22 @@ async function loadExecutionRoute(): Promise<{ resolve: ExecutionRouteResolver }
   return { resolve };
 }
 
-/** §5: the refusal of the L1 gate's retired input while the control harness's
- * execution authority is ACTIVE (or `null` when the file route still answers).
- * kind=l1 assembles its input from the workflow SNAPSHOT and from every other
- * registered ACTIVE workflow's snapshot, so — like the phase gates — it is a
- * whole-document reader with no snapshot-free normalization; it therefore
- * refuses not-ready instead of reading retired bytes. A store that exists and
- * cannot be read keeps its own refusal. */
+async function readActiveExecutionGraph(harnessDir: string): Promise<{ graph: ExecutionState } | { error: AgentToolResult } | null> {
+  const engine = await import("@mstar-harness/engine");
+  if (typeof engine.resolveExecutionReadRoute !== "function" || typeof engine.readExecutionState !== "function") {
+    return { error: result("installed @mstar-harness/engine lacks ACTIVE worktree-check graph exports (resolveExecutionReadRoute / readExecutionState) — upgrade the engine; CLI fallback: mstar worktree check", { ok: false }, true) };
+  }
+  try {
+    if (await engine.resolveExecutionReadRoute({ harnessDir }) !== "execution") return null;
+    return { graph: (await engine.readExecutionState({ harnessDir })).data };
+  } catch (error) {
+    const refusal = error as { code?: unknown; message?: unknown };
+    return { error: result(`${typeof refusal?.code === "string" ? refusal.code : "store.authority-unreadable"}: ${typeof refusal?.message === "string" ? refusal.message : String(error)}`, { ok: false }, true) };
+  }
+}
+
+/** Reject the retired snapshot input only when the active graph reader did not
+ * already serve the ACTIVE route (for example, a concurrent authority change). */
 async function executionNotReady(
   harnessDir: string,
 ): Promise<{ code: string; message: string } | { error: AgentToolResult } | null> {
@@ -226,9 +236,8 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
     name: "mstar_worktree_check",
     label: "Check worktree dispatch readiness",
     description:
-      "Run the engine pre-dispatch worktree checklists: kind=l1 verifies the cross-plan L1 gate — main-worktree residency against the recorded expectation (mainBranch param or the snapshot's branch.base) and non-ownership of any active lifecycle branch, the dedicated integration checkout (snapshot integration_worktree_path on branch.integration), and the plan row execution_lease feature worktree (Git-checkout identity, existence, branch alignment). kind=l2 verifies the within-plan L2 gate (each parallel writable track has a distinct absolute worktree path and matching checked-out branch). " +
-      "Use before any writable dispatch, especially parallel multi-track dispatch. Returns one line per violation as [severity] code: message (fix: …). " +
-      "kind=l2 is a pure parameter check (no workflow state); kind=l1 refuses execution.consumer-not-ready while the control harness's execution authority is ACTIVE, because its snapshot input is retired.",
+      "Run the engine pre-dispatch worktree checklists: kind=l1 verifies main-worktree residency, lifecycle branch ownership, the integration checkout, and the plan execution-lease checkout. While the execution authority is ACTIVE, it derives those inputs from the registered workflow graph; otherwise it reads the file-route snapshot. kind=l2 verifies distinct absolute worktree paths and matching checked-out branches for parallel writable tracks. " +
+      "Use before any writable dispatch. Returns one line per violation as [severity] code: message (fix: …). kind=l2 is a pure parameter check with no workflow state.",
     parameters: pi.zod
       .object({
         kind: pi.zod.enum(["l1", "l2"]),
@@ -273,6 +282,41 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
         // Main-root discovery BEFORE snapshot resolution: the main worktree
         // (process-SSOT control root) is Git-derived, never snapshot state.
         const observedMain = `main worktree: ${main.root} on branch "${main.branch}" (observed)`;
+        // Keep this dynamic import: published engines may lack the ACTIVE graph reader.
+        const active = await readActiveExecutionGraph(harnessDir);
+        if (active !== null && "error" in active) return active.error;
+        if (active !== null) {
+          const workflow = active.graph.workflows.find(({ state }) => state.id === params.workflowId);
+          if (!workflow) return result(`workflow "${params.workflowId}" not found in active execution authority graph`, { kind: "l1", workflow_id: params.workflowId, authority_graph: harnessDir }, true);
+          const planView = params.planId === undefined
+            ? workflow.plans.length === 1 ? workflow.plans[0] : undefined
+            : workflow.plans.find(({ plan }) => plan.id === params.planId);
+          if (!planView) return result(`plan "${params.planId ?? "(sole plan)"}" not found in active execution authority graph workflow "${params.workflowId}"`, { kind: "l1", workflow_id: params.workflowId, plan_id: params.planId ?? null, authority_graph: harnessDir }, true);
+          const branch = workflow.state.branch ?? {};
+          const lifecycleBranches = new Set<string>();
+          for (const item of active.graph.workflows) {
+            for (const key of ["source", "target", "integration", "base"] as const) {
+              const value = item.state.branch?.[key];
+              if (typeof value === "string" && value !== "") lifecycleBranches.add(value);
+            }
+          }
+          const lease = planView.executionLease;
+          const input: L1PreDispatchInput = {
+            workflowType: workflow.state.type,
+            integrationWorktreePath: params.integrationWorktreePath !== undefined ? resolve(params.integrationWorktreePath) : String(workflow.integrationLease?.worktree_path ?? ""),
+            integrationBranch: String(branch.integration ?? ""),
+            mainWorktree: main,
+            expectedMainBranch: params.mainBranch ?? String(branch.base ?? ""),
+            lifecycleBranches: [...lifecycleBranches],
+            leaseWorktreePath: String(lease?.worktree_path ?? ""),
+            leaseWorkingBranch: String(lease?.working_branch ?? ""),
+            planId: String(planView.plan.id),
+          };
+          const gate = l1PreDispatchCheck(input);
+          const body = gate.ok ? `l1 pre-dispatch check OK (plan "${planView.plan.id}", workflow "${params.workflowId}")` : violationLines(gate.violations);
+          return result(`${observedMain}\n${body}`, { kind: "l1", workflow_id: params.workflowId, plan_id: planView.plan.id, ok: gate.ok, violations: gate.violations, input }, !gate.ok);
+        }
+        
         // §5: before any snapshot read — the L1 input document (and every
         // sibling registered workflow's snapshot) is retired while the execution
         // authority of this harness is ACTIVE.

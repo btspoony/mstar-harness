@@ -26,6 +26,8 @@ import {
   parseAssignmentFields,
   parseBranchPolicyDirectOnBranch,
   planQualityBar,
+  readExecutionState,
+  resolveExecutionReadRoute,
   scanActiveLifecycleBranches,
   scopeGuard,
   SddScriptError,
@@ -217,6 +219,47 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
         if (!harness) throw new Error("harness directory not found");
+        if (await resolveExecutionReadRoute({ harnessDir: harness }) === "execution") {
+          const graph = (await readExecutionState({ harnessDir: harness })).data;
+          const registered = graph.workflows.find(({ state }) => state.id === workflow);
+          if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness });
+          const planView = input.planId === undefined
+            ? registered.plans.length === 1 ? registered.plans[0] : undefined
+            : registered.plans.find(({ plan }) => plan.id === plan);
+          if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness });
+          const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
+          if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed");
+          const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+          if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree");
+          const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
+          if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
+          const branch = registered.state.branch ?? {};
+          const lifecycleBranches = new Set<string>();
+          for (const item of graph.workflows) {
+            for (const key of ["source", "target", "integration", "base"]) {
+              const value = item.state.branch?.[key];
+              if (typeof value === "string" && value !== "") lifecycleBranches.add(value);
+            }
+          }
+          const lease = planView.executionLease;
+          const selectedIntegration = input.integration ?? input.control;
+          const gate = l1PreDispatchCheck({
+            workflowType: registered.state.type,
+            integrationWorktreePath: selectedIntegration !== undefined
+              ? path.resolve(selectedIntegration)
+              : String(registered.integrationLease?.worktree_path ?? ""),
+            integrationBranch: String(branch.integration ?? ""),
+            mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
+            expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),
+            lifecycleBranches: [...lifecycleBranches],
+            leaseWorktreePath: String(lease?.worktree_path ?? ""),
+            leaseWorkingBranch: String(lease?.working_branch ?? ""),
+            planId: planView.plan.id,
+          });
+          const gateResult = gateData(gate);
+          const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
+          return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");
+        }
         const snapshotPath = path.join(harness, "workflows", workflow, "snapshot.json");
         if (!existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
         let snapshot: Record<string, any>;
