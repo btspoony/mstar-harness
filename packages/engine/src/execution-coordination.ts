@@ -1994,7 +1994,7 @@ export async function integrationAcceptExecutionPlan(
   const proof = integrationProof(anchors.worktreePath, checkout.head, attempt.base_sha, named.source_sha);
   const gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
   if (proof.kind === "diverged") {
-    throw integrationDiverged(`plan ${planId} integration cannot be proven — ${proof.reason}`, {
+    throw integrationDiverged(`plan ${planId} integration cannot be proven \u2014 ${proof.reason}`, {
       plan_id: planId,
       base: attempt.base_sha,
       source: named.source_sha,
@@ -2002,7 +2002,7 @@ export async function integrationAcceptExecutionPlan(
   }
   if (proof.kind === "pending") {
     throw integrationUnresolved(
-      `plan ${planId} integration shows no merge of ${named.source_sha} onto ${attempt.base_sha} yet — run the coordinator merge, then accept`,
+      `plan ${planId} integration shows no merge of ${named.source_sha} onto ${attempt.base_sha} yet \u2014 run the coordinator merge, then accept`,
       { plan_id: planId, base: attempt.base_sha, source: named.source_sha },
     );
   }

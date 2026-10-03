@@ -1247,6 +1247,32 @@ describe("execution-stage", () => {
     expect(storeFootprint(fixture.dbPath)).toEqual(footprint);
   });
 
+  test("execution-stage-refreshes-current-plan-state-on-reapply-and-activation", async () => {
+    const fixture = await coreWorkspace("stage-current-content");
+    const backup = await recoveryPoint(fixture);
+    const manifest = await previewExecutionMigration(migrationInput(fixture, "op-current-preview"));
+    await applyExecutionMigration({ ...migrationInput(fixture, "op-current-stage"),
+      manifest, backup, coverage: await coverageOf(fixture, manifest) });
+    const path = fixture.snapshotPaths[0]!;
+    const current = JSON.parse(readFileSync(path, "utf8")) as WorkflowSnapshot;
+    current.plans[0]!.status = "InProgress";
+    current.plans[0]!.title = "Current authored scope";
+    writeJson(path, current);
+    const replay = await applyExecutionMigration({ ...migrationInput(fixture, "op-current-reapply"),
+      manifest, backup, coverage: await coverageOf(fixture, manifest) });
+    expect(replay.replayed).toBe(true);
+    const staged = rawGet<{ state_json: string }>(fixture.dbPath, "select state_json from execution_plans")!;
+    expect(JSON.parse(staged.state_json)).toMatchObject({ status: "InProgress", title: "Current authored scope" });
+    current.plans[0]!.status = "InReview";
+    current.plans[0]!.title = "Latest scope before activation";
+    writeJson(path, current);
+    await activateExecutionMigration(await activationInput(fixture, manifest, "current-content"));
+    const active = rawGet<{ state_json: string }>(fixture.dbPath, "select state_json from execution_plans")!;
+    expect(JSON.parse(active.state_json)).toMatchObject({ status: "InReview", title: "Latest scope before activation" });
+    expect((await readExecutionState(fixture.context)).data.workflows[0]!.plans[0]!.plan)
+      .toMatchObject({ status: "InReview", title: "Latest scope before activation" });
+  });
+
   test("execution-stage-compares-source-locations-as-an-order-independent-set", async () => {
     const fixture = await legacyWorkspace("stage-order-set");
     const backup = await recoveryPoint(fixture);

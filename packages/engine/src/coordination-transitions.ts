@@ -360,7 +360,7 @@ export function assertPrepareAdmission(input: {
   if (input.sessionBound && input.rowClaimant !== true) {
     throw new CoordinationError(
       "coordination.prepare-session-bound",
-      `plan ${planId} already has a bound plan session — preparation precedes the bind`,
+      `plan ${planId} already has a bound plan session \u2014 preparation precedes the bind`,
       { plan_id: planId },
     );
   }

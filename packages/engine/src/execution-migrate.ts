@@ -3099,6 +3099,12 @@ export async function applyExecutionMigration(input: ExecutionMigrationApplyInpu
                     `idempotently, and an aborted one needs a re-preview under a new manifest.`,
                 );
               }
+              if (tx.execution.authorityState !== "staged" || tx.execution.manifestId !== manifest.id) {
+                throw conflict(`manifest ${manifest.id} does not own the staged authority; abort the current staged migration before applying another.`);
+              }
+              refreshStagedImport(tx, discovered);
+              tx.db.prepare("update execution_migrations set coverage_json = ?, updated_at = ? where manifest_id = ?")
+                .run(serializeExecutionValue(coverage.set), new Date().toISOString(), manifest.id);
               return { manifestId: manifest.id, phase: "staged" as const, replayed: true };
             }
             const otherStaged = tx.db
@@ -3581,6 +3587,19 @@ function assertStagedGraphIsTheImport(graph: StagedGraph, discovered: Discovered
   }
 }
 
+/** JSON remains authoritative while staged; refresh its validated current rows. */
+function refreshStagedImport(tx: ExecutionTransaction, discovered: DiscoveredSources): void {
+  assertStagedGraphIsTheImport(readStagedGraph(tx.db), discovered, tx.epoch);
+  for (const table of STAGED_TABLES) tx.db.prepare(`delete from ${table}`).run();
+  for (const workflow of discovered.workflows) {
+    if (workflow.exclusion !== undefined) continue;
+    assertCatalogCoherence(workflow, tx.storeId);
+    importWorkflow(tx, workflow);
+  }
+  tx.db.prepare("update execution_meta set root_updated_at = ? where id = 1").run(discovered.rootDoc.updated_at);
+}
+
+
 /** §6 item 3 the recorded activation of an already-active manifest: its receipt is the only answer. */
 function replayActivation(record: MigrationRecord): ExecutionMigrationReceipt {
   return { manifestId: record.manifestId, phase: "active", replayed: true };
@@ -3592,7 +3611,7 @@ function replayActivation(record: MigrationRecord): ExecutionMigrationReceipt {
  *
  * It re-reads the recorded staged manifest (never a caller-supplied document),
  * takes the §4.2 maintenance → root → sorted-workflow lock ladder, and inside
- * ONE transaction rechecks the exact witness bytes, the core digest, the
+ * ONE transaction rechecks source membership and ownership, refreshes current rows, the
  * RECOMPUTED coverage of every discovered surface, an empty pending catalog
  * journal, the store identity, the reviewed schema, the `expectedEpoch` CAS,
  * the operator's own identity, the attestation's coverage of the frozen owner
@@ -3736,7 +3755,7 @@ export async function activateExecutionMigration(
             // the operator approved and the set recorded at staging.
             const barrierCoverage = coverageFromDiscovery({ discovered, manifest, manifestHash: record.manifestHash });
             assertAttestationCoversOwners(discovered.owners, attestation);
-            assertStagedGraphIsTheImport(readStagedGraph(tx.db), discovered, tx.epoch);
+            refreshStagedImport(tx, discovered);
 
             // ── the cutover: ONE transaction, ONE epoch bump ──────────────
             const epoch = tx.epoch + 1;

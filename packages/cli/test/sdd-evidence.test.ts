@@ -22,16 +22,19 @@
  *   mirror (engine schema validation accepts exactly the CLI's constants),
  * - 8 MiB per-stream storage cap, finalization-failure honesty,
  * - usage/gate refusals before any child, canonical SDD writes only,
- * - read-only verify: artifact damage codes, no-target integrity-only
- *   semantics, target candidate/changed/uncertain lanes (expected-head
- *   mismatch, different repository, unknown declaration, unreadable
- *   inputs, missing declared roots as explicit missing entries ⇒ changed),
+ * - read-only verify: artifact slot existence/type codes and no-target
+ *   integrity-only semantics (recorded log content is provenance, so a
+ *   content edit alone is not an integrity failure), target
+ *   candidate/changed/uncertain lanes (expected-head mismatch, different
+ *   repository, unknown declaration, unreadable inputs, missing declared
+ *   roots and added files under declared roots as source-set differences
+ *   ⇒ changed),
  * - no environment dump; selected env values (including null absence)
  *   fingerprinted,
  * - budgeted collectEvidenceInputs: shared two-pass byte allowance, entry
  *   enumeration stop, capped-snapshot representability, usage rejections,
  * - integrated handoff (task 4): one capture feeds integrity, current-target
- *   candidate, damaged-log/changed-fixture noncandidates without counter
+ *   candidate, symlinked-log/membership-change noncandidates without counter
  *   change, an explicit retry (new run id, counter incremented only by
  *   capture), integrity readable after historical worktree removal, and a
  *   target comparison against another explicit checkout sharing the common
@@ -1275,27 +1278,35 @@ describe("verify — artifact integrity is read-only and code-exact", () => {
     }
   }, 30000);
 
-  test("altered log content fails integrity with the exact hash code; missing log fails with the missing code", async () => {
+  test("altered log content stays provenance while a symlinked log fails its type code; missing log fails the missing code", async () => {
     const root = tmpRoot("mstar-sdd-ev-damage-");
     try {
       const f = evidenceFixture(root);
       const result = await captureDirect(f, counterArgv(f));
 
-      // Alter stdout.log after capture.
+      // Altered stdout.log content no longer gates integrity: the recorded
+      // hash is provenance, and the retained file is still a regular file.
       const stdoutPath = join(result.runDir, "stdout.log");
       writeFileSync(stdoutPath, readFileSync(stdoutPath).toString() + "tampered\n");
       const facts = await collectEvidenceArtifacts(result.runDir);
       const gate = verifySddEvidence(readRecord(result.runDir), facts, { planId: PLAN_ID, taskId: TASK_ID, runId: result.record.runId });
-      expect(gate.ok).toBe(false);
-      expect(gate.violations.map((v) => v.code)).toContain("evidence.artifact.hash");
+      expect(gate.ok).toBe(true);
 
-      // Missing stderr.log after restore of stdout.
-      writeFileSync(stdoutPath, readFileSync(stdoutPath).toString().replace("tampered\n", ""));
-      rmSync(join(result.runDir, "stderr.log"));
+      // A symlinked log is not a verifiable regular file ⇒ exact type code.
+      rmSync(stdoutPath);
+      symlinkSync(join(root, "elsewhere.log"), stdoutPath);
       const facts2 = await collectEvidenceArtifacts(result.runDir);
       const gate2 = verifySddEvidence(readRecord(result.runDir), facts2, { planId: PLAN_ID, taskId: TASK_ID, runId: result.record.runId });
       expect(gate2.ok).toBe(false);
-      expect(gate2.violations.map((v) => v.code)).toContain("evidence.artifact.missing");
+      expect(gate2.violations.map((v) => v.code)).toContain("evidence.artifact.type");
+
+      // Missing stderr.log after removing the symlinked stdout.
+      rmSync(stdoutPath);
+      rmSync(join(result.runDir, "stderr.log"));
+      const facts3 = await collectEvidenceArtifacts(result.runDir);
+      const gate3 = verifySddEvidence(readRecord(result.runDir), facts3, { planId: PLAN_ID, taskId: TASK_ID, runId: result.record.runId });
+      expect(gate3.ok).toBe(false);
+      expect(gate3.violations.map((v) => v.code)).toContain("evidence.artifact.missing");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1420,21 +1431,27 @@ describe("verify — target applicability", () => {
       const root = tmpRoot("mstar-sdd-ev-changed-");
       try {
         const f = evidenceFixture(root);
-        const result = await captureDirect(f, counterArgv(f), { env: { NODE_ENV: undefined } });
+        // Selected env must be identical on the capture and verify lanes:
+        // pin NODE_ENV explicitly instead of relying on the runner's value
+        // (an inherited NODE_ENV would otherwise be an environment difference).
+        const env = { NODE_ENV: "EVIDENCE_NODE_ENV" };
+        const result = await captureDirect(f, counterArgv(f), { env });
 
-        // Known content change in a declared input.
-        writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'fixture-v2';\n");
+        // Known membership change inside a declared root: a new test file under
+        // the declared `tests/` directory is a semantic source-set difference
+        // (a same-path content edit alone is no longer a difference).
+        writeFileSync(join(f.feature, "tests", "extra.js"), "test('extra', () => {});\n");
         const target1 = targetFileFor(root, f.feature, f.head);
-        const verify1 = verifyCli(f, result.record.runId, { target: target1 });
+        const verify1 = verifyCli(f, result.record.runId, { target: target1, env });
         expect(verify1.exitCode).toBe(0);
         const assessment1 = dataOf(verify1) as { applicability: string; changedInputs: string[] };
         expect(assessment1.applicability).toBe("changed");
-        expect(assessment1.changedInputs).toContain("src/app.js");
+        expect(assessment1.changedInputs).toContain("tests/extra.js");
 
         // A declared root that disappeared is an explicit missing entry ⇒ changed.
         rmSync(join(f.feature, "deps", "lib.js"));
         const target2 = targetFileFor(root, f.feature, f.head);
-        const verify2 = verifyCli(f, result.record.runId, { target: target2 });
+        const verify2 = verifyCli(f, result.record.runId, { target: target2, env });
         expect(verify2.exitCode).toBe(0);
         const assessment2 = dataOf(verify2) as { applicability: string; changedInputs: string[] };
         expect(assessment2.applicability).toBe("changed");
@@ -1615,7 +1632,7 @@ describe("verify — canonical sdd-dir containment", () => {
 
 describe("integrated handoff — capture once, verify, reuse, damage, retry, removal", () => {
   test(
-    "one capture feeds integrity, candidate, damaged-log/changed-fixture noncandidates, " +
+    "one capture feeds integrity, candidate, symlinked-log/membership-change noncandidates, " +
       "explicit retry, historical worktree removal survival and a same-repo alternate checkout",
     async () => {
       const root = tmpRoot("mstar-sdd-ev-integrated-");
@@ -1658,11 +1675,14 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         // Verify lanes never executed the recorded child.
         expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
 
-        // 4) Damaged log: integrity fails first, so the run is an uncertain
-        //    noncandidate whether or not a target exists; counter unchanged.
+        // 4) A symlinked log is not a verifiable regular file: integrity fails
+        //    first, so the run is an uncertain noncandidate whether or not a
+        //    target exists; counter unchanged. (Recorded log content is
+        //    provenance now, so a content edit alone no longer fails integrity.)
         const stdoutLog = join(first.runDir, "stdout.log");
         const originalLog = readFileSync(stdoutLog);
-        writeFileSync(stdoutLog, `${originalLog.toString("utf8")}damaged\n`);
+        rmSync(stdoutLog);
+        symlinkSync(join(root, "elsewhere.log"), stdoutLog);
         const damaged = verifyCli(f, first.record.runId, { target: currentTarget, env });
         expect(damaged.exitCode).toBe(0);
         const damagedAssessment = dataOf(damaged) as {
@@ -1675,15 +1695,17 @@ describe("integrated handoff — capture once, verify, reuse, damage, retry, rem
         expect(damagedAssessment.reasons).toContain("evidence.integrity");
         expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
 
-        // 5) Restored log + changed declared fixture input: a known difference
-        //    (changed noncandidate) with still zero additional child runs.
+        // 5) Restored log + a new file under a declared root: a known membership
+        //    difference (changed noncandidate) with still zero additional child
+        //    runs. A same-path content edit alone is no longer a difference.
+        rmSync(stdoutLog);
         writeFileSync(stdoutLog, originalLog);
-        writeFileSync(join(f.feature, "src", "app.js"), "export const app = 'fixture-v2';\n");
+        writeFileSync(join(f.feature, "tests", "extra.js"), "test('extra', () => {});\n");
         const changed = verifyCli(f, first.record.runId, { target: currentTarget, env });
         expect(changed.exitCode).toBe(0);
         const changedAssessment = dataOf(changed) as { applicability: string; changedInputs: string[] };
         expect(changedAssessment.applicability).toBe("changed");
-        expect(changedAssessment.changedInputs).toContain("src/app.js");
+        expect(changedAssessment.changedInputs).toContain("tests/extra.js");
         expect(JSON.parse(readFileSync(f.counterPath, "utf8"))).toEqual({ count: 1 });
 
         // 6) Only an explicit second capture increments the counter, under a

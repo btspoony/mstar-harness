@@ -817,6 +817,23 @@ describe("phase2 launch admission journal", () => {
     expect(released?.target).toBe("pane-plan-a");
   });
 
+  test("a current coordinator cannot replay another coordinator's launch but can record its outcome", async () => {
+    const fixture = await bindFixture();
+    writeSettings(fixture, { enabled: true, cap: 2 });
+    const original = intentOf(await reserveFor(fixture, "plan-a"));
+    writeJson(fixture.journalPath, {
+      ...readJson(fixture.journalPath),
+      intents: [{ ...original, coordinatorSessionId: "previous-coordinator" }],
+    });
+    expect(refusalOf(await reserveFor(fixture, "plan-a")).code).toBe("launch.plan-occupied");
+    expect(journalIntents(fixture)).toHaveLength(1);
+    expect(intentOf(await recordFor(fixture, original.id, "refused")).state).toBe("refused");
+    const replacement = intentOf(await reserveFor(fixture, "plan-a"));
+    expect(replacement.id).not.toBe(original.id);
+    expect(replacement.coordinatorSessionId).toBe(authorityOf(fixture).identity.sessionId);
+    expect(intentOf(await recordFor(fixture, replacement.id, "starting")).state).toBe("starting");
+  });
+
   test("foreign or other-attempt handoff stays occupied until an explicit release", async () => {
     const fixture = await bindFixture();
     writeSettings(fixture, { enabled: true, cap: 2 });

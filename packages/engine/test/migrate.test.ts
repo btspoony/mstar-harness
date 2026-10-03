@@ -58,7 +58,7 @@ import {
 } from "../src/migrate.js";
 import { validateProjectRegister, PROJECT_REGISTER_FILE, PROJECT_ROADMAP_FILE } from "../src/project.js";
 import { registerWorkflow, validateStatusV2 } from "../src/status.js";
-import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot, writeWorkflowSnapshot } from "../src/workflow.js";
+import { WORKFLOW_SNAPSHOT_FILE, validateWorkflowSnapshot, writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures", "migrate-real");
 
@@ -525,13 +525,13 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
       const plan = planOf(root);
       const v1Before = readJson(join(root, "status.json"));
 
-      // Poison one snapshot (invalid id) so the apply fails mid-loop (the
-      // writer's own validation fails closed — no apply-loop gate).
-      const poisoned = structuredClone(plan) as MigratePlan;
+      // A blocked destination injects a real filesystem failure, not a mutation
+      // of the diagnostic preview which apply now derives from current v1 data.
       const failureIndex = 3;
-      poisoned.snapshots[failureIndex]!.data.id = "";
-
-      await expect(applyMigratePlan(poisoned)).rejects.toThrow(/invalid workflow snapshot/);
+      const blockedDir = dirname(join(root, plan.snapshots[failureIndex]!.file));
+      mkdirSync(dirname(blockedDir), { recursive: true });
+      writeFileSync(blockedDir, "blocked destination");
+      await expect(applyMigratePlan(plan)).rejects.toThrow();
 
       // Root still v1 — the failed run is recoverable by re-running.
       expect(readJson(join(root, "status.json"))).toEqual(v1Before);
@@ -540,16 +540,16 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
       // Additive contract: snapshots BEFORE the failure point
       // may exist on disk (additive-first apply, no rollback)…
       for (let i = 0; i < failureIndex; i++) {
-        expect(existsSync(join(root, poisoned.snapshots[i]!.file))).toBe(true);
+        expect(existsSync(join(root, plan.snapshots[i]!.file))).toBe(true);
       }
       // …while the failure point and everything after it were never written.
-      for (let i = failureIndex; i < poisoned.snapshots.length; i++) {
-        expect(existsSync(join(root, poisoned.snapshots[i]!.file))).toBe(false);
+      for (let i = failureIndex; i < plan.snapshots.length; i++) {
+        expect(existsSync(join(root, plan.snapshots[i]!.file))).toBe(false);
       }
 
-      // Re-run with the valid plan (poison fixed) converges to the full v2
-      // tree: every planned snapshot exists, the root is v2, and a further
-      // re-run is a no-op (re-run idempotency contract).
+      // Clearing the injected filesystem obstacle makes the ordinary retry
+      // converge; no preview token or manual authority repair is needed.
+      rmSync(blockedDir);
       const retry = await applyMigratePlan(plan);
       expect(retry.applied).toBe(true);
       expect(readJson(join(root, "status.json")).version).toBe(2);
@@ -581,97 +581,6 @@ describe("applyMigratePlan — executor on a copied fixture tree", () => {
     }
   });
 
-  test("constructed empty register ({ entries: {} }) applies but writes no register file or parent dir", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      // Hand-build the non-null empty register the planner never produces:
-      // `data.entries` is a valid (gate-passing) empty map, so the only
-      // reason to skip the write is the zero-entries rule.
-      plan.register = {
-        file: "projects/_empty-register/residuals.json",
-        source: "constructed",
-        data: { entries: {} },
-      };
-      // Isolate the register step: no roadmap write may create the parent
-      // dir for us.
-      plan.roadmap = null;
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      expect(existsSync(join(root, "projects", "_empty-register", "residuals.json"))).toBe(false);
-      expect(existsSync(join(root, "projects", "_empty-register"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("constructed register with >=1 entry writes the doc verbatim", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      const data = {
-        entries: {
-          "plan-a": [{ ...residual(), source_plan: "plan-a", registered_at: "2026-08-21" }],
-        },
-      };
-      plan.register = {
-        file: "projects/_default/residuals.json",
-        source: "constructed",
-        data,
-      };
-      plan.roadmap = null;
-
-      const result = await applyMigratePlan(plan);
-      expect(result.applied).toBe(true);
-      const registerPath = join(root, "projects", "_default", "residuals.json");
-      expect(existsSync(registerPath)).toBe(true);
-      expect(readJson(registerPath)).toEqual(data);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("constructed register with data {} (missing entries) still throws and writes nothing", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      plan.register = {
-        file: "projects/_invalid-register/residuals.json",
-        source: "constructed",
-        data: {},
-      };
-
-      await expect(applyMigratePlan(plan)).rejects.toThrow(/missing required field: entries/);
-      expect(existsSync(join(root, "projects", "_invalid-register", "residuals.json"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("constructed register with data { entries: null } still throws and writes nothing", async () => {
-    const root = fixtureTree();
-    try {
-      const plan = planOf(root);
-      plan.register = {
-        file: "projects/_null-entries-register/residuals.json",
-        source: "constructed",
-        // `entries: null` is NOT a realistic planner shape (buildRegister
-        // emits `entries: {}` or returns null), but it locks the
-        // validate-before-skip ordering: validateProjectRegister rejects
-        // a non-object `entries` ("entries must be an object keyed by plan
-        // id"), so the `?? {}` zero-entries skip must never swallow it.
-        // The gate runs first — invalid docs throw, only gate-passing
-        // empty `{ entries: {} }` registers are skipped.
-        data: { entries: null },
-      };
-
-      await expect(applyMigratePlan(plan)).rejects.toThrow(/entries must be an object/);
-      expect(existsSync(join(root, "projects", "_null-entries-register", "residuals.json"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
   test("a v1 tree with no status.json refuses to migrate", () => {
     const root = tmpRoot("migrate-nov1-");
@@ -938,14 +847,14 @@ describe("migrate path-safety and duplicate-id guards", () => {
     }
   });
 
-  test("apply refuses a hand-built plan whose destination escapes the harness dir (boundary enforcement)", async () => {
+  test("apply derives safe destinations from current source rather than caller-edited preview steps", async () => {
     const root = fixtureTree();
     try {
       const plan = planOf(root);
       const escaped = structuredClone(plan) as MigratePlan;
       escaped.notesFiles = [{ file: "../../../tmp/evil-notes.jsonl", source: "crafted", lines: [] }];
-      await expect(applyMigratePlan(escaped)).rejects.toThrow(/escapes the harness dir/);
-      // No partial writes happened before the guard.
+      expect((await applyMigratePlan(escaped)).applied).toBe(true);
+      expect(readJson(join(root, plan.snapshots[0]!.file)).id).toBe(plan.snapshots[0]!.id);
       expect(existsSync(join(root, "../../../tmp/evil-notes.jsonl"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1023,12 +932,16 @@ describe("migration commit point under the root write lock", () => {
     try {
       const statusPath = join(root, "status.json");
       const plan = planOf(root);
-      const concurrent = readJson(statusPath) as Record<string, unknown>;
+      const concurrent = readJson(statusPath) as { plans: Array<Record<string, unknown>> };
+      concurrent.plans[0]!.title = "Current scope after planning";
       writeJson(statusPath, { ...concurrent, concurrent_note: "edited after planning" });
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
       expect(readJson(statusPath).version).toBe(2);
       expect(readJson(join(root, ARCHIVED_STATUS_V1_FILE))).toMatchObject({ concurrent_note: "edited after planning" });
+      const owner = plan.snapshots.find((snapshot) => snapshot.data.plans.some((row) => row.id === concurrent.plans[0]!.id))!;
+      const migrated = readJson(join(root, owner.file)) as WorkflowSnapshot;
+      expect(migrated.plans.find((row) => row.id === concurrent.plans[0]!.id)!.title).toBe("Current scope after planning");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1244,6 +1157,25 @@ describe("coordinated-writer — migration is additive-only", () => {
       const result = await applyMigratePlan(plan);
       expect(result.applied).toBe(true);
       expect(readJson(join(root, "status.json")).version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unrelated workflow target refuses and a configured separate destination recovers", async () => {
+    const root = fixtureTree();
+    try {
+      const plan = planOf(root);
+      const target = join(root, plan.snapshots[0]!.file);
+      writeJson(target, { ...plan.snapshots[0]!.data, id: "foreign-workflow" });
+      await expect(applyMigratePlan(plan)).rejects.toMatchObject({ code: "coordination.store" });
+      expect(readJson(join(root, "status.json")).version).toBe(1);
+      expect(readJson(target).id).toBe("foreign-workflow");
+      writeFileSync(join(root, ".mstarc"), "[config]\nworkflow_dir=migrated-workflows\n");
+      expect((await applyMigratePlan(plan)).applied).toBe(true);
+      expect(readJson(target).id).toBe("foreign-workflow");
+      const freshTarget = join(root, "migrated-workflows", plan.snapshots[0]!.id, WORKFLOW_SNAPSHOT_FILE);
+      expect(readJson(freshTarget).id).toBe(plan.snapshots[0]!.id);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

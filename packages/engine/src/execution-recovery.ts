@@ -1203,7 +1203,7 @@ function compareRetainedBodies(
  * sides are read under the SAME rule, so a row that only one of them holds is
  * as visible as a row whose content changed.
  */
-async function buildLossInventory(context: StoreContext, backupPath: string): Promise<LossInventory> {
+async function buildLossInventory(context: StoreContext, backupPath: string, imagePath?: string): Promise<LossInventory> {
   if (!isNonEmptyString(backupPath)) {
     throw conflict("a restore preview needs the recovery point path it is previewed against");
   }
@@ -1229,7 +1229,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
   }
   let description: BackupInspection;
   try {
-    description = await inspectBackupCopy(point);
+    description = await inspectBackupCopy(imagePath ?? point);
   } catch (error) {
     if (error instanceof StoreActivationError) throw error;
     throw new StoreActivationError(
@@ -1237,7 +1237,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
       `the recovery point at ${point} cannot be verified (${(error as Error).message}); it is not a recovery point for this store.`,
     );
   }
-  const backupSha256 = await sha256OfFile(point);
+  const backupSha256 = await sha256OfFile(imagePath ?? point);
 
   // §8: the point must describe THIS store, this schema and this generation.
   const live = await readLiveStore(context, "the restore preview");
@@ -1268,7 +1268,7 @@ async function buildLossInventory(context: StoreContext, backupPath: string): Pr
     execution: live.schemaVersion >= EXECUTION_MIGRATION_VERSION,
     provenanceOrigin: live.schemaVersion >= PROVENANCE_ORIGIN_MIGRATION_VERSION,
   };
-  const copy = await readCopyRows(point, availability);
+  const copy = await readCopyRows(imagePath ?? point, availability);
 
   const differences: ExecutionRecoveryAuthorityDifference[] = [];
   const liveByKey = new Map(live.rows.map((row) => [`${row.domain}\u0000${row.key}`, row] as const));
@@ -1665,11 +1665,11 @@ function attemptNeverInstalled(root: string, attemptId: string, imagePath: strin
  * Its one other premise is the §4.2 maintenance lock, which every restore takes
  * first: this sweep runs INSIDE it (`restoreExecutionBackup`), so the only
  * attempt that can be running while it sweeps is the one sweeping, and that
- * attempt creates its own image afterwards. Best-effort throughout — a control
+ * attempt has no durable replacement record yet. Best-effort throughout — a control
  * root this run cannot read, or a scratch file it cannot remove, never fails
  * the restore that is about to run.
  */
-function reclaimAbandonedRestoreScratch(root: string): void {
+function reclaimAbandonedRestoreScratch(root: string, currentAttemptId: string): void {
   let names: string[];
   try {
     names = readdirSync(root);
@@ -1681,6 +1681,7 @@ function reclaimAbandonedRestoreScratch(root: string): void {
   const attempts = new Set(names.map((name) => RESTORE_SCRATCH_NAME.exec(name)?.[1]).filter((attemptId) => attemptId !== undefined));
   if (attempts.size === 0) return;
   for (const attemptId of attempts) {
+    if (attemptId === currentAttemptId) continue;
     try {
       const imagePath = join(root, `.store-restore-${attemptId}.db`);
       if (!attemptNeverInstalled(root, attemptId, imagePath)) continue;
@@ -1759,19 +1760,53 @@ async function checkpointLiveStore(context: StoreContext): Promise<void> {
 }
 
 async function runRestore(context: StoreContext, root: string, input: ResolvedRestoreInput): Promise<ExecutionRestoreReceipt> {
-  // §8: the loss inventory is recomputed under the maintenance lock. The
-  // recorded preview is a description of what a restore would cost — it is
-  // never re-compared to decide whether the replacement may proceed; the real
-  // destructive-phase requirements below (path, generation, quiescence) are the
-  // guards.
-  const inventory = await buildLossInventory(context, input.preview.backupPath);
+  // Inventory and install one private image; the selected path may be replaced
+  // by another process after this copy without changing this attempt.
+  const attemptId = randomUUID();
+  const imagePath = join(root, `.store-restore-${attemptId}.db`);
+  try {
+    copyFileSync(input.preview.backupPath, imagePath);
+    return await runRestoreImage(context, root, input, imagePath, attemptId);
+  } finally {
+    rmSync(`${imagePath}-wal`, { force: true });
+    rmSync(`${imagePath}-shm`, { force: true });
+    rmSync(imagePath, { force: true });
+  }
+}
 
-  // §8: an attempt that crashed before this one left its scratch beside the
-  // live store, and the retry that would have reclaimed it drew a fresh
-  // `attemptId` — so the sweep runs here, before the checkpoint rewrites the
-  // live bytes. It is placed after the loss inventory so a restore that refuses
-  // still changes nothing.
-  reclaimAbandonedRestoreScratch(root);
+async function runRestoreImage(
+  context: StoreContext,
+  root: string,
+  input: ResolvedRestoreInput,
+  imagePath: string,
+  attemptId: string,
+): Promise<ExecutionRestoreReceipt> {
+  const inventory = await buildLossInventory(context, input.preview.backupPath, imagePath);
+  const approved = input.preview;
+  const approvedOperations = new Set(approved.lostOperationIds);
+  const approvedRows = new Map(approved.authorityDifferences.map((row) => [`${row.domain}\u0000${row.key}`, row]));
+  const unapprovedRow = inventory.preview.authorityDifferences.find((row) => {
+    const reviewed = approvedRows.get(`${row.domain}\u0000${row.key}`);
+    return reviewed === undefined || reviewed.liveRevision !== row.liveRevision || reviewed.backupRevision !== row.backupRevision;
+  });
+  const unapprovedOperation = inventory.preview.lostOperationIds.find((id) => !approvedOperations.has(id));
+  if (
+    inventory.live.storeId !== approved.liveStoreId ||
+    inventory.live.epoch !== approved.liveEpoch ||
+    inventory.backup.epoch !== approved.backupEpoch ||
+    unapprovedRow !== undefined ||
+    unapprovedOperation !== undefined
+  ) {
+    throw lossUnaccepted(
+      `the restore would discard work outside the authorized loss inventory` +
+        `${unapprovedRow === undefined ? "" : ` (${unapprovedRow.domain}:${unapprovedRow.key})`}` +
+        `${unapprovedOperation === undefined ? "" : ` (operation ${unapprovedOperation})`}. Nothing was replaced. ` +
+        `Run store execution restore-preview again and authorize its current loss before retrying restore.`,
+    );
+  }
+
+  // Refused authorization leaves prior attempts and all authority untouched.
+  reclaimAbandonedRestoreScratch(root, attemptId);
 
   // §8 quiescence, then the fresh pre-restore recovery point.
   await checkpointLiveStore(context);
@@ -1804,12 +1839,10 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
   // §8: restore into a verified sibling on the SAME filesystem, with the epoch
   // already above both generations, so the rename is the whole cutover and no
   // window exists in which the restored bytes carry a live reference generation.
-  const attemptId = randomUUID();
-  const imagePath = join(root, `.store-restore-${attemptId}.db`);
+  // The private image was inventoried before the destructive phase.
   const receiptPath = recoveryReceiptPathOf(root, attemptId);
   const newEpoch = Math.max(before.epoch, inventory.backup.epoch) + 1;
   try {
-    copyFileSync(inventory.preview.backupPath, imagePath);
     await patchImageEpoch(imagePath, newEpoch);
     const image = await inspectBackupCopy(imagePath);
     if (

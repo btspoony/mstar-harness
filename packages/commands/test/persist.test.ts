@@ -68,12 +68,12 @@ describe("persist command family", () => {
     expect(protocolReads()).toBe(0);
   });
 
-  test("surfaces stale coordinated CAS refusal from the engine", async () => {
+  test("status replacement is explicit last-write-wins without a byte token", async () => {
     const { harness, store, context } = setup();
     const write = definition("persist.write");
     writeFileSync(join(harness, "status.json"), JSON.stringify(STATUS));
-    const result = await write.execute({ kind: "status", key: "root", input: JSON.stringify(STATUS), expectVersion: `sha256:${"0".repeat(64)}` }, context);
-    expect(result).toMatchObject({ status: "refused", exitCode: 1, code: "coordination.version-conflict" });
+    const result = await write.execute({ kind: "status", key: "root", input: JSON.stringify(STATUS) }, context);
+    expect(result).toMatchObject({ status: "ok", data: { kind: "status", key: "root" } });
     expect(await store.get({ kind: "status", key: "root" })).toEqual(STATUS);
   });
 
@@ -174,7 +174,7 @@ describe("persist command family", () => {
     expect(Object.keys(write.payloads ?? {}).sort()).toEqual(["json", "review", "snapshot", "status"]);
     expect(write.payloads?.status?.schema.safeParse(STATUS).success).toBe(true);
 
-    const invalid = await write.execute({ kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }), expectVersion: "absent" }, context);
+    const invalid = await write.execute({ kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }) }, context);
     expect(invalid).toMatchObject({ status: "refused", code: "persist.write-refused" });
     expect(invalid.message).toContain("updated_at");
     expect(invalid.message).toContain("workflows");

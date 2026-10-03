@@ -84,7 +84,7 @@
  * the conflict list.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
 import { withStatusWriteLock } from "./lease.js";
@@ -103,7 +103,7 @@ import {
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
   assertDeliveryRegistrationCoherence,
-  
+  validateWorkflowSnapshot,
   writeWorkflowSnapshot,
   type WorkflowDeliveryKind,
   type WorkflowLifecycleStatus,
@@ -202,6 +202,8 @@ export type MigrateOptions = {
 export type MigratePlan = {
  /** Resolved harness dir. */
   root: string;
+  /** Caller declarations reused when apply derives the locked current source. */
+  options?: MigrateOptions;
   /**
  * Resolved `{WORKFLOW_DIR}` (Phase-5 F1): the `.mstarc` `[config]
  * workflow_dir` declaration wins, else `{HARNESS_DIR}/workflows`. The
@@ -735,6 +737,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
     const updatedAt = typeof legacy.updated_at === "string" && legacy.updated_at !== "" ? legacy.updated_at : "1970-01-01";
     return {
       root: harnessDir,
+      options: { ...opts },
       workflowDir,
       projectDir,
       dryRun: opts.dryRun === true,
@@ -941,6 +944,7 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 
   return {
     root: harnessDir,
+    options: { ...opts },
     workflowDir,
     projectDir,
     dryRun: opts.dryRun === true,
@@ -960,44 +964,15 @@ export function migrateHarnessTree(root: string, opts: MigrateOptions = {}): Mig
 }
 
 /**
- * Execute a migration plan. Additive-first ordering: the v1 root is archived,
- * workflow snapshots/notes and the project register are written BEFORE the
- * root v2 replacement — the LAST step, the commit point. A legacy roadmap is
- * returned as a transport candidate only. A failure before commit leaves v1
- * intact (re-run applies the same deterministic plan). Re-running on a v2
- * root, or with a `dryRun` plan, is a no-op. Every destination stays inside
- * the harness dir; every snapshot is validated fail-closed inside
- * `writeWorkflowSnapshot` — the writer is the authoritative validator, so
- * the apply loop does not pre-validate (a gate here would run the same O(rows)
- * pass twice per snapshot).
+ * Apply current v1 authority using the preview's caller declarations. Archive
+ * and destination writes precede the root v2 commit point; retry re-derives
+ * current content rather than requiring the old preview's bytes. A v2 root
+ * or dry-run plan is a no-op. Destination paths come from the same validated
+ * planner used by preview, never from caller-edited preview write steps.
  */
 export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult> {
   if (plan.dryRun) {
     return { applied: false, message: `dry-run: ${plan.steps.length} steps planned (source \u2192 destination), zero writes` };
-  }
-  // A single declaration describes ONE delivery identity, so a plan that would
-  // stamp it onto 2+ active standalone lifts is not applicable — the apply
-  // boundary refuses it too (the CLI reports the same condition as usage
-  // before any write), checked first because the operator DID pass a
-  // declaration and the batch split is the actionable reason.
-  if (plan.deliveryKindAmbiguous.length > 0) {
-    throw new Error(
-      `refusing to apply migration: one delivery declaration cannot describe ` +
-        `${plan.deliveryKindAmbiguous.length} active standalone plan lifts (${plan.deliveryKindAmbiguous.join(", ")}) \u2014 ` +
-        `migrate them in batches of one declared lifecycle (CLI: run migrate once per plan, each with its own --delivery-kind)`,
-    );
-  }
-  // A plan that would lift ACTIVE standalone plan snapshots without a declared
-  // delivery kind is not applicable (contract §1/§4a): the apply boundary is
-  // the API caller's guard too — the CLI reports the same condition as usage
-  // before any write, and neither path may create a lifecycle no close could
-  // complete.
-  if (plan.deliveryKindRequired.length > 0) {
-    throw new Error(
-      `refusing to apply migration: ${plan.deliveryKindRequired.length} active standalone plan snapshot(s) ` +
-        `(${plan.deliveryKindRequired.join(", ")}) would be lifted without a declared delivery kind \u2014 ` +
-        `re-plan with an explicit deliveryKind (CLI: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>)`,
-    );
   }
   const statusPath = join(plan.root, MIGRATE_STATUS_FILE);
   const current = readJson(statusPath);
@@ -1005,42 +980,6 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
     return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
 
- // Phase-5 F1: actual write targets derive from the RESOLVED layout dirs
- // recorded on the plan (`.mstarc` `workflow_dir` / `project_dir`, else
- // defaults under the harness dir) — the canonical `file` fields stay the
- // default-layout rel names (display/provenance), the resolved dirs are
- // where a custom layout must land. `relative("workflows"|"projects", …)`
- // strips the canonical prefix and re-joins under the resolved dir.
-  const harnessRoot = resolve(plan.root);
-  const workflowRoot = resolve(plan.workflowDir);
-  const projectRoot = resolve(plan.projectDir);
-  if (!isAbsolute(plan.workflowDir) || !isAbsolute(plan.projectDir)) {
-    throw new Error(
-      `refusing to apply migration: plan workflowDir/projectDir must be absolute (got ${JSON.stringify(plan.workflowDir)} / ${JSON.stringify(plan.projectDir)})`,
-    );
-  }
-
- // Defense-in-depth at the write boundary (Phase-5 F1
- // extended): the planner already refuses unsafe ids via
- // assertSafePathComponent, but apply is a public API — re-enforce the
- // module invariant ("no fs writes outside the harness dir or the
- // resolved workflow/project dirs") on every planned destination so a
- // hand-built plan can never escape `plan.root` via a relative path.
-  const allDestinations = [
-    plan.archive.file,
-    ...plan.snapshots.map((snapshot) => snapshot.file),
-    ...plan.notesFiles.map((notes) => notes.file),
-    ...(plan.register !== null ? [plan.register.file] : []),
-  ];
-  for (const destination of allDestinations) {
-    const resolvedDest = resolve(join(plan.root, destination));
-    const inside = (dir: string): boolean => resolvedDest === dir || resolvedDest.startsWith(`${dir}${sep}`);
-    if (!inside(harnessRoot) && !inside(workflowRoot) && !inside(projectRoot)) {
-      throw new Error(
-        `refusing to apply migration: destination escapes the harness dir (${JSON.stringify(destination)}) \u2014 every write must stay under ${JSON.stringify(plan.root)}, the workflow dir (${JSON.stringify(plan.workflowDir)}) or the project dir (${JSON.stringify(plan.projectDir)})`,
-      );
-    }
-  }
 
   const store = getArtifactStore();
 
@@ -1058,7 +997,7 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
  // register → root v2 replacement), so it runs under the ROOT lock. The lock
  // prevents root writers and concurrent migrations from interleaving with
  // commit. Schema version is a field-value no-op, not a content fingerprint.
-  return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store, workflowRoot, projectRoot));
+  return withStatusWriteLock(statusPath, () => applyMigratePlanLocked(plan, statusPath, store));
 }
 
 /**
@@ -1126,14 +1065,10 @@ async function assertNoActiveStoreForLegacyLayout(harnessDir: string): Promise<v
  * replacement. Assumes the root lock on `statusPath` is held.
  */
 async function applyMigratePlanLocked(
-  plan: MigratePlan,
+  reviewed: MigratePlan,
   statusPath: string,
   store: ArtifactStore,
-  workflowRoot: string,
-  projectRoot: string,
 ): Promise<MigrateResult> {
-  const workflowTargetOf = (canonicalFile: string): string => join(workflowRoot, relative("workflows", canonicalFile));
-  const projectTargetOf = (canonicalFile: string): string => join(projectRoot, relative("projects", canonicalFile));
 
   const source = readArtifactBytes(statusPath);
   const sourcePayload = source?.payload;
@@ -1141,12 +1076,30 @@ async function applyMigratePlanLocked(
     return { applied: false, message: "no-op: status.json already at schema version 2 (migrated) \u2014 nothing to do" };
   }
 
+  // Preview data is diagnostic; derive the destinations from current authority.
+  const plan = migrateHarnessTree(reviewed.root, reviewed.options);
+  if (plan.deliveryKindAmbiguous.length > 0) {
+    throw new Error(
+      `refusing to apply migration: one delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts ` +
+        `(${plan.deliveryKindAmbiguous.join(", ")}); migrate them in batches of one declared lifecycle (CLI: --delivery-kind)`,
+    );
+  }
+  if (plan.deliveryKindRequired.length > 0) {
+    throw new Error(
+      `refusing to apply migration: ${plan.deliveryKindRequired.length} active standalone plan snapshot(s) ` +
+        `(${plan.deliveryKindRequired.join(", ")}) would be lifted without a declared delivery kind; ` +
+        `re-plan with an explicit deliveryKind (CLI: --delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}>)`,
+    );
+  }
+  const workflowTargetOf = (file: string): string => join(plan.workflowDir, relative("workflows", file));
+  const projectTargetOf = (file: string): string => join(plan.projectDir, relative("projects", file));
+
  // 1. Archive the v1 root before the commit point; an existing archive is left
  // untouched and never compared with current bytes.
   writeRawMigrateTarget(join(plan.root, plan.archive.file), readFileSync(statusPath));
 
- // 2. Workflow snapshots are create-only. Existing snapshots are preserved;
- // migration does not compare their serialized payload with the planned rows.
+ // 2. Refresh only destinations with this workflow identity. JSON is still the
+ // authority before the root commit, including on retry after a partial apply.
   for (const snapshot of plan.snapshots) {
     const snapshotDir = dirname(workflowTargetOf(snapshot.file));
     const snapshotPath = join(snapshotDir, WORKFLOW_SNAPSHOT_FILE);
@@ -1154,7 +1107,25 @@ async function applyMigratePlanLocked(
       await writeWorkflowSnapshot(snapshot.data, snapshotDir, { createOnly: true });
       continue;
     }
-    
+    await withStatusWriteLock(snapshotPath, async () => {
+      const existing = readJson(snapshotPath);
+      if (existing.id !== snapshot.id || existing.type !== snapshot.type || existing.coordination !== undefined) {
+        throw new CoordinationError(
+          "coordination.store",
+          `migration target ${snapshotPath} belongs to another or coordinated workflow; configure a separate workflow_dir in .mstarc and retry migrate`,
+          { path: snapshotPath },
+        );
+      }
+      const payload = { ...existing, ...snapshot.data } as WorkflowSnapshot;
+      const gate = validateWorkflowSnapshot(payload);
+      if (!gate.ok) throw new Error(`refusing to write invalid workflow snapshot: ${gate.violations.map((v) => v.message).join("; ")}`);
+      assertFsStorePath(store, { kind: "snapshot", key: snapshot.id }, snapshotPath);
+      // A v1 root still owns these uncoordinated migration destinations. This
+      // is not a runtime phase projection: all current source rows are lifted.
+      await withProtectedWrite(snapshotPath, "put", () =>
+        store.put({ kind: "snapshot", key: snapshot.id, payload }),
+      );
+    });
   }
 
  // 3. Notes ledgers are create-only destinations and retain their planned

@@ -1016,6 +1016,7 @@ export async function reservePlanLaunch(
       );
       const identical = live.find(
         (entry) =>
+          entry.coordinatorSessionId === authority.identity.sessionId &&
           entry.assignmentPath === assignmentPath &&
           typeof worktreePath === "string" &&
           entry.worktreePath === worktreePath &&
@@ -1025,7 +1026,7 @@ export async function reservePlanLaunch(
       if (live.length > 0) {
         return refuse(
           "launch.plan-occupied",
-          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}); an uncertain or pre-bind intent needs a durable handoff or explicit human recovery`,
+          `plan ${planId} already has an outstanding launch intent ${live[0]!.id} (${live[0]!.state}) from coordinator ${live[0]!.coordinatorSessionId}; inspect its native transport evidence, then use record-launch with observation submitted, refused or uncertain to record the observed outcome before reserving again`,
         );
       }
 

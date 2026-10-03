@@ -158,7 +158,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         kind,
         { schema: descriptor.schema, help: descriptor.help },
       ])),
-      output, effects: ["write"], description: "Persist one JSON coordination document.",
+      output, effects: ["write"], description: "Replace one authored JSON document (last write wins); coordinated authority requires its scoped writers.",
       async execute(input, context) {
         const id = "persist.write";
         const kind = parseKind(input.kind, id);

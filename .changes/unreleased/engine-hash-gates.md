@@ -9,6 +9,9 @@ packages: root, engine, cli, commands, opencode, dsh, omp
 - Accept equivalent session-reference and execution-token key JSON without byte canonicalization. Preserve interrupted ledger tails instead of truncating or refusing them, and retire only reviewed index rows while preserving added rows and narrative content.
 - Add a bounded architecture check for hash, raw-byte and canonical-equality refusals/assertions, with operation-id lookup evidence required for each replay exception.
 - Remove `persist --expect-version`, Prepare recovery/amendment byte-version inputs and `store execution restore --accept-loss-digest`. OMP launch admission and duplicate detection now use actual plan/session/checkout facts rather than prepared Assignment digests.
+- Restore compares authorized loss row identities/revisions and operation IDs, inventories and installs one private backup image, and retains fresh pre-restore safety backups. Re-preview is needed only for newly endangered work or authority generations, never for a changed digest.
+- Legacy migration derives current source data under its root lock; staged execution re-apply and activation refresh current validated JSON rows while preserving workflow/plan membership and session ownership. OMP reservation replay also requires the current coordinator identity, with native-outcome recording as recovery.
+- State `persist write` replacement semantics in help, update obsolete hash/CAS expectations in consumer tests, and escape non-ASCII code literals for bundled CLI execution.
 
 <!-- CN -->
 - **哈希仅作溯源，不作门禁。** 删除已准备文档、已提交证据、workflow/catalog/roadmap 操作、迁移/覆盖/激活、恢复及存储 schema 记录中的内容哈希与规范序列化相等拒绝。普通文档编辑不再要求恢复字节、收养、重封或重签；已有摘要保留为历史信息。
@@ -17,3 +20,6 @@ packages: root, engine, cli, commands, opencode, dsh, omp
 - 接受语义等价的 session reference 与 execution-token key JSON，不再要求字节规范化。保留中断的 ledger 尾部而非截断或拒绝；仅清退已审查的 index 行，保留后增行与正文内容。
 - 新增有界架构检查，识别哈希、原始字节及规范序列化相等的拒绝/断言；每个 replay 例外均须有 operation-id 查询关联证据。
 - 删除 `persist --expect-version`、Prepare 恢复/修订的字节版本输入及 `store execution restore --accept-loss-digest`。OMP launch 的准入与重复请求判定改用真实 plan/session/checkout 事实，不再使用已准备 Assignment 的摘要。
+- Restore 比较已授权损失的行身份/revision 与 operation ID，盘点并安装同一份私有备份副本，保留即时恢复前安全备份。仅新增待丢失工作或权威世代变化需要重新预览，不因摘要变化要求重签。
+- Legacy 迁移在 root lock 内派生当前源数据；staged execution 的重新 apply 与 activation 刷新当前有效 JSON 行，同时保留 workflow/plan 成员与 session 归属约束。OMP reservation 重放也须匹配当前 coordinator 身份，并通过记录原生 transport 的实际结果恢复。
+- 在 help 中明确 `persist write` 的整文档覆盖语义，迁移消费者测试中的过时 hash/CAS 期望，并转义代码字面量中的非 ASCII 字符以适配 bundled CLI。

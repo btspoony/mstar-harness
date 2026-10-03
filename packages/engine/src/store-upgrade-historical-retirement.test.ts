@@ -4,19 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
-import { listPendingCatalogRegistrations } from "./catalog-registration.js";
+import { listPendingCatalogRegistrations, retireStaleCatalogExecutionsForMigration } from "./catalog-registration.js";
 import { stageStoreUpgrade } from "./store-upgrade.js";
 
 const root = mkdtempSync(join(tmpdir(), "mstar-historical-retirement-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-test("stage upgrade retires a stale execution-written historical workflow without root membership", async () => {
-  const harnessDir = join(root, ".mstar");
+async function fixture(name: string, rootEntry: Record<string, unknown> | null) {
+  const harnessDir = join(root, name);
   mkdirSync(harnessDir, { recursive: true });
   const context: StoreContext = { harnessDir };
   const initialized = await initializeStore(context);
   initialized.close();
-  const workflowId = "wf-historical-retirement";
+  const workflowId = `wf-historical-${name}`;
   const workflowDir = join(harnessDir, "workflows", workflowId);
   mkdirSync(workflowDir, { recursive: true });
   const plan = { file: "sample-plan.md", id: "sample-plan", status: "Todo", title: "Sample plan" };
@@ -27,12 +27,16 @@ test("stage upgrade retires a stale execution-written historical workflow withou
     stop_reason: "historical workflow stopped", plans: [plan], delivery_kind: "development", branch,
   };
   writeFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify(snapshot));
-  writeFileSync(join(harnessDir, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-30", workflows: [] }));
-  const operationId = "op-historical-retirement";
+  writeFileSync(join(harnessDir, "status.json"), JSON.stringify({
+    version: 2,
+    updated_at: "2026-09-30",
+    workflows: rootEntry === null ? [] : [{ id: workflowId, type: "plan", started_at: snapshot.started_at, dir: `workflows/${workflowId}`, ...rootEntry }],
+  }));
+  const operationId = `op-${name}`;
   const db = await openStore(context, "write");
   db.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
   const identity = JSON.stringify({
-    branch, completion_policy: null, coordinator: null, delivery_kind: "development",
+    id: workflowId, branch, completion_policy: null, coordinator: null, delivery_kind: "development",
     plans: [plan], project: null, status: "running", type: "plan",
   });
   const delta = JSON.stringify({
@@ -48,10 +52,11 @@ test("stage upgrade retires a stale execution-written historical workflow withou
   db.db.prepare("insert into catalog_operations(operation_id, request_hash, phase, catalog_delta_json, before_versions_json, after_versions_json, result_json, created_at, updated_at) values (?, 'test-hash', 'execution-written', ?, '{}', '{}', null, ?, ?)")
     .run(operationId, delta, "2026-09-30T00:00:00.000Z", "2026-09-30T00:00:00.000Z");
   db.close();
-  const beforeDb = await openStore(context, "read");
-  const before = beforeDb.db.prepare("select phase from catalog_operations where operation_id = ?").get(operationId);
-  beforeDb.close();
-  expect(before).toEqual({ phase: "execution-written" });
+  return { context, operationId };
+}
+
+test("stage upgrade retires a terminal historical workflow without root membership", async () => {
+  const { context, operationId } = await fixture("without-root", null);
   expect(await listPendingCatalogRegistrations(context)).toHaveLength(1);
 
   await stageStoreUpgrade({ context, operator: "owner", operationId: "stage-historical", catalogDeltaDisposition: "preserve for later review" });
@@ -62,4 +67,31 @@ test("stage upgrade retires a stale execution-written historical workflow withou
   expect(after.phase).toBe("aborted");
   expect(JSON.parse(after.result_json).reason).toContain("unpublished catalog delta disposition: preserve for later review");
   expect(await listPendingCatalogRegistrations(context)).toHaveLength(0);
+});
+
+test("stage upgrade rejects a same-id root entry with a foreign path or type", async () => {
+  for (const [name, rootEntry] of [
+    ["foreign-dir", { dir: "workflows/other-workflow" }],
+    ["foreign-type", { type: "iteration" }],
+  ] as const) {
+    const { context } = await fixture(name, rootEntry);
+
+    await expect(stageStoreUpgrade({
+      context,
+      operator: "owner",
+      operationId: `stage-${name}`,
+      catalogDeltaDisposition: "preserve for later review",
+    })).rejects.toMatchObject({ code: "catalog.reconcile-conflict" });
+    expect(await listPendingCatalogRegistrations(context)).toHaveLength(1);
+  }
+});
+
+test("retirement accepts matching semantic root membership before terminal root cleanup", async () => {
+  const { context, operationId } = await fixture("matching-root", {});
+
+  await retireStaleCatalogExecutionsForMigration(context, [operationId], "preserve for later review");
+  const db = await openStore(context, "read");
+  const row = db.db.prepare("select phase from catalog_operations where operation_id = ?").get(operationId);
+  db.close();
+  expect(row).toEqual({ phase: "aborted" });
 });

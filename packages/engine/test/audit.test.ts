@@ -884,7 +884,7 @@ describe("validateAuditFindingGates", () => {
     const gate = validateAuditFindingGates(findings);
     expect({ ok: gate.ok, violations: gate.violations.map((v) => v.code) }).toEqual({ ok: true, violations: [] });
     expect(findings.map(({ title, fingerprint }) => [title, fingerprint])).toEqual([
-      ["Legacy row", undefined],
+      ["Fix N+1 query", undefined],
       ["Unparameterized sink in export path", "sql-export-sink"],
     ]);
   });

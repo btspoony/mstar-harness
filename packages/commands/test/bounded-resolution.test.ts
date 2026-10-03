@@ -172,7 +172,7 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "status.backlog-register": unverified("register a backlog entry", "requires registered backlog state; fixture deferred"),
   "status.backlog-close": unverified("close a backlog entry", "requires registered backlog state; fixture deferred"),
   // persist family
-  "persist.write": witnessed("bounded route derives the version from a receipt and replaces in two calls; unguarded and stale explicit constraints refuse without any write", "explicit-constraint-cas (bounded leg 2 calls; refusal legs 2 calls)", "warm", 2, "resolved"),
+  "persist.write": witnessed("explicit whole-document replacement is last-write-wins in one call; a malformed document is refused by the validator without any write", "explicit-replacement (replace leg 1 call; malformed refusal leg 1 call)", "warm", 2, "resolved"),
   "persist.get": witnessed("file-authority read resolves the stored document in one call", "file-authority-read", "warm", 1, "resolved"),
   "persist.list": unverified("store listing read", "same authority family as the persist.get witness; the listing route is not separately exercised"),
   "persist.delete": witnessed("protected kind deletion is refused and the document survives", "protected-deletion", "warm", 1, "safety-refusal"),
@@ -576,35 +576,24 @@ describe("persist family witnesses", () => {
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 1 });
   });
 
-  test("coordinated writes: the bounded route derives its version from a receipt; unguarded and stale explicit constraints refuse without any write", async () => {
+  test("explicit replacement is last-write-wins in one call; a malformed replacement refuses without any write", async () => {
     const { harness, context } = persistContext();
     writeFileSync(join(harness, "status.json"), JSON.stringify(STATUS));
 
-    // Bounded leg: versioned read (1) then replacement with the derived
-    // version (2) — the explicit constraint threads end to end within budget.
-    const bounded: Interaction = { label: "derived-version replace", context: "warm", extraDependency: "", calls: [] };
-    const versioned = await countedCall(bounded, "execute", "persist.get", { kind: "status", key: "root", versioned: true }, context);
-    expect(versioned.status).toBe("ok");
-    if (versioned.status !== "ok") return;
-    const readReceipt = versioned.data as { version: string }; // versioned read receipt shape (persist.ts)
-    const accepted = await countedCall(bounded, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify(STATUS), expectVersion: readReceipt.version }, context);
-    expect(accepted.status).toBe("ok");
-    expect(audit(bounded, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
-      .toMatchObject({ compliant: true, countedCalls: 2 });
+    const interaction: Interaction = { label: "explicit last-write-wins replace", context: "warm", extraDependency: "", calls: [] };
 
-    // Refusal legs: an unguarded replacement names the missing constraint; a
-    // stale explicit constraint refuses and the stored bytes survive.
-    const refusals: Interaction = { label: "constraint refusals", context: "warm", extraDependency: "", calls: [] };
-    const unguarded = await countedCall(refusals, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify(STATUS) }, context);
-    expect(unguarded).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    if (unguarded.status === "usage") expect(unguarded.message).toContain("expectVersion");
-
-    const stale = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
-    const refused = await countedCall(refusals, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify(STATUS), expectVersion: stale }, context);
-    expect(refused).toMatchObject({ status: "refused", code: "coordination.version-conflict", exitCode: 1 });
+    // Replacement leg: an explicit whole-document replace needs no byte token.
+    const replaced = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify(STATUS) }, context);
+    expect(replaced.status).toBe("ok");
     expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
 
-    expect(audit(refusals, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
+    // Refusal leg: a malformed document is refused by the semantic validator
+    // and the stored bytes survive.
+    const malformed = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }) }, context);
+    expect(malformed).toMatchObject({ status: "refused", code: "persist.write-refused", exitCode: 1 });
+    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
+
+    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
       .toMatchObject({ compliant: true, countedCalls: 2 });
   });
 

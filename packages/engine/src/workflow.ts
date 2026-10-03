@@ -1116,7 +1116,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   if (!isPlainObject(stored)) {
     throw new CoordinationError(
       "coordination.store",
-      "stored workflow snapshot is not an object — refusing a field-scoped rewrite over it",
+      "stored workflow snapshot is not an object \u2014 refusing a field-scoped rewrite over it",
       {},
     );
   }
@@ -1824,7 +1824,7 @@ export async function recordWorkflowDelivery(
     ) {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `workflow ${workflowId} records PR identity ${JSON.stringify(previousPr)} once at submission — ${JSON.stringify(nextPr)} is a different delivery, not an evidence update`,
+        `workflow ${workflowId} records PR identity ${JSON.stringify(previousPr)} once at submission \u2014 ${JSON.stringify(nextPr)} is a different delivery, not an evidence update`,
         { workflow_id: workflowId },
       );
     }

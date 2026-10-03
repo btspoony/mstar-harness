@@ -95,6 +95,7 @@ import {
   type WorkflowEntry,
 } from "./status.js";
 import {
+  WORKFLOW_TERMINAL_STATUSES,
   WORKFLOW_SNAPSHOT_FILE,
   assertDeliveryRegistrationCoherence,
   derivePlanRegistration,
@@ -1745,20 +1746,23 @@ export async function retireStaleCatalogExecutionsForMigration(
       const journal = parseJournalDelta(row);
       const snapshot = readSnapshotIfPresent(resolve(journal.workflow.snapshotPath, ".."))?.snapshot;
       const rootEntry = findRegisteredWorkflow(journal.workflow.harnessDir, journal.workflow.workflowId);
-      // The retirement proves the SAME workflow on both sides by KEY: the
-      // snapshot's own identity and the root entry's `id`/`dir` — never a
-      // serialized equality of the two entries, whose projections may
-      // legitimately differ (a timestamp, a type alias) while describing the
-      // same registered workflow.
-      const entryHolds =
-        rootEntry === undefined ||
-        (rootEntry.id === journal.workflow.workflowId &&
-          rootEntry.dir === `workflows/${journal.workflow.workflowId}`);
+      // A terminal historical snapshot may outlive its root entry. When a root
+      // entry still exists, it must identify this workflow semantically.
+      const expectedType = journal.workflow.kind === "iteration" ? "iteration" : "plan";
+      const terminalWithoutRoot =
+        rootEntry === undefined &&
+        (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot?.status ?? "");
+      const entryMatches =
+        rootEntry !== undefined &&
+        rootEntry.id === journal.workflow.workflowId &&
+        rootEntry.type === expectedType &&
+        rootEntry.dir === `workflows/${journal.workflow.workflowId}`;
       if (
         snapshot === undefined ||
         snapshot.id !== journal.workflow.workflowId ||
-        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement") ||
-        !entryHolds
+        snapshot.type !== expectedType ||
+        (!entryMatches && !terminalWithoutRoot) ||
+        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement")
       ) {
         failReconcile(
           `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +

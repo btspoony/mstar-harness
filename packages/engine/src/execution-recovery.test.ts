@@ -478,7 +478,7 @@ describe("execution-restore", () => {
     expect(footprint(world.dbPath)).toEqual(untouched);
   });
 
-  test("execution-restore-preview-lists-every-domain-and-proceeds-without-a-loss-approval", async () => {
+  test("execution-restore-preview-lists-every-domain-and-proceeds-without-a-digest-approval", async () => {
     const world = await recoveryWorld("restore-preview");
     const baselineIssue = await captureIssue(world.context, issueInput("Origin-only baseline"), {
       operationId: "op-origin-baseline",
@@ -556,10 +556,8 @@ describe("execution-restore", () => {
     expect(pointDb.length).toBeGreaterThan(0);
 
 
-    // No approval token is consulted: the restore proceeds on the operator and
-    // authorization facts alone. Nothing is replaced here (the preview is stale
-    // by one committed finding), but it is not the lost approval digest that
-    // stops it — the destructive-phase guards are what the restore checks.
+    // The loss is authorized by row/operation identities, never its digest.
+    preview.lossDigest = "record-only";
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
       operator: OPERATOR,
@@ -567,6 +565,62 @@ describe("execution-restore", () => {
     });
     expect(receipt.storeId).toBe(world.storeId);
     expect(receipt.epoch).toBe(Math.max(world.epoch, point.epoch) + 1);
+  });
+
+  test("execution-restore-refuses-new-loss-and-recovers-through-a-fresh-preview", async () => {
+    const world = await recoveryWorld("restore-new-loss");
+    const point = await recoveryPoint(world, "new-loss-point");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    await captureIssue(world.context, issueInput("New unapproved finding"), {
+      operationId: "op-new-unapproved-finding", actor: "project-manager",
+    });
+    const before = footprint(world.dbPath);
+    const staleImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
+    writeFileSync(staleImage, JSON.stringify({ attempt: "orphan", state: "pending" }));
+    const refusal = await refusalOf(() => restoreExecutionBackup(world.context, {
+      preview, operator: OPERATOR, authorization: AUTHORIZATION,
+    }));
+    expect(refusal.code).toBe("execution.recovery-loss-unaccepted");
+    expect(footprint(world.dbPath)).toEqual(before);
+    expect(JSON.parse(readFileSync(staleImage, "utf8"))).toMatchObject({ attempt: "orphan", state: "pending" });
+    const current = await previewExecutionRestore(world.context, point.backupPath);
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview: current, operator: OPERATOR, authorization: AUTHORIZATION,
+    });
+    expect(footprint(world.dbPath).issues).toBe(0);
+    expect(footprint(receipt.preRestoreBackup.backupPath).issues).toBe(1);
+  });
+
+  test("execution-restore-installs-the-inventoried-image-when-the-selected-path-is-replaced", async () => {
+    const world = await recoveryWorld("restore-backup-swap");
+    const point = await recoveryPoint(world, "selected-point");
+    const selected = footprint(point.backupPath);
+    await captureIssue(world.context, issueInput("Replacement backup finding"), {
+      operationId: "op-replacement-backup", actor: "project-manager",
+    });
+    const replacement = await recoveryPoint(world, "replacement-point");
+    const preview = await previewExecutionRestore(world.context, point.backupPath);
+    const safetyDir = join(world.harness, "archived", "store-migration", "backups");
+    let swapped = false;
+    let stop = false;
+    const injector = (async () => {
+      while (!stop) {
+        await nextTurn();
+        if (swapped || !existsSync(safetyDir)) continue;
+        if (!readdirSync(safetyDir).some((name) => name.startsWith("pre-restore-") && existsSync(retainedInventoryPath(join(safetyDir, name))))) continue;
+        writeFileSync(point.backupPath, readFileSync(replacement.backupPath));
+        swapped = true;
+      }
+    })();
+    try {
+      await restoreExecutionBackup(world.context, { preview, operator: OPERATOR, authorization: AUTHORIZATION });
+    } finally {
+      stop = true;
+      await injector;
+    }
+    expect(swapped).toBe(true);
+    expect(footprint(world.dbPath).issues).toBe(selected.issues);
+    expect(footprint(world.dbPath).revision).toBe(selected.revision);
   });
 
   test("execution-restore-installs-the-selected-state-and-invalidates-old-references", async () => {
@@ -731,14 +785,17 @@ describe("execution-restore", () => {
     // store's WAL, and those frames are NOT in the database bytes the checkpoint
     // covers — so the replacement may not proceed past them. The window to reach
     // is the one INSIDE the replacement sequence, after the sidecar identities
-    // were snapshotted and before the rename: the prepared scratch image
-    // (`.store-restore-<id>.db`) is copied in that window, and the sequence then
-    // awaits its verification, so the injector keys on that image and lands a
-    // fresh sidecar file in the yield.
+    // were snapshotted and before the rename: the prepared scratch image's
+    // epoch is advanced in that window, and the sequence then awaits its
+    // verification, so the injector keys on that epoch and lands a fresh
+    // sidecar file in the yield.
     const sidecarBytes = Buffer.alloc(4096, 0x7a);
     const scratchPath = `${walPath}.appearing-writer`;
     const scratchImageExists = (): boolean =>
-      readdirSync(world.harness).some((name) => name.startsWith(".store-restore-") && name.endsWith(".db"));
+      readdirSync(world.harness).some((name) =>
+        name.startsWith(".store-restore-") && name.endsWith(".db") &&
+        rawGet<{ authority_epoch: number }>(join(world.harness, name), "select authority_epoch from store_meta where id = 1")!.authority_epoch > preview.liveEpoch,
+      );
     let injected = false;
     let stop = false;
     const injector = (async () => {
