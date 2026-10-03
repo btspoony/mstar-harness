@@ -14,9 +14,23 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  mutateExecutionWorkflow,
+  readExecutionState,
+  storeDbPath,
+  type ExecutionToken,
+  type StoreContext,
+  type WorkflowEntry,
+  type WorkflowSnapshot,
+} from "@mstar-harness/engine";
 
 const CLI_ROOT = join(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -1836,4 +1850,490 @@ describe("mstar worktree cleanup — candidate scope", () => {
     }
   });
 
+});
+
+/* ------------------------------------------------------------------------ *
+ * ACTIVE execution authority — cleanup source selection
+ *
+ * Every case builds a REAL `node:sqlite` execution authority through the same
+ * public producers the engine ships (`initializeStore` /
+ * `initializeExecutionAuthority` / `createExecutionWorkflow` /
+ * `bindExecutionSession` / `mutateExecutionWorkflow`) and drives the real CLI
+ * entry against it. The ACTIVE route answers from the store, so the retired
+ * root/snapshot JSON is neither required nor consulted; the pre-activation
+ * route below keeps the unchanged file reader. Foreign or released retention
+ * claims are planted as raw domain rows because no public producer represents
+ * a holder this process does not own — the same fixture technique the engine's
+ * own reader tests use.
+ * ------------------------------------------------------------------------ */
+
+const ACTIVE_TS = "2026-10-04T00:00:00.000Z";
+const ACTIVE_COORD = "cleanup-active-coordinator";
+
+interface ActiveFixture {
+  root: string;
+  harnessDir: string;
+  context: StoreContext;
+}
+
+/** Temp Git main worktree + `.mstar` harness dir; store created, authority ACTIVE. */
+async function activeFixture(prefix: string): Promise<ActiveFixture> {
+  // A canonical (realpath) temp root so macOS `/var` vs `/private/var` never splits a fixture.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  git(["init", "-q", "-b", "main"], root);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  const store = await initializeStore(context);
+  store.close();
+  await initializeExecutionAuthority(context);
+  return { root, harnessDir, context };
+}
+
+/** Temp Git main worktree + `.mstar` store whose execution authority is still pre-activation. */
+async function legacyStoreFixture(prefix: string): Promise<ActiveFixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  git(["init", "-q", "-b", "main"], root);
+  git(["config", "user.email", "cleanup-test@example.com"], root);
+  git(["config", "user.name", "Cleanup Test"], root);
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(["add", "-A"], root);
+  git(["commit", "-q", "-m", "base commit"], root);
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  const store = await initializeStore(context);
+  store.close();
+  return { root, harnessDir, context };
+}
+
+/** One standalone plan workflow document whose single row may carry ownership metadata. */
+function planWorkflowDoc(
+  workflowId: string,
+  mainBranch: string,
+  rows: Array<Record<string, unknown>>,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    id: workflowId,
+    type: "plan",
+    status: "running",
+    started_at: ACTIVE_TS,
+    updated_at: ACTIVE_TS,
+    delivery_kind: "development",
+    branch: { target: mainBranch },
+    plans: rows,
+    ...extra,
+  };
+}
+
+/** A fresh merged worktree on `branch` (merged into the current main branch), returned canonicalized. */
+function addMergedWorktree(root: string, name: string, branch: string): string {
+  const worktreePath = join(root, name);
+  git(["worktree", "add", "-q", worktreePath, "-b", branch], root);
+  writeFileSync(join(worktreePath, `${name}.txt`), `${name} work\n`);
+  git(["add", "-A"], worktreePath);
+  git(["commit", "-q", "-m", `${name} work`], worktreePath);
+  git(["merge", "-q", "--no-ff", "-m", `merge ${branch}`, branch], root);
+  return wt(worktreeList(root), name).path;
+}
+
+/** Register one workflow through the public producer at the store's current root token. */
+async function registerActiveWorkflow(fx: ActiveFixture, workflowId: string, snapshot: Record<string, unknown>): Promise<void> {
+  const expected = (await readExecutionState(fx.context)).token;
+  // The fixture document is validated by the engine's own `resolveCreateWorkflow`
+  // on the way in, so the unchecked cast is confined to this boundary.
+  const typedSnapshot = snapshot as unknown as WorkflowSnapshot;
+  await createExecutionWorkflow(
+    { ...fx.context, caller: { sessionId: ACTIVE_COORD, role: "coordinator", workflowId, planId: null } },
+    {
+      entry: { id: workflowId, type: "plan", started_at: ACTIVE_TS, dir: `workflows/${workflowId}` } as WorkflowEntry,
+      snapshot: typedSnapshot,
+      expected,
+      operationId: `create-${workflowId}`,
+    },
+  );
+}
+
+/** The CAS token the store serves for one registered workflow right now. */
+async function activeWorkflowToken(fx: ActiveFixture, workflowId: string): Promise<ExecutionToken> {
+  const state = await readExecutionState(fx.context);
+  const workflow = state.data.workflows.find((candidate) => candidate.state.id === workflowId);
+  if (workflow === undefined) throw new Error(`fixture: workflow ${workflowId} is not registered`);
+  return workflow.workflowToken;
+}
+
+/** Bind the fixture coordinator and close the lifecycle `stopped` (terminal + unregistered). */
+async function stopActiveWorkflow(fx: ActiveFixture, workflowId: string): Promise<void> {
+  const caller = { sessionId: ACTIVE_COORD, role: "coordinator" as const, workflowId, planId: null };
+  const bound = await bindExecutionSession(
+    { ...fx.context, caller },
+    {
+      workflowId,
+      planId: null,
+      role: "coordinator",
+      expected: await activeWorkflowToken(fx, workflowId),
+      operationId: `bind-${workflowId}`,
+    },
+  );
+  await mutateExecutionWorkflow(
+    { ...fx.context, caller },
+    {
+      operationId: `stop-${workflowId}`,
+      session: bound.data,
+      expected: await activeWorkflowToken(fx, workflowId),
+      workflowId,
+      operation: { kind: "lifecycle", status: "stopped", reason: "fixture terminal close" },
+    },
+  );
+}
+
+function activeRawStore(fx: ActiveFixture): DatabaseSync {
+  return new DatabaseSync(storeDbPath(fx.context));
+}
+
+/** The store's current authority epoch, read through a narrowed shape (never an unchecked member access). */
+function activeStoreEpoch(db: DatabaseSync): number {
+  const row = db.prepare("select authority_epoch as epoch from store_meta where id = 1").get();
+  if (row === undefined || typeof row !== "object" || row === null || !("epoch" in row) || typeof row.epoch !== "number") {
+    throw new Error("fixture: store_meta.authority_epoch is missing");
+  }
+  return row.epoch;
+}
+
+/**
+ * A foreign HELD/RELEASED plan execution lease for a retained sibling, expressed
+ * as the raw rows no public producer can write for a holder this process does
+ * not own. A holder session row is planted only for a held claim (the reader's
+ * ownership invariant demands it); a released claim is a tombstone without one.
+ */
+function plantExecutionLease(
+  fx: ActiveFixture,
+  input: { workflowId: string; planId: string; holder: string; worktreePath: string; branch: string; status: "held" | "released" },
+): void {
+  const db = activeRawStore(fx);
+  try {
+    const epoch = activeStoreEpoch(db);
+    if (input.status === "held") {
+      db.prepare(
+        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+          "values (?, 'plan-pm', ?, ?, ?, 1, 'active', ?)",
+      ).run(input.workflowId, input.holder, input.planId, epoch, ACTIVE_TS);
+    }
+    db.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)").run(
+      input.workflowId,
+      input.planId,
+      epoch,
+      JSON.stringify({
+        holder: input.holder,
+        holder_session_id: input.holder,
+        holder_role: "plan-pm",
+        claimed_at: ACTIVE_TS,
+        worktree_path: input.worktreePath,
+        working_branch: input.branch,
+        plan_worktree_path: input.worktreePath,
+        plan_branch: input.branch,
+        status: input.status,
+      }),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** A foreign HELD/RELEASED integration merge claim for a retained sibling. */
+function plantIntegrationLease(
+  fx: ActiveFixture,
+  input: { workflowId: string; holder: string; sourceBranch: string; targetBranch: string; planId: string; status: "held" | "released" },
+): void {
+  const db = activeRawStore(fx);
+  try {
+    const epoch = activeStoreEpoch(db);
+    db.prepare("insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)").run(
+      input.workflowId,
+      epoch,
+      JSON.stringify({
+        holder: input.holder,
+        claimed_at: ACTIVE_TS,
+        plan_id: input.planId,
+        source_branch: input.sourceBranch,
+        target_branch: input.targetBranch,
+        status: input.status,
+      }),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function activeCleanup(fx: ActiveFixture, workflowId: string, extra: string[] = []): RunResult {
+  return runCli(["worktree", "cleanup", "--workflow", workflowId, "--harness", fx.harnessDir, ...extra], fx.root);
+}
+
+describe("mstar worktree cleanup — ACTIVE execution authority", () => {
+  test("an ACTIVE authority answers from the store and never the retired or absent JSON", async () => {
+    const fx = await activeFixture("mstar-cleanup-active-json-");
+    try {
+      const main = git(["branch", "--show-current"], fx.root);
+      const wtA = addMergedWorktree(fx.root, "wt-a", "feature/a");
+      await registerActiveWorkflow(fx, "wf-a", planWorkflowDoc("wf-a", main, [row("plan-a", "Done", { metadata: { working_branch: "feature/a", worktree_path: wtA } })]));
+      await stopActiveWorkflow(fx, "wf-a");
+
+      // The ACTIVE route needs no snapshot: none was ever written. Planting a
+      // decoy that the retired file reader would have trusted must change nothing.
+      const snapshotPath = join(fx.harnessDir, "workflows", "wf-a", "snapshot.json");
+      expect(existsSync(snapshotPath)).toBe(false);
+      mkdirSync(dirname(snapshotPath), { recursive: true });
+      writeFileSync(
+        snapshotPath,
+        JSON.stringify(
+          {
+            schema_version: 1,
+            id: "wf-a",
+            type: "plan",
+            status: "completed",
+            started_at: ACTIVE_TS,
+            ended_at: ACTIVE_TS,
+            updated_at: ACTIVE_TS,
+            plans: [row("plan-decoy", "Done", { metadata: { working_branch: "feature/decoy", worktree_path: "/tmp/decoy" } })],
+          },
+          null,
+          2,
+        ),
+      );
+      const decoyBytes = readFileSync(snapshotPath, "utf8");
+
+      const dry = activeCleanup(fx, "wf-a");
+      expect(dry.exitCode).toBe(0);
+      expect(decisionRows(dry)).toEqual([
+        `remove | worktree | ${wtA} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/a | cleanup.refuse.checked-out",
+      ]);
+      expect(decisionRows(dry).join("\n")).not.toContain("decoy");
+      // Cleanup never rewrites or removes the retired bytes it did not read.
+      expect(readFileSync(snapshotPath, "utf8")).toBe(decoyBytes);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a terminal workflow stays addressable after unregister while a retained sibling keeps its own targets", async () => {
+    const fx = await activeFixture("mstar-cleanup-active-retained-");
+    try {
+      const main = git(["branch", "--show-current"], fx.root);
+      const wtA = addMergedWorktree(fx.root, "wt-a", "feature/a");
+      const wtB = addMergedWorktree(fx.root, "wt-b", "feature/b");
+      await registerActiveWorkflow(fx, "wf-a", planWorkflowDoc("wf-a", main, [row("plan-a", "Done", { metadata: { working_branch: "feature/a", worktree_path: wtA } })]));
+      await registerActiveWorkflow(fx, "wf-b", planWorkflowDoc("wf-b", main, [row("plan-b", "Done", { metadata: { working_branch: "feature/b", worktree_path: wtB } })]));
+      await stopActiveWorkflow(fx, "wf-a");
+      await stopActiveWorkflow(fx, "wf-b");
+
+      // The selected workflow is gone from the registry; the scoped read still
+      // addresses it exactly, and the sibling's targets stay out of its scope.
+      const scoped = activeCleanup(fx, "wf-a");
+      expect(scoped.exitCode).toBe(0);
+      expect(decisionRows(scoped)).toEqual([
+        `remove | worktree | ${wtA} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/a | cleanup.refuse.checked-out",
+      ]);
+
+      const applied = activeCleanup(fx, "wf-a", ["--apply"]);
+      expect(applied.exitCode).toBe(0);
+      const listed = git(["worktree", "list", "--porcelain"], fx.root);
+      expect(listed.split("\n")).not.toContain(`worktree ${wtA}`);
+      expect(listed.split("\n")).toContain(`worktree ${wtB}`);
+      expect(git(["for-each-ref", "refs/heads/feature/a"], fx.root)).toBe("");
+      expect(git(["for-each-ref", "refs/heads/feature/b"], fx.root)).not.toBe("");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("held retention claims refuse an otherwise eligible target while released claims do not block it", async () => {
+    const fx = await activeFixture("mstar-cleanup-active-claims-");
+    try {
+      const main = git(["branch", "--show-current"], fx.root);
+      const wtA = addMergedWorktree(fx.root, "wt-a", "feature/a");
+      const wtB = addMergedWorktree(fx.root, "wt-b", "feature/b");
+      await registerActiveWorkflow(fx, "wf-a", planWorkflowDoc("wf-a", main, [row("plan-a", "Done", { metadata: { working_branch: "feature/a", worktree_path: wtA } })]));
+      // wf-b stays running and owns feature/b; its claim is the foreign one below.
+      await registerActiveWorkflow(fx, "wf-b", planWorkflowDoc("wf-b", main, [row("plan-b", "InProgress", { metadata: { working_branch: "feature/b" } })]));
+      await stopActiveWorkflow(fx, "wf-a");
+
+      plantExecutionLease(fx, { workflowId: "wf-b", planId: "plan-b", holder: "foreign-holder", worktreePath: wtB, branch: "feature/a", status: "held" });
+      plantIntegrationLease(fx, { workflowId: "wf-b", holder: "foreign-holder", sourceBranch: "feature/a", targetBranch: main, planId: "plan-b", status: "held" });
+
+      const held = activeCleanup(fx, "wf-a");
+      expect(held.exitCode).toBe(0);
+      expect(decisionRows(held)).toEqual([
+        `refuse | worktree | ${wtA} | cleanup.refuse.active-lease`,
+        "refuse | local-branch | feature/a | cleanup.refuse.active-lease",
+      ]);
+
+      // Released tombstones are not active claims: the same target becomes eligible.
+      const db = activeRawStore(fx);
+      try {
+        db.prepare("update execution_leases set lease_json = json_set(lease_json, '$.status', 'released') where workflow_id = 'wf-b' and plan_id = 'plan-b'").run();
+        db.prepare("update execution_integration_leases set lease_json = json_set(lease_json, '$.status', 'released') where workflow_id = 'wf-b'").run();
+        db.prepare("delete from execution_sessions where workflow_id = 'wf-b' and role = 'plan-pm' and session_id = 'foreign-holder'").run();
+      } finally {
+        db.close();
+      }
+
+      const released = activeCleanup(fx, "wf-a");
+      expect(released.exitCode).toBe(0);
+      expect(decisionRows(released)).toEqual([
+        `remove | worktree | ${wtA} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/a | cleanup.refuse.checked-out",
+      ]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed ACTIVE authority fails closed and removes nothing", async () => {
+    const fx = await activeFixture("mstar-cleanup-active-corrupt-");
+    try {
+      const main = git(["branch", "--show-current"], fx.root);
+      const wtA = addMergedWorktree(fx.root, "wt-a", "feature/a");
+      await registerActiveWorkflow(fx, "wf-a", planWorkflowDoc("wf-a", main, [row("plan-a", "Done", { metadata: { working_branch: "feature/a", worktree_path: wtA } })]));
+      await registerActiveWorkflow(fx, "wf-b", planWorkflowDoc("wf-b", main, [row("plan-b", "Done", { metadata: { working_branch: "feature/b" } })]));
+      await stopActiveWorkflow(fx, "wf-a");
+
+      // A corrupt PROTECTIVE sibling must refuse the whole read rather than
+      // silently drop its ownership from the safety universe.
+      const db = activeRawStore(fx);
+      try {
+        db.prepare("update execution_workflows set state_json = '{' where workflow_id = 'wf-b'").run();
+      } finally {
+        db.close();
+      }
+
+      const applied = activeCleanup(fx, "wf-a", ["--apply"]);
+      expect(applied.exitCode).toBe(1);
+      expect(envelope(applied).status).toBe("refused");
+      expect(envelope(applied).code).toBe("store.corrupt");
+      expect(git(["worktree", "list", "--porcelain"], fx.root).split("\n")).toContain(`worktree ${wtA}`);
+      expect(git(["for-each-ref", "refs/heads/feature/a"], fx.root)).not.toBe("");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a store that predates activation keeps the unchanged file-authoritative route", async () => {
+    const fx = await legacyStoreFixture("mstar-cleanup-legacy-route-");
+    try {
+      const main = git(["branch", "--show-current"], fx.root);
+      const wtLegacy = addMergedWorktree(fx.root, "wt-legacy", "feature/legacy");
+      const workflowDir = join(fx.harnessDir, "workflows", "wf-legacy");
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(
+        join(workflowDir, "snapshot.json"),
+        JSON.stringify(
+          {
+            schema_version: 1,
+            id: "wf-legacy",
+            type: "plan",
+            status: "completed",
+            started_at: ACTIVE_TS,
+            ended_at: ACTIVE_TS,
+            updated_at: ACTIVE_TS,
+            branch: { target: main },
+            plans: [row("plan-legacy", "Done", { metadata: { working_branch: "feature/legacy", worktree_path: wtLegacy } })],
+          },
+          null,
+          2,
+        ),
+      );
+
+      const dry = activeCleanup(fx, "wf-legacy");
+      expect(dry.exitCode).toBe(0);
+      expect(decisionRows(dry)).toEqual([
+        `remove | worktree | ${wtLegacy} | cleanup.remove.merged`,
+        "refuse | local-branch | feature/legacy | cleanup.refuse.checked-out",
+      ]);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("an eight-workflow stack reclaims scoped eligible targets and preserves every protected one", async () => {
+    const fx = await activeFixture("mstar-cleanup-active-stack-");
+    try {
+      const main = git(["branch", "--show-current"], fx.root);
+      const wtElig1 = addMergedWorktree(fx.root, "wt-elig-1", "feature/elig-1");
+      const wtElig2 = addMergedWorktree(fx.root, "wt-elig-2", "feature/elig-2");
+      const wtDirty = addMergedWorktree(fx.root, "wt-dirty", "feature/dirty");
+      writeFileSync(join(wtDirty, "untracked.txt"), "dirty\n");
+      const wtLocked = addMergedWorktree(fx.root, "wt-locked", "feature/locked");
+      git(["worktree", "lock", wtLocked], fx.root);
+      const wtLive = addMergedWorktree(fx.root, "wt-live", "feature/live");
+      const wtAnchor = addMergedWorktree(fx.root, "wt-anchor", "feature/anchor");
+
+      // Unmerged: a committed branch that was never integrated (its worktree is gone).
+      const tmpWt = join(fx.root, "wt-tmp-unmerged");
+      git(["worktree", "add", "-q", tmpWt, "-b", "feature/unmerged"], fx.root);
+      writeFileSync(join(tmpWt, "unmerged.txt"), "unmerged work\n");
+      git(["add", "-A"], tmpWt);
+      git(["commit", "-q", "-m", "unmerged work"], tmpWt);
+      git(["worktree", "remove", tmpWt], fx.root);
+
+      // Foreign: a worktree/branch no workflow records.
+      const foreignRaw = join(fx.root, "wt-foreign");
+      git(["worktree", "add", "-q", foreignRaw, "-b", "feature/stranger"], fx.root);
+      const foreignWt = wt(worktreeList(fx.root), "wt-foreign").path;
+
+      // Eight workflows: six terminal standalone plans, one running sibling that
+      // owns a live target, and one running sibling whose base anchor protects
+      // another workflow's branch.
+      await registerActiveWorkflow(fx, "wf-elig-1", planWorkflowDoc("wf-elig-1", main, [row("plan-e1", "Done", { metadata: { working_branch: "feature/elig-1", worktree_path: wtElig1 } })]));
+      await registerActiveWorkflow(fx, "wf-elig-2", planWorkflowDoc("wf-elig-2", main, [row("plan-e2", "Done", { metadata: { working_branch: "feature/elig-2", worktree_path: wtElig2 } })]));
+      await registerActiveWorkflow(fx, "wf-dirty", planWorkflowDoc("wf-dirty", main, [row("plan-d", "Done", { metadata: { working_branch: "feature/dirty", worktree_path: wtDirty } })]));
+      await registerActiveWorkflow(fx, "wf-locked", planWorkflowDoc("wf-locked", main, [row("plan-l", "Done", { metadata: { working_branch: "feature/locked", worktree_path: wtLocked } })]));
+      await registerActiveWorkflow(fx, "wf-unmerged", planWorkflowDoc("wf-unmerged", main, [row("plan-u", "Done", { metadata: { working_branch: "feature/unmerged" } })]));
+      await registerActiveWorkflow(fx, "wf-anchor", planWorkflowDoc("wf-anchor", main, [row("plan-anchor", "Done", { metadata: { working_branch: "feature/anchor", worktree_path: wtAnchor } })]));
+      await registerActiveWorkflow(fx, "wf-live", planWorkflowDoc("wf-live", main, [row("plan-live", "InProgress", { metadata: { working_branch: "feature/live", worktree_path: wtLive } })]));
+      await registerActiveWorkflow(
+        fx,
+        "wf-protect",
+        planWorkflowDoc("wf-protect", main, [row("plan-protect", "Todo")], { branch: { base: "feature/anchor", target: main } }),
+      );
+      for (const id of ["wf-elig-1", "wf-elig-2", "wf-dirty", "wf-locked", "wf-unmerged", "wf-anchor"]) await stopActiveWorkflow(fx, id);
+
+      const dry = activeCleanup(fx, "wf-elig-1", ["--all-workflows"]);
+      expect(dry.exitCode).toBe(0);
+      const rowsText = decisionRows(dry).join("\n");
+      // Eligible scoped targets.
+      expect(rowsText).toContain(`remove | worktree | ${wtElig1} | cleanup.remove.merged`);
+      expect(rowsText).toContain(`remove | worktree | ${wtElig2} | cleanup.remove.merged`);
+      expect(rowsText).toContain("refuse | local-branch | feature/elig-1 | cleanup.refuse.checked-out");
+      expect(rowsText).toContain("refuse | local-branch | feature/elig-2 | cleanup.refuse.checked-out");
+      // Protected targets stay named and refused/kept.
+      expect(rowsText).toContain(`refuse | worktree | ${wtDirty} | cleanup.refuse.dirty-worktree`);
+      expect(rowsText).toContain(`refuse | worktree | ${wtLocked} | cleanup.refuse.locked-worktree`);
+      expect(rowsText).toContain(`refuse | worktree | ${wtLive} | cleanup.refuse.non-terminal`);
+      expect(rowsText).toContain("refuse | local-branch | feature/unmerged | cleanup.refuse.unmerged");
+      expect(rowsText).toContain("keep | local-branch | feature/anchor | cleanup.keep.protected-ref");
+      expect(rowsText).toContain(`refuse | worktree | ${foreignWt} | cleanup.refuse.foreign-worktree`);
+      expect(rowsText).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
+
+      const applied = activeCleanup(fx, "wf-elig-1", ["--all-workflows", "--apply"]);
+      expect(applied.exitCode).toBe(0);
+      const listed = git(["worktree", "list", "--porcelain"], fx.root);
+      for (const path of [wtElig1, wtElig2]) expect(listed.split("\n")).not.toContain(`worktree ${path}`);
+      for (const path of [wtDirty, wtLocked, wtLive, wtAnchor, foreignWt]) expect(listed.split("\n")).toContain(`worktree ${path}`);
+      for (const branch of ["feature/elig-1", "feature/elig-2"]) expect(git(["for-each-ref", `refs/heads/${branch}`], fx.root)).toBe("");
+      for (const branch of ["feature/dirty", "feature/locked", "feature/unmerged", "feature/live", "feature/anchor", "feature/stranger"]) {
+        expect(git(["for-each-ref", `refs/heads/${branch}`], fx.root)).not.toBe("");
+      }
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  }, 60000);
 });
