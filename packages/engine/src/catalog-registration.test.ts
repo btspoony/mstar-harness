@@ -437,6 +437,24 @@ describe("catalog execution registration \u2014 failure boundaries", () => {
     expect((await listCatalog(context, {})).total).toBe(1);
   });
 
+  test("a committed registration replay refuses while a terminal snapshot remains root-registered", async () => {
+    const { harnessDir, context } = await fixture("terminal-replay-");
+    const request = planRequest({ harnessDir, operationId: "op-terminal-replay", expectedCatalogRevision: 0 });
+    const receipt = await registerCatalogExecution(context, request);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", "snapshot.json");
+    const snapshotDoc = JSON.parse(readFileSync(snapshotPath, "utf8")) as { status: string; ended_at?: string };
+    snapshotDoc.status = "stopped";
+    snapshotDoc.ended_at = "2026-10-04";
+    writeFileSync(snapshotPath, `${JSON.stringify(snapshotDoc, null, 2)}\n`);
+
+    await expect(registerCatalogExecution(context, request)).rejects.toMatchObject({
+      name: "CatalogRegistrationError",
+      code: "catalog.registration-terminal-lifecycle",
+      message: expect.stringContaining("retry after the close sequence finishes, or route through catalog reconcile"),
+    });
+    expect(receipt.operationId).toBe("op-terminal-replay");
+  });
+
   test("interrupted registration \u2014 recovers a crash after the catalog publish: the pending marker is finished without republishing", async () => {
     const { harnessDir, context } = await fixture("post-publish-crash-");
     const request = planRequest({ harnessDir, operationId: "op-crash", expectedCatalogRevision: 0 });
