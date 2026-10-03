@@ -4,6 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
+import {
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  registerCatalogEntity,
+  type CatalogOperation,
+  type ExecutionCaller,
+  type WorkflowSnapshot,
+} from "../../engine/src/index.js";
+
 
 const roots: string[] = [];
 afterEach(() => {
@@ -32,6 +42,59 @@ function definition(id: string) {
   return found;
 }
 
+async function activeWorkflow(cwd: string, workflowId: string, status: "running" | "completed" = "running") {
+  const harness = path.join(cwd, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  const storeContext = { harnessDir: harness };
+  const store = await initializeStore(storeContext);
+  store.close();
+  const initialized = await initializeExecutionAuthority(storeContext);
+  const planId = `plan-${workflowId}`;
+  await registerCatalogEntity(storeContext, {
+    kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `${planId}.md`,
+  }, { operationId: `catalog-${workflowId}`, actor: "project-manager" } satisfies CatalogOperation);
+  const caller: ExecutionCaller = { sessionId: `coordinator-${workflowId}`, role: "coordinator", workflowId, planId: null };
+  await createExecutionWorkflow({ ...storeContext, caller }, {
+    entry: { id: workflowId, type: "plan", started_at: "2026-09-01T00:00:00.000Z", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1, id: workflowId, type: "plan", status, started_at: "2026-09-01T00:00:00.000Z",
+      updated_at: "2026-09-01T00:00:00.000Z", phase: "phase-2-execute",
+      plans: [{ id: planId, title: planId, file: `${planId}.md`, status: status === "completed" ? "Done" : "InProgress" }],
+      delivery_kind: "development",
+      branch: { base: "main", source: "feature/test", target: "main", integration: "integration/test" },
+    } as unknown as WorkflowSnapshot,
+    expected: initialized.token,
+    operationId: `create-${workflowId}`,
+  });
+  return { harness, storeContext, planId };
+}
+
+
+  test("ACTIVE phase-six gate reads workflow and served root state", async () => {
+    const cwd = tempRoot();
+    const { harness } = await activeWorkflow(cwd, "wf-active-running");
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-active-running", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "refused", code: "PHASE6_NOT_TERMINAL" });
+    if (result.status === "refused") {
+      expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
+        expect.objectContaining({ code: "PHASE6_NOT_TERMINAL" }),
+        expect.objectContaining({ code: "PHASE6_ROOT_ENTRY_PRESENT" }),
+      ]) });
+    }
+  });
+
+  test("non-six compass form still refuses on ACTIVE execution authority", async () => {
+    const cwd = tempRoot();
+    const { harness } = await activeWorkflow(cwd, "wf-active-phase-five");
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-active-phase-five", compass: "compass.md", harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "refused", code: "execution.consumer-not-ready" });
+  });
 describe("coordination checks command family", () => {
   test("lease verification refuses a plan id outside the workflow snapshot scope", async () => {
     const cwd = tempRoot();

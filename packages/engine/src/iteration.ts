@@ -51,6 +51,7 @@ import type { GateResult, Severity, ValidationResult } from "./core.js";
 // query, so neither side dereferences the other during module evaluation.
 import { catalogRootDir } from "./catalog.js";
 import { StoreError, openStore, type StoreContext } from "./store-db.js";
+import { readExecutionState } from "./execution-store.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { LEGACY_WORKTREE_PATH_CODE, consultDeliveryEvidence, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
@@ -704,7 +705,10 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
 export async function evaluatePostMergeCloseFromExecutionAuthority(context: StoreContext, workflowId: string): Promise<GateResult> {
   const violations: ValidationResult[] = [];
   const state = (await readExecutionState(context)).data;
-  const rootGate = validateStatusV2(state.root as StatusV2Doc);
+  const rootGate = validateStatusV2({
+    ...state.root,
+    updated_at: typeof state.root.updated_at === "string" ? state.root.updated_at.slice(0, 10) : state.root.updated_at,
+  } as StatusV2Doc);
   if (!rootGate.ok) {
     violations.push(
       violation(
@@ -723,7 +727,7 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
       ),
     );
   }
-  const handle = openStore(context, "read");
+  const handle = await openStore(context, "read");
   try {
     handle.db.exec("begin deferred");
     try {

@@ -116,15 +116,27 @@ async function loadExecutionRoute(): Promise<
   return { resolve };
 }
 
-/** §5: the refusal of this gate's retired input while the control harness's
- * execution authority is ACTIVE (or `null` when the file route still answers).
- * The gate's pure input is the whole snapshot DOCUMENT — the phase gates
- * validate its shape and a prepared row's coordination carries its session
- * binding, which the DB adapter deliberately does not carry — so the honest
- * answer is not-ready, never the retired bytes and never a synthesized
- * snapshot. A store that exists and cannot be read keeps its own refusal. */
+/** ACTIVE authority form for phase 6; stale engines keep the existing refusal. */
+type Phase6Evaluator = (context: { harnessDir: string }, workflowId: string) => Promise<{
+  ok: boolean;
+  violations: ValidationResult[];
+}>;
+
+async function loadPhase6Evaluator(): Promise<Phase6Evaluator | null> {
+  try {
+    const engine = await import("@mstar-harness/engine");
+    return typeof engine.evaluatePostMergeCloseFromExecutionAuthority === "function"
+      ? engine.evaluatePostMergeCloseFromExecutionAuthority as Phase6Evaluator
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** §5: the refusal of this gate's retired input outside phase 6 (or `null` when file route answers). */
 async function executionNotReady(
   harnessDir: string,
+  phase6: boolean,
 ): Promise<{ code: string; message: string } | { error: AgentToolResult } | null> {
   const load = await loadExecutionRoute();
   if ("error" in load) return { error: load.error };
@@ -142,7 +154,7 @@ async function executionNotReady(
         "while that authority governs it, so no file-route gate verdict is available",
     };
   }
-  if (route !== "execution") return null;
+  if (route !== "execution" || phase6) return null;
   return {
     code: "execution.consumer-not-ready",
     message:
@@ -201,7 +213,7 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
         const workflowDir = await resolveWorkflowDirOf(harnessDir);
         // §5: before any snapshot/compass read — the gate's input document is
         // retired while the execution authority is ACTIVE.
-        const notReady = await executionNotReady(harnessDir);
+        const notReady = await executionNotReady(harnessDir, params.phase === "6");
         if (notReady !== null && "error" in notReady) return notReady.error;
         if (notReady !== null) {
           return result(
@@ -209,6 +221,26 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
             { phase: params.phase, workflow_id: params.workflowId, ok: false, execution: { code: notReady.code } },
             true,
           );
+        }
+        if (params.phase === "6") {
+          const route = await loadExecutionRoute();
+          if ("error" in route) return route.error;
+          if (await route.resolve({ harnessDir }) === "execution") {
+            const evaluate = await loadPhase6Evaluator();
+            if (evaluate === null) {
+              return result(
+                "installed @mstar-harness/engine lacks evaluatePostMergeCloseFromExecutionAuthority — upgrade the engine; CLI fallback: mstar iteration gate",
+                { phase: params.phase, workflow_id: params.workflowId, ok: false },
+                true,
+              );
+            }
+            const gate = await evaluate({ harnessDir }, params.workflowId);
+            return result(
+              gate.ok ? "gate ok" : `phase "${params.phase}" gate violations:\n${violationLines(gate.violations)}`,
+              { phase: params.phase, workflow_id: params.workflowId, ok: gate.ok, violations: gate.violations },
+              !gate.ok,
+            );
+          }
         }
         const snapshotPath = join(workflowDir, params.workflowId, "snapshot.json");
         const compassPath = resolve(pi.cwd, params.compassPath);
