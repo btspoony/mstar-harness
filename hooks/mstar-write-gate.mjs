@@ -11347,6 +11347,23 @@ function hasFiles(dir) {
     return false;
   }
 }
+function storedCoordinationViolations(block, options) {
+  const { revision, route, sessionBound, what } = options;
+  const { handoff, ...rest } = block;
+  const violations = validateRowCoordination({ revision, ...rest }, what, route);
+  if (handoff !== undefined) {
+    violations.push(...validatePlanHandoff(handoff, `${what}.handoff`, route));
+    if (!sessionBound) {
+      violations.push({
+        ok: false,
+        severity: "high",
+        code: "coordination.row.handoff-field",
+        message: `${what}.handoff requires a bound plan session`
+      });
+    }
+  }
+  return violations;
+}
 var AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
 var AUDIT_RISKS = ["LOW", "MED", "HIGH"];
 var AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
@@ -12462,7 +12479,435 @@ var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
 var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+class ExecutionError extends Error {
+  code;
+  details;
+  constructor(code2, message, details) {
+    super(`[${code2}] ${message}`);
+    this.name = "ExecutionError";
+    this.code = code2;
+    this.details = details;
+  }
+}
+function canonicalRefusal(detail) {
+  return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
+}
+function canonicalString(value) {
+  for (let index2 = 0;index2 < value.length; index2++) {
+    const code2 = value.charCodeAt(index2);
+    if (code2 >= 55296 && code2 <= 56319) {
+      const next = value.charCodeAt(index2 + 1);
+      if (!(next >= 56320 && next <= 57343))
+        throw canonicalRefusal("a string carrying an unpaired high surrogate");
+      index2++;
+    } else if (code2 >= 56320 && code2 <= 57343) {
+      throw canonicalRefusal("a string carrying an unpaired low surrogate");
+    }
+  }
+  return JSON.stringify(value);
+}
+function canonicalNumber(value) {
+  if (!Number.isFinite(value))
+    throw canonicalRefusal(`the non-finite number ${String(value)}`);
+  if (Number.isInteger(value) && !Number.isSafeInteger(value))
+    throw canonicalRefusal(`the unsafe integer ${value}`);
+  return String(value);
+}
+function canonicalArray(value, ancestors) {
+  if (ancestors.has(value))
+    throw canonicalRefusal("a cyclic structure");
+  ancestors.add(value);
+  const parts = [];
+  for (let index2 = 0;index2 < value.length; index2++)
+    parts.push(canonical(value[index2], ancestors));
+  ancestors.delete(value);
+  return `[${parts.join(",")}]`;
+}
+function canonicalObject(value, ancestors) {
+  if (ancestors.has(value))
+    throw canonicalRefusal("a cyclic structure");
+  ancestors.add(value);
+  const record = value;
+  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key], ancestors)}`);
+  ancestors.delete(value);
+  return `{${parts.join(",")}}`;
+}
+function canonical(value, ancestors) {
+  if (value === null)
+    return "null";
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "string":
+      return canonicalString(value);
+    case "number":
+      return canonicalNumber(value);
+    case "object":
+      break;
+    default:
+      throw canonicalRefusal(`an unsupported ${typeof value} value`);
+  }
+  if (Array.isArray(value))
+    return canonicalArray(value, ancestors);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw canonicalRefusal("an object whose prototype is neither Object.prototype nor null");
+  }
+  return canonicalObject(value, ancestors);
+}
+function serializeExecutionValue(value) {
+  return `${canonical(value, new Set)}
+`;
+}
+var KIND_KEY_LENGTHS = {
+  root: 0,
+  workflow: 1,
+  plan: 2,
+  session: 3,
+  "execution-lease": 2,
+  "integration-lease": 1,
+  input: 2
+};
+function isExecutionKind(value) {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(KIND_KEY_LENGTHS, value);
+}
+var TOKEN_PREFIX = "exec-v1";
+var STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function tokenRefusal(detail) {
+  return new ExecutionError("execution.token-invalid", detail);
+}
+function canonicalIntegerText(value, what) {
+  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value <= 0) {
+    throw tokenRefusal(`${what} must be a positive safe integer — got ${String(value)}`);
+  }
+  return String(value);
+}
+function assertKeyShape(kind, key) {
+  const expected = KIND_KEY_LENGTHS[kind];
+  if (key.length !== expected) {
+    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) — got ${key.length}`);
+  }
+  for (const part of key) {
+    if (!isNonEmptyString(part))
+      throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
+  }
+  if (kind === "session" && key[1] !== "coordinator" && key[1] !== "plan-pm") {
+    throw tokenRefusal(`a session token key carries the role as its second part — got ${JSON.stringify(key[1])}`);
+  }
+}
+function encodeTokenKey(key) {
+  return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
+}
+function executionToken(kind, storeId, epoch, key, revision) {
+  if (!isExecutionKind(kind))
+    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
+  if (!STORE_UUID_RE.test(storeId))
+    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  assertKeyShape(kind, key);
+  const epochText = canonicalIntegerText(epoch, "the epoch");
+  const revisionText = canonicalIntegerText(revision, "the revision");
+  return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
+}
+function corrupt(detail) {
+  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
+}
+function readStoreIdentity(db) {
+  const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
+  if (!row || typeof row.store_id !== "string" || typeof row.authority_epoch !== "number") {
+    throw corrupt("store_meta is missing or malformed");
+  }
+  return { storeId: row.store_id, epoch: row.authority_epoch };
+}
+function readExecutionMetaRow(db) {
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw corrupt("execution_meta is missing or malformed");
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
+function storedJsonObject(text4, what) {
+  if (typeof text4 !== "string")
+    throw corrupt(`${what} is not a JSON string`);
+  let parsed;
+  try {
+    parsed = JSON.parse(text4);
+  } catch (error) {
+    throw corrupt(`${what} is not valid JSON (${error.message})`);
+  }
+  if (!isPlainObject(parsed))
+    throw corrupt(`${what} is not a JSON object`);
+  return parsed;
+}
+function storedRevision(value, what) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw corrupt(`${what} is not a positive safe integer`);
+  }
+  return value;
+}
+function storedText(value, what) {
+  if (typeof value !== "string")
+    throw corrupt(`${what} is not a string`);
+  return value;
+}
+function validationRefusal(what, violations) {
+  return corrupt(`${what} does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`);
+}
+function readFrozenInput(json, what) {
+  if (json === null || json === undefined)
+    return null;
+  const pin = storedJsonObject(json, what);
+  if (!isNonEmptyString(pin.store_id) || !STORE_UUID_RE.test(pin.store_id) || typeof pin.entity_revision !== "number" || !Number.isSafeInteger(pin.entity_revision) || pin.entity_revision <= 0 || !isNonEmptyString(pin.document_hash) || !isNonEmptyString(pin.relation_hash)) {
+    throw corrupt(`${what} is not a complete catalog execution pin`);
+  }
+  const keys = Object.keys(pin);
+  if (keys.length !== 4) {
+    throw corrupt(`${what} carries fields beyond the catalog execution pin contract`);
+  }
+  return {
+    store_id: pin.store_id,
+    entity_revision: pin.entity_revision,
+    document_hash: pin.document_hash,
+    relation_hash: pin.relation_hash
+  };
+}
+function readExecutionLease(json, what) {
+  const lease = storedJsonObject(json, what);
+  const validation = validateExecutionLease(lease);
+  if (!validation.ok)
+    throw validationRefusal(what, validation.violations);
+  return lease;
+}
+function readIntegrationLease(json, what) {
+  const lease = storedJsonObject(json, what);
+  const validation = validateIntegrationMergeLease(lease);
+  if (!validation.ok)
+    throw validationRefusal(what, validation.violations);
+  return lease;
+}
+function assertLeaseOwnership(lease, sessionRow, ownerEpoch, store, workflowId, planId) {
+  if (lease.status !== "held")
+    return;
+  const what = `execution_leases(${workflowId},${planId}).lease_json`;
+  if (!isNonEmptyString(lease.holder_session_id) || lease.holder_role !== "plan-pm" && lease.holder_role !== "coordinator") {
+    throw corrupt(`${what} is held without the holder session identity and role it must agree with`);
+  }
+  if (lease.plan_worktree_path !== lease.worktree_path || lease.plan_branch !== lease.working_branch) {
+    throw corrupt(`${what} records a plan scope that disagrees with its own lease identity fields`);
+  }
+  if (ownerEpoch !== store.epoch)
+    return;
+  if (sessionRow === undefined) {
+    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ${planId} has no session of that identity`);
+  }
+  if (sessionRow.state !== "active") {
+    throw corrupt(`${what} is held in current epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that session is ${String(sessionRow.state)} and cannot authorize the lease`);
+  }
+  if (sessionRow.epoch !== ownerEpoch) {
+    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that active session is in epoch ${String(sessionRow.epoch)}; a lease and the session row it names as its owner are ONE ownership fact of one epoch`);
+  }
+  if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
+    throw corrupt(`${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session row of ${planId} in epoch ${ownerEpoch} is ${String(sessionRow.role)} session ${String(sessionRow.session_id)}`);
+  }
+}
+function sessionRef(store, workflowId, row) {
+  const role = row.role;
+  if (role !== "plan-pm" && role !== "coordinator") {
+    throw corrupt(`execution_sessions(${workflowId}) carries role ${JSON.stringify(role)}`);
+  }
+  if (!isNonEmptyString(row.session_id)) {
+    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
+  }
+  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
+  }
+  let planId = null;
+  if (role === "plan-pm") {
+    if (!isNonEmptyString(row.plan_id)) {
+      throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
+    }
+    planId = row.plan_id;
+  } else if (row.plan_id !== null && row.plan_id !== undefined) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
+  }
+  return {
+    storeId: store.storeId,
+    epoch: row.epoch,
+    workflowId,
+    role,
+    sessionId: row.session_id,
+    planId
+  };
+}
+function readIntegrationLeaseRow(db, workflowId) {
+  const row = db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
+  if (row === undefined)
+    return null;
+  const what = `execution_integration_leases(${workflowId}).lease_json`;
+  const lease = readIntegrationLease(row.lease_json, what);
+  const status = lease.status;
+  if (status !== undefined && status !== "held" && status !== "released") {
+    throw corrupt(`${what} carries status ${JSON.stringify(status)}, which is neither held nor released`);
+  }
+  return {
+    lease,
+    status: status === "released" ? "released" : "held",
+    revision: storedRevision(row.revision, `execution_integration_leases(${workflowId}).revision`),
+    ownerEpoch: storedRevision(row.owner_epoch, `execution_integration_leases(${workflowId}).owner_epoch`)
+  };
+}
+function readWorkflowView(db, store, workflowId) {
+  const workflowRow = db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (!workflowRow) {
+    throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
+  }
+  const revision = storedRevision(workflowRow.revision, `execution_workflows(${workflowId}).revision`);
+  const state = storedJsonObject(workflowRow.state_json, `execution_workflows(${workflowId}).state_json`);
+  if (state.id !== workflowId) {
+    throw corrupt(`execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`);
+  }
+  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
+    throw corrupt(`execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by execution_plans/execution_integration_leases/execution_sessions`);
+  }
+  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+  if (!workflowValidation.ok) {
+    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
+  }
+  const sessions = db.prepare("select role, session_id, plan_id, epoch, state from execution_sessions where workflow_id = ?").all(workflowId);
+  const activeSessions = sessions.filter((entry) => entry.state === "active");
+  const leases = db.prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ?").all(workflowId);
+  const inputs = db.prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?").all(workflowId);
+  const integrationRow = readIntegrationLeaseRow(db, workflowId);
+  const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
+  const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
+  const planRows = db.prepare("select plan_id, revision, ordinal, state_json, coordination_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId);
+  const planTokens = {};
+  const plans = [];
+  const planIds = planRows.map((entry) => storedText(entry.plan_id, `execution_plans(${workflowId}).plan_id`));
+  const routeSnapshot = {
+    ...state,
+    plans: planIds.map((planId) => ({ id: planId }))
+  };
+  for (const row of planRows) {
+    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+    const planRevision = storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
+    const planState = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+    const storedCoordination = storedJsonObject(row.coordination_json, `execution_plans(${workflowId},${planId}).coordination_json`);
+    if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json/execution_leases`);
+    }
+    if (planState.id !== planId) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
+    }
+    const planValidation = validatePlanRow(planState);
+    if (!planValidation.ok) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
+    }
+    if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the revision column and in execution_sessions; the DB authority stores neither`);
+    }
+    const projectedCoordination = { revision: planRevision, ...storedCoordination };
+    const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    const handoff = isPlainObject(storedCoordination.handoff) ? storedCoordination.handoff : undefined;
+    const submitter = handoff?.submitted_by;
+    const historicalSessionRow = typeof submitter === "string" ? sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId && entry.session_id === submitter) : undefined;
+    const coordinationViolations = storedCoordinationViolations(storedCoordination, {
+      revision: planRevision,
+      route: rowValidationRoute(routeSnapshot, planState),
+      sessionBound: handoff === undefined || historicalSessionRow !== undefined,
+      what: `execution_plans(${workflowId},${planId}).coordination_json`
+    });
+    if (coordinationViolations.length > 0) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
+    }
+    const hasCoordination = Object.keys(storedCoordination).length > 0;
+    const leaseRow = leases.find((entry) => entry.plan_id === planId);
+    const inputRow = inputs.find((entry) => entry.plan_id === planId);
+    const executionLease = leaseRow ? readExecutionLease(leaseRow.lease_json, `execution_leases(${workflowId},${planId}).lease_json`) : null;
+    if (leaseRow !== undefined && executionLease !== null) {
+      const holderRow = executionLease.status === "held" ? sessions.find((entry) => entry.role === executionLease.holder_role && entry.session_id === executionLease.holder_session_id && (entry.role === "coordinator" || entry.plan_id === planId)) : undefined;
+      assertLeaseOwnership(executionLease, holderRow, storedRevision(leaseRow.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`), store, workflowId, planId);
+    }
+    planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
+    plans.push({
+      workflow: state,
+      plan: planState,
+      coordination: hasCoordination ? projectedCoordination : null,
+      session: activeSessionRow ? sessionRef(store, workflowId, activeSessionRow) : null,
+      executionLease,
+      integrationLease,
+      frozenInput: inputRow ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`) : null
+    });
+  }
+  return {
+    workflowToken: executionToken("workflow", store.storeId, store.epoch, [workflowId], revision),
+    planTokens,
+    state,
+    plans,
+    coordinator: coordinatorRow ? sessionRef(store, workflowId, coordinatorRow) : null,
+    integrationLease
+  };
+}
+function readExecutionGraph(db, store, meta) {
+  const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
+  const entries = [];
+  const workflows = [];
+  for (const row of registry) {
+    const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
+    const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
+    const validation = validateWorkflowEntry(entry);
+    if (!validation.ok)
+      throw validationRefusal(`execution_registry(${workflowId}).entry_json`, validation.violations);
+    if (entry.id !== workflowId) {
+      throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
+    }
+    entries.push(entry);
+    workflows.push(readWorkflowView(db, store, workflowId));
+  }
+  return { root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries }, workflows };
+}
 var ownedTransactions = new AsyncLocalStorage3;
+async function withExecutionReadTransaction(context, body) {
+  const handle = await openStore(context, "read");
+  try {
+    if (handle.execution === null) {
+      throw new ExecutionError("execution.not-active", "this store predates the execution schema, so it has no execution authority. Upgrade the store and initialize the execution domain before reading execution state.");
+    }
+    const db = handle.db;
+    db.exec("begin");
+    try {
+      const meta = readExecutionMetaRow(db);
+      if (meta.authorityState !== "active") {
+        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. A staged store is inspectable only through migration diagnostics.`);
+      }
+      const store = readStoreIdentity(db);
+      const result = body({ db, storeId: store.storeId, epoch: store.epoch, execution: meta });
+      db.exec("commit");
+      return result;
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+  } finally {
+    handle.close();
+  }
+}
+async function readExecutionState(context) {
+  return withExecutionReadTransaction(context, (tx) => ({
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
+    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch
+  }));
+}
 class MilestoneError extends Error {
   code;
   constructor(code2, message) {
@@ -12518,6 +12963,27 @@ class ProjectionError extends Error {
     this.code = code2;
   }
 }
+var DATABASE_SOURCE_PRIMARY_KEYS = {
+  execution_registry: [],
+  execution_workflows: ["workflow_id"],
+  execution_plans: ["workflow_id", "plan_id"],
+  execution_leases: ["workflow_id", "plan_id"],
+  execution_integration_leases: ["workflow_id"]
+};
+function databaseSourceLocationError(location) {
+  if (!isPlainObject(location) || typeof location.table !== "string" || !Object.prototype.hasOwnProperty.call(DATABASE_SOURCE_PRIMARY_KEYS, location.table)) {
+    return "unknown database source table";
+  }
+  const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[location.table];
+  const sourceKeys = location.keys;
+  if (!isPlainObject(sourceKeys))
+    return "database source keys do not match the table primary key";
+  const keys = Object.keys(sourceKeys);
+  if (keys.length !== primaryKeys.length || primaryKeys.some((key) => !Object.prototype.hasOwnProperty.call(sourceKeys, key)) || keys.some((key) => typeof sourceKeys[key] !== "string" || sourceKeys[key] === "")) {
+    return "database source keys do not match the table primary key";
+  }
+  return null;
+}
 function sourceKeyOf2(kind, rootKind, relativePath) {
   return `${kind}:${rootKind}:${relativePath}`;
 }
@@ -12535,7 +13001,51 @@ function churnAfterRead(spec) {
 `);
   } catch {}
 }
-function readSource(spec) {
+function readSource(spec, db) {
+  if (spec.source === "database") {
+    const sourceError = databaseSourceLocationError(spec);
+    if (sourceError !== null)
+      return { state: "invalid", sha256: null, content: null, diagnostic: sourceError };
+    if (db === undefined) {
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: "capture arm pending (Task 2)" };
+    }
+    try {
+      if (spec.table === "execution_registry") {
+        const entries = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id asc").all();
+        for (const entry of entries) {
+          if (typeof entry.entry_json !== "string") {
+            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+          }
+          try {
+            JSON.parse(entry.entry_json);
+          } catch {
+            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+          }
+        }
+        const content5 = JSON.stringify(entries);
+        return { state: "ok", sha256: createHash17("sha256").update(content5, "utf8").digest("hex"), content: content5, diagnostic: null };
+      }
+      const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[spec.table];
+      const row = db.prepare(`select * from ${spec.table} where ${primaryKeys.map((key) => `${key} = ?`).join(" and ")}`).get(...primaryKeys.map((key) => spec.keys[key]));
+      if (row === undefined) {
+        return { state: "missing", sha256: null, content: null, diagnostic: `missing: no row at ${spec.relativePath}` };
+      }
+      const columns = spec.table === "execution_plans" ? [row.state_json, row.coordination_json] : [spec.table === "execution_workflows" ? row.state_json : row.lease_json];
+      if (columns.some((value) => typeof value !== "string")) {
+        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+      }
+      try {
+        for (const column of columns)
+          JSON.parse(column);
+      } catch {
+        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+      }
+      const content4 = columns.join("\x00");
+      return { state: "ok", sha256: createHash17("sha256").update(content4, "utf8").digest("hex"), content: content4, diagnostic: null };
+    } catch {
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: `inaccessible: execution row read refused at ${spec.relativePath}` };
+    }
+  }
   let content3;
   try {
     content3 = readFileSync21(spec.absolutePath, "utf8");
@@ -12814,6 +13324,290 @@ function deriveCompass(iterationId, content3, relativePath) {
   };
 }
 async function captureProjectionSources(context) {
+  const authority = await resolveCurrentAuthority(context);
+  return authority.route === "execution" ? captureExecutionProjectionSources(context) : captureFileProjectionSources(context);
+}
+function safeExecutionAuthorityError(error) {
+  const name = error instanceof Error ? error.constructor.name : "UnknownError";
+  const safeName = /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(name) ? name : "UnknownError";
+  return `execution authority unreadable (${safeName})`;
+}
+async function captureExecutionProjectionSources(context) {
+  const inputs = await readCatalogInputs(context);
+  const revisionHandle = await openStore(context, "read");
+  let capturedStoreRevision;
+  try {
+    capturedStoreRevision = revisionHandle.db.prepare("select revision from store_meta where id = 1").get().revision;
+  } finally {
+    revisionHandle.close();
+  }
+  let servedGraph;
+  try {
+    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR) {
+      throw new SyntaxError(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
+    }
+    servedGraph = (await readExecutionState(context)).data;
+  } catch (error) {
+    const sourceKey = sourceKeyOf2("root", "harness", "execution/registry");
+    const message = safeExecutionAuthorityError(error);
+    const sources = [];
+    const rows = { workflows: [], plans: [], leases: [], compasses: [] };
+    return {
+      formatVersion: PROJECTION_FORMAT_VERSION,
+      catalogRevision: inputs.catalogRevision,
+      storeRevision: capturedStoreRevision,
+      sources,
+      rows,
+      diagnostics: [{ sourceKey, reason: "invalid", message }],
+      sourceSetHash: computeSourceSetHash(inputs.catalogRevision, sources),
+      blocked: true,
+      locations: []
+    };
+  }
+  const handle = await openStore(context, "read");
+  try {
+    const db = handle.db;
+    const sources = [];
+    const locations = [];
+    const diagnostics = [];
+    const rows = { workflows: [], plans: [], leases: [], compasses: [] };
+    const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
+      const sha2564 = readState === "invalid" ? null : createHash17("sha256").update(content3, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256: sha2564, state: readState, table: sourceSpec.table, keys: sourceSpec.keys });
+      diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
+    };
+    const record = (sourceSpec, content3, shaText = content3) => {
+      const sha2564 = createHash17("sha256").update(shaText, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", table: sourceSpec.table, keys: sourceSpec.keys });
+    };
+    const spec = (table, kind, rel, keys) => ({
+      source: "database",
+      sourceKey: sourceKeyOf2(kind, "harness", rel),
+      kind,
+      rootKind: "harness",
+      relativePath: rel,
+      declared: true,
+      table,
+      keys
+    });
+    const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all();
+    const registrySpec = spec("execution_registry", "root", "execution/registry", {});
+    const malformedRegistryJson = registry.some((item) => {
+      try {
+        JSON.parse(item.entry_json);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    const invalidRegistryEntry = registry.find((item) => {
+      try {
+        const entry = JSON.parse(item.entry_json);
+        return !isPlainObject(entry) || entry.id !== item.workflow_id || !validateWorkflowEntry(entry).ok;
+      } catch {
+        return false;
+      }
+    });
+    if (malformedRegistryJson)
+      recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed entry JSON", "invalid");
+    else if (invalidRegistryEntry)
+      recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains mismatched or domain-invalid entry JSON");
+    else
+      record(registrySpec, JSON.stringify(registry));
+    const graphWorkflows = servedGraph.workflows;
+    const servedWorkflowIds = graphWorkflows.map((workflow) => workflow.state.id);
+    const registryIds = new Set(servedWorkflowIds);
+    const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
+    const workflows = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`, servedWorkflowIds, (id) => [id]);
+    const workflowIds = new Set(workflows.map((item) => item.workflow_id));
+    for (const item of registry) {
+      if (!workflowIds.has(item.workflow_id)) {
+        const sourceKey = sourceKeyOf2("root", "harness", "execution/registry");
+        diagnostics.push({ sourceKey, reason: "invalid", message: `invalid: registry membership has no workflow row (${item.workflow_id})` });
+      }
+    }
+    const workflowStateById = new Map;
+    for (const item of workflows) {
+      const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
+      let state;
+      try {
+        state = JSON.parse(item.state_json);
+      } catch {
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state is not valid JSON", "invalid");
+        continue;
+      }
+      if (!isPlainObject(state) || state.id !== item.workflow_id || !WORKFLOW_LIFECYCLE_TYPES.includes(state.type) || !WORKFLOW_LIFECYCLE_STATUSES.includes(state.status)) {
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state has an invalid object, type, or status");
+        continue;
+      }
+      const servedWorkflow = servedWorkflowById.get(item.workflow_id);
+      if (!servedWorkflow) {
+        recordInvalid(workflowSpec, item.state_json, "invalid: served workflow is missing from the execution authority graph");
+        continue;
+      }
+      const projectionState = servedWorkflow.state;
+      const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
+      const workflowErrors = workflowValidation.violations.filter((violation18) => violation18.code !== LEGACY_WORKTREE_PATH_CODE);
+      if (workflowErrors.length > 0) {
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation18) => violation18.code).join(", ")})`);
+        continue;
+      }
+      record(workflowSpec, item.state_json);
+      const branch = isPlainObject(projectionState.branch) ? projectionState.branch : {};
+      rows.workflows.push({
+        id: item.workflow_id,
+        type: projectionState.type,
+        status: projectionState.status,
+        phase: text4(projectionState.phase),
+        startedAt: text4(projectionState.started_at),
+        endedAt: text4(projectionState.ended_at),
+        updatedAt: text4(projectionState.updated_at),
+        branchBase: text4(branch.base),
+        branchSource: text4(branch.source),
+        branchIntegration: text4(branch.integration),
+        branchTarget: text4(branch.target),
+        activeRegistration: registryIds.has(item.workflow_id)
+      });
+    }
+    const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
+    const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
+    const servedLeaseIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.filter((plan) => plan.executionLease !== null).map((plan) => plan.plan.id))]));
+    const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
+    const plans = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${placeholders}) order by workflow_id, plan_id`, servedWorkflowIds, (id) => [id]);
+    for (const row of plans) {
+      if (!servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id))
+        continue;
+      const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
+      let state;
+      let coordination;
+      try {
+        state = JSON.parse(row.state_json);
+        coordination = JSON.parse(row.coordination_json);
+      } catch {
+        recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, "invalid: plan state or coordination is not valid JSON", "invalid");
+        continue;
+      }
+      const plan = isPlainObject(state) ? { ...state, coordination } : state;
+      const validation = validatePlanRow(plan);
+      if (!isPlainObject(coordination) || !validation.ok) {
+        const codes2 = validation.violations.map((item) => item.code);
+        recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, `invalid: plan state or coordination failed validation${codes2.length ? ` (${codes2.join(", ")})` : ""}`);
+        continue;
+      }
+      const planState = state;
+      const coordinationState = coordination;
+      const planId = rowPlanId(planState);
+      if (!planId || planId !== row.plan_id) {
+        recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, "invalid: plan state id does not match its execution_plans key");
+        continue;
+      }
+      const workflowState = workflowStateById.get(row.workflow_id);
+      const authorityPlanView = servedWorkflowById.get(row.workflow_id)?.plans.find((view) => view.plan.id === row.plan_id);
+      const leaseRow = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id);
+      let snapshotLease;
+      if (leaseRow) {
+        try {
+          snapshotLease = JSON.parse(leaseRow.lease_json);
+        } catch {}
+      }
+      const snapshotPlanBase = { ...planState, coordination: { revision: row.revision, ...coordinationState } };
+      const snapshotPlan = snapshotLease === undefined ? snapshotPlanBase : { ...snapshotPlanBase, execution_lease: snapshotLease };
+      if (workflowState) {
+        const workflowGate = validateWorkflowSnapshot({ ...workflowState, plans: [snapshotPlan] });
+        const blockingCodes = workflowGate.violations.filter((violation18) => violation18.code !== LEGACY_WORKTREE_PATH_CODE).map((violation18) => violation18.code);
+        if (blockingCodes.length > 0) {
+          recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, `invalid: plan does not validate in its workflow (${blockingCodes.join(", ")})`);
+          continue;
+        }
+      }
+      if (!authorityPlanView) {
+        recordInvalid(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, "invalid: served plan is missing from the execution authority graph");
+        continue;
+      }
+      const pinRevision = authorityPlanView.frozenInput?.entity_revision ?? (isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin.entity_revision : null);
+      record(sourceSpec, `${row.state_json}\x00${row.coordination_json}`, `${row.state_json}\x00${row.coordination_json}`);
+      const mappedCoordination = authorityPlanView.coordination;
+      const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
+      rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
+    }
+    const leases = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${placeholders}) order by workflow_id, plan_id`, servedWorkflowIds, (id) => [id]);
+    for (const lease of leases) {
+      if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id))
+        continue;
+      const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
+      let value;
+      try {
+        value = JSON.parse(lease.lease_json);
+      } catch {
+        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON", "invalid");
+        continue;
+      }
+      const validation = validateExecutionLease(value);
+      if (!isPlainObject(value) || !validation.ok) {
+        recordInvalid(leaseSpec, lease.lease_json, `invalid: execution lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
+        continue;
+      }
+      const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
+      if (!servedLease || servedLease.status === "released")
+        continue;
+      record(leaseSpec, lease.lease_json);
+      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text4(servedLease.holder), worktreePath: text4(servedLease.worktree_path), expiresAt: text4(servedLease.expires_at) });
+    }
+    for (const doc of inputs.compassDocs) {
+      const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join34(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const read = readSource(fspec);
+      if (read.state !== "ok" || read.content === null) {
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: read.state });
+        diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
+        continue;
+      }
+      const parsed = deriveCompass(doc.iterationId, read.content, doc.relativePath);
+      if ("diagnostic" in parsed) {
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "invalid", diagnostic: parsed.diagnostic, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "invalid" });
+        diagnostics.push({ sourceKey: fspec.sourceKey, reason: "invalid", message: parsed.diagnostic });
+        continue;
+      }
+      rows.compasses.push(parsed);
+      sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
+      locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
+    }
+    const integrationLeases = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, lease_json from execution_integration_leases where workflow_id in (${placeholders}) order by workflow_id`, servedWorkflowIds, (id) => [id]);
+    for (const row of integrationLeases) {
+      if (!servedIntegrationLeaseIds.has(row.workflow_id))
+        continue;
+      const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
+      let value;
+      try {
+        value = JSON.parse(row.lease_json);
+      } catch {
+        recordInvalid(leaseSpec, row.lease_json, "invalid: integration lease is not valid JSON", "invalid");
+        continue;
+      }
+      const validation = validateIntegrationMergeLease(value);
+      if (!isPlainObject(value) || !validation.ok) {
+        recordInvalid(leaseSpec, row.lease_json, `invalid: integration lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
+        continue;
+      }
+      const servedLease = servedWorkflowById.get(row.workflow_id)?.integrationLease;
+      const mappedLease = servedLease;
+      if (!mappedLease)
+        continue;
+      record(leaseSpec, row.lease_json);
+      rows.leases.push({ workflowId: row.workflow_id, planId: text4(mappedLease.plan_id) ?? "", kind: "integration-merge", holder: text4(mappedLease.holder), worktreePath: null, expiresAt: text4(mappedLease.expires_at) });
+    }
+    sources.sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
+    locations.sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
+    const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
+    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: capturedStoreRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
+  } finally {
+    handle.close();
+  }
+}
+async function captureFileProjectionSources(context) {
   const harness = catalogRootDir(context, "harness");
   const inputs = await readCatalogInputs(context);
   const sources = [];
@@ -12831,13 +13625,7 @@ async function captureProjectionSources(context) {
       diagnostic,
       declared: spec.declared
     });
-    locations.push({
-      sourceKey: spec.sourceKey,
-      relativePath: spec.relativePath,
-      absolutePath: spec.absolutePath,
-      sha256: read.sha256,
-      state
-    });
+    locations.push(spec.source === "file" ? { source: "file", sourceKey: spec.sourceKey, relativePath: spec.relativePath, absolutePath: spec.absolutePath, sha256: read.sha256, state } : { source: "database", sourceKey: spec.sourceKey, relativePath: spec.relativePath, sha256: read.sha256, state, table: spec.table, keys: spec.keys });
     if (options.tolerate === true)
       return;
     if (state === "ok" && diagnostic === null)
@@ -12849,6 +13637,7 @@ async function captureProjectionSources(context) {
     });
   };
   const rootSpec = {
+    source: "file",
     sourceKey: sourceKeyOf2("root", "harness", PROJECTION_ROOT_FILE),
     kind: "root",
     rootKind: "harness",
@@ -12873,6 +13662,7 @@ async function captureProjectionSources(context) {
   const workflowSpecs = declaredEntries.map((entry) => {
     const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
     return {
+      source: "file",
       sourceKey: sourceKeyOf2("workflow", "harness", relativePath),
       kind: "workflow",
       rootKind: "harness",
@@ -12887,6 +13677,7 @@ async function captureProjectionSources(context) {
     const root = catalogRootDir(context, binding.rootKind);
     const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
     workflowSpecs.push({
+      source: "file",
       sourceKey: sourceKeyOf2("workflow", binding.rootKind, relativePath),
       kind: "workflow",
       rootKind: binding.rootKind,
@@ -12913,6 +13704,7 @@ async function captureProjectionSources(context) {
   }
   for (const doc of inputs.compassDocs) {
     const spec = {
+      source: "file",
       sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath),
       kind: "compass",
       rootKind: doc.rootKind,
@@ -12925,7 +13717,7 @@ async function captureProjectionSources(context) {
       record(spec, read, read.state, read.diagnostic);
       continue;
     }
-    const derived = deriveCompass(doc.iterationId, read.content, spec.absolutePath);
+    const derived = deriveCompass(doc.iterationId, read.content, doc.relativePath);
     if ("diagnostic" in derived) {
       record(spec, read, "invalid", derived.diagnostic);
       continue;
@@ -12960,12 +13752,26 @@ var PROJECTION_TABLES = [
   "projection_leases",
   "projection_compasses"
 ];
-function verifyCaptureStable(capture) {
+async function verifyCaptureStable(context, capture) {
   const mismatched = [];
-  for (const location of capture.locations) {
-    const observed = readSource(location);
-    if (observed.state !== location.state || observed.sha256 !== location.sha256)
-      mismatched.push(location.sourceKey);
+  const databaseLocations = capture.locations.filter((location) => location.source === "database");
+  let handle;
+  if (databaseLocations.length > 0) {
+    try {
+      handle = await openStore(context, "read");
+    } catch {
+      return databaseLocations.map((location) => location.sourceKey).sort();
+    }
+  }
+  try {
+    for (const location of capture.locations) {
+      const observed = readSource(location, handle?.db);
+      const stableInvalidFile = location.source === "file" && location.state === "invalid" && observed.state === "ok" && observed.sha256 === location.sha256;
+      if (!stableInvalidFile && (observed.state !== location.state || observed.sha256 !== location.sha256))
+        mismatched.push(location.sourceKey);
+    }
+  } finally {
+    handle?.close();
   }
   return mismatched.sort();
 }
@@ -13046,25 +13852,29 @@ function reportOf(metadata, capture, changedKeys, published) {
     changedKeys
   };
 }
-function recordRetainedHealth(db, capture, movement, attempts) {
+function recordRetainedHealth(db, capture, movement, attempts, transactionOpen = false) {
   const checkedAt = new Date().toISOString();
-  db.exec("begin immediate");
+  if (!transactionOpen)
+    db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
     const diagnostics = [...capture.diagnostics, ...movementDiagnostics(movement, attempts)];
     const freshness = meta.generation === null ? "unavailable" : "stale";
-    const changedKeys = changedSourceKeys(readPublishedFingerprints(db, meta.generation), capture.sources);
+    const changedKeys = capture.blocked && capture.sources.length === 0 ? [] : changedSourceKeys(readPublishedFingerprints(db, meta.generation), capture.sources);
     db.prepare("update projection_meta set checked_at = ?, freshness = ?, last_error_json = ? where id = 1").run(checkedAt, freshness, JSON.stringify({
       code: freshness === "unavailable" ? "projection.unavailable" : "projection.stale",
       message: freshness === "unavailable" ? "No projection generation has ever been published and this refresh could not read a coherent source set; the store reports unavailable instead of zero active work." : "At least one declared projection source failed; the last good generation was retained unchanged.",
       sources: diagnostics
     }));
-    db.exec("commit");
+    if (!transactionOpen)
+      db.exec("commit");
     return reportOf({ generation: meta.generation, freshness, builtAt: meta.builtAt, checkedAt, diagnostics }, capture, changedKeys, false);
   } catch (error) {
-    try {
-      db.exec("rollback");
-    } catch {}
+    if (!transactionOpen) {
+      try {
+        db.exec("rollback");
+      } catch {}
+    }
     throw error;
   }
 }
@@ -13076,16 +13886,18 @@ function movementDiagnostics(movement, attempts) {
     return [{ sourceKey: "catalog", reason: "source-changing", message }];
   return movement.keys.map((sourceKey) => ({ sourceKey, reason: "source-changing", message }));
 }
-function publishGeneration(db, capture) {
+function publishGeneration(db, capture, transactionOpen = false) {
   const checkedAt = new Date().toISOString();
-  db.exec("begin immediate");
+  if (!transactionOpen)
+    db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
     const previous3 = readPublishedFingerprints(db, meta.generation);
     const changedKeys = changedSourceKeys(previous3, capture.sources);
     if (meta.generation !== null && meta.sourceSetHash === capture.sourceSetHash) {
       db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(checkedAt);
-      db.exec("commit");
+      if (!transactionOpen)
+        db.exec("commit");
       return reportOf({ generation: meta.generation, freshness: "current", builtAt: meta.builtAt, checkedAt, diagnostics: [] }, capture, [], false);
     }
     const generation = (meta.generation ?? 0) + 1;
@@ -13093,32 +13905,105 @@ function publishGeneration(db, capture) {
       db.exec(`delete from ${table}`);
     insertGeneration(db, generation, capture);
     db.prepare("update projection_meta set generation = ?, format_version = ?, source_set_hash = ?, built_at = ?, checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(generation, capture.formatVersion, capture.sourceSetHash, checkedAt, checkedAt);
-    db.exec("commit");
+    if (!transactionOpen)
+      db.exec("commit");
     return reportOf({ generation, freshness: "current", builtAt: checkedAt, checkedAt, diagnostics: [] }, capture, changedKeys, true);
+  } catch (error) {
+    if (!transactionOpen) {
+      try {
+        db.exec("rollback");
+      } catch {}
+    }
+    throw error;
+  }
+}
+var PROJECTION_IN_BATCH = 500;
+function selectWhereIn(db, sql, ids, params) {
+  const rows = [];
+  for (let start = 0;start < ids.length; start += PROJECTION_IN_BATCH) {
+    const chunk = ids.slice(start, start + PROJECTION_IN_BATCH);
+    const statement = db.prepare(sql(chunk.map(() => "?").join(",")));
+    rows.push(...statement.all(...chunk.flatMap(params)));
+  }
+  return rows;
+}
+async function attemptPublication(context, capture, attempts) {
+  const mismatched = await verifyCaptureStable(context, capture);
+  if (mismatched.length > 0)
+    return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
+  if (capture.storeRevision !== undefined)
+    await applyDatabaseChurn(context);
+  const handle = await openStore(context, "write");
+  const db = handle.db;
+  try {
+    assertProjectionTables(handle);
+    db.exec("begin immediate");
+    const executionMetaTable = db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_meta'").get();
+    if (executionMetaTable?.n) {
+      const authorityRow = db.prepare("select authority_state from execution_meta where id = 1").get();
+      const authorityActive = authorityRow?.authority_state === "active";
+      if (capture.storeRevision === undefined && authorityActive) {
+        db.exec("rollback");
+        return {
+          kind: "source-stale",
+          movement: { kind: "sources", keys: ["root:harness:execution/authority"] }
+        };
+      }
+    }
+    if (capture.storeRevision !== undefined) {
+      const storeRevision = db.prepare("select revision from store_meta where id = 1").get();
+      if (storeRevision.revision !== capture.storeRevision) {
+        db.exec("rollback");
+        return { kind: "source-stale", movement: { kind: "sources", keys: ["root:harness:execution/store-revision"] } };
+      }
+    }
+    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get();
+    const catalogRevision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
+    if (catalogRevision !== capture.catalogRevision) {
+      db.exec("rollback");
+      return { kind: "source-stale", movement: { kind: "catalog" } };
+    }
+    const report = capture.blocked ? recordRetainedHealth(db, capture, null, attempts, true) : publishGeneration(db, capture, true);
+    db.exec("commit");
+    return { kind: "report", report };
   } catch (error) {
     try {
       db.exec("rollback");
     } catch {}
     throw error;
+  } finally {
+    handle.close();
   }
 }
-async function attemptPublication(context, capture, attempts) {
-  const mismatched = verifyCaptureStable(capture);
-  if (mismatched.length > 0)
-    return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
+async function applyDatabaseChurn(context) {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
+    return;
+  const encoded = process.env.MSTAR_PROJECTION_DB_CHURN;
+  if (!encoded)
+    return;
+  const request = JSON.parse(encoded);
+  const requests = Array.isArray(request) ? request : [request];
+  const next = requests.shift();
+  if (requests.length === 0)
+    delete process.env.MSTAR_PROJECTION_DB_CHURN;
+  else
+    process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify(requests);
+  if (!isPlainObject(next) || next.kind !== "insert-plan" && next.kind !== "update-row" || typeof next.workflowId !== "string" || typeof next.planId !== "string") {
+    throw new Error("invalid projection DB churn test request");
+  }
   const handle = await openStore(context, "write");
   try {
-    assertProjectionTables(handle);
-    const db = handle.db;
-    if (capture.blocked) {
-      return { kind: "report", report: recordRetainedHealth(db, capture, null, attempts) };
+    if (next.kind === "insert-plan") {
+      handle.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')").run(next.workflowId, next.planId, next.workflowId, JSON.stringify({ id: next.planId, title: next.planId, file: `plans/${next.planId}.md`, status: "Todo" }));
+    } else {
+      const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(next.workflowId);
+      if (!current)
+        throw new Error("projection DB churn workflow is missing");
+      const state = JSON.parse(current.state_json);
+      state.updated_at = `${String(state.updated_at)}-churn`;
+      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), next.workflowId);
     }
-    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get();
-    const revision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
-    if (revision !== capture.catalogRevision) {
-      return { kind: "source-stale", movement: { kind: "catalog" } };
-    }
-    return { kind: "report", report: publishGeneration(db, capture) };
+    handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
   } finally {
     handle.close();
   }

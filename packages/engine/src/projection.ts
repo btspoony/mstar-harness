@@ -37,20 +37,23 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
-import type { ExecutionLease, IntegrationMergeLease } from "./lease.js";
-import { rowPlanId, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
-import { openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+import { validateExecutionLease, validateIntegrationMergeLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
+import { readExecutionState, type ExecutionState } from "./execution-store.js";
+import { rowPlanId, validatePlanRow, validateWorkflowEntry, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
+import { resolveCurrentAuthority } from "./store-read.js";
 import {
   LEGACY_WORKTREE_PATH_CODE,
   validateWorkflowSnapshot,
+  WORKFLOW_LIFECYCLE_STATUSES,
+  WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
   type WorkflowSnapshot,
 } from "./workflow.js";
-
 /** Projection payload/format version (contract §5). A bump invalidates every
  * published generation: the refresh discards the old rows and rebuilds. */
 export const PROJECTION_FORMAT_VERSION = 2;
@@ -144,15 +147,18 @@ export type ProjectionRows = {
   leases: ProjectedLease[];
   compasses: ProjectedCompass[];
 };
-
-/** Resolved location of one captured source (internal re-verification handle). */
-export type ProjectionSourceLocation = {
-  sourceKey: string;
-  relativePath: string;
-  absolutePath: string;
-  sha256: string | null;
-  state: ProjectionSourceState;
-};
+/** Resolved file or database row used to re-verify one captured source. */
+export type ProjectionSourceLocation =
+  | { source: "file"; sourceKey: string; relativePath: string; absolutePath: string; sha256: string | null; state: ProjectionSourceState }
+  | {
+      source: "database";
+      sourceKey: string;
+      relativePath: string;
+      sha256: string | null;
+      state: ProjectionSourceState;
+      table: "execution_workflows" | "execution_plans" | "execution_leases" | "execution_integration_leases" | "execution_registry";
+      keys: Record<string, string>;
+    };
 
 /**
  * A validated read of the whole source set, taken outside any transaction.
@@ -163,6 +169,7 @@ export type ProjectionSourceLocation = {
 export type ProjectionCapture = {
   formatVersion: number;
   catalogRevision: number;
+  storeRevision?: number | null;
   sources: ProjectionSourceDigest[];
   rows: ProjectionRows;
   diagnostics: SourceDiagnostic[];
@@ -216,14 +223,42 @@ export class ProjectionError extends Error {
 // Source discovery and reads
 // ---------------------------------------------------------------------------
 
-type SourceSpec = {
-  sourceKey: string;
-  kind: ProjectionSourceKind;
-  rootKind: CatalogRootKind;
-  relativePath: string;
-  absolutePath: string;
-  declared: boolean;
+type ProjectionSourceTable =
+  | "execution_workflows"
+  | "execution_plans"
+  | "execution_leases"
+  | "execution_integration_leases"
+  | "execution_registry";
+
+const DATABASE_SOURCE_PRIMARY_KEYS: Record<ProjectionSourceTable, readonly string[]> = {
+  execution_registry: [],
+  execution_workflows: ["workflow_id"],
+  execution_plans: ["workflow_id", "plan_id"],
+  execution_leases: ["workflow_id", "plan_id"],
+  execution_integration_leases: ["workflow_id"],
 };
+
+function databaseSourceLocationError(location: unknown): string | null {
+  if (!isPlainObject(location) || typeof location.table !== "string" || !Object.prototype.hasOwnProperty.call(DATABASE_SOURCE_PRIMARY_KEYS, location.table)) {
+    return "unknown database source table";
+  }
+  const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[location.table as ProjectionSourceTable];
+  const sourceKeys = location.keys;
+  if (!isPlainObject(sourceKeys)) return "database source keys do not match the table primary key";
+  const keys = Object.keys(sourceKeys);
+  if (
+    keys.length !== primaryKeys.length ||
+    primaryKeys.some((key) => !Object.prototype.hasOwnProperty.call(sourceKeys, key)) ||
+    keys.some((key) => typeof sourceKeys[key] !== "string" || sourceKeys[key] === "")
+  ) {
+    return "database source keys do not match the table primary key";
+  }
+  return null;
+}
+
+type SourceSpec =
+  | { source: "file"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; absolutePath: string; declared: boolean }
+  | { source: "database"; sourceKey: string; kind: ProjectionSourceKind; rootKind: CatalogRootKind; relativePath: string; declared: boolean; table: ProjectionSourceTable; keys: Record<string, string> };
 
 type SourceRead = { state: ProjectionSourceState; sha256: string | null; content: string | null; diagnostic: string | null };
 
@@ -262,7 +297,55 @@ function churnAfterRead(spec: { relativePath: string; absolutePath: string }): v
  * used: the digest of the raw bytes is the only correctness token, so a
  * same-size/same-mtime rewrite is visible here.
  */
-function readSource(spec: { relativePath: string; absolutePath: string }): SourceRead {
+function readSource(spec: SourceSpec | ProjectionSourceLocation, db?: StoreDb): SourceRead {
+  if (spec.source === "database") {
+    const sourceError = databaseSourceLocationError(spec);
+    if (sourceError !== null) return { state: "invalid", sha256: null, content: null, diagnostic: sourceError };
+    if (db === undefined) {
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: "capture arm pending (Task 2)" };
+    }
+    try {
+      if (spec.table === "execution_registry") {
+        const entries = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id asc").all() as
+          Array<{ workflow_id: string; entry_json: unknown }>;
+        for (const entry of entries) {
+          if (typeof entry.entry_json !== "string") {
+            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+          }
+          try {
+            JSON.parse(entry.entry_json);
+          } catch {
+            return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+          }
+        }
+        const content = JSON.stringify(entries);
+        return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+      }
+      const primaryKeys = DATABASE_SOURCE_PRIMARY_KEYS[spec.table];
+      const row = db
+        .prepare(`select * from ${spec.table} where ${primaryKeys.map((key) => `${key} = ?`).join(" and ")}`)
+        .get(...primaryKeys.map((key) => spec.keys[key])) as Record<string, unknown> | undefined;
+      if (row === undefined) {
+        return { state: "missing", sha256: null, content: null, diagnostic: `missing: no row at ${spec.relativePath}` };
+      }
+      const columns =
+        spec.table === "execution_plans"
+          ? [row.state_json, row.coordination_json]
+          : [spec.table === "execution_workflows" ? row.state_json : row.lease_json];
+      if (columns.some((value) => typeof value !== "string")) {
+        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+      }
+      try {
+        for (const column of columns as string[]) JSON.parse(column);
+      } catch {
+        return { state: "invalid", sha256: null, content: null, diagnostic: `invalid: malformed JSON at ${spec.relativePath}` };
+      }
+      const content = columns.join("\u0000");
+      return { state: "ok", sha256: createHash("sha256").update(content, "utf8").digest("hex"), content, diagnostic: null };
+    } catch {
+      return { state: "inaccessible", sha256: null, content: null, diagnostic: `inaccessible: execution row read refused at ${spec.relativePath}` };
+    }
+  }
   let content: string;
   try {
     content = readFileSync(spec.absolutePath, "utf8");
@@ -641,6 +724,8 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
 // Capture
 // ---------------------------------------------------------------------------
 
+
+
 /**
  * Read, validate and fingerprint the whole source set without writing
  * anything. Source I/O happens ONLY here (and in the publication
@@ -648,6 +733,295 @@ function deriveCompass(iterationId: string, content: string, relativePath: strin
  * the transaction" rule is structural rather than a convention.
  */
 export async function captureProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
+  const authority = await resolveCurrentAuthority(context);
+  return authority.route === "execution"
+    ? captureExecutionProjectionSources(context)
+    : captureFileProjectionSources(context);
+}
+function safeExecutionAuthorityError(error: unknown): string {
+  const name = error instanceof Error ? error.constructor.name : "UnknownError";
+  const safeName = /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(name) ? name : "UnknownError";
+  return `execution authority unreadable (${safeName})`;
+}
+
+async function captureExecutionProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
+  const inputs = await readCatalogInputs(context);
+  const revisionHandle = await openStore(context, "read");
+  let capturedStoreRevision: number;
+  try {
+    capturedStoreRevision = (revisionHandle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
+  } finally {
+    revisionHandle.close();
+  }
+  let servedGraph: ExecutionState;
+  try {
+    if (process.env.MSTAR_STORE_TEST_RUNNER === "1" && process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR) {
+      throw new SyntaxError(process.env.MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR);
+    }
+    servedGraph = (await readExecutionState(context)).data;
+  } catch (error) {
+    const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
+    const message = safeExecutionAuthorityError(error);
+    const sources: ProjectionSourceDigest[] = [];
+    const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
+    return {
+      formatVersion: PROJECTION_FORMAT_VERSION,
+      catalogRevision: inputs.catalogRevision,
+      storeRevision: capturedStoreRevision,
+      sources,
+      rows,
+      diagnostics: [{ sourceKey, reason: "invalid", message }],
+      sourceSetHash: computeSourceSetHash(inputs.catalogRevision, sources),
+      blocked: true,
+      locations: [],
+    };
+  }
+  const handle = await openStore(context, "read");
+  try {
+    const db = handle.db;
+    const sources: ProjectionSourceDigest[] = [];
+    const locations: ProjectionSourceLocation[] = [];
+    const diagnostics: SourceDiagnostic[] = [];
+    const rows: ProjectionRows = { workflows: [], plans: [], leases: [], compasses: [] };
+    const recordInvalid = (sourceSpec: Extract<SourceSpec, { source: "database" }>, content: string, message: string, readState: "ok" | "invalid" = "ok"): void => {
+      const sha256 = readState === "invalid" ? null : createHash("sha256").update(content, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "invalid", diagnostic: message, declared: true });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: readState, table: sourceSpec.table, keys: sourceSpec.keys });
+      diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
+    };
+    const record = (sourceSpec: Extract<SourceSpec, { source: "database" }>, content: string, shaText = content): void => {
+      const sha256 = createHash("sha256").update(shaText, "utf8").digest("hex");
+      sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256, state: "ok", diagnostic: null, declared: sourceSpec.declared });
+      locations.push({ source: "database", sourceKey: sourceSpec.sourceKey, relativePath: sourceSpec.relativePath, sha256, state: "ok", table: sourceSpec.table, keys: sourceSpec.keys });
+    };
+    const spec = (table: ProjectionSourceTable, kind: ProjectionSourceKind, rel: string, keys: Record<string, string>): Extract<SourceSpec, { source: "database" }> => ({
+      source: "database", sourceKey: sourceKeyOf(kind, "harness", rel), kind, rootKind: "harness", relativePath: rel, declared: true, table, keys,
+    });
+    const registry = db.prepare("select workflow_id, entry_json from execution_registry order by workflow_id").all() as Array<{ workflow_id: string; entry_json: string }>;
+    const registrySpec = spec("execution_registry", "root", "execution/registry", {});
+    const malformedRegistryJson = registry.some((item) => {
+      try {
+        JSON.parse(item.entry_json);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    const invalidRegistryEntry = registry.find((item) => {
+      try {
+        const entry: unknown = JSON.parse(item.entry_json);
+        return !isPlainObject(entry) || entry.id !== item.workflow_id || !validateWorkflowEntry(entry).ok;
+      } catch {
+        return false;
+      }
+    });
+    if (malformedRegistryJson) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains malformed entry JSON", "invalid");
+    else if (invalidRegistryEntry) recordInvalid(registrySpec, JSON.stringify(registry), "invalid: execution registry contains mismatched or domain-invalid entry JSON");
+    else record(registrySpec, JSON.stringify(registry));
+    const graphWorkflows = servedGraph.workflows;
+    const servedWorkflowIds = graphWorkflows.map((workflow) => workflow.state.id);
+    const registryIds = new Set(servedWorkflowIds);
+    const servedWorkflowById = new Map(graphWorkflows.map((workflow) => [workflow.state.id, workflow]));
+    const workflows = servedWorkflowIds.length === 0
+      ? []
+      : selectWhereIn<{ workflow_id: string; state_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, state_json from execution_workflows where workflow_id in (${placeholders}) order by workflow_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
+    const workflowIds = new Set(workflows.map((item) => item.workflow_id));
+    for (const item of registry) {
+      if (!workflowIds.has(item.workflow_id)) {
+        const sourceKey = sourceKeyOf("root", "harness", "execution/registry");
+        diagnostics.push({ sourceKey, reason: "invalid", message: `invalid: registry membership has no workflow row (${item.workflow_id})` });
+      }
+    }
+    const workflowStateById = new Map<string, Record<string, unknown>>();
+    for (const item of workflows) {
+      const workflowSpec = spec("execution_workflows", "workflow", `execution/workflows/${item.workflow_id}`, { workflow_id: item.workflow_id });
+      let state: unknown;
+      try { state = JSON.parse(item.state_json); } catch {
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state is not valid JSON", "invalid");
+        continue;
+      }
+      if (!isPlainObject(state) || state.id !== item.workflow_id || !WORKFLOW_LIFECYCLE_TYPES.includes(state.type as never) || !WORKFLOW_LIFECYCLE_STATUSES.includes(state.status as never)) {
+        recordInvalid(workflowSpec, item.state_json, "invalid: workflow state has an invalid object, type, or status");
+        continue;
+      }
+      const servedWorkflow = servedWorkflowById.get(item.workflow_id);
+      if (!servedWorkflow) {
+        recordInvalid(workflowSpec, item.state_json, "invalid: served workflow is missing from the execution authority graph");
+        continue;
+      }
+      const projectionState = servedWorkflow.state;
+      const workflowValidation = validateWorkflowSnapshot({ ...projectionState, plans: [] });
+      const workflowErrors = workflowValidation.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE);
+      if (workflowErrors.length > 0) {
+        recordInvalid(workflowSpec, item.state_json, `invalid: workflow state failed validation (${workflowErrors.map((violation) => violation.code).join(", ")})`);
+        continue;
+      }
+      record(workflowSpec, item.state_json);
+      const branch = isPlainObject(projectionState.branch) ? projectionState.branch : {};
+      rows.workflows.push({
+        id: item.workflow_id, type: projectionState.type as ProjectedWorkflow["type"], status: projectionState.status as string,
+        phase: text(projectionState.phase), startedAt: text(projectionState.started_at), endedAt: text(projectionState.ended_at), updatedAt: text(projectionState.updated_at),
+        branchBase: text(branch.base), branchSource: text(branch.source), branchIntegration: text(branch.integration), branchTarget: text(branch.target),
+        activeRegistration: registryIds.has(item.workflow_id),
+      });
+    }
+    const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
+    const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
+    const servedLeaseIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.filter((plan) => plan.executionLease !== null).map((plan) => plan.plan.id))]));
+    const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
+    const plans = servedWorkflowIds.length === 0
+      ? []
+      : selectWhereIn<{ workflow_id: string; plan_id: string; revision: number; state_json: string; coordination_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${placeholders}) order by workflow_id, plan_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
+    for (const row of plans) {
+      if (!servedPlanIdsByWorkflow.get(row.workflow_id)?.has(row.plan_id)) continue;
+      const sourceSpec = spec("execution_plans", "workflow", `execution/plans/${row.workflow_id}/${row.plan_id}`, { workflow_id: row.workflow_id, plan_id: row.plan_id });
+      let state: unknown;
+      let coordination: unknown;
+      try {
+        state = JSON.parse(row.state_json);
+        coordination = JSON.parse(row.coordination_json);
+      } catch {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state or coordination is not valid JSON", "invalid");
+        continue;
+      }
+      const plan = isPlainObject(state) ? { ...state, coordination } : state;
+      const validation = validatePlanRow(plan);
+      if (!isPlainObject(coordination) || !validation.ok) {
+        const codes = validation.violations.map((item) => item.code);
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `invalid: plan state or coordination failed validation${codes.length ? ` (${codes.join(", ")})` : ""}`);
+        continue;
+      }
+      const planState = state as Record<string, unknown>;
+      const coordinationState = coordination as Record<string, unknown>;
+      const planId = rowPlanId(planState);
+      if (!planId || planId !== row.plan_id) {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: plan state id does not match its execution_plans key");
+        continue;
+      }
+      const workflowState = workflowStateById.get(row.workflow_id);
+      const authorityPlanView = servedWorkflowById.get(row.workflow_id)?.plans.find((view) => view.plan.id === row.plan_id);
+      const leaseRow = db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(row.workflow_id, row.plan_id) as { lease_json: string } | undefined;
+      let snapshotLease: unknown;
+      if (leaseRow) {
+        try { snapshotLease = JSON.parse(leaseRow.lease_json); } catch { /* reported on the lease source below */ }
+      }
+      const snapshotPlanBase = { ...planState, coordination: { revision: row.revision, ...coordinationState } };
+      const snapshotPlan = snapshotLease === undefined ? snapshotPlanBase : { ...snapshotPlanBase, execution_lease: snapshotLease };
+      if (workflowState) {
+        const workflowGate = validateWorkflowSnapshot({ ...workflowState, plans: [snapshotPlan] });
+        const blockingCodes = workflowGate.violations.filter((violation) => violation.code !== LEGACY_WORKTREE_PATH_CODE).map((violation) => violation.code);
+        if (blockingCodes.length > 0) {
+          recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `invalid: plan does not validate in its workflow (${blockingCodes.join(", ")})`);
+          continue;
+        }
+      }
+      if (!authorityPlanView) {
+        recordInvalid(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, "invalid: served plan is missing from the execution authority graph");
+        continue;
+      }
+      const pinRevision = authorityPlanView.frozenInput?.entity_revision ?? (isPlainObject(planState.metadata) && isPlainObject(planState.metadata.catalog_pin) ? planState.metadata.catalog_pin.entity_revision : null);
+      record(sourceSpec, `${row.state_json}\u0000${row.coordination_json}`, `${row.state_json}\u0000${row.coordination_json}`);
+      const mappedCoordination = authorityPlanView.coordination;
+      const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
+      rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
+    }
+    const leases = servedWorkflowIds.length === 0
+      ? []
+      : selectWhereIn<{ workflow_id: string; plan_id: string; lease_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${placeholders}) order by workflow_id, plan_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
+    for (const lease of leases) {
+      if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id)) continue;
+      const leaseSpec = spec("execution_leases", "workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`, { workflow_id: lease.workflow_id, plan_id: lease.plan_id });
+      let value: unknown;
+      try { value = JSON.parse(lease.lease_json); } catch {
+        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON", "invalid");
+        continue;
+      }
+      const validation = validateExecutionLease(value);
+      if (!isPlainObject(value) || !validation.ok) {
+        recordInvalid(leaseSpec, lease.lease_json, `invalid: execution lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
+        continue;
+      }
+      const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
+      // A released lease row is a retained tombstone the authority keeps for
+      // ABA/holder rules; the dashboard must not show past ownership as a
+      // current lease, so released rows are projection-invisible (the same
+      // treatment the authority applies to released integration leases).
+      if (!servedLease || servedLease.status === "released") continue;
+      record(leaseSpec, lease.lease_json);
+      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(servedLease.holder), worktreePath: text(servedLease.worktree_path), expiresAt: text(servedLease.expires_at) });
+    }
+    for (const doc of inputs.compassDocs) {
+      const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const read = readSource(fspec);
+      if (read.state !== "ok" || read.content === null) {
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: read.state });
+        diagnostics.push({ sourceKey: fspec.sourceKey, reason: read.state, message: read.diagnostic ?? "compass unavailable" });
+        continue;
+      }
+      const parsed = deriveCompass(doc.iterationId, read.content, doc.relativePath);
+      if ("diagnostic" in parsed) {
+        sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "invalid", diagnostic: parsed.diagnostic, declared: true });
+        locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "invalid" });
+        diagnostics.push({ sourceKey: fspec.sourceKey, reason: "invalid", message: parsed.diagnostic });
+        continue;
+      }
+      rows.compasses.push(parsed);
+      sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: "ok", diagnostic: null, declared: true });
+      locations.push({ source: "file", sourceKey: fspec.sourceKey, relativePath: fspec.relativePath, absolutePath: fspec.absolutePath, sha256: read.sha256, state: "ok" });
+    }
+    const integrationLeases = servedWorkflowIds.length === 0
+      ? []
+      : selectWhereIn<{ workflow_id: string; lease_json: string }>(
+          db,
+          (placeholders) => `select workflow_id, lease_json from execution_integration_leases where workflow_id in (${placeholders}) order by workflow_id`,
+          servedWorkflowIds,
+          (id) => [id],
+        );
+    for (const row of integrationLeases) {
+      if (!servedIntegrationLeaseIds.has(row.workflow_id)) continue;
+      const leaseSpec = spec("execution_integration_leases", "workflow", `execution/integration-leases/${row.workflow_id}`, { workflow_id: row.workflow_id });
+      let value: unknown;
+      try { value = JSON.parse(row.lease_json); } catch {
+        recordInvalid(leaseSpec, row.lease_json, "invalid: integration lease is not valid JSON", "invalid");
+        continue;
+      }
+      const validation = validateIntegrationMergeLease(value);
+      if (!isPlainObject(value) || !validation.ok) {
+        recordInvalid(leaseSpec, row.lease_json, `invalid: integration lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
+        continue;
+      }
+      const servedLease = servedWorkflowById.get(row.workflow_id)?.integrationLease;
+      const mappedLease = servedLease;
+      if (!mappedLease) continue;
+      record(leaseSpec, row.lease_json);
+      rows.leases.push({ workflowId: row.workflow_id, planId: text(mappedLease.plan_id) ?? "", kind: "integration-merge", holder: text(mappedLease.holder), worktreePath: null, expiresAt: text(mappedLease.expires_at) });
+    }
+    sources.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
+    locations.sort((a,b) => a.sourceKey.localeCompare(b.sourceKey));
+    const sourceSetHash = computeSourceSetHash(inputs.catalogRevision, sources);
+    return { formatVersion: PROJECTION_FORMAT_VERSION, catalogRevision: inputs.catalogRevision, storeRevision: capturedStoreRevision, sources, rows, diagnostics, sourceSetHash, blocked: diagnostics.length > 0, locations };
+  } finally {
+    handle.close();
+  }
+}
+
+async function captureFileProjectionSources(context: StoreContext): Promise<ProjectionCapture> {
   const harness = catalogRootDir(context, "harness");
   const inputs = await readCatalogInputs(context);
 
@@ -673,13 +1047,11 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
       diagnostic,
       declared: spec.declared,
     });
-    locations.push({
-      sourceKey: spec.sourceKey,
-      relativePath: spec.relativePath,
-      absolutePath: spec.absolutePath,
-      sha256: read.sha256,
-      state,
-    });
+    locations.push(
+      spec.source === "file"
+        ? { source: "file", sourceKey: spec.sourceKey, relativePath: spec.relativePath, absolutePath: spec.absolutePath, sha256: read.sha256, state }
+        : { source: "database", sourceKey: spec.sourceKey, relativePath: spec.relativePath, sha256: read.sha256, state, table: spec.table, keys: spec.keys },
+    );
     if (options.tolerate === true) return;
     if (state === "ok" && diagnostic === null) return;
     diagnostics.push({
@@ -693,6 +1065,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
 
   // --- root execution source ------------------------------------------------
   const rootSpec: SourceSpec = {
+    source: "file",
     sourceKey: sourceKeyOf("root", "harness", PROJECTION_ROOT_FILE),
     kind: "root",
     rootKind: "harness",
@@ -719,6 +1092,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
   const workflowSpecs: SourceSpec[] = declaredEntries.map((entry) => {
     const relativePath = `${entry.dir}/${WORKFLOW_SNAPSHOT_FILE}`;
     return {
+      source: "file",
       sourceKey: sourceKeyOf("workflow", "harness", relativePath),
       kind: "workflow",
       rootKind: "harness",
@@ -732,6 +1106,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
     const root = catalogRootDir(context, binding.rootKind);
     const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
     workflowSpecs.push({
+      source: "file",
       sourceKey: sourceKeyOf("workflow", binding.rootKind, relativePath),
       kind: "workflow",
       rootKind: binding.rootKind,
@@ -767,6 +1142,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
   // --- catalog-linked compass documents ------------------------------------
   for (const doc of inputs.compassDocs) {
     const spec: SourceSpec = {
+      source: "file",
       sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath),
       kind: "compass",
       rootKind: doc.rootKind,
@@ -779,7 +1155,7 @@ export async function captureProjectionSources(context: StoreContext): Promise<P
       record(spec, read, read.state, read.diagnostic);
       continue;
     }
-    const derived = deriveCompass(doc.iterationId, read.content, spec.absolutePath);
+    const derived = deriveCompass(doc.iterationId, read.content, doc.relativePath);
     if ("diagnostic" in derived) {
       record(spec, read, "invalid", derived.diagnostic);
       continue;
@@ -854,11 +1230,25 @@ const PROJECTION_TABLES: readonly string[] = [
  * inside the publication transaction), so re-reading the captured locations
  * plus that revision comparison covers the whole source set.
  */
-function verifyCaptureStable(capture: ProjectionCapture): string[] {
+async function verifyCaptureStable(context: StoreContext, capture: ProjectionCapture): Promise<string[]> {
   const mismatched: string[] = [];
-  for (const location of capture.locations) {
-    const observed = readSource(location);
-    if (observed.state !== location.state || observed.sha256 !== location.sha256) mismatched.push(location.sourceKey);
+  const databaseLocations = capture.locations.filter((location) => location.source === "database");
+  let handle: StoreHandle | undefined;
+  if (databaseLocations.length > 0) {
+    try {
+      handle = await openStore(context, "read");
+    } catch {
+      return databaseLocations.map((location) => location.sourceKey).sort();
+    }
+  }
+  try {
+    for (const location of capture.locations) {
+      const observed = readSource(location, handle?.db);
+      const stableInvalidFile = location.source === "file" && location.state === "invalid" && observed.state === "ok" && observed.sha256 === location.sha256;
+      if (!stableInvalidFile && (observed.state !== location.state || observed.sha256 !== location.sha256)) mismatched.push(location.sourceKey);
+    }
+  } finally {
+    handle?.close();
   }
   return mismatched.sort();
 }
@@ -1045,14 +1435,17 @@ function recordRetainedHealth(
   capture: ProjectionCapture,
   movement: Movement | null,
   attempts: number,
+  transactionOpen = false,
 ): RefreshReport {
   const checkedAt = new Date().toISOString();
-  db.exec("begin immediate");
+  if (!transactionOpen) db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
     const diagnostics = [...capture.diagnostics, ...movementDiagnostics(movement, attempts)];
     const freshness: ProjectionFreshness = meta.generation === null ? "unavailable" : "stale";
-    const changedKeys = changedSourceKeys(readPublishedFingerprints(db, meta.generation), capture.sources);
+    const changedKeys = capture.blocked && capture.sources.length === 0
+      ? []
+      : changedSourceKeys(readPublishedFingerprints(db, meta.generation), capture.sources);
     db.prepare("update projection_meta set checked_at = ?, freshness = ?, last_error_json = ? where id = 1").run(
       checkedAt,
       freshness,
@@ -1065,7 +1458,7 @@ function recordRetainedHealth(
         sources: diagnostics,
       }),
     );
-    db.exec("commit");
+    if (!transactionOpen) db.exec("commit");
     return reportOf(
       { generation: meta.generation, freshness, builtAt: meta.builtAt, checkedAt, diagnostics },
       capture,
@@ -1073,10 +1466,12 @@ function recordRetainedHealth(
       false,
     );
   } catch (error) {
-    try {
-      db.exec("rollback");
-    } catch {
-      // connection-level failure during rollback -- nothing was committed
+    if (!transactionOpen) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback -- nothing was committed
+      }
     }
     throw error;
   }
@@ -1104,9 +1499,9 @@ function movementDiagnostics(movement: Movement | null, attempts: number): Sourc
  * the catalog revision inside that transaction). Identical captures keep the
  * published generation and only refresh `checked_at`/`freshness`.
  */
-function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshReport {
+function publishGeneration(db: StoreDb, capture: ProjectionCapture, transactionOpen = false): RefreshReport {
   const checkedAt = new Date().toISOString();
-  db.exec("begin immediate");
+  if (!transactionOpen) db.exec("begin immediate");
   try {
     const meta = ensureProjectionFormat(db);
     const previous = readPublishedFingerprints(db, meta.generation);
@@ -1115,7 +1510,7 @@ function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshRepo
       db.prepare("update projection_meta set checked_at = ?, freshness = 'current', last_error_json = null where id = 1").run(
         checkedAt,
       );
-      db.exec("commit");
+      if (!transactionOpen) db.exec("commit");
       return reportOf(
         { generation: meta.generation, freshness: "current", builtAt: meta.builtAt, checkedAt, diagnostics: [] },
         capture,
@@ -1130,7 +1525,7 @@ function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshRepo
       "update projection_meta set generation = ?, format_version = ?, source_set_hash = ?, built_at = ?, checked_at = ?, " +
         "freshness = 'current', last_error_json = null where id = 1",
     ).run(generation, capture.formatVersion, capture.sourceSetHash, checkedAt, checkedAt);
-    db.exec("commit");
+    if (!transactionOpen) db.exec("commit");
     return reportOf(
       { generation, freshness: "current", builtAt: checkedAt, checkedAt, diagnostics: [] },
       capture,
@@ -1138,10 +1533,12 @@ function publishGeneration(db: StoreDb, capture: ProjectionCapture): RefreshRepo
       true,
     );
   } catch (error) {
-    try {
-      db.exec("rollback");
-    } catch {
-      // connection-level failure during rollback -- the last good rows survive
+    if (!transactionOpen) {
+      try {
+        db.exec("rollback");
+      } catch {
+        // connection-level failure during rollback -- the last good rows survive
+      }
     }
     throw error;
   }
@@ -1165,33 +1562,84 @@ function assertCaptureShape(capture: ProjectionCapture): void {
   if (capture.locations.length !== capture.sources.length) {
     invalid("capture locations must line up with its source digests (both come from the same read)");
   }
+  for (const location of capture.locations) {
+    if (location.source !== "database") continue;
+    const sourceError = databaseSourceLocationError(location);
+    if (sourceError !== null) invalid(`capture ${sourceError}`);
+  }
   if (capture.blocked && capture.diagnostics.length === 0) {
     invalid("a blocked capture must name the diagnostic that blocked it");
   }
 }
 
+const PROJECTION_IN_BATCH = 500;
+
+/** `select ... where col in (...)` over a possibly large served-id set, chunked
+ * to stay under SQLite's bind-variable limit; result rows are concatenated in
+ * chunk order (callers re-sort or key by id, never by query order). */
+function selectWhereIn<T>(db: StoreDb, sql: (placeholders: string) => string, ids: readonly string[], params: (id: string) => unknown[]): T[] {
+  const rows: T[] = [];
+  for (let start = 0; start < ids.length; start += PROJECTION_IN_BATCH) {
+    const chunk = ids.slice(start, start + PROJECTION_IN_BATCH);
+    const statement = db.prepare(sql(chunk.map(() => "?").join(",")));
+    rows.push(...(statement.all(...chunk.flatMap(params)) as T[]));
+  }
+  return rows;
+}
+
 async function attemptPublication(context: StoreContext, capture: ProjectionCapture, attempts: number): Promise<PublishAttempt> {
-  const mismatched = verifyCaptureStable(capture);
+  const mismatched = await verifyCaptureStable(context, capture);
   if (mismatched.length > 0) return { kind: "source-stale", movement: { kind: "sources", keys: mismatched } };
+  if (capture.storeRevision !== undefined) await applyDatabaseChurn(context);
 
   const handle = await openStore(context, "write");
+  const db = handle.db;
   try {
     assertProjectionTables(handle);
-    const db = handle.db;
-    if (capture.blocked) {
-      return { kind: "report", report: recordRetainedHealth(db, capture, null, attempts) };
+    db.exec("begin immediate");
+    // Arm/authority agreement, decided INSIDE the publication transaction: a
+    // files-arm capture must not publish after the authority activated (and an
+    // authority-arm capture must not publish after a deactivation, should one
+    // ever exist). Activation bumps the store revision without touching the
+    // catalog revision, so the revision compares alone cannot catch it. A store
+    // below migration 4 has no execution_meta and cannot activate — no guard.
+    const executionMetaTable = db
+      .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_meta'")
+      .get() as { n?: number } | undefined;
+    if (executionMetaTable?.n) {
+      const authorityRow = db.prepare("select authority_state from execution_meta where id = 1").get() as
+        | { authority_state?: unknown }
+        | undefined;
+      const authorityActive = authorityRow?.authority_state === "active";
+      if (capture.storeRevision === undefined && authorityActive) {
+        db.exec("rollback");
+        return {
+          kind: "source-stale",
+          movement: { kind: "sources", keys: ["root:harness:execution/authority"] },
+        };
+      }
     }
-    // The catalog revision is part of the fingerprint and the compass/roadmap
-    // paths come from it, so a move must be compared INSIDE the transaction:
-    // outside it, another catalog writer could land between check and commit.
-    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get() as
-      | { catalog_revision?: unknown }
-      | undefined;
-    const revision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
-    if (revision !== capture.catalogRevision) {
+    if (capture.storeRevision !== undefined) {
+      const storeRevision = db.prepare("select revision from store_meta where id = 1").get() as { revision: number };
+      if (storeRevision.revision !== capture.storeRevision) {
+        db.exec("rollback");
+        return { kind: "source-stale", movement: { kind: "sources", keys: ["root:harness:execution/store-revision"] } };
+      }
+    }
+    const revisionRow = db.prepare("select catalog_revision from store_meta where id = 1").get() as { catalog_revision?: unknown } | undefined;
+    const catalogRevision = typeof revisionRow?.catalog_revision === "number" ? revisionRow.catalog_revision : 0;
+    if (catalogRevision !== capture.catalogRevision) {
+      db.exec("rollback");
       return { kind: "source-stale", movement: { kind: "catalog" } };
     }
-    return { kind: "report", report: publishGeneration(db, capture) };
+    const report = capture.blocked
+      ? recordRetainedHealth(db, capture, null, attempts, true)
+      : publishGeneration(db, capture, true);
+    db.exec("commit");
+    return { kind: "report", report };
+  } catch (error) {
+    try { db.exec("rollback"); } catch { /* transaction may already be closed */ }
+    throw error;
   } finally {
     handle.close();
   }
@@ -1230,6 +1678,39 @@ export async function publishProjectionCapture(context: StoreContext, capture: P
  * unusable store (missing/outdated schema, busy writer), which the read
  * boundary must surface rather than cache.
  */
+async function applyDatabaseChurn(context: StoreContext): Promise<void> {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1") return;
+  const encoded = process.env.MSTAR_PROJECTION_DB_CHURN;
+  if (!encoded) return;
+  const request: unknown = JSON.parse(encoded);
+  const requests = Array.isArray(request) ? request : [request];
+  const next = requests.shift();
+  if (requests.length === 0) delete process.env.MSTAR_PROJECTION_DB_CHURN;
+  else process.env.MSTAR_PROJECTION_DB_CHURN = JSON.stringify(requests);
+  if (!isPlainObject(next) || (next.kind !== "insert-plan" && next.kind !== "update-row") ||
+      typeof next.workflowId !== "string" || typeof next.planId !== "string") {
+    throw new Error("invalid projection DB churn test request");
+  }
+  const handle = await openStore(context, "write");
+  try {
+    if (next.kind === "insert-plan") {
+      handle.db.prepare(
+        "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) " +
+          "values (?, ?, 1, (select coalesce(max(ordinal), -1) + 1 from execution_plans where workflow_id = ?), ?, '{}')",
+      ).run(next.workflowId, next.planId, next.workflowId, JSON.stringify({ id: next.planId, title: next.planId, file: `plans/${next.planId}.md`, status: "Todo" }));
+    } else {
+      const current = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(next.workflowId) as { state_json: string } | undefined;
+      if (!current) throw new Error("projection DB churn workflow is missing");
+      const state = JSON.parse(current.state_json) as Record<string, unknown>;
+      state.updated_at = `${String(state.updated_at)}-churn`;
+      handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), next.workflowId);
+    }
+    handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+  } finally {
+    handle.close();
+  }
+}
+
 export async function refreshProjections(context: StoreContext): Promise<RefreshReport> {
   let capture = await captureProjectionSources(context);
   let attempt = await attemptPublication(context, capture, 1);
