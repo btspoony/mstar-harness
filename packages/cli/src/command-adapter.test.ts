@@ -83,27 +83,35 @@ test("CLI scope gate constrains a minted identity to the scope it declares", () 
   const sameWorkflowRef = encodeExecutionSessionRef({
     storeId: "stores/scope", epoch: 1, workflowId: identity.workflowId, role: "coordinator", sessionId: "s", planId: null,
   });
-  expect(mintedIdentityScopeProblem(identity, { sessionRef: sameWorkflowRef, operation: "op" })).toBeUndefined();
-  expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: identity.workflowId, coordinator: true })).toBeUndefined();
-  expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, planId: identity.planId ?? undefined, expect: "exec-v1:plan:x:1:k:1" })).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { sessionRef: sameWorkflowRef, operation: "op" }, "plan.progress")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: identity.workflowId, coordinator: true }, "plan.bind")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeUndefined();
   // An ambient identity that addresses nothing derivable is never constrained.
-  expect(mintedIdentityScopeProblem(undefined, { workflow: "wf-other" })).toBeUndefined();
+  expect(mintedIdentityScopeProblem(undefined, { workflow: "wf-other" }, "workflow.register")).toBeUndefined();
 
   // A reference whose declared workflow differs is refused, and so is an active
-  // bind to another workflow.
+  // bind to another workflow — the refusal is a presence, not a prose match.
   const otherRef = encodeExecutionSessionRef({
     storeId: "stores/scope", epoch: 1, workflowId: "wf-elsewhere", role: "coordinator", sessionId: "s", planId: null,
   });
-  expect(String(mintedIdentityScopeProblem(identity, { sessionRef: otherRef }))).toContain("never authorizes a scope it does not declare");
-  expect(String(mintedIdentityScopeProblem(identity, { execution: true, workflow: "wf-elsewhere", coordinator: true }))).toContain("never authorizes a scope it does not declare");
+  expect(mintedIdentityScopeProblem(identity, { sessionRef: otherRef }, "plan.progress")).toBeDefined();
+  expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: "wf-elsewhere", coordinator: true }, "plan.bind")).toBeDefined();
+
+  // A coordinator-seat registration addresses the coordinator seat regardless of
+  // its registered plan selector: a same-workflow plan-pm minted tuple is
+  // refused (the registered plan is a row, not the caller seat), while a
+  // coordinator tuple passes.
+  const planPm = { ...identity, role: "plan-pm" as const, planId: "plan-registered" };
+  expect(mintedIdentityScopeProblem(planPm, { workflow: identity.workflowId, planId: "plan-registered", expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeDefined();
+  expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, planId: "plan-registered", expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeUndefined();
   // The explicit active bind's seat is part of the declared scope.
-  expect(mintedIdentityScopeProblem({ ...identity, role: "plan-pm", planId: "plan-x" }, {
+  expect(mintedIdentityScopeProblem(planPm, {
     execution: true, workflow: identity.workflowId, coordinator: true,
-  })).toBeDefined();
+  }, "plan.bind")).toBeDefined();
 
   // A legacy route that ignores the identity is not constrained by this gate.
-  expect(mintedIdentityScopeProblem(identity, { coordinator: true, workflow: "wf-elsewhere" })).toBeUndefined();
-  expect(mintedIdentityScopeProblem(identity, { resume: "/tmp/x.json", workflow: "wf-elsewhere" })).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { coordinator: true, workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { resume: "/tmp/x.json", workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
   // A malformed reference stays the family's own typed refusal.
-  expect(mintedIdentityScopeProblem(identity, { sessionRef: "not-a-wire", operation: "op" })).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { sessionRef: "not-a-wire", operation: "op" }, "plan.progress")).toBeUndefined();
 });

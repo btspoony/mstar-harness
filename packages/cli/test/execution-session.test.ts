@@ -615,6 +615,27 @@ describe("mstar session run — minted identity transport", () => {
     expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
   });
 
+  test("an active registration refuses a same-workflow identity addressing the wrong seat", async () => {
+    const fixture = await activeFixture("mstar-minted-seat");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    // A complete, otherwise-valid registration whose minted identity addresses the
+    // SAME workflow but the plan-pm seat: registration's caller seat is the
+    // coordinator, so this is refused before any mutation.
+    const planPm = { source: "local" as const, sessionId: "minted-plan-pm", workflowId: WORKFLOW_ID, role: "plan-pm" as const, planId: PLAN_ID };
+    const refused = spawnCli(
+      registerArgs(fixture, rootToken, "register-wrong-seat"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(planPm) },
+    );
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused).code).toBe("command.invalid-input");
+    expect(fieldOf(jsonOf(refused), "details")).toMatchObject({ identity: { code: "command.identity-scope-mismatch" } });
+    // Nothing was written: no workflow row and no catalog plan entity.
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+    await expect(getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).rejects.toThrow();
+  });
+
   test("a malformed minted transport refuses before any write instead of falling back", async () => {
     const fixture = await activeFixture("mstar-minted-malformed");
     const rootToken = (await readExecutionAuthority(fixture.context)).token;

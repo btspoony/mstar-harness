@@ -392,34 +392,53 @@ export function resolveCliSessionIdentity(
 }
 
 /**
+ * The routes whose active-token caller seat is the workflow's coordinator,
+ * independent of any session reference. Each family below constructs exactly
+ * `{workflowId, role: "coordinator", planId: null}` from the trusted caller, so a
+ * minted identity addressing that workflow in any other seat is refused here.
+ * Every other active route either carries its whole scope in a session reference
+ * or states its seat in the bind selectors; this set is the command-aware fact
+ * the sparse routes can consume instead of treating token-only calls as
+ * workflow-only.
+ */
+const COORDINATOR_SEAT_ROUTES: Record<string, true> = {
+  "workflow.register": true,
+  "iteration.register": true,
+  "status.workflow-close": true,
+  "session.recover": true,
+};
+
+/**
  * The scope-consistency check the adapter can make without restating a family's
  * role/plan grammar: a launcher-minted identity declares the workflow, role and
  * plan it addresses, and a command that consumes that identity may only address
  * the scope it declares. The addressed scope is derived from the request the
  * same way the families do — a canonical session reference carries it, else the
- * explicit workflow/plan selectors do — and a mismatch is refused here, before
- * the command runs, so a minted identity never silently authorizes a scope it
- * does not declare. Identity stays attribution: this proves the request is the
- * one the launch declares, not that the caller owns anything.
+ * selected command's own seat plus the explicit workflow/plan selectors do — and
+ * a mismatch is refused here, before the command runs, so a minted identity never
+ * silently authorizes a scope it does not declare. Identity stays attribution:
+ * this proves the request is the one the launch declares, not that the caller
+ * owns anything.
  */
 export function mintedIdentityScopeProblem(
   identity: ExecutionIdentity | undefined,
   input: Record<string, unknown>,
+  commandId: string,
 ): string | undefined {
   if (identity === undefined) return undefined;
-  const addressed = addressedMintedScope(input);
+  const addressed = addressedMintedScope(input, commandId);
   if (addressed === undefined) return undefined;
   const mismatched = addressed.workflowId !== identity.workflowId ||
     (addressed.role !== undefined && addressed.role !== identity.role) ||
     (addressed.planId !== undefined && addressed.planId !== identity.planId);
   if (!mismatched) return undefined;
-  return `the launched identity addresses ${describeMintedScope(identity)}; this invocation addresses ${describeMintedScope(addressed)}. ` +
-    `A minted identity never authorizes a scope it does not declare \u2014 relaunch under the addressed scope, or pass an explicit --session-id.`;
+  return `the launched identity addresses ${describeMintedScope(identity)}; this invocation addresses ${describeMintedScope(addressed)}`;
 }
 
 /** The scope one invocation addresses, derived exactly as its family would. */
 function addressedMintedScope(
   input: Record<string, unknown>,
+  commandId: string,
 ): { workflowId: string; role?: "coordinator" | "plan-pm"; planId?: string | null } | undefined {
   // A canonical session reference is itself an ACTIVE transport and carries the
   // whole addressed scope.
@@ -444,11 +463,13 @@ function addressedMintedScope(
   if (input.execution !== true && typeof input.expect !== "string") return undefined;
   const workflowId = input.workflow;
   if (typeof workflowId !== "string" || workflowId.trim() === "") return undefined;
-  // The explicit active bind states its seat unambiguously; every other active
-  // address constrains the workflow half alone, never a role or plan guessed
-  // from an unrelated selector.
+  // The explicit active bind states its seat unambiguously …
   if (input.execution === true && input.coordinator === true) return { workflowId, role: "coordinator", planId: null };
   if (input.execution === true && typeof input.plan === "string") return { workflowId, role: "plan-pm", planId: input.plan };
+  // … and a coordinator-seat registration/close/recovery states its seat from
+  // the command's own contract, never from the registered plan selector (that
+  // names the row being registered, not the caller's seat).
+  if (COORDINATOR_SEAT_ROUTES[commandId] === true) return { workflowId, role: "coordinator", planId: null };
   return { workflowId };
 }
 
@@ -602,7 +623,7 @@ export function registerCliCommands(
             throw error;
           }
           const minted = sessionIdentity.executionIdentity;
-          const scopeProblem = mintedIdentityScopeProblem(minted, collected);
+          const scopeProblem = mintedIdentityScopeProblem(minted, collected, definition.id);
           if (scopeProblem !== undefined && minted !== undefined) {
             writeEnvelope(usageEnvelope(definition.id, scopeProblem, {
               identity: { code: "command.identity-scope-mismatch", workflow: minted.workflowId },
