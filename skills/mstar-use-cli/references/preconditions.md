@@ -76,7 +76,7 @@ Tokens are not interchangeable. Read again after every successful mutation; neve
 
 ## 6. Diagnose an actual conflict
 
-Run the requested intent first. If it cannot establish a unique target, root, caller or foreign-holder disposition, use the refusal to identify that one missing fact; do not execute every row below as preflight. For an explicit raw replacement only, retain the byte-version comparison basis. For an action-local partial receipt, preserve applied components and resolve its named remaining conflict rather than replaying the whole sequence.
+Run the requested intent first. If it cannot establish a unique target, root, caller or foreign-holder disposition, use the refusal to identify that one missing fact; do not execute every row below as preflight. For an action-local partial receipt, preserve applied components and resolve its named remaining conflict rather than replaying the whole sequence. Recorded byte versions do not authorize replacement or require hash repair.
 
 | Conflict | Operator input only when needed |
 |---|---|
@@ -84,7 +84,6 @@ Run the requested intent first. If it cannot establish a unique target, root, ca
 | foreign live holder or stopped owner | authoritative stop/transfer evidence and authorization |
 | caller identity unavailable | acquire the correct independent identity; never infer it from a reference |
 | checkout/Git fact required by integration | use the recorded integration checkout or report unavailable Git fact |
-| raw replacement version conflict | read its current bytes and compare the intended replacement anew |
 
 ## 7. When a precondition cannot be met
 

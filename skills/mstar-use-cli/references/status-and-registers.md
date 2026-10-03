@@ -1,10 +1,10 @@
 # Coordination documents and registers
 
-Two coordinated documents carry harness process state, and both are written the same way: the bytes belong to locked engine writers, a replacement needs the version token of the bytes being replaced, and a refusal changes nothing. This file records that write protocol, the lifecycle verbs around it, and the two surfaces that took over the retired project register: the issue store (open items) and its staged migration/activation lifecycle.
+Harness process state belongs to locked engine writers and their current actor, scope and state contracts. Recorded document versions are provenance, not replacement credentials. This file records the lifecycle verbs and the two surfaces that took over the retired project register: the issue store (open items) and its staged migration/activation lifecycle.
 
 Field schemas, section meanings and per-document semantics are owned by `mstar-artifacts`; the capture duty and the register's migration mapping by `mstar-project-governance`; phase and close semantics by `mstar-iteration`. What follows is the CLI face.
 
-For ordinary lifecycle intents use the owning public verb rather than replacing a snapshot as a setup step. Current authority derives coherent projections and action-local prerequisites; the raw versioned replacement protocol below is for an explicitly requested raw replacement on its supported authority only. Preserve an `applied` or `partial` receipt and resolve only its outstanding conflict; do not treat partial success as a mutation-free refusal.
+For ordinary lifecycle intents use the owning public verb rather than replacing a snapshot as a setup step. Current authority derives coherent projections and action-local prerequisites; protected documents have no raw byte-version replacement recipe here. Preserve an `applied` or `partial` receipt and resolve only its outstanding conflict; do not treat partial success as a mutation-free refusal.
 
 For the open-issue store, discover JSON shapes with `mstar-harness schema CaptureInput`, `OccurrenceInput`, `IssueTriage`, `ClosureEvidence`, and `IssueLink` before `issue add|occurrence|triage|close|waive|duplicate|supersede|link` (the corresponding verb help owns flags). `ClosureEvidence` has disposition-specific required fields; use the schema rather than guessing from a prior refusal. Store reads/export need no write payload. Plan-scoped `issue-add` and `issue-close` are separate authority routes, not substitutes for the unscoped actor's explicit operation and issue-revision inputs.
 
@@ -51,24 +51,9 @@ A third legacy document still exists — the project register `{PROJECT_DIR}/<pr
 
 Enumeration reflects what exists: listing a kind prints its stored keys, one per line ascending, with no header, and an empty kind prints nothing and exits `0`. A missing backing file lists as empty rather than erroring.
 
-## Versioned replacement (pre-activation store face)
+## Protected document writes
 
-A coordinated replacement is two commands, and the token from the first is the only thing the second accepts. This is the **pre-activation** writer for those documents: on a harness whose execution authority is active, the same documents are owned by the coordination verbs (`mstar plan progress`, `mstar workflow amend-prepare`, `mstar status workflow-close`), which take the scope's full execution token instead, and a bare store-face replacement refuses there.
-
-```sh
-# 1. read the bytes and their version
-mstar persist get snapshot --key <workflow-id> --versioned
-
-# 2. replace exactly those bytes
-mstar persist snapshot --key <workflow-id> --expect-version sha256:<64-hex> --file payload.json --session <coordinator-envelope>
-```
-
-- The versioned read prints the payload together with its version: the digest of the exact bytes read, or the literal `absent` with a null payload when the document does not exist yet. `absent` is therefore a real token, not a missing value.
-- The versioned read requires the local store. An injected module store refuses with `coordination.local-store-required`, because no same-host compare-and-swap is promised on a pluggable store — the coordination surface will not pretend a remote module gives it one.
-- The write replaces; it never merges. A token that no longer matches the bytes refuses with `coordination.version-conflict`: someone wrote in between, the edit is lost, and the recovery is to read again and re-apply against the new bytes.
-- A protected kind without a token refuses with `coordination.expected-version-required` — a bare put on those kinds is a usage error, not a fast path.
-- Replacing a coordinated snapshot also needs its bound coordinator envelope; the command checks the session's role, so a plan envelope refuses. The session path must be absolute — a relative one is a usage error, because the engine compares canonical targets.
-- After a successful replacement, read again. The token was consumed by the write that used it.
+Use the supported coordination/lifecycle action for the current authority, not a raw protected-document replacement recipe. Protected snapshot/status targets and retired residual registers keep their writer/actor boundary. A versioned read may expose a digest or `absent` as historical information; neither is a mandatory mutation flag or a consumed byte-CAS token. Current semantic validation, lock/transaction behavior, numeric revisions and active execution tokens remain separate requirements.
 
 ## Lifecycle close
 
@@ -117,10 +102,12 @@ mstar store activate --manifest <path> --attestation <path>   # the barrier
 mstar store retire --manifest <path>          # moves the reviewed legacy sources under a ledger
 ```
 
-- **`migrate`** previews by default: a reviewable manifest (control root, canonical source paths, byte digests, source-set digest, parsed counts, per-entry dispositions, unresolved mappings, catalog conflicts, index-section retirement ranges) and no DB. The explicit reviewed apply commits the import in one issue/catalog/receipt transaction with a persistent ID mapping, and refuses on source-set or byte drift. The applied store is **staged**: ordinary mutations stay refused, and the legacy registers remain the live capture path.
+- **`migrate`** previews by default: a reviewable manifest (control root, canonical source paths, provenance byte/source-set digests, parsed counts, per-entry dispositions, unresolved mappings, catalog conflicts, index-section retirement ranges) and no DB. The explicit reviewed apply commits the import in one issue/catalog/receipt transaction with a persistent ID mapping. Digest-only source drift does not refuse apply; current source path-set, identity, parsed-field and state requirements remain. The applied store is **staged**: ordinary mutations stay refused, and the legacy registers remain the live capture path.
 - **`backup`** writes a quiesced, SQLite-consistent `VACUUM INTO` recovery point (committed WAL frames included) and verifies it by reopening the copy read-only; the receipt records the store identity and the verified row counts. Copying `store.db` alone, without its WAL, is not a backup.
 - **`activate`** is the barrier. It requires the reviewed apply receipt to be the **final** one, a compatible-consumer attestation (installed entrypoints and versions, quiesced sessions, the approving operator — never session credentials) and a verified backup; the state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards, and every command checks epoch and state.
-- **`retire`** moves the exact reviewed legacy registers and index sections into `{HARNESS_DIR}/archived/store-migration/<receipt-id>/` under a resumable per-item ledger, after revalidating active identity, epoch, source hashes and catalog digests. A late old-format write refuses `store.legacy-write-detected` and is never deleted; a crash resumes from the ledger to the recorded bytes.
+- **`retire`** moves the reviewed legacy registers and index sections into `{HARNESS_DIR}/archived/store-migration/<receipt-id>/` under a resumable per-item ledger, checking active identity, epoch, current paths and item state and preserving copy-before-remove ordering. Content-digest changes alone do not refuse retirement or replay. An unreviewed register path still refuses `store.legacy-write-detected`; resume uses current item/path/state facts and archive presence, not recorded-byte equality.
+
+Execution migration apply/activate/retire requests no longer take `manifestHash`, activation no longer takes `coverageDigest`, and restore no longer takes `acceptLossDigest`. Generated manifest/coverage/loss digests remain historical diagnostics only. Use current verb help for the remaining actor, authorization, identity, path, state and numeric revision inputs; no digest-confirmation flag or replacement seal is required.
 
 **Readiness guidance (not an action).** These are the readiness checks an operator performs *before* a live activation; running a documentation or source task performs none of them, and no stored flag stands in for them. Activation is an authorized ops act under a recorded, bounded authorization covering the affected installed CLI/plugin upgrades or reloads; credentials and unrelated global configuration stay out of scope. Ready means every compatible consumer is quiesced and then reloaded, upgraded or explicitly excluded, and old software is kept out by that operational barrier — a marker, a chmod or a missing register cannot stop an old binary. If a host cannot reload safely, **stop at that host's exact manual-restart step**, have the user restart, then re-check entrypoint, runtime, version and session identity read-only before activating; until activation succeeds the legacy authority remains in force, and a below-floor runtime or missing capability refuses actionably rather than falling back to JSON.
 

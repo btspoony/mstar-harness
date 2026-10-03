@@ -78,7 +78,7 @@ Each form binds once, and the session then re-reads with `show` and is constrain
 
 #### Coordinator preparation
 
-The coordinator holds one seat per workflow. It runs `bind --coordinator` once, then `prepare` for the plan, which registers the reviewed Assignment on that row and releases its dependencies. That is preparation, not a second business plan: dependency and task readiness stay PM judgment. The prepared Assignment is immutable while the plan is claimed, so amending it means stopping the writable work, restoring the pinned file and re-preparing.
+The coordinator holds one seat per workflow. It runs `bind --coordinator` once, then `prepare` for the plan, registering the reviewed Assignment and releasing dependencies. This is preparation, not a second business plan: dependency/task readiness stays PM judgment. Recorded semantic scope, ownership, branch, QA and cleanup constraints remain; Assignment/plan prose edits do not trigger byte freshness refusal, restoration, rebind or re-preparation.
 
 #### Scope boundary
 
@@ -88,9 +88,9 @@ The writable surface, the field ownership and the lock rules are stated once in 
 
 #### Revision preconditions
 
-Every mutating verb takes the row revision it read from `show` — passed as `--expect`, and `0` for a row whose coordination record is still absent, never the snapshot schema version or a date — and the residual verbs additionally take the project register's byte version from the same call (`--expect-register`, the literal `absent` before that register exists). `bind` is the only verb without that precondition, because it reads, checks and claims atomically against current ownership.
+Mutations retain the addressed row's numeric revision or active full execution-token contract, not snapshot schema versions or dates. Plan operations may derive the current expectation; an explicitly held stale expectation still refuses. `bind` checks and claims atomically against current ownership. Issue revisions are separate numeric constraints; retired project-register byte versions are not required flags or mutation credentials.
 
-A write whose precondition no longer holds is refused instead of overwriting, so a stale retry refreshes with `show` first. Row revision and document byte versions are separate preconditions and never substitute for each other.
+Resolve actual revision/holder/scope conflicts through the supported action and current state. Document digest changes alone do not refuse progress or require hash repair.
 
 #### Finish and completion
 
