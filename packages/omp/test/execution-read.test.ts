@@ -206,10 +206,13 @@ function plantLeftoverEvidence(fixture: Fixture, status: string = LEFTOVER_STATU
  * `"iteration"`, the only lifecycle a model handoff can target, so that the start
  * path is proved to answer from the DB rather than from the retired register.
  */
+function seedActiveAuthority(fixture: Fixture, lifecycleType?: "plan" | "iteration"): Promise<ExecutionSessionRef>;
+function seedActiveAuthority(fixture: Fixture, lifecycleType: "plan" | "iteration", bindCoordinator: false): Promise<null>;
 async function seedActiveAuthority(
   fixture: Fixture,
   lifecycleType: "plan" | "iteration" = "plan",
-): Promise<ExecutionSessionRef> {
+  bindCoordinator = true,
+): Promise<ExecutionSessionRef | null> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
   const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
@@ -247,6 +250,7 @@ async function seedActiveAuthority(
     expected: initialized.token,
     operationId: `create-${WORKFLOW_ID}`,
   });
+  if (!bindCoordinator) return null;
   const workflowToken = (await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).token;
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
@@ -421,8 +425,7 @@ describe("execution-omp-read — the validator surfaces answer the authority, ne
 
   test("mstar_worktree_check kind=l1 serves ACTIVE graph-derived L1 violations", async () => {
     const fixture = makeFixture("worktree-l1");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
+    await seedActiveAuthority(fixture, "plan", false);
 
     const result = await runTool(mstarWorktreeCheck, fixture.main, { kind: "l1", workflowId: WORKFLOW_ID });
 
