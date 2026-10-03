@@ -216,14 +216,19 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       }
       let bindInput: BindPlanSessionInput;
       if (input.resume !== undefined) {
-        if (context.sessionId !== undefined || input.harness !== undefined) {
+        if ((context.sessionId !== undefined && context.sessionIdSource !== "env") || input.harness !== undefined) {
           return usage(id, "--resume accepts no --session-id or --harness");
         }
         const resumePath = absolutePath(input.resume, "resume");
         pinSessionStore(resumePath);
         bindInput = { resumePath, cwd };
       } else if (input.coordinator === true) {
-        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage(id, "coordinator bind requires runtime session identity");
+        if (context.sessionId === undefined || context.sessionId.trim() === "" || context.sessionIdSource === "env") {
+          const message = context.sessionIdSource === "env"
+            ? "legacy pre-activation coordinator bootstrap does not accept env-provided identity; pass --session-id explicitly"
+            : "coordinator bind requires runtime session identity";
+          return usage(id, message);
+        }
         if (input.workflow === undefined) return usage(id, "coordinator bind requires workflow");
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));

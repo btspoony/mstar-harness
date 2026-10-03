@@ -2,10 +2,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
-import { initializeStore } from "@mstar-harness/engine";
+import {
+  createExecutionWorkflow,
+  initializeExecutionAuthority,
+  initializeStore,
+  registerCatalogEntity,
+  type WorkflowEntry,
+  type WorkflowSnapshot,
+} from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import { startDashboard, type RunningDashboard } from "../src/dashboard/server.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
+import { readDashboardView } from "../src/dashboard/store-read.js";
 
 function dashboardDefinition() {
   const definition = getCommandDefinitions().find(({ id }) => id === "dashboard");
@@ -48,6 +56,67 @@ function serviceEffects(handles: RunningDashboard[], onOpen?: (url: string) => P
     },
   };
 }
+
+describe("dashboard ACTIVE projection views", () => {
+  test("all projection-backed views read seeded ACTIVE-authority data", async () => {
+    const harnessDir = await workspace("dashboard-active-");
+    const context = { harnessDir };
+    try {
+      const initialized = await initializeExecutionAuthority(context);
+      const id = "wf-synthetic";
+      await createExecutionWorkflow(
+        { ...context, caller: { sessionId: "session-synthetic", role: "coordinator", workflowId: id, planId: null } },
+        {
+          entry: { id, type: "iteration", started_at: "2026-01-02T03:04:05.000Z", dir: `workflows/${id}` } as WorkflowEntry,
+          snapshot: {
+            schema_version: 1,
+            id,
+            type: "iteration",
+            status: "running",
+            started_at: "2026-01-02T03:04:05.000Z",
+            updated_at: "2026-01-02T03:04:05.000Z",
+            phase: "phase-1-prepare",
+            plans: [],
+          } as unknown as WorkflowSnapshot,
+          expected: initialized.token,
+          operationId: "dashboard-synthetic-create",
+        },
+      );
+      await registerCatalogEntity(
+        context,
+        { kind: "iteration", id, title: "Synthetic iteration", rootKind: "iterations", relativePath: id },
+        { operationId: "dashboard-synthetic-iteration", actor: "test" },
+      );
+      const workflows = await readDashboardView({ context, view: "workflows" });
+      expect(workflows.projection.freshness).toBe("current");
+      expect(workflows.data?.items).toContainEqual(expect.objectContaining({
+        id,
+        status: "running",
+        phase: "phase-1-prepare",
+      }));
+
+      const workflow = await readDashboardView({ context, view: "workflow-detail", id });
+      expect(workflow.projection.freshness).toBe("current");
+      expect(workflow.data).toMatchObject({ id, status: "running", phase: "phase-1-prepare" });
+
+      const iterations = await readDashboardView({ context, view: "iterations" });
+      expect(iterations.projection.freshness).toBe("current");
+      expect(iterations.data?.items).toContainEqual(expect.objectContaining({
+        iterationId: id,
+        workflow: { id, status: "running", phase: "phase-1-prepare", activeRegistration: true },
+      }));
+
+      const iteration = await readDashboardView({ context, view: "iteration-detail", id });
+      expect(iteration.projection.freshness).toBe("current");
+      expect(iteration.data).toMatchObject({
+        iterationId: id,
+        workflow: { id, status: "running", phase: "phase-1-prepare", activeRegistration: true },
+      });
+    } finally {
+      rmSync(harnessDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("dashboard connection lifetime", () => {
   test("service lifetime reuses one same-root/port handle until connection close", async () => {

@@ -112,6 +112,9 @@ function cliOptionFlags(definition: CommandDefinition, option: CommandDefinition
 export function renderCommandContract(definition: CommandDefinition, route: "cli" | "mcp"): string {
   const descriptor = getCommandSchemas([definition])[0]!;
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
+  if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
+    lines.push("Session identity resolves --session-id first, then MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset; for active token-authorized writes it is attribution, not authorization. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and rejects the environment value. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity.");
+  }
   if (route === "mcp") {
     // The CLI route prints this same syntax as commander's Usage line, built
     // from the same `cli` table; MCP descriptions carry it explicitly.
@@ -283,6 +286,14 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
   return input;
 }
 
+export function resolveCliSessionIdentity(sessionId: unknown): Pick<InvocationContext, "sessionId" | "sessionIdSource"> {
+  if (typeof sessionId === "string") return { sessionId, sessionIdSource: "flag" };
+  const environmentSessionId = process.env.MSTAR_HOST_SESSION_ID;
+  return typeof environmentSessionId === "string" && environmentSessionId.trim() !== ""
+    ? { sessionId: environmentSessionId, sessionIdSource: "env" }
+    : {};
+}
+
 function ensureCommand(program: Command, pathParts: readonly string[]): Command {
   let current = program;
   for (const part of pathParts) {
@@ -409,10 +420,12 @@ export function registerCliCommands(
           return;
         }
         const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
-        const sessionId = sessionOption === undefined ? undefined : collected[sessionOption.key];
+        const sessionIdentity = resolveCliSessionIdentity(
+          sessionOption === undefined ? undefined : collected[sessionOption.key],
+        );
         const envelope = await executeCommand(definition.id, input ?? payload.input, {
           ...baseContext,
-          ...(typeof sessionId === "string" ? { sessionId } : {}),
+          ...sessionIdentity,
           signal: controller.signal,
           effects: cliEffects(services),
         });
