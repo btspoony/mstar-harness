@@ -2,7 +2,7 @@
 
 本文件是 `commands/iteration-*.md`（`iteration-start` / `iteration-drive` / `iteration-loop`）**重叠内容**的单一共享副本（SSOT）。**只收录出现在 ≥2 个命令中的行**；命令专属内容保留在命令正文，**不**复制进本文件：
 
-- `iteration-start` Phase 1 review-chain 表（§5.1→§5.2→§5.3 顺序 invoke、三角色冒充禁止、`{KNOWLEDGE_DIR}/` 新增禁止）— start 专属
+- `iteration-start` Phase 1 Review & Edit: optional product/architect rounds selected with rationale, sequential shared edits and mandatory final writer; selection/closure authority → `phase-1-prepare.md` §1.6 — start-specific
 - `iteration-loop`「Do not Read `skills/grill-me/SKILL.md`」— loop 专属
 - `iteration-loop` session todo `phase-1-autonomous-start`（Boot → compass `locked` + integration branch pushed（§6））— loop 专属
 
@@ -66,4 +66,6 @@ Execute **`mstar-iteration` §2.6**（Continuous execution SSOT：自 Phase 2 �
 - **`Blocked`**：真冲突、secrets、不可逆范围缺口、Phase 5 多轮仍无法 merge-ready
 - 用户本轮显式打断
 
-**Turn 收束纪律**：最后一条 assistant 内容必须是 **in-flight 动作**（invoke 已发出、或写明下一 dispatch 的 Assignment 字段），**不得**以对用户的确认问句收束 turn。
+**Turn closure during Phase 2–5 continuous execution**: retain the existing in-flight-action discipline (invoke issued or next dispatch Assignment named); do not end with a routine user-confirmation question.
+
+**Phase 1 distinction**: interactive prototype feedback and explicit current-revision design confirmation (§1.2.5) are required before formal authoring, not forbidden routine execution check-ins. Explicit autonomous opt-in instead retains a reasoned prototype/disposition without routine human approval. Neither route waives host Plan-mode permissions or implementation authorization.

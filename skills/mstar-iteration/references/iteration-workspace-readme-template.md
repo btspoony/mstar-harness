@@ -7,11 +7,12 @@ It is a guide, not a register: which documents exist, where they live, what kind
 ```markdown
 # <iteration-id>
 
-Iteration package — `delivery-compass.md` + specs/guides. Not `{KNOWLEDGE_DIR}/`. Worthy content is **promoted** at iteration-close via `mstar-compound`.
+Iteration package — retained `prototypes/` design context + formal `delivery-compass.md` and specs/guides. Not `{KNOWLEDGE_DIR}/`; eligible formal material follows the existing iteration-close promotion rules.
 
 ## Orientation
 
 - `delivery-compass.md` — scope, plans, acceptance criteria, branch policy.
+- `prototypes/` — current design preview/revision, feedback and confirmation or autonomous disposition; design context, not specs/acceptance evidence.
 - `guides/<name>.md` — <purpose>
 - `specs/<name>.md` — <purpose>
 

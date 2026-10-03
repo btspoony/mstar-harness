@@ -1,14 +1,14 @@
 # Iteration corpus hygiene（writing-specialist · §1.6）
 
-> **When**: Phase 1 §1.6 — **writing-specialist** only, after product/architect landed compass / plans / **`{ITERATION_DIR}/<iteration-id>/`** package（specs 在 `<iteration-id>/specs/`）.
-> **Boundaries**: **`iteration-artifact-boundaries.md`** — no `{KNOWLEDGE_DIR}/` adds @ start; iteration drafts → **`<iteration-id>/guides/`** or **`specs/`**.
+> **When**: Phase 1 §1.6 — mandatory **writing-specialist**, after PM drafts and any selected product/architect edits have landed. If a specialist round reopens, writer closes the revised corpus again.
+> **Boundaries**: `iteration-artifact-boundaries.md` — no new knowledge at start; prototypes remain design context under `prototypes/`, formal iteration drafts under `guides/` or `specs/`.
 
 ## Scope
 
 | | Path | Notes |
 |--|------|-------|
-| **Primary** | `{ITERATION_DIR}/<iteration-id>/**` | Package guides/specs hygiene (lock vs draft, naming, index) + compass cross-links |
-| **Existing only** | `{KNOWLEDGE_DIR}/**` | Archive / misplaced correction — **no** new knowledge docs |
+| **Primary** | `{ITERATION_DIR}/<iteration-id>/**` | Only this round's affected prototypes/guides/specs, compass/plan links, draft-vs-locked status and current design baseline |
+| **Existing only** | Directly related `{KNOWLEDGE_DIR}/` references | Archive / misplaced correction as needed — no new knowledge or whole-corpus scan |
 | **Out of scope** | `{SPECS_DIR}/**` writes | 全局 specs 在 **Phase 3 iteration-close** 提升时写入 |
 | **Out of scope** | New `{KNOWLEDGE_DIR}/` writes | → **`mstar-compound`** @ iteration-close |
 
@@ -17,21 +17,22 @@
 | Found in | Misplaced as | Move to |
 |----------|--------------|---------|
 | `{SPECS_DIR}/` | 迭代期草案等历史误入文件 | 登记到 package `README.md`（`Promotion candidate:`），Phase 3 提升流程统一处置 |
+| Package `specs/` or `{KNOWLEDGE_DIR}/` | Prototype/feedback mislabeled as a spec or implementation knowledge | `<iteration-id>/prototypes/`; restore design-context links |
 | `{KNOWLEDGE_DIR}/` | New exploration from start chain → `<iteration-id>/guides/` or archive |
 | Flat `{ITERATION_DIR}/*-working-guide.md`（legacy） | → `<iteration-id>/guides/` |
 | Flat `{ITERATION_DIR}/*-delivery-compass.md`（legacy） | Prefer migrate to `<iteration-id>/delivery-compass.md` when touching that iteration |
 
-## Index updates（after edits）
+## Cross-links after edits
 
-1. `{ITERATION_DIR}/<iteration-id>/README.md` — package 索引（guides/specs 归属；非 trivial 时创建）
-2. `{KNOWLEDGE_DIR}/README.md` — Status / archive only（无新增行来自 start 链）
-3. `{ITERATION_DIR}/README.md` — **一行 = 一次迭代**（目录链接，非 compass+workspace 双行）
+1. Check that compass and affected plans point to the retained prototype revision and genuine confirmation/autonomous disposition, and that formal criteria/constraints do not contradict it. Material design changes return to `phase-1-prepare.md` §1.2.5; stale approval cannot close the corpus.
+2. Apply existing catalog/metadata rules; README files are optional prose, not required registration tables (`mstar-conventions` § Catalog fields / Markdown index retirement). Prototype traceability uses existing `iteration_refs`; never `primary_spec`/`spec_refs`.
+3. Check all §1.3 markers and Open Questions, not only writing-owned ones. An omitted specialist's product/technical gap returns to PM for re-selection, never silent deletion or reassignment to evade a round. §1.6 owns reporting and lock criteria.
 
 ## Done signals
 
-- Package specs hygiene complete（`<iteration-id>/specs/` draft vs locked clear）
-- Package used for iteration-level drafts (`<iteration-id>/guides|specs/`)
-- Misplaced knowledge moved or archived with index Status updated
+- Package prototype retained separately from specs, with current revision/disposition and aligned compass/plan links
+- Package specs hygiene complete (`<iteration-id>/specs/` draft vs locked clear); no specialist markers or blocking questions at lock
+- Misplaced material corrected under the existing package/knowledge boundaries
 - No new `{KNOWLEDGE_DIR}/` documents from this chain
 
 ## Close vs start
