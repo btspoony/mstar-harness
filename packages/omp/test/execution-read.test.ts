@@ -206,10 +206,13 @@ function plantLeftoverEvidence(fixture: Fixture, status: string = LEFTOVER_STATU
  * `"iteration"`, the only lifecycle a model handoff can target, so that the start
  * path is proved to answer from the DB rather than from the retired register.
  */
+function seedActiveAuthority(fixture: Fixture, lifecycleType?: "plan" | "iteration"): Promise<ExecutionSessionRef>;
+function seedActiveAuthority(fixture: Fixture, lifecycleType: "plan" | "iteration", bindCoordinator: false): Promise<null>;
 async function seedActiveAuthority(
   fixture: Fixture,
   lifecycleType: "plan" | "iteration" = "plan",
-): Promise<ExecutionSessionRef> {
+  bindCoordinator = true,
+): Promise<ExecutionSessionRef | null> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
   const initialized = await initializeExecutionAuthority({ harnessDir: fixture.harness });
@@ -247,6 +250,7 @@ async function seedActiveAuthority(
     expected: initialized.token,
     operationId: `create-${WORKFLOW_ID}`,
   });
+  if (!bindCoordinator) return null;
   const workflowToken = (await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).token;
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
@@ -419,19 +423,17 @@ describe("execution-omp-read — the validator surfaces answer the authority, ne
     expect(textOf(result)).not.toContain("gate ok");
   });
 
-  test("mstar_worktree_check kind=l1 refuses not-ready although the snapshot exists", async () => {
+  test("mstar_worktree_check kind=l1 serves ACTIVE graph-derived L1 violations", async () => {
     const fixture = makeFixture("worktree-l1");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
+    await seedActiveAuthority(fixture, "plan", false);
 
     const result = await runTool(mstarWorktreeCheck, fixture.main, { kind: "l1", workflowId: WORKFLOW_ID });
 
-    // The refusal must be THIS tool's own not-ready verdict (its documented
-    // `[severity] code: message` line, after the observed-main line) rather than
-    // the engine's raw file-reader throw: without the gate the tool would open
-    // the retired snapshot and report that exception instead.
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("[high] execution.consumer-not-ready:");
+    expect(textOf(result)).toContain("worktree.main.expected-branch-missing");
+    expect(textOf(result)).toContain("worktree.l1.lease-missing");
+    expect(textOf(result)).toContain("worktree.l1.lease-branch-missing");
+    expect(textOf(result)).not.toContain("execution.consumer-not-ready");
     expect(textOf(result)).toContain("main worktree:");
     expect(textOf(result)).not.toContain("snapshot not found");
   });

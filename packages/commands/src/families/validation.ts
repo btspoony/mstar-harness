@@ -41,6 +41,7 @@ import {
   WorkflowSnapshotValidationError,
   readWorkflowSnapshot,
   resolveProcessHarnessDir,
+  type ExecutionState,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
@@ -106,6 +107,31 @@ function rejected(id: string, result: GateResult, fallback: string): CommandEnve
   return refusal(id, first?.code ?? fallback, first?.message ?? fallback, { violations: result.violations });
 }
 function gateData(result: GateResult) { return { ok: result.ok, violations: result.violations }; }
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function activeGraphLifecycleBranches(graph: ExecutionState): string[] {
+  const branches = new Set<string>();
+  for (const workflow of graph.workflows) {
+    const integration = workflow.state.branch?.integration;
+    if (typeof integration === "string" && integration.trim() !== "") branches.add(integration);
+    for (const view of workflow.plans) {
+      const leaseBranch = view.executionLease?.working_branch;
+      if (typeof leaseBranch === "string" && leaseBranch.trim() !== "") branches.add(leaseBranch);
+      const metadata = view.plan.metadata;
+      if (!isPlainRecord(metadata)) continue;
+      const trackBranches = metadata.track_branches;
+      if (Array.isArray(trackBranches)) {
+        for (const branch of trackBranches) {
+          if (typeof branch === "string" && branch.trim() !== "") branches.add(branch);
+        }
+      }
+      const retainedBranch = metadata.working_branch;
+      if (typeof retainedBranch === "string" && retainedBranch.trim() !== "") branches.add(retainedBranch);
+    }
+  }
+  return [...branches];
+}
 function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
@@ -217,6 +243,44 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) throw new Error(`invalid workflow id ${JSON.stringify(workflow)}`);
         const harness = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
         if (!harness) throw new Error("harness directory not found");
+        const { readExecutionState, resolveExecutionReadRoute } = await import("@mstar-harness/engine");
+        if (await resolveExecutionReadRoute({ harnessDir: harness }) === "execution") {
+          const graph = (await readExecutionState({ harnessDir: harness })).data;
+          const registered = graph.workflows.find(({ state }) => state.id === workflow);
+          if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness });
+          const planView = input.planId === undefined
+            ? registered.plans.length === 1 ? registered.plans[0] : undefined
+            : registered.plans.find((candidate) => candidate.plan.id === plan);
+          if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness });
+          const selectedPlanId = planView.plan.id;
+          if (typeof selectedPlanId !== "string") return refusal(id, "worktree.l1.plan-not-found", `the selected plan row in workflow "${workflow}" has no string id`, { workflowId: workflow, authorityGraph: harness });
+          const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
+          if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed");
+          const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+          if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree");
+          const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
+          if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
+          const branch = registered.state.branch ?? {};
+          const lifecycleBranches = activeGraphLifecycleBranches(graph);
+          const lease = planView.executionLease;
+          const selectedIntegration = input.integration ?? input.control;
+          const gate = l1PreDispatchCheck({
+            workflowType: registered.state.type,
+            integrationWorktreePath: selectedIntegration !== undefined
+              ? path.resolve(selectedIntegration)
+              : typeof registered.state.integration_worktree_path === "string" ? registered.state.integration_worktree_path : "",
+            integrationBranch: String(branch.integration ?? ""),
+            mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
+            expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),
+            lifecycleBranches: [...lifecycleBranches],
+            leaseWorktreePath: String(lease?.worktree_path ?? ""),
+            leaseWorkingBranch: String(lease?.working_branch ?? ""),
+            planId: selectedPlanId,
+          });
+          const gateResult = gateData(gate);
+          const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
+          return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");
+        }
         const snapshotPath = path.join(harness, "workflows", workflow, "snapshot.json");
         if (!existsSync(snapshotPath)) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
         let snapshot: Record<string, any>;
