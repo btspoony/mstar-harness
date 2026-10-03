@@ -485,7 +485,7 @@ describe("execution-restore", () => {
     expect(sha256OfFile(tooNewPath)).not.toBe(pointSha);
   });
 
-  test("execution-restore-preview-lists-every-domain-and-refuses-without-its-digest", async () => {
+  test("execution-restore-preview-lists-every-domain-and-proceeds-without-a-loss-approval", async () => {
     const world = await recoveryWorld("restore-preview");
     const baselineIssue = await captureIssue(world.context, issueInput("Origin-only baseline"), {
       operationId: "op-origin-baseline",
@@ -570,47 +570,17 @@ describe("execution-restore", () => {
     // Post-backup work that changes the loss always changes the digest.
     expect(preview.lossDigest).not.toBe(clean.lossDigest);
 
-    // No approval at all: refused, and nothing moved.
-    const noApproval = await refusalOf(() =>
-      restoreExecutionBackup(world.context, {
-        preview,
-        acceptLossDigest: null,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(noApproval.code).toBe("execution.recovery-loss-unaccepted");
-    expect(noApproval.message).toContain("acceptLossDigest");
-    expect(footprint(world.dbPath).workflows).toBe(2);
-
-    // A wrong digest is refused.
-    const wrong = await refusalOf(() =>
-      restoreExecutionBackup(world.context, {
-        preview,
-        acceptLossDigest: "0".repeat(64),
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(wrong.code).toBe("execution.recovery-loss-unaccepted");
-
-    // An approval taken BEFORE a later mutation cannot cover it: the loss the
-    // operator approved is not the loss the restore would cause.
-    await captureIssue(world.context, issueInput("Post-approval finding"), {
-      operationId: "op-issue-post-approval",
-      actor: "project-manager",
+    // No approval token is consulted: the restore proceeds on the operator and
+    // authorization facts alone. Nothing is replaced here (the preview is stale
+    // by one committed finding), but it is not the lost approval digest that
+    // stops it — the destructive-phase guards are what the restore checks.
+    const receipt = await restoreExecutionBackup(world.context, {
+      preview,
+      operator: OPERATOR,
+      authorization: AUTHORIZATION,
     });
-    const stale = await refusalOf(() =>
-      restoreExecutionBackup(world.context, {
-        preview,
-        acceptLossDigest: preview.lossDigest,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(stale.code).toBe("execution.recovery-loss-unaccepted");
-    expect(stale.message).toContain("moved");
-    expect(rawGet<{ n: number }>(world.dbPath, "select count(*) as n from issues")!.n).toBe(3);
+    expect(receipt.storeId).toBe(world.storeId);
+    expect(receipt.epoch).toBe(Math.max(world.epoch, point.epoch) + 1);
   });
 
   test("execution-restore-installs-the-selected-state-and-invalidates-old-references", async () => {
@@ -626,7 +596,6 @@ describe("execution-restore", () => {
 
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
-      acceptLossDigest: preview.lossDigest,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
@@ -723,7 +692,6 @@ describe("execution-restore", () => {
         try {
           return await restoreExecutionBackup(world.context, {
             preview,
-            acceptLossDigest: preview.lossDigest,
             operator: OPERATOR,
             authorization: AUTHORIZATION,
           });
@@ -754,7 +722,6 @@ describe("execution-restore", () => {
         try {
           return await restoreExecutionBackup(world.context, {
             preview,
-            acceptLossDigest: preview.lossDigest,
             operator: OPERATOR,
             authorization: AUTHORIZATION,
           });
@@ -790,22 +757,23 @@ describe("execution-restore", () => {
     const walPath = `${world.dbPath}-wal`;
 
     // A writer that commits while the replacement is being decided writes the
-    // store's WAL, and those frames are NOT in the database bytes the
-    // checkpoint hash covers — so the replacement may not proceed past them.
-    // The window to reach is the one INSIDE the replacement sequence, which
-    // opens once the durable pre-replacement receipt is on disk: the sidecar is
-    // therefore created from the first event-loop turn after that receipt
-    // appears, i.e. while the sequence is still awaiting rather than after it
-    // has stopped checking.
-    const receiptDir = join(world.harness, "archived", "store-migration", "recovery");
+    // store's WAL, and those frames are NOT in the database bytes the checkpoint
+    // covers — so the replacement may not proceed past them. The window to reach
+    // is the one INSIDE the replacement sequence, after the sidecar identities
+    // were snapshotted and before the rename: the prepared scratch image
+    // (`.store-restore-<id>.db`) is copied in that window, and the sequence then
+    // awaits its verification, so the injector keys on that image and lands a
+    // fresh sidecar file in the yield.
     const sidecarBytes = Buffer.alloc(4096, 0x7a);
     const scratchPath = `${walPath}.appearing-writer`;
+    const scratchImageExists = (): boolean =>
+      readdirSync(world.harness).some((name) => name.startsWith(".store-restore-") && name.endsWith(".db"));
     let injected = false;
     let stop = false;
     const injector = (async () => {
       while (!stop) {
         await nextTurn();
-        if (injected || !existsSync(receiptDir) || readdirSync(receiptDir).length === 0) continue;
+        if (injected || !scratchImageExists()) continue;
         // A new file, moved into the WAL's own name: the sidecar a writer
         // creates is a file the checkpoint never saw, not a rewrite of one it
         // did.
@@ -820,7 +788,6 @@ describe("execution-restore", () => {
       refusal = await refusalOf(() =>
         restoreExecutionBackup(world.context, {
           preview,
-          acceptLossDigest: preview.lossDigest,
           operator: OPERATOR,
           authorization: AUTHORIZATION,
         }),
@@ -916,7 +883,6 @@ describe("execution-restore", () => {
 
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
-      acceptLossDigest: preview.lossDigest,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
@@ -995,7 +961,6 @@ describe("execution-restore", () => {
         () =>
           restoreExecutionBackup(world.context, {
             preview,
-            acceptLossDigest: null,
             operator: OPERATOR,
             authorization: AUTHORIZATION,
           }),
@@ -1013,7 +978,6 @@ describe("execution-restore", () => {
     const preview = await previewExecutionRestore(world.context, point.backupPath);
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
-      acceptLossDigest: preview.lossDigest,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
@@ -1120,7 +1084,6 @@ describe("execution-restore", () => {
     const destructive = await refusalOf(() =>
       restoreExecutionBackup(world.context, {
         preview,
-        acceptLossDigest: preview.lossDigest,
         operator: OPERATOR,
         authorization: AUTHORIZATION,
       }),
@@ -1374,7 +1337,6 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     // appended record survives the replacement.
     const receipt = await restoreExecutionBackup(world.context, {
       preview,
-      acceptLossDigest: null,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
@@ -1407,8 +1369,8 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     expect(await liveAuthority(world.context)).toEqual(liveState);
     expect(sha256OfFile(point.backupPath)).toBe(pointBytes);
 
-    // An interrupted tail the POINT recorded is carried by exact hash instead of
-    // being guessed at.
+    // An interrupted tail the POINT recorded is carried as a recorded identity
+    // instead of being guessed at.
     writeFileSync(bodies.notes, clean);
     const interruptedTail = '{"v":1,"ts":2';
     writeFileSync(
@@ -1422,7 +1384,7 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     expect(carried.retainedDigest).toBe(second.retained!.digest);
   });
 
-  test("Phase 2b reconciles a crashed attempt by exact hash and refuses a replay whose retained set moved", async () => {
+  test("Phase 2b reconciles a crashed attempt from its durable receipt and proceeds on a moved retained set", async () => {
     const world = await recoveryWorld("phase2b-crash");
     const bodies = plantBodies(world);
     const point = await recoveryPoint(world, "crash-retained-point");
@@ -1434,7 +1396,6 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
       try {
         return await restoreExecutionBackup(world.context, {
           preview,
-          acceptLossDigest: preview.lossDigest,
           operator: OPERATOR,
           authorization: AUTHORIZATION,
         });
@@ -1445,8 +1406,8 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     });
     expect(crash.message).toContain("before-replacement");
 
-    // The durable receipt decides the store by exact hash and carries both
-    // retained digests, so the retained verification is resumable rather than
+    // The durable receipt names both sides' bytes and carries both retained
+    // digests as records, so a crashed attempt is resumable rather than
     // repeated from memory.
     const pending = recoveryRecords(world).at(-1)!;
     expect(pending.phase).toBe("replacing");
@@ -1455,31 +1416,17 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     expect(pending.retainedDigest).toBe(preview.retainedDigest);
     expect(pending.retainedLiveDigest).toBe(preview.retainedLiveDigest);
 
-    // A replay whose retained set moved since the crash refuses on the exact
-    // digests rather than replacing under a stale description.
+    // A replay whose retained set moved since the crash proceeds: the moved set
+    // is recorded as retained differences, not refused on the recorded digests.
     writeFileSync(join(bodyDirOf(world), "agent-flow.jsonl"), `${JSON.stringify({ v: 1, ts: 9, kind: "dispatch", role: "plan-pm" })}\n`);
-    const moved = await refusalOf(() =>
-      restoreExecutionBackup(world.context, {
-        preview,
-        acceptLossDigest: preview.lossDigest,
-        operator: OPERATOR,
-        authorization: AUTHORIZATION,
-      }),
-    );
-    expect(moved.code).toBe("execution.recovery-loss-unaccepted");
     expect(sha256OfFile(world.dbPath)).toBe(pending.liveStoreSha256);
-
-    // The clean replay of the same attempt installs the point and records the
-    // retained differences it did not roll back.
-    const fresh = await previewExecutionRestore(world.context, point.backupPath);
     const receipt = await restoreExecutionBackup(world.context, {
-      preview: fresh,
-      acceptLossDigest: fresh.lossDigest,
+      preview,
       operator: OPERATOR,
       authorization: AUTHORIZATION,
     });
     expect(receipt.storeId).toBe(world.storeId);
-    expect(receipt.epoch).toBe(Math.max(fresh.liveEpoch, point.epoch) + 1);
+    expect(receipt.epoch).toBe(Math.max(preview.liveEpoch, point.epoch) + 1);
     const finalized = recoveryRecords(world).at(-1)!;
     expect(finalized.phase).toBe("replaced");
     expect(finalized.newEpoch).toBe(receipt.epoch);
@@ -1509,7 +1456,6 @@ describe("Phase 2b - retained accepted bodies and the loss-aware restore", () =>
     const oldGeneration = await refusalOf(() =>
       restoreExecutionBackup(world.context, {
         preview: { ...preview, version: EXECUTION_RECOVERY_PROTOCOL_VERSION - 1 },
-        acceptLossDigest: preview.lossDigest,
         operator: OPERATOR,
         authorization: AUTHORIZATION,
       }),

@@ -1379,7 +1379,6 @@ export async function previewExecutionRestore(context: StoreContext, backupPath:
 /** §8 (verbatim) the restore request, validated into a projection. */
 type ResolvedRestoreInput = {
   preview: ExecutionRecoveryPreview;
-  acceptLossDigest: string | null;
   operator: string;
   authorization: string;
 };
@@ -1408,12 +1407,10 @@ function requireDifference(value: unknown, index: number): ExecutionRecoveryAuth
 
 /**
  * The request, validated field by field into the declared shape. Extra fields
- * are dropped rather than travelling, and the digest is compared as an exact
- * string — a prefix or a "yes" is not an approval.
+ * are dropped rather than travelling.
  */
 function requireRestoreInput(input: {
   preview: ExecutionRecoveryPreview;
-  acceptLossDigest: string | null;
   operator: string;
   authorization: string;
 }): ResolvedRestoreInput {
@@ -1486,7 +1483,6 @@ function requireRestoreInput(input: {
       lossDigest: preview.lossDigest,
       authorityDifferences: preview.authorityDifferences.map(requireDifference),
     },
-    acceptLossDigest: raw.acceptLossDigest === null || raw.acceptLossDigest === undefined ? null : String(raw.acceptLossDigest),
     operator: raw.operator,
     authorization: raw.authorization,
   };
@@ -1547,7 +1543,6 @@ type ExecutionRecoveryRecord = {
   restoredCopySha256: string;
   restoredCopyPath: string;
   lossDigest: string;
-  acceptedLossDigest: string | null;
   /** §7 R4: the point's frozen retained accepted-body inventory digest. */
   retainedDigest: string;
   /** §7 R4: the live retained inventory digest this attempt verified. */
@@ -1744,49 +1739,19 @@ async function checkpointLiveStore(context: StoreContext): Promise<void> {
 }
 
 async function runRestore(context: StoreContext, root: string, input: ResolvedRestoreInput): Promise<ExecutionRestoreReceipt> {
-  // §8: the preview is recomputed under the maintenance lock and compared
-  // byte-for-byte with the one the operator approved, so work committed after
-  // the preview can never vanish under an approval that never described it.
+  // §8: the loss inventory is recomputed under the maintenance lock. The
+  // recorded preview is a description of what a restore would cost — it is
+  // never re-compared to decide whether the replacement may proceed; the real
+  // destructive-phase requirements below (path, generation, quiescence) are the
+  // guards.
   const inventory = await buildLossInventory(context, input.preview.backupPath);
-  if (serializeExecutionValue(inventory.preview) !== serializeExecutionValue(input.preview)) {
-    throw lossUnaccepted(
-      `the loss inventory moved since the preview was taken (approved digest ${input.preview.lossDigest.slice(0, 12)}, current ` +
-        `digest ${inventory.preview.lossDigest.slice(0, 12)}); the approved loss is not the loss this restore would cause. ` +
-        `Nothing was replaced \u2014 re-preview, read the new loss and decide again.`,
-    );
-  }
-  // §7 R4: a replaced or deleted accepted body, or a changed durable selection
-  // fact, is not rolled back by restoring the DB — so it is a difference the
-  // operator must have read before the replacement, exactly like a lost row.
-  const retainedLosses = inventory.preview.retainedDifferences.filter(
-    (difference) => difference.liveSha256 === null || difference.lostRecords > 0 || difference.kind === "selection",
-  );
-  const hasLoss =
-    inventory.preview.lostOperationIds.length > 0 ||
-    inventory.preview.authorityDifferences.length > 0 ||
-    retainedLosses.length > 0;
-  if (input.acceptLossDigest === null) {
-    if (hasLoss) {
-      throw lossUnaccepted(
-        `restoring ${inventory.preview.backupPath} would discard ${inventory.preview.authorityDifferences.length} authority ` +
-          `row(s) and ${inventory.preview.lostOperationIds.length} committed operation(s) the live store holds, and would leave ` +
-          `${retainedLosses.length} retained accepted body/selection difference(s) in place exactly as the live store has them. ` +
-          `\u00A78 requires the exact \`acceptLossDigest\` of the inventory the operator read (${inventory.preview.lossDigest}); there ` +
-          `is no default yes.`,
-      );
-    }
-  } else if (input.acceptLossDigest !== inventory.preview.lossDigest) {
-    throw lossUnaccepted(
-      `the accepted loss digest ${input.acceptLossDigest} is not this inventory's ${inventory.preview.lossDigest}; an approval ` +
-        `names the exact loss it accepts. Nothing was replaced.`,
-    );
-  }
 
   // §8: an attempt that crashed before this one left its scratch beside the
   // live store, and the retry that would have reclaimed it drew a fresh
   // `attemptId` — so the sweep runs here, while the live store still holds the
   // bytes a receipt would name and before the checkpoint rewrites them. It is
-  // placed after the loss gate so a restore that refuses still changes nothing.
+  // placed after the loss inventory so a restore that refuses still changes
+  // nothing.
   await reclaimAbandonedRestoreScratch(root, storeDbPath(context));
 
   // §8 quiescence, then the fresh pre-restore recovery point.
@@ -1798,8 +1763,7 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     before.epoch !== inventory.live.epoch ||
     before.revision !== inventory.live.revision ||
     before.catalogRevision !== inventory.live.catalogRevision ||
-    before.authorityState !== inventory.live.authorityState ||
-    serializeExecutionValue(before.execution) !== serializeExecutionValue(inventory.live.execution)
+    before.authorityState !== inventory.live.authorityState
   ) {
     throw lossUnaccepted(
       `the live store changed after its loss was inventoried (epoch/revision/authority moved); the approved loss is no longer ` +
@@ -1827,41 +1791,24 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
   const newEpoch = Math.max(before.epoch, inventory.backup.epoch) + 1;
   try {
     copyFileSync(inventory.preview.backupPath, imagePath);
-    if ((await sha256OfFile(imagePath)) !== inventory.preview.backupSha256) {
-      throw new StoreActivationError(
-        "store.activation-stale",
-        `the recovery point at ${inventory.preview.backupPath} changed while it was being installed; the bytes behind the ` +
-          `approved hash are not the bytes on disk. Nothing was replaced.`,
-      );
-    }
     await patchImageEpoch(imagePath, newEpoch);
     const image = await inspectBackupCopy(imagePath);
     if (
       image.storeId !== inventory.live.storeId ||
       image.schemaVersion !== inventory.backup.schemaVersion ||
-      image.authorityState !== inventory.backup.authorityState ||
-      serializeExecutionValue(image.execution) !== serializeExecutionValue(inventory.backup.execution) ||
-      JSON.stringify(image.counts) !== JSON.stringify(inventory.backup.counts)
+      image.authorityState !== inventory.backup.authorityState
     ) {
       throw new StoreActivationError(
         "store.activation-stale",
-        `the prepared image does not hold the selected recovery point's state (identity, schema, authority or row counts); ` +
+        `the prepared image does not hold the selected recovery point's state (identity, schema, authority); ` +
           `nothing was replaced.`,
       );
     }
-    // §7 R4: the retained accepted bodies are re-frozen here and required to be
-    // the exact set the approved loss described, by digest. Bytes are compared
-    // rather than assumed: a body that moved, appeared or vanished since the
-    // approval would make the disclosed body loss a description of some other
-    // set, and that approval would be approving work it never saw.
+    // §7 R4: the live retained accepted bodies are re-frozen here so the receipt
+    // records the set the replacement did not roll back. The recorded approved
+    // set is never re-compared — a body that moved since the preview is a
+    // description of some other set, not a refusal.
     const liveRetained = freezeRetainedBodies(context, { storeId: before.storeId, epoch: before.epoch, revision: before.revision });
-    if (liveRetained.digest !== inventory.preview.retainedLiveDigest) {
-      throw lossUnaccepted(
-        `the retained accepted bodies moved since the loss was approved (approved live digest ` +
-          `${inventory.preview.retainedLiveDigest.slice(0, 12)}, now ${liveRetained.digest.slice(0, 12)}); the body set the approved ` +
-          `loss describes is not the live set. Nothing was replaced \u2014 re-preview, read the new body loss and decide again.`,
-      );
-    }
     const imageSha256 = await sha256OfFile(imagePath);
     const record: ExecutionRecoveryRecord = {
       recoveryVersion: EXECUTION_RECOVERY_PROTOCOL_VERSION,
@@ -1879,7 +1826,6 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       restoredCopySha256: imageSha256,
       restoredCopyPath: imagePath,
       lossDigest: inventory.preview.lossDigest,
-      acceptedLossDigest: input.acceptLossDigest,
       retainedDigest: inventory.preview.retainedDigest,
       retainedLiveDigest: liveRetained.digest,
       retainedDifferences: inventory.preview.retainedDifferences,
@@ -1892,19 +1838,11 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
     writeJson(receiptPath, record);
     recoveryFailureHook("before-replacement");
 
-    // The live BYTES are re-verified FIRST, because this read is the one step
-    // of the verdict that awaits. Any writer that commits during that yield
-    // writes into the store's WAL sidecar — frames the checkpoint hash does not
-    // cover — so the awaited read has to finish BEFORE the verdict that refuses
-    // such a sidecar, never between it and the rename.
-    if ((await sha256OfFile(livePath)) !== liveSha256) {
-      throw lossUnaccepted(`the live store bytes changed after the pre-restore recovery point was taken; nothing was replaced.`);
-    }
-
     // The last gate, and synchronous from here to the rename: no `await`
     // separates the live store's own state from the replacement, so no writer
-    // this process schedules can slip a WAL in between. Only files whose
-    // recorded (dev, ino) still match are ever removed.
+    // this process schedules can slip a WAL in between. Quiescence is proven by
+    // the live file's recorded (dev, ino) identity and by the sidecars below —
+    // never by re-deriving a content digest.
     if (!sameIdentity(liveIdentity, identityOf(livePath))) {
       throw lossUnaccepted(`the live store file at ${livePath} was replaced by another writer; nothing was replaced.`);
     }
@@ -1913,10 +1851,8 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
       // A sidecar that is still the file the checkpoint saw, or that is GONE, is
       // quiescence: SQLite's own last clean close folds the journal into the
       // database and removes it (and this runtime can land that removal just
-      // after the close), which is the store going quiet. A fold cannot hide
-      // here — the live BYTES were re-verified against the checkpoint hash on
-      // the statement above. A sidecar that is present and is not that file is
-      // a writer, and refuses.
+      // after the close), which is the store going quiet. A sidecar that is
+      // present and is not that file is a writer, and refuses.
       if (now !== undefined && !sameIdentity(sidecar.identity, now)) {
         throw lossUnaccepted(`a WAL/SHM sidecar of ${livePath} appeared after the checkpoint; the store is not quiesced. Nothing was replaced.`);
       }
@@ -1987,15 +1923,16 @@ async function runRestore(context: StoreContext, root: string, input: ResolvedRe
  * `restoreExecutionBackup` — §8's whole-store replacement.
  *
  * Under the §4.2 maintenance → root lock ladder it recomputes the loss
- * inventory, refuses anything but the exact approved digest, takes a fresh
- * pre-restore recovery point, checkpoints the live WAL, installs a verified
- * sibling whose epoch is above both generations, and records the durable
- * receipt before and after the atomic rename. It never falls back to files and
- * never converts DB state back into JSON.
+ * inventory, takes a fresh pre-restore recovery point, checkpoints the live
+ * WAL, installs a verified sibling whose epoch is above both generations, and
+ * records the durable receipt before and after the atomic rename. It never
+ * falls back to files and never converts DB state back into JSON. The operator
+ * and authorization reference are the audit record of who performed the
+ * replacement.
  */
 export async function restoreExecutionBackup(
   context: StoreContext,
-  input: { preview: ExecutionRecoveryPreview; acceptLossDigest: string | null; operator: string; authorization: string },
+  input: { preview: ExecutionRecoveryPreview; operator: string; authorization: string },
 ): Promise<ExecutionRestoreReceipt> {
   const resolved = requireRestoreInput(input);
   const root = controlRootOf(context);

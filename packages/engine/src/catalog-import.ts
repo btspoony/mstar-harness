@@ -463,7 +463,7 @@ function fallbackTitle(relativePath: string): string {
 // Legacy index tables
 // ---------------------------------------------------------------------------
 
-type RawTable = {
+export type RawTable = {
   header: string[];
   headerLine: number;
   firstLine: number;
@@ -483,7 +483,7 @@ function isDelimiterRow(line: string): boolean {
 }
 
 /** Every markdown table in the file, in document order. */
-function readTables(text: string): RawTable[] {
+export function readTables(text: string): RawTable[] {
   const lines = text.split(/\r?\n/);
   const tables: RawTable[] = [];
   for (let i = 0; i < lines.length - 1; i += 1) {
@@ -516,19 +516,19 @@ function cellLinkTarget(cell: string): string | null {
   return match === null ? null : match[1]!.trim();
 }
 
-function cellBacktickToken(cell: string): string | null {
+export function cellBacktickToken(cell: string): string | null {
   const match = /^`([^`]+)`$/.exec(cell.trim());
   return match === null ? null : match[1]!.trim();
 }
 
 /** The path a first-cell reference points at: link target, else a backticked token. */
-function cellReference(cell: string): string | null {
+export function cellReference(cell: string): string | null {
   return cellLinkTarget(cell) ?? cellBacktickToken(cell);
 }
 
-type IndexFamily = "iteration-rows" | "document-rows" | "package-documents";
+export type IndexFamily = "iteration-rows" | "document-rows" | "package-documents";
 
-function detectIndexFamily(header: string[]): IndexFamily | null {
+export function detectIndexFamily(header: string[]): IndexFamily | null {
   const keys = header.map((cell) => cellText(cell).toLowerCase());
   const has = (token: string) => keys.includes(token);
   if (has("iteration")) return "iteration-rows";

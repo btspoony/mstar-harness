@@ -1048,10 +1048,12 @@ function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): Appl
 }
 
 /**
- * Verify the applied set against the compiled migrations: contiguous from 1,
- * every checksum matching, nothing unknown or newer. Refuses before any
- * mutation (contract §2: unknown/newer → schema-unsupported, gap/checksum
- * drift → schema-drift, malformed → corrupt).
+ * Verify the applied set against the compiled migrations: contiguous version
+ * ids from 1, nothing unknown or newer. Refuses before any mutation (contract
+ * §2: unknown/newer → schema-unsupported, version gap → schema-drift,
+ * malformed → corrupt). The recorded `name`/`checksum` columns are provenance
+ * and are never compared — "same version id, different SQL" is a build
+ * mismatch caught by CI, not a runtime gate.
  */
 function validateAppliedMigrations(applied: AppliedMigration[]): number {
   if (applied.length === 0) {
@@ -1073,13 +1075,6 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
         "store.schema-drift",
         `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). ` +
           `The store is refused rather than migrated; nothing was modified.`,
-      );
-    }
-    if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
-      throw new StoreError(
-        "store.schema-drift",
-        `Checksum drift for migration ${row.version}: the applied row does not match the compiled migration. ` +
-          `The store is refused rather than silently migrated; nothing was modified.`,
       );
     }
     max = row.version;

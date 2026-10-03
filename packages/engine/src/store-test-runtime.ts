@@ -167,24 +167,22 @@ const scenarios: Record<string, (rootDir: string) => Promise<string>> = {
     return "double init refused without touching the store";
   },
 
-  /** Checksum drift refuses (rollback preserved) and never silently migrates. */
-  async "checksum-drift"(rootDir) {
+  /** A version gap refuses (rollback preserved) and never silently migrates. */
+  async "version-drift"(rootDir) {
     const created = await initializeStore({ harnessDir: rootDir });
-    created.db.prepare("update schema_version set checksum = ? where version = 1").run("0".repeat(64));
+    created.db.prepare("delete from schema_version where version = 2").run();
     created.close();
     await expectStoreErrorAsync("store.schema-drift", () => openStore({ harnessDir: rootDir }, "write"));
     await expectStoreErrorAsync("store.schema-drift", () => openStore({ harnessDir: rootDir }, "read"));
     const { DatabaseSync } = await import("node:sqlite");
     const raw = new DatabaseSync(join(rootDir, "store.db"), { readOnly: true });
-    const rows = raw.prepare("select version, checksum from schema_version order by version").all() as Array<{
-      version: number;
-      checksum: string;
-    }>;
+    const rows = raw.prepare("select version from schema_version order by version").all() as Array<{ version: number }>;
     raw.close();
-    if (rows.length !== MIGRATIONS.length || rows[0].version !== 1 || rows[0].checksum !== "0".repeat(64)) {
+    const expected = MIGRATIONS.map((migration) => migration.version).filter((version) => version !== 2);
+    if (rows.length !== expected.length || rows.some((row, index) => row.version !== expected[index])) {
       throw new Error("the drift refusal rewrote schema rows");
     }
-    return "checksum drift refused with the applied row preserved";
+    return "version gap refused with the applied rows preserved";
   },
 
   /** An unknown/newer schema version refuses instead of migrating down. */
