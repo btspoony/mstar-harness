@@ -45,11 +45,11 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { evaluatePhaseGate, readJson, resolveHarnessDir } from "@mstar-harness/engine";
+import { evaluatePhaseGate, evaluatePostMergeClose, readJson, resolveHarnessDir } from "@mstar-harness/engine";
 import type { ValidationResult } from "@mstar-harness/engine";
 import type { AgentToolResult, CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 
-type Params = { phase: string; workflowId: string; compassPath: string };
+type Params = { phase: string; workflowId: string; compassPath?: string };
 
 function violationLines(violations: readonly ValidationResult[]): string {
   return violations
@@ -193,12 +193,12 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
       .object({
         phase: pi.zod.string(),
         workflowId: pi.zod.string(),
-        compassPath: pi.zod.string(),
+        compassPath: pi.zod.string().optional(),
       }),
     async execute(_toolCallId: string, params: Params, _onUpdate, _ctx, _signal): Promise<AgentToolResult> {
       try {
-        if (!params?.phase || !params?.workflowId || !params?.compassPath) {
-          return result("mstar_iteration_gate: phase, workflowId and compassPath are required", { ok: false }, true);
+        if (!params?.phase || !params?.workflowId || (params.phase !== "6" && !params?.compassPath)) {
+          return result("mstar_iteration_gate: phase and workflowId are required; compassPath is required except for phase 6", { ok: false }, true);
         }
         const guardError = assertSafeWorkflowId(params.workflowId);
         if (guardError !== null) return result(guardError, { ok: false }, true);
@@ -222,6 +222,7 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
             true,
           );
         }
+        const snapshotPath = join(workflowDir, params.workflowId, "snapshot.json");
         if (params.phase === "6") {
           const route = await loadExecutionRoute();
           if ("error" in route) return route.error;
@@ -242,7 +243,25 @@ export default function mstarIterationGate(pi: CustomToolAPI): CustomTool {
             );
           }
         }
-        const snapshotPath = join(workflowDir, params.workflowId, "snapshot.json");
+        if (params.phase === "6") {
+          if (!existsSync(snapshotPath)) {
+            return result(`workflow snapshot not found: ${snapshotPath}`, { phase: params.phase, workflow_id: params.workflowId }, true);
+          }
+          let rootDoc: unknown;
+          try {
+            const rootPath = join(harnessDir, "status.json");
+            if (existsSync(rootPath)) rootDoc = readJson(rootPath);
+          } catch { rootDoc = undefined; }
+          const gate = evaluatePostMergeClose(readJson(snapshotPath), rootDoc);
+          return result(
+            gate.ok ? "gate ok" : `phase "6" gate violations:\n${violationLines(gate.violations)}`,
+            { phase: params.phase, workflow_id: params.workflowId, ok: gate.ok, violations: gate.violations },
+            !gate.ok,
+          );
+        }
+        if (!params.compassPath) {
+          return result("mstar_iteration_gate: compassPath is required outside phase 6", { ok: false }, true);
+        }
         const compassPath = resolve(pi.cwd, params.compassPath);
         if (!existsSync(snapshotPath)) {
           return result(`workflow snapshot not found: ${snapshotPath}`, { phase: params.phase, workflow_id: params.workflowId, workflow_snapshot_path: snapshotPath }, true);

@@ -9,42 +9,42 @@ import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relativ
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
-import { createHash as createHash8 } from "node:crypto";
 import { createHash as createHash7 } from "node:crypto";
-import { closeSync, existsSync as existsSync16, fstatSync, lstatSync as lstatSync3, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync5 } from "node:fs";
+import { createHash as createHash6 } from "node:crypto";
+import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync3, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync5 } from "node:fs";
 import { createRequire as createRequire22 } from "node:module";
-import { join as join19, resolve as resolve13 } from "node:path";
+import { join as join18, resolve as resolve13 } from "node:path";
 import {
-  existsSync as existsSync15,
+  existsSync as existsSync14,
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync6,
   readFileSync as readFileSync11,
-  readdirSync as readdirSync9,
+  readdirSync as readdirSync8,
   readlinkSync,
   statSync as statSync5,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename8, dirname as dirname10, isAbsolute as isAbsolute12, join as join18, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
+import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync11, mkdirSync as mkdirSync4, readdirSync as readdirSync7, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename5, dirname as dirname9, isAbsolute as isAbsolute9, join as join14, relative as relative3, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
 import { dirname as dirname3, join as join3, resolve as resolvePath, sep } from "node:path";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
-import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
 import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
+import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { basename as basename4, isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync14, realpathSync as realpathSync5 } from "node:fs";
-import { existsSync as existsSync18, statSync as statSync8 } from "node:fs";
-import { basename as basename11, dirname as dirname14, join as join22, relative as relative6, resolve as resolve15 } from "node:path";
+import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:fs";
+import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
+import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
+import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash17 } from "node:crypto";
 import { appendFileSync, readFileSync as readFileSync21 } from "node:fs";
 import { join as join34 } from "node:path";
@@ -10813,453 +10813,6 @@ function resolveRepoEnforcement(harnessDir) {
     return rc;
   return resolveCompassEnforcement(harnessDir);
 }
-function storedCoordinationViolations(block, options) {
-  const { revision, route, sessionBound, what } = options;
-  const { handoff, ...rest } = block;
-  const violations = validateRowCoordination({ revision, ...rest }, what, route);
-  if (handoff !== undefined) {
-    violations.push(...validatePlanHandoff(handoff, `${what}.handoff`, route));
-    if (!sessionBound) {
-      violations.push({
-        ok: false,
-        severity: "high",
-        code: "coordination.row.handoff-field",
-        message: `${what}.handoff requires a bound plan session`
-      });
-    }
-  }
-  return violations;
-}
-
-class ExecutionError extends Error {
-  code;
-  details;
-  constructor(code2, message, details) {
-    super(`[${code2}] ${message}`);
-    this.name = "ExecutionError";
-    this.code = code2;
-    this.details = details;
-  }
-}
-function canonicalRefusal(detail) {
-  return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
-}
-function canonicalString(value) {
-  for (let index2 = 0;index2 < value.length; index2++) {
-    const code2 = value.charCodeAt(index2);
-    if (code2 >= 55296 && code2 <= 56319) {
-      const next = value.charCodeAt(index2 + 1);
-      if (!(next >= 56320 && next <= 57343))
-        throw canonicalRefusal("a string carrying an unpaired high surrogate");
-      index2++;
-    } else if (code2 >= 56320 && code2 <= 57343) {
-      throw canonicalRefusal("a string carrying an unpaired low surrogate");
-    }
-  }
-  return JSON.stringify(value);
-}
-function canonicalNumber(value) {
-  if (!Number.isFinite(value))
-    throw canonicalRefusal(`the non-finite number ${String(value)}`);
-  if (Number.isInteger(value) && !Number.isSafeInteger(value))
-    throw canonicalRefusal(`the unsafe integer ${value}`);
-  return String(value);
-}
-function canonicalArray(value, ancestors) {
-  if (ancestors.has(value))
-    throw canonicalRefusal("a cyclic structure");
-  ancestors.add(value);
-  const parts = [];
-  for (let index2 = 0;index2 < value.length; index2++)
-    parts.push(canonical(value[index2], ancestors));
-  ancestors.delete(value);
-  return `[${parts.join(",")}]`;
-}
-function canonicalObject(value, ancestors) {
-  if (ancestors.has(value))
-    throw canonicalRefusal("a cyclic structure");
-  ancestors.add(value);
-  const record = value;
-  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key], ancestors)}`);
-  ancestors.delete(value);
-  return `{${parts.join(",")}}`;
-}
-function canonical(value, ancestors) {
-  if (value === null)
-    return "null";
-  switch (typeof value) {
-    case "boolean":
-      return value ? "true" : "false";
-    case "string":
-      return canonicalString(value);
-    case "number":
-      return canonicalNumber(value);
-    case "object":
-      break;
-    default:
-      throw canonicalRefusal(`an unsupported ${typeof value} value`);
-  }
-  if (Array.isArray(value))
-    return canonicalArray(value, ancestors);
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    throw canonicalRefusal("an object whose prototype is neither Object.prototype nor null");
-  }
-  return canonicalObject(value, ancestors);
-}
-function serializeExecutionValue(value) {
-  return `${canonical(value, new Set)}
-`;
-}
-var KIND_KEY_LENGTHS = {
-  root: 0,
-  workflow: 1,
-  plan: 2,
-  session: 3,
-  "execution-lease": 2,
-  "integration-lease": 1,
-  input: 2
-};
-function isExecutionKind(value) {
-  return typeof value === "string" && Object.prototype.hasOwnProperty.call(KIND_KEY_LENGTHS, value);
-}
-var TOKEN_PREFIX = "exec-v1";
-var STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-function tokenRefusal(detail) {
-  return new ExecutionError("execution.token-invalid", detail);
-}
-function canonicalIntegerText(value, what) {
-  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value <= 0) {
-    throw tokenRefusal(`${what} must be a positive safe integer — got ${String(value)}`);
-  }
-  return String(value);
-}
-function assertKeyShape(kind, key) {
-  const expected = KIND_KEY_LENGTHS[kind];
-  if (key.length !== expected) {
-    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) — got ${key.length}`);
-  }
-  for (const part of key) {
-    if (!isNonEmptyString(part))
-      throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
-  }
-  if (kind === "session" && key[1] !== "coordinator" && key[1] !== "plan-pm") {
-    throw tokenRefusal(`a session token key carries the role as its second part — got ${JSON.stringify(key[1])}`);
-  }
-}
-function encodeTokenKey(key) {
-  return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
-}
-function executionToken(kind, storeId, epoch, key, revision) {
-  if (!isExecutionKind(kind))
-    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
-  if (!STORE_UUID_RE.test(storeId))
-    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
-  assertKeyShape(kind, key);
-  const epochText = canonicalIntegerText(epoch, "the epoch");
-  const revisionText = canonicalIntegerText(revision, "the revision");
-  return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
-}
-function corrupt(detail) {
-  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
-}
-function readStoreIdentity(db) {
-  const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
-  if (!row || typeof row.store_id !== "string" || typeof row.authority_epoch !== "number") {
-    throw corrupt("store_meta is missing or malformed");
-  }
-  return { storeId: row.store_id, epoch: row.authority_epoch };
-}
-function readExecutionMetaRow(db) {
-  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
-  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw corrupt("execution_meta is missing or malformed");
-  }
-  return {
-    protocolVersion: row.protocol_version,
-    authorityState: row.authority_state,
-    revision: row.revision,
-    rootUpdatedAt: row.root_updated_at,
-    manifestId: row.manifest_id ?? null,
-    activatedAt: row.activated_at ?? null
-  };
-}
-function storedJsonObject(text4, what) {
-  if (typeof text4 !== "string")
-    throw corrupt(`${what} is not a JSON string`);
-  let parsed;
-  try {
-    parsed = JSON.parse(text4);
-  } catch (error) {
-    throw corrupt(`${what} is not valid JSON (${error.message})`);
-  }
-  if (!isPlainObject(parsed))
-    throw corrupt(`${what} is not a JSON object`);
-  return parsed;
-}
-function storedRevision(value, what) {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
-    throw corrupt(`${what} is not a positive safe integer`);
-  }
-  return value;
-}
-function storedText(value, what) {
-  if (typeof value !== "string")
-    throw corrupt(`${what} is not a string`);
-  return value;
-}
-function validationRefusal(what, violations) {
-  return corrupt(`${what} does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`);
-}
-function readFrozenInput(json, what) {
-  if (json === null || json === undefined)
-    return null;
-  const pin = storedJsonObject(json, what);
-  if (!isNonEmptyString(pin.store_id) || !STORE_UUID_RE.test(pin.store_id) || typeof pin.entity_revision !== "number" || !Number.isSafeInteger(pin.entity_revision) || pin.entity_revision <= 0 || !isNonEmptyString(pin.document_hash) || !isNonEmptyString(pin.relation_hash)) {
-    throw corrupt(`${what} is not a complete catalog execution pin`);
-  }
-  const keys = Object.keys(pin);
-  if (keys.length !== 4) {
-    throw corrupt(`${what} carries fields beyond the catalog execution pin contract`);
-  }
-  return {
-    store_id: pin.store_id,
-    entity_revision: pin.entity_revision,
-    document_hash: pin.document_hash,
-    relation_hash: pin.relation_hash
-  };
-}
-function readExecutionLease(json, what) {
-  const lease = storedJsonObject(json, what);
-  const validation = validateExecutionLease(lease);
-  if (!validation.ok)
-    throw validationRefusal(what, validation.violations);
-  return lease;
-}
-function readIntegrationLease(json, what) {
-  const lease = storedJsonObject(json, what);
-  const validation = validateIntegrationMergeLease(lease);
-  if (!validation.ok)
-    throw validationRefusal(what, validation.violations);
-  return lease;
-}
-function assertLeaseOwnership(lease, sessionRow, ownerEpoch, store, workflowId, planId) {
-  if (lease.status !== "held")
-    return;
-  const what = `execution_leases(${workflowId},${planId}).lease_json`;
-  if (!isNonEmptyString(lease.holder_session_id) || lease.holder_role !== "plan-pm" && lease.holder_role !== "coordinator") {
-    throw corrupt(`${what} is held without the holder session identity and role it must agree with`);
-  }
-  if (lease.plan_worktree_path !== lease.worktree_path || lease.plan_branch !== lease.working_branch) {
-    throw corrupt(`${what} records a plan scope that disagrees with its own lease identity fields`);
-  }
-  if (ownerEpoch !== store.epoch)
-    return;
-  if (sessionRow === undefined) {
-    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ${planId} has no session of that identity`);
-  }
-  if (sessionRow.state !== "active") {
-    throw corrupt(`${what} is held in current epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that session is ${String(sessionRow.state)} and cannot authorize the lease`);
-  }
-  if (sessionRow.epoch !== ownerEpoch) {
-    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that active session is in epoch ${String(sessionRow.epoch)}; a lease and the session row it names as its owner are ONE ownership fact of one epoch`);
-  }
-  if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
-    throw corrupt(`${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session row of ${planId} in epoch ${ownerEpoch} is ${String(sessionRow.role)} session ${String(sessionRow.session_id)}`);
-  }
-}
-function sessionRef(store, workflowId, row) {
-  const role = row.role;
-  if (role !== "plan-pm" && role !== "coordinator") {
-    throw corrupt(`execution_sessions(${workflowId}) carries role ${JSON.stringify(role)}`);
-  }
-  if (!isNonEmptyString(row.session_id)) {
-    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
-  }
-  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
-    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
-  }
-  let planId = null;
-  if (role === "plan-pm") {
-    if (!isNonEmptyString(row.plan_id)) {
-      throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
-    }
-    planId = row.plan_id;
-  } else if (row.plan_id !== null && row.plan_id !== undefined) {
-    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
-  }
-  return {
-    storeId: store.storeId,
-    epoch: row.epoch,
-    workflowId,
-    role,
-    sessionId: row.session_id,
-    planId
-  };
-}
-function readIntegrationLeaseRow(db, workflowId) {
-  const row = db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
-  if (row === undefined)
-    return null;
-  const what = `execution_integration_leases(${workflowId}).lease_json`;
-  const lease = readIntegrationLease(row.lease_json, what);
-  const status = lease.status;
-  if (status !== undefined && status !== "held" && status !== "released") {
-    throw corrupt(`${what} carries status ${JSON.stringify(status)}, which is neither held nor released`);
-  }
-  return {
-    lease,
-    status: status === "released" ? "released" : "held",
-    revision: storedRevision(row.revision, `execution_integration_leases(${workflowId}).revision`),
-    ownerEpoch: storedRevision(row.owner_epoch, `execution_integration_leases(${workflowId}).owner_epoch`)
-  };
-}
-function readWorkflowView(db, store, workflowId) {
-  const workflowRow = db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
-  if (!workflowRow) {
-    throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
-  }
-  const revision = storedRevision(workflowRow.revision, `execution_workflows(${workflowId}).revision`);
-  const state = storedJsonObject(workflowRow.state_json, `execution_workflows(${workflowId}).state_json`);
-  if (state.id !== workflowId) {
-    throw corrupt(`execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`);
-  }
-  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
-    throw corrupt(`execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by execution_plans/execution_integration_leases/execution_sessions`);
-  }
-  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
-  if (!workflowValidation.ok) {
-    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
-  }
-  const sessions = db.prepare("select role, session_id, plan_id, epoch, state from execution_sessions where workflow_id = ?").all(workflowId);
-  const activeSessions = sessions.filter((entry) => entry.state === "active");
-  const leases = db.prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ?").all(workflowId);
-  const inputs = db.prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?").all(workflowId);
-  const integrationRow = readIntegrationLeaseRow(db, workflowId);
-  const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
-  const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
-  const planRows = db.prepare("select plan_id, revision, ordinal, state_json, coordination_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId);
-  const planTokens = {};
-  const plans = [];
-  const planIds = planRows.map((entry) => storedText(entry.plan_id, `execution_plans(${workflowId}).plan_id`));
-  const routeSnapshot = {
-    ...state,
-    plans: planIds.map((planId) => ({ id: planId }))
-  };
-  for (const row of planRows) {
-    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
-    const planRevision = storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
-    const planState = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
-    const storedCoordination = storedJsonObject(row.coordination_json, `execution_plans(${workflowId},${planId}).coordination_json`);
-    if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json/execution_leases`);
-    }
-    if (planState.id !== planId) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
-    }
-    const planValidation = validatePlanRow(planState);
-    if (!planValidation.ok) {
-      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
-    }
-    if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the revision column and in execution_sessions; the DB authority stores neither`);
-    }
-    const projectedCoordination = { revision: planRevision, ...storedCoordination };
-    const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
-    const handoff = isPlainObject(storedCoordination.handoff) ? storedCoordination.handoff : undefined;
-    const submitter = handoff?.submitted_by;
-    const historicalSessionRow = typeof submitter === "string" ? sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId && entry.session_id === submitter) : undefined;
-    const coordinationViolations = storedCoordinationViolations(storedCoordination, {
-      revision: planRevision,
-      route: rowValidationRoute(routeSnapshot, planState),
-      sessionBound: handoff === undefined || historicalSessionRow !== undefined,
-      what: `execution_plans(${workflowId},${planId}).coordination_json`
-    });
-    if (coordinationViolations.length > 0) {
-      throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
-    }
-    const hasCoordination = Object.keys(storedCoordination).length > 0;
-    const leaseRow = leases.find((entry) => entry.plan_id === planId);
-    const inputRow = inputs.find((entry) => entry.plan_id === planId);
-    const executionLease = leaseRow ? readExecutionLease(leaseRow.lease_json, `execution_leases(${workflowId},${planId}).lease_json`) : null;
-    if (leaseRow !== undefined && executionLease !== null) {
-      const holderRow = executionLease.status === "held" ? sessions.find((entry) => entry.role === executionLease.holder_role && entry.session_id === executionLease.holder_session_id && (entry.role === "coordinator" || entry.plan_id === planId)) : undefined;
-      assertLeaseOwnership(executionLease, holderRow, storedRevision(leaseRow.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`), store, workflowId, planId);
-    }
-    planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
-    plans.push({
-      workflow: state,
-      plan: planState,
-      coordination: hasCoordination ? projectedCoordination : null,
-      session: activeSessionRow ? sessionRef(store, workflowId, activeSessionRow) : null,
-      executionLease,
-      integrationLease,
-      frozenInput: inputRow ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`) : null
-    });
-  }
-  return {
-    workflowToken: executionToken("workflow", store.storeId, store.epoch, [workflowId], revision),
-    planTokens,
-    state,
-    plans,
-    coordinator: coordinatorRow ? sessionRef(store, workflowId, coordinatorRow) : null,
-    integrationLease
-  };
-}
-function readExecutionGraph(db, store, meta) {
-  const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
-  const entries = [];
-  const workflows = [];
-  for (const row of registry) {
-    const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
-    const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
-    const validation = validateWorkflowEntry(entry);
-    if (!validation.ok)
-      throw validationRefusal(`execution_registry(${workflowId}).entry_json`, validation.violations);
-    if (entry.id !== workflowId) {
-      throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
-    }
-    entries.push(entry);
-    workflows.push(readWorkflowView(db, store, workflowId));
-  }
-  return { root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries }, workflows };
-}
-var ownedTransactions = new AsyncLocalStorage3;
-async function withExecutionReadTransaction(context, body) {
-  const handle = await openStore(context, "read");
-  try {
-    if (handle.execution === null) {
-      throw new ExecutionError("execution.not-active", "this store predates the execution schema, so it has no execution authority. Upgrade the store and initialize the execution domain before reading execution state.");
-    }
-    const db = handle.db;
-    db.exec("begin");
-    try {
-      const meta = readExecutionMetaRow(db);
-      if (meta.authorityState !== "active") {
-        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. A staged store is inspectable only through migration diagnostics.`);
-      }
-      const store = readStoreIdentity(db);
-      const result = body({ db, storeId: store.storeId, epoch: store.epoch, execution: meta });
-      db.exec("commit");
-      return result;
-    } catch (error) {
-      try {
-        db.exec("rollback");
-      } catch {}
-      throw error;
-    }
-  } finally {
-    handle.close();
-  }
-}
-async function readExecutionState(context) {
-  return withExecutionReadTransaction(context, (tx) => ({
-    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
-    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
-    storeId: tx.storeId,
-    epoch: tx.epoch
-  }));
-}
 var COMPASS_STATUSES = ["active", "locked", "completed"];
 var DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
 function typeName(value) {
@@ -11652,13 +11205,13 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
   for (;; ) {
     if (!isAtOrBelow2(dir, boundary))
       return null;
-    for (const candidate of [join14(dir, ".mstar"), join14(dir, ".agents"), join14(dir, ".plans"), join14(dir, "plans")]) {
+    for (const candidate of [join13(dir, ".mstar"), join13(dir, ".agents"), join13(dir, ".plans"), join13(dir, "plans")]) {
       if (isDirectory(candidate))
         return candidate;
     }
     if (dir === boundary)
       return null;
-    const parent = dirname9(dir);
+    const parent = dirname8(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -11676,7 +11229,7 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname9(boundary);
+        boundary = dirname8(boundary);
     }
     return resolve8(boundary);
   } catch {}
@@ -11684,11 +11237,11 @@ function defaultWorkspaceRoot(startDir) {
 }
 function isAtOrBelow2(dir, root) {
   const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute9(rel);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname9(dir));
+  const rc = loadMstarc(dir, dirname8(dir));
   const declared = rc?.config[key];
   return declared ? resolve8(rc.dir, declared) : null;
 }
@@ -11700,19 +11253,19 @@ function resolveSpecsDir(harnessDir, opts = {}) {
     return declared;
   }
   const harness = resolve8(harnessDir);
-  const repoRoot = dirname9(harness);
+  const repoRoot = dirname8(harness);
   const candidates = [
-    join14(harness, "specs"),
-    join14(repoRoot, "docs", "specs"),
-    join14(repoRoot, "specs"),
-    join14(harness, "designs"),
-    join14(repoRoot, "designs")
+    join13(harness, "specs"),
+    join13(repoRoot, "docs", "specs"),
+    join13(repoRoot, "specs"),
+    join13(harness, "designs"),
+    join13(repoRoot, "designs")
   ];
   for (const candidate of candidates) {
     if (isDirectory(candidate) && hasFiles(candidate))
       return candidate;
   }
-  const fallback = join14(harness, "specs");
+  const fallback = join13(harness, "specs");
   if (opts.create !== false)
     mkdirSync4(fallback, { recursive: true });
   return fallback;
@@ -11725,19 +11278,19 @@ function resolvePlanDir(harnessDir) {
   const name = basename5(dir);
   if (name === ".plans" || name === "plans")
     return dir;
-  return join14(dir, "plans");
+  return join13(dir, "plans");
 }
 function resolveIterationDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "iterationDir");
   if (declared !== null)
     return declared;
-  return join14(resolve8(harnessDir), "iterations");
+  return join13(resolve8(harnessDir), "iterations");
 }
 function resolveKnowledgeDir(harnessDir) {
   const declared = mstarcDirOverride(harnessDir, "knowledgeDir");
   if (declared !== null)
     return declared;
-  return join14(resolve8(harnessDir), "knowledge");
+  return join13(resolve8(harnessDir), "knowledge");
 }
 function resolveHarnessSubdir(startDir, opts, key, fallback) {
   const harness = resolveHarnessDir(startDir, opts);
@@ -11745,7 +11298,7 @@ function resolveHarnessSubdir(startDir, opts, key, fallback) {
     throw new Error(`harness dir not found from ${resolve8(startDir)} — cannot resolve the ${fallback} dir (run \`mstar harness scaffold\`, pass opts.harnessDir, or set MSTAR_HARNESS_DIR)`);
   }
   const declared = mstarcDirOverride(harness, key);
-  return declared !== null ? declared : join14(resolve8(harness), fallback);
+  return declared !== null ? declared : join13(resolve8(harness), fallback);
 }
 function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "workflowDir", "workflows");
@@ -11787,9 +11340,9 @@ function isDirectory(dir) {
 }
 function hasFiles(dir) {
   try {
-    for (const entry of readdirSync7(dir, { withFileTypes: true })) {
+    for (const entry of readdirSync6(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (hasFiles(join14(dir, entry.name)))
+        if (hasFiles(join13(dir, entry.name)))
           return true;
       } else if (entry.isFile()) {
         return true;
@@ -11799,6 +11352,23 @@ function hasFiles(dir) {
   } catch {
     return false;
   }
+}
+function storedCoordinationViolations(block, options) {
+  const { revision, route, sessionBound, what } = options;
+  const { handoff, ...rest } = block;
+  const violations = validateRowCoordination({ revision, ...rest }, what, route);
+  if (handoff !== undefined) {
+    violations.push(...validatePlanHandoff(handoff, `${what}.handoff`, route));
+    if (!sessionBound) {
+      violations.push({
+        ok: false,
+        severity: "high",
+        code: "coordination.row.handoff-field",
+        message: `${what}.handoff requires a bound plan session`
+      });
+    }
+  }
+  return violations;
 }
 var AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
 var AUDIT_RISKS = ["LOW", "MED", "HIGH"];
@@ -11873,19 +11443,19 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
-  for (let dir = start;; dir = dirname10(dir)) {
+  for (let dir = start;; dir = dirname9(dir)) {
     let linked = false;
     try {
-      linked = statSync5(join18(dir, ".git")).isFile();
+      linked = statSync5(join17(dir, ".git")).isFile();
     } catch (error) {
       const code2 = errorCode(error);
       if (code2 !== "ENOENT" && code2 !== "ENOTDIR")
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join18(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join18(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join17(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join17(dir, ".git") });
     }
-    const parent = dirname10(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -11947,7 +11517,7 @@ function storeDbPath(context) {
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
   const start = resolve13(context.harnessDir);
   const resolved = resolveProcessHarnessDir(start);
-  return join19(resolved ?? start, "store.db");
+  return join18(resolved ?? start, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -12045,7 +11615,7 @@ function isWalFormatDatabase(header, bytes) {
   return bytes % legalPageSize === 0;
 }
 function ensureJournalForRead(dbPath) {
-  if (existsSync16(`${dbPath}-wal`))
+  if (existsSync15(`${dbPath}-wal`))
     return;
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   let bytes;
@@ -12566,7 +12136,7 @@ var EXECUTION_TABLE_NAMES = [
 ];
 var EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
 function migrationChecksum(migration) {
-  return createHash7("sha256").update(migration.sql, "utf8").digest("hex");
+  return createHash6("sha256").update(migration.sql, "utf8").digest("hex");
 }
 function readAppliedMigrations(db, tolerateMissingTable) {
   const present = db.prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'").get();
@@ -12653,7 +12223,7 @@ async function openStore(context, mode) {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync16(dbPath)) {
+  if (!existsSync15(dbPath)) {
     throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace (or the staged migration for an existing workspace). Nothing was created.`);
   }
   let db;
@@ -12689,7 +12259,7 @@ class RoadmapError extends Error {
   }
 }
 function sha2562(value) {
-  return createHash8("sha256").update(value).digest("hex");
+  return createHash7("sha256").update(value).digest("hex");
 }
 function requireRoadmapSchema(db) {
   const present = db.prepare("select count(*) as count from sqlite_master where type='table' and name='schema_version'").get();
@@ -12757,7 +12327,7 @@ var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync8(join22(dir, name));
+    statSync8(join21(dir, name));
     return true;
   } catch {
     return false;
@@ -12779,7 +12349,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname14(dir);
+    const parent = dirname13(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -12802,8 +12372,8 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join22(harnessDir2, "workflows");
-      projectDir = join22(harnessDir2, "projects");
+      workflowDir = join21(harnessDir2, "workflows");
+      projectDir = join21(harnessDir2, "projects");
     }
     if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
@@ -12813,8 +12383,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -12822,7 +12392,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname14(resolved));
+  const fallbackDir = resolveHarnessDir(dirname13(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -12870,7 +12440,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
     }
     return validateDocByKind(doc2, kind);
   }
-  if (!existsSync18(filePath))
+  if (!existsSync17(filePath))
     return [];
   try {
     if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
@@ -12919,6 +12489,435 @@ var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
 var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+class ExecutionError extends Error {
+  code;
+  details;
+  constructor(code2, message, details) {
+    super(`[${code2}] ${message}`);
+    this.name = "ExecutionError";
+    this.code = code2;
+    this.details = details;
+  }
+}
+function canonicalRefusal(detail) {
+  return new ExecutionError("execution.canonical-value", `${detail} is not a canonical execution value`);
+}
+function canonicalString(value) {
+  for (let index2 = 0;index2 < value.length; index2++) {
+    const code2 = value.charCodeAt(index2);
+    if (code2 >= 55296 && code2 <= 56319) {
+      const next = value.charCodeAt(index2 + 1);
+      if (!(next >= 56320 && next <= 57343))
+        throw canonicalRefusal("a string carrying an unpaired high surrogate");
+      index2++;
+    } else if (code2 >= 56320 && code2 <= 57343) {
+      throw canonicalRefusal("a string carrying an unpaired low surrogate");
+    }
+  }
+  return JSON.stringify(value);
+}
+function canonicalNumber(value) {
+  if (!Number.isFinite(value))
+    throw canonicalRefusal(`the non-finite number ${String(value)}`);
+  if (Number.isInteger(value) && !Number.isSafeInteger(value))
+    throw canonicalRefusal(`the unsafe integer ${value}`);
+  return String(value);
+}
+function canonicalArray(value, ancestors) {
+  if (ancestors.has(value))
+    throw canonicalRefusal("a cyclic structure");
+  ancestors.add(value);
+  const parts = [];
+  for (let index2 = 0;index2 < value.length; index2++)
+    parts.push(canonical(value[index2], ancestors));
+  ancestors.delete(value);
+  return `[${parts.join(",")}]`;
+}
+function canonicalObject(value, ancestors) {
+  if (ancestors.has(value))
+    throw canonicalRefusal("a cyclic structure");
+  ancestors.add(value);
+  const record = value;
+  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key], ancestors)}`);
+  ancestors.delete(value);
+  return `{${parts.join(",")}}`;
+}
+function canonical(value, ancestors) {
+  if (value === null)
+    return "null";
+  switch (typeof value) {
+    case "boolean":
+      return value ? "true" : "false";
+    case "string":
+      return canonicalString(value);
+    case "number":
+      return canonicalNumber(value);
+    case "object":
+      break;
+    default:
+      throw canonicalRefusal(`an unsupported ${typeof value} value`);
+  }
+  if (Array.isArray(value))
+    return canonicalArray(value, ancestors);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw canonicalRefusal("an object whose prototype is neither Object.prototype nor null");
+  }
+  return canonicalObject(value, ancestors);
+}
+function serializeExecutionValue(value) {
+  return `${canonical(value, new Set)}
+`;
+}
+var KIND_KEY_LENGTHS = {
+  root: 0,
+  workflow: 1,
+  plan: 2,
+  session: 3,
+  "execution-lease": 2,
+  "integration-lease": 1,
+  input: 2
+};
+function isExecutionKind(value) {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(KIND_KEY_LENGTHS, value);
+}
+var TOKEN_PREFIX = "exec-v1";
+var STORE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function tokenRefusal(detail) {
+  return new ExecutionError("execution.token-invalid", detail);
+}
+function canonicalIntegerText(value, what) {
+  if (!Number.isInteger(value) || !Number.isSafeInteger(value) || value <= 0) {
+    throw tokenRefusal(`${what} must be a positive safe integer — got ${String(value)}`);
+  }
+  return String(value);
+}
+function assertKeyShape(kind, key) {
+  const expected = KIND_KEY_LENGTHS[kind];
+  if (key.length !== expected) {
+    throw tokenRefusal(`a ${kind} token key carries ${expected} part(s) — got ${key.length}`);
+  }
+  for (const part of key) {
+    if (!isNonEmptyString(part))
+      throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
+  }
+  if (kind === "session" && key[1] !== "coordinator" && key[1] !== "plan-pm") {
+    throw tokenRefusal(`a session token key carries the role as its second part — got ${JSON.stringify(key[1])}`);
+  }
+}
+function encodeTokenKey(key) {
+  return Buffer.from(serializeExecutionValue(key), "utf8").toString("base64url");
+}
+function executionToken(kind, storeId, epoch, key, revision) {
+  if (!isExecutionKind(kind))
+    throw tokenRefusal(`unknown execution kind ${JSON.stringify(kind)}`);
+  if (!STORE_UUID_RE.test(storeId))
+    throw tokenRefusal(`a store identity must be a lowercase UUID — got ${JSON.stringify(storeId)}`);
+  assertKeyShape(kind, key);
+  const epochText = canonicalIntegerText(epoch, "the epoch");
+  const revisionText = canonicalIntegerText(revision, "the revision");
+  return `${TOKEN_PREFIX}:${kind}:${storeId}:${epochText}:${encodeTokenKey(key)}:${revisionText}`;
+}
+function corrupt(detail) {
+  return new StoreError("store.corrupt", `${detail}; the execution authority cannot be verified`);
+}
+function readStoreIdentity(db) {
+  const row = db.prepare("select store_id, authority_epoch from store_meta where id = 1").get();
+  if (!row || typeof row.store_id !== "string" || typeof row.authority_epoch !== "number") {
+    throw corrupt("store_meta is missing or malformed");
+  }
+  return { storeId: row.store_id, epoch: row.authority_epoch };
+}
+function readExecutionMetaRow(db) {
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw corrupt("execution_meta is missing or malformed");
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
+function storedJsonObject(text4, what) {
+  if (typeof text4 !== "string")
+    throw corrupt(`${what} is not a JSON string`);
+  let parsed;
+  try {
+    parsed = JSON.parse(text4);
+  } catch (error) {
+    throw corrupt(`${what} is not valid JSON (${error.message})`);
+  }
+  if (!isPlainObject(parsed))
+    throw corrupt(`${what} is not a JSON object`);
+  return parsed;
+}
+function storedRevision(value, what) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw corrupt(`${what} is not a positive safe integer`);
+  }
+  return value;
+}
+function storedText(value, what) {
+  if (typeof value !== "string")
+    throw corrupt(`${what} is not a string`);
+  return value;
+}
+function validationRefusal(what, violations) {
+  return corrupt(`${what} does not validate (${violations.map((entry) => `${entry.code}: ${entry.message}`).join("; ")})`);
+}
+function readFrozenInput(json, what) {
+  if (json === null || json === undefined)
+    return null;
+  const pin = storedJsonObject(json, what);
+  if (!isNonEmptyString(pin.store_id) || !STORE_UUID_RE.test(pin.store_id) || typeof pin.entity_revision !== "number" || !Number.isSafeInteger(pin.entity_revision) || pin.entity_revision <= 0 || !isNonEmptyString(pin.document_hash) || !isNonEmptyString(pin.relation_hash)) {
+    throw corrupt(`${what} is not a complete catalog execution pin`);
+  }
+  const keys = Object.keys(pin);
+  if (keys.length !== 4) {
+    throw corrupt(`${what} carries fields beyond the catalog execution pin contract`);
+  }
+  return {
+    store_id: pin.store_id,
+    entity_revision: pin.entity_revision,
+    document_hash: pin.document_hash,
+    relation_hash: pin.relation_hash
+  };
+}
+function readExecutionLease(json, what) {
+  const lease = storedJsonObject(json, what);
+  const validation = validateExecutionLease(lease);
+  if (!validation.ok)
+    throw validationRefusal(what, validation.violations);
+  return lease;
+}
+function readIntegrationLease(json, what) {
+  const lease = storedJsonObject(json, what);
+  const validation = validateIntegrationMergeLease(lease);
+  if (!validation.ok)
+    throw validationRefusal(what, validation.violations);
+  return lease;
+}
+function assertLeaseOwnership(lease, sessionRow, ownerEpoch, store, workflowId, planId) {
+  if (lease.status !== "held")
+    return;
+  const what = `execution_leases(${workflowId},${planId}).lease_json`;
+  if (!isNonEmptyString(lease.holder_session_id) || lease.holder_role !== "plan-pm" && lease.holder_role !== "coordinator") {
+    throw corrupt(`${what} is held without the holder session identity and role it must agree with`);
+  }
+  if (lease.plan_worktree_path !== lease.worktree_path || lease.plan_branch !== lease.working_branch) {
+    throw corrupt(`${what} records a plan scope that disagrees with its own lease identity fields`);
+  }
+  if (ownerEpoch !== store.epoch)
+    return;
+  if (sessionRow === undefined) {
+    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ${planId} has no session of that identity`);
+  }
+  if (sessionRow.state !== "active") {
+    throw corrupt(`${what} is held in current epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that session is ${String(sessionRow.state)} and cannot authorize the lease`);
+  }
+  if (sessionRow.epoch !== ownerEpoch) {
+    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that active session is in epoch ${String(sessionRow.epoch)}; a lease and the session row it names as its owner are ONE ownership fact of one epoch`);
+  }
+  if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
+    throw corrupt(`${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session row of ${planId} in epoch ${ownerEpoch} is ${String(sessionRow.role)} session ${String(sessionRow.session_id)}`);
+  }
+}
+function sessionRef(store, workflowId, row) {
+  const role = row.role;
+  if (role !== "plan-pm" && role !== "coordinator") {
+    throw corrupt(`execution_sessions(${workflowId}) carries role ${JSON.stringify(role)}`);
+  }
+  if (!isNonEmptyString(row.session_id)) {
+    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
+  }
+  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
+  }
+  let planId = null;
+  if (role === "plan-pm") {
+    if (!isNonEmptyString(row.plan_id)) {
+      throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
+    }
+    planId = row.plan_id;
+  } else if (row.plan_id !== null && row.plan_id !== undefined) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
+  }
+  return {
+    storeId: store.storeId,
+    epoch: row.epoch,
+    workflowId,
+    role,
+    sessionId: row.session_id,
+    planId
+  };
+}
+function readIntegrationLeaseRow(db, workflowId) {
+  const row = db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
+  if (row === undefined)
+    return null;
+  const what = `execution_integration_leases(${workflowId}).lease_json`;
+  const lease = readIntegrationLease(row.lease_json, what);
+  const status = lease.status;
+  if (status !== undefined && status !== "held" && status !== "released") {
+    throw corrupt(`${what} carries status ${JSON.stringify(status)}, which is neither held nor released`);
+  }
+  return {
+    lease,
+    status: status === "released" ? "released" : "held",
+    revision: storedRevision(row.revision, `execution_integration_leases(${workflowId}).revision`),
+    ownerEpoch: storedRevision(row.owner_epoch, `execution_integration_leases(${workflowId}).owner_epoch`)
+  };
+}
+function readWorkflowView(db, store, workflowId) {
+  const workflowRow = db.prepare("select revision, state_json from execution_workflows where workflow_id = ?").get(workflowId);
+  if (!workflowRow) {
+    throw corrupt(`execution_registry lists workflow ${workflowId} without an execution_workflows row`);
+  }
+  const revision = storedRevision(workflowRow.revision, `execution_workflows(${workflowId}).revision`);
+  const state = storedJsonObject(workflowRow.state_json, `execution_workflows(${workflowId}).state_json`);
+  if (state.id !== workflowId) {
+    throw corrupt(`execution_workflows(${workflowId}).state_json carries id ${JSON.stringify(state.id)} and does not describe its own key`);
+  }
+  if (state.plans !== undefined || state.integration_merge_lease !== undefined || state.coordinator_session !== undefined) {
+    throw corrupt(`execution_workflows(${workflowId}).state_json carries plans/integration_merge_lease/coordinator_session, which are owned by execution_plans/execution_integration_leases/execution_sessions`);
+  }
+  const workflowValidation = validateWorkflowSnapshot({ ...state, plans: [] });
+  if (!workflowValidation.ok) {
+    throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
+  }
+  const sessions = db.prepare("select role, session_id, plan_id, epoch, state from execution_sessions where workflow_id = ?").all(workflowId);
+  const activeSessions = sessions.filter((entry) => entry.state === "active");
+  const leases = db.prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ?").all(workflowId);
+  const inputs = db.prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?").all(workflowId);
+  const integrationRow = readIntegrationLeaseRow(db, workflowId);
+  const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
+  const integrationLease = integrationRow === null || integrationRow.status === "released" ? null : integrationRow.lease;
+  const planRows = db.prepare("select plan_id, revision, ordinal, state_json, coordination_json from execution_plans where workflow_id = ? order by ordinal").all(workflowId);
+  const planTokens = {};
+  const plans = [];
+  const planIds = planRows.map((entry) => storedText(entry.plan_id, `execution_plans(${workflowId}).plan_id`));
+  const routeSnapshot = {
+    ...state,
+    plans: planIds.map((planId) => ({ id: planId }))
+  };
+  for (const row of planRows) {
+    const planId = storedText(row.plan_id, `execution_plans(${workflowId}).plan_id`);
+    const planRevision = storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
+    const planState = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
+    const storedCoordination = storedJsonObject(row.coordination_json, `execution_plans(${workflowId},${planId}).coordination_json`);
+    if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json/execution_leases`);
+    }
+    if (planState.id !== planId) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
+    }
+    const planValidation = validatePlanRow(planState);
+    if (!planValidation.ok) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).state_json`, planValidation.violations);
+    }
+    if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
+      throw corrupt(`execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the revision column and in execution_sessions; the DB authority stores neither`);
+    }
+    const projectedCoordination = { revision: planRevision, ...storedCoordination };
+    const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
+    const handoff = isPlainObject(storedCoordination.handoff) ? storedCoordination.handoff : undefined;
+    const submitter = handoff?.submitted_by;
+    const historicalSessionRow = typeof submitter === "string" ? sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId && entry.session_id === submitter) : undefined;
+    const coordinationViolations = storedCoordinationViolations(storedCoordination, {
+      revision: planRevision,
+      route: rowValidationRoute(routeSnapshot, planState),
+      sessionBound: handoff === undefined || historicalSessionRow !== undefined,
+      what: `execution_plans(${workflowId},${planId}).coordination_json`
+    });
+    if (coordinationViolations.length > 0) {
+      throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
+    }
+    const hasCoordination = Object.keys(storedCoordination).length > 0;
+    const leaseRow = leases.find((entry) => entry.plan_id === planId);
+    const inputRow = inputs.find((entry) => entry.plan_id === planId);
+    const executionLease = leaseRow ? readExecutionLease(leaseRow.lease_json, `execution_leases(${workflowId},${planId}).lease_json`) : null;
+    if (leaseRow !== undefined && executionLease !== null) {
+      const holderRow = executionLease.status === "held" ? sessions.find((entry) => entry.role === executionLease.holder_role && entry.session_id === executionLease.holder_session_id && (entry.role === "coordinator" || entry.plan_id === planId)) : undefined;
+      assertLeaseOwnership(executionLease, holderRow, storedRevision(leaseRow.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`), store, workflowId, planId);
+    }
+    planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
+    plans.push({
+      workflow: state,
+      plan: planState,
+      coordination: hasCoordination ? projectedCoordination : null,
+      session: activeSessionRow ? sessionRef(store, workflowId, activeSessionRow) : null,
+      executionLease,
+      integrationLease,
+      frozenInput: inputRow ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`) : null
+    });
+  }
+  return {
+    workflowToken: executionToken("workflow", store.storeId, store.epoch, [workflowId], revision),
+    planTokens,
+    state,
+    plans,
+    coordinator: coordinatorRow ? sessionRef(store, workflowId, coordinatorRow) : null,
+    integrationLease
+  };
+}
+function readExecutionGraph(db, store, meta) {
+  const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
+  const entries = [];
+  const workflows = [];
+  for (const row of registry) {
+    const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
+    const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
+    const validation = validateWorkflowEntry(entry);
+    if (!validation.ok)
+      throw validationRefusal(`execution_registry(${workflowId}).entry_json`, validation.violations);
+    if (entry.id !== workflowId) {
+      throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
+    }
+    entries.push(entry);
+    workflows.push(readWorkflowView(db, store, workflowId));
+  }
+  return { root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries }, workflows };
+}
+var ownedTransactions = new AsyncLocalStorage3;
+async function withExecutionReadTransaction(context, body) {
+  const handle = await openStore(context, "read");
+  try {
+    if (handle.execution === null) {
+      throw new ExecutionError("execution.not-active", "this store predates the execution schema, so it has no execution authority. Upgrade the store and initialize the execution domain before reading execution state.");
+    }
+    const db = handle.db;
+    db.exec("begin");
+    try {
+      const meta = readExecutionMetaRow(db);
+      if (meta.authorityState !== "active") {
+        throw new ExecutionError("execution.not-active", `the execution authority is ${meta.authorityState}; ordinary execution reads require an active authority. A staged store is inspectable only through migration diagnostics.`);
+      }
+      const store = readStoreIdentity(db);
+      const result = body({ db, storeId: store.storeId, epoch: store.epoch, execution: meta });
+      db.exec("commit");
+      return result;
+    } catch (error) {
+      try {
+        db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+  } finally {
+    handle.close();
+  }
+}
+async function readExecutionState(context) {
+  return withExecutionReadTransaction(context, (tx) => ({
+    data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.execution),
+    token: executionToken("root", tx.storeId, tx.epoch, [], tx.execution.revision),
+    storeId: tx.storeId,
+    epoch: tx.epoch
+  }));
+}
 class MilestoneError extends Error {
   code;
   constructor(code2, message) {

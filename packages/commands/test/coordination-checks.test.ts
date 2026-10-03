@@ -70,19 +70,35 @@ async function activeWorkflow(cwd: string, workflowId: string, status: "running"
   return { harness, storeContext, planId };
 }
 
-async function completeAndUnregister(context: { harnessDir: string }, workflowId: string, planId: string, releasedLease: boolean) {
+async function completeAndUnregister(
+  context: { harnessDir: string },
+  workflowId: string,
+  planId: string,
+  options: { releasedLease?: boolean; delivery?: boolean; rowDone?: boolean } = {},
+) {
   const store = await openStore(context, "write");
   try {
     store.db.exec("begin immediate");
     const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
     const state = JSON.parse(row.state_json) as Record<string, unknown>;
-    state.type = "iteration";
     state.status = "completed";
     state.ended_at = "2026-09-02T00:00:00.000Z";
     state.updated_at = "2026-09-02T00:00:00.000Z";
+    if (options.delivery) {
+      state.delivery = {
+        compound: { outcome: "updated" },
+        pr: { repo: "fixture/repo", head: "feature/test", target: "main" },
+        merge: { provider: "fixture", evidence: "merged" },
+      };
+    }
     store.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+    const plan = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string };
+    const planState = JSON.parse(plan.state_json) as Record<string, unknown>;
+    planState.status = options.rowDone === false ? "InProgress" : "Done";
+    store.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
+      .run(JSON.stringify(planState), workflowId, planId);
     store.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
-    if (releasedLease) {
+    if (options.releasedLease) {
       store.db.prepare(
         "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
       ).run(workflowId, planId, JSON.stringify({ status: "released" }));
@@ -100,7 +116,7 @@ async function completeAndUnregister(context: { harnessDir: string }, workflowId
   test("completed unregistered workflow remains addressable in execution history", async () => {
     const cwd = tempRoot();
     const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-closed");
-    await completeAndUnregister(storeContext, "wf-active-closed", planId, false);
+    await completeAndUnregister(storeContext, "wf-active-closed", planId, { delivery: true, rowDone: true });
     const result = await definition("iteration.gate").execute(
       { workflow: "wf-active-closed", phase: "6", harness } as never,
       context(cwd),
@@ -111,7 +127,7 @@ async function completeAndUnregister(context: { harnessDir: string }, workflowId
   test("released lease tombstone does not count as a dangling lease", async () => {
     const cwd = tempRoot();
     const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-released");
-    await completeAndUnregister(storeContext, "wf-active-released", planId, true);
+    await completeAndUnregister(storeContext, "wf-active-released", planId, { releasedLease: true, delivery: true });
     const result = await definition("iteration.gate").execute(
       { workflow: "wf-active-released", phase: "6", harness } as never,
       context(cwd),
@@ -123,6 +139,38 @@ async function completeAndUnregister(context: { harnessDir: string }, workflowId
     }
   });
 
+
+  test("completed plan without delivery evidence is blocked", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-no-delivery");
+    await completeAndUnregister(storeContext, "wf-active-no-delivery", planId, { rowDone: true });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-active-no-delivery", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result.status).toBe("refused");
+    if (result.status === "refused") {
+      expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
+        expect.objectContaining({ code: "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE" }),
+      ]) });
+    }
+  });
+
+  test("completed plan with a non-Done owned row is blocked", async () => {
+    const cwd = tempRoot();
+    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-row-not-done");
+    await completeAndUnregister(storeContext, "wf-active-row-not-done", planId, { delivery: true, rowDone: false });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-active-row-not-done", phase: "6", harness } as never,
+      context(cwd),
+    );
+    expect(result.status).toBe("refused");
+    if (result.status === "refused") {
+      expect(result.details?.gate).toMatchObject({ violations: expect.arrayContaining([
+        expect.objectContaining({ code: "PHASE6_PLAN_ROW_NOT_DONE" }),
+      ]) });
+    }
+  });
   test("ACTIVE phase-six gate reads workflow and served root state", async () => {
     const cwd = tempRoot();
     const { harness } = await activeWorkflow(cwd, "wf-active-running");
