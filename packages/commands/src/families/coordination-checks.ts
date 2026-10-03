@@ -5,7 +5,6 @@ import {
   createFsStore,
   evaluatePhaseGate,
   evaluatePostMergeClose,
-  evaluatePostMergeCloseFromExecutionAuthority,
   migrateHarnessTree,
   parseCompassFrontmatter,
   pushCadenceProbe,
@@ -190,6 +189,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             // root registration, dangling leases) live in the execution DB
             // authority — evaluate them there instead of refusing on the
             // retired snapshot document.
+            const { evaluatePostMergeCloseFromExecutionAuthority } = await import("@mstar-harness/engine");
             const gate = await evaluatePostMergeCloseFromExecutionAuthority({ harnessDir: root }, input.workflow);
             return gate.ok
               ? ok(id, { phase: 6, gate })
