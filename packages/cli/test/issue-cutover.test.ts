@@ -542,31 +542,38 @@ describe("mstar issue actor-only mutations", () => {
     ], fixture.root);
   }
 
-  // Thirteen real CLI processes share a loaded CI worker; this integration
-  // scenario uses the same budget as the suite's other multi-process flow.
-  test("close, triage, supersede, and link succeed on ACTIVE authority with actor alone", async () => {
+  test("close succeeds on ACTIVE authority with actor alone", async () => {
     const fixture = await makeFixture();
     const closedId = await capture(fixture, "close");
     expect(mutate(fixture, "close", closedId, "actor-close", {
       reason: "accepted", references: ["qa.md"], alignmentRef: "PM acceptance record",
     }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", closedId, "--harness", fixture.harness], fixture.root)).disposition).toBe("resolved");
+  });
 
+  test("triage succeeds on ACTIVE authority with actor alone", async () => {
+    const fixture = await makeFixture();
     const triageId = await capture(fixture, "triage");
     expect(mutate(fixture, "triage", triageId, "actor-triage", { reason: "reclassify", severity: "medium" }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", triageId, "--harness", fixture.harness], fixture.root)).severity).toBe("medium");
+  });
 
+  test("supersede succeeds on ACTIVE authority with actor alone", async () => {
+    const fixture = await makeFixture();
     const canonicalId = await capture(fixture, "canonical");
     const supersededId = await capture(fixture, "superseded");
     expect(mutate(fixture, "supersede", supersededId, "actor-supersede", { reason: "replaced", canonicalIssueId: canonicalId }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", supersededId, "--harness", fixture.harness], fixture.root)).disposition).toBe("superseded");
+  });
 
+  test("link succeeds on ACTIVE authority with actor alone", async () => {
+    const fixture = await makeFixture();
     const linkedId = await capture(fixture, "linked");
     expect(mutate(fixture, "link", linkedId, "actor-link", { kind: "plan", target: "unregistered-plan-label" }).exitCode).toBe(0);
     expect(jsonOf(runCli(["issue", "show", "--id", linkedId, "--harness", fixture.harness], fixture.root)).provenance).toContainEqual(
       expect.objectContaining({ kind: "plan", target: "unregistered-plan-label", origin: "unscoped" }),
     );
-  }, 30000);
+  });
 });
 describe("mstar status — the issue authority is never read as an empty rollup (G2b)", () => {
   test("a missing store refuses the rollup and the findings gate", () => {

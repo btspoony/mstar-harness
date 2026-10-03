@@ -8,16 +8,15 @@
  * never forks semantics.
  *
  * Spec sources (each function cites the source section):
- * - simplify:/temporary markers: `mstar-coding-behavior` SKILL.md § Simplicity
- * First → "Simplification markers": a deliberate shortcut with a known
+ * - simplify:/temporary markers: `mstar-coding-behavior` SKILL.md § Decision
+ * Rules: a deliberate shortcut with a known
  * ceiling is marked with a `simplify:` comment naming the ceiling and the
  * upgrade path; a workaround is labeled `simplify:` / `temporary`, explains
  * why, and records the removal path in the plan/status artifact before the
  * task is claimed complete.
- * - SDD TDD triple: `mstar-coding-behavior` SKILL.md § Integration Notes —
- * completion evidence must include the TDD triple (test file(s), command,
- * output) in `task-N-report.md`; `mstar-sdd/references/file-handoffs.md` —
- * fix subagents append covering test file(s), command run, output.
+ * - SDD verification evidence: `mstar-sdd/references/file-handoffs.md`
+ * § Verification evidence — completion and fix reports retain the affected
+ * test file(s), command and actual output, or applicable scoped-check evidence.
  * - Plan quality bar: `mstar-artifacts/references/plan-quality-bar.md`
  * § Quality checklist + `templates/plan.main.md` self-review
  * ("Placeholder scan: no TBD").
@@ -59,8 +58,8 @@ const COMMENT_INTRODUCER = "(?:\\/\\/|\\/\\*|#|;|--|\\s\\*)";
 export type SimplifyMarker = { line: number; text: string };
 
 /**
- * Find `simplify:` marker comments (mstar-coding-behavior § Simplicity First
- * → "Simplification markers": a deliberate shortcut with a known ceiling —
+ * Find `simplify:` marker comments (mstar-coding-behavior § Decision Rules:
+ * a deliberate shortcut with a known ceiling —
  * global lock, O(n²) scan, naive heuristic — is marked with a `simplify:`
  * comment naming the ceiling and the upgrade path).
  *
@@ -97,7 +96,7 @@ export type TemporaryMarker = {
 export type TemporaryMarkerResult = GateResult & { markers: TemporaryMarker[] };
 
 /**
- * Removal-path patterns (mstar-coding-behavior § Simplicity First: "record
+ * Removal-path patterns (mstar-coding-behavior § Decision Rules: "record
  * the removal path in the plan/status artifact"). A marker satisfies the
  * convention when its line references one of these — first match wins:
  * 1. `status.json` (the plan-harness status artifact)
@@ -122,9 +121,9 @@ const REMOVAL_PATH_PATTERNS: readonly RegExp[] = [
  * Find `temporary` label comments and check each carries a recorded removal
  * path (plan/status artifact reference). Markers lacking a removal path are
  * violations: `lint.temporary.no-removal-path` (mstar-coding-behavior §
- * Simplicity First — "If a workaround is unavoidable, label it `simplify:` /
- * `temporary`, explain why, and record the removal path in the plan/status
- * artifact before claiming the task complete").
+ * Decision Rules — unavoidable workarounds explain why, carry a `simplify:`
+ * or `temporary` label, and record a removal path in the existing plan/status
+ * artifact before completion; temporary markers cite that artifact).
  *
  * Heuristic (documented, conservative): a marker is a comment-context line
  * containing the word `temporary` (case-insensitive, word-boundary — so
@@ -162,7 +161,7 @@ export function findTemporaryMarkers(fileText: string): TemporaryMarkerResult {
         violation(
           "medium",
           "lint.temporary.no-removal-path",
-          `temporary marker at line ${i + 1} records no removal path (plan/status artifact reference) \u2014 record one before claiming the task complete (mstar-coding-behavior \u00a7 Simplification markers)`,
+          `temporary marker at line ${i + 1} records no removal path (plan/status artifact reference) \u2014 record one before claiming the task complete (mstar-coding-behavior \u00a7 Decision Rules)`,
           'add a plan/status reference to the marker, e.g. "removal tracked in status.json" or "plan 20991231-example-plan removes this"',
         ),
       );
@@ -476,7 +475,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       violation(
         "medium",
         "lint.sdd-tdd.missing-tests",
-        "task report carries no test file reference \u2014 the TDD triple needs covering test file(s) (mstar-coding-behavior \u00a7 Integration Notes; mstar-sdd/references/file-handoffs.md)",
+        "task report carries no test file reference \u2014 the TDD triple needs covering test file(s) (mstar-sdd/references/file-handoffs.md \u00a7 Verification evidence)",
         'add a "Covering test file(s): <path>.test.ts" line or a `.test.<ext>` path to the report',
       ),
     );
@@ -486,7 +485,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       violation(
         "medium",
         "lint.sdd-tdd.missing-command",
-        "task report carries no command \u2014 the TDD triple needs the exact command run (mstar-coding-behavior \u00a7 Integration Notes; mstar-sdd/references/file-handoffs.md)",
+        "task report carries no command \u2014 the TDD triple needs the exact command run (mstar-sdd/references/file-handoffs.md \u00a7 Verification evidence)",
         'add a "Command run: `bun test <file>`" line to the report',
       ),
     );
@@ -496,7 +495,7 @@ export function assertSddTddTriple(reportText: string): GateResult {
       violation(
         "medium",
         "lint.sdd-tdd.missing-output",
-        "task report carries no output evidence \u2014 the TDD triple needs the run output (pass/fail counts or exit code) (mstar-coding-behavior \u00a7 Integration Notes; mstar-sdd/references/file-handoffs.md)",
+        "task report carries no output evidence \u2014 the TDD triple needs the run output (pass/fail counts or exit code) (mstar-sdd/references/file-handoffs.md \u00a7 Verification evidence)",
         "paste the test-run output (e.g. \"12 pass / 0 fail\") into the report",
       ),
     );

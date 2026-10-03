@@ -357,6 +357,28 @@ describe("lintFiveQuestion", () => {
     expect(result.ok).toBe(false);
     expect(result.violations.map((v) => v.code)).toContain("skill-authoring.five-question.load-order");
   });
+  test("standalone profile accepts no Load Order without weakening the other four questions", () => {
+    const profile = classifySkillLint("mstar-coding-behavior");
+    expect(profile.mode).toBe("standalone");
+    expect(lintFiveQuestion(BODY_NO_LOAD_ORDER, profile.mode!).ok).toBe(true);
+    expect(lintFiveQuestion("", profile.mode!).violations.map((v) => v.code)).toEqual([
+      "skill-authoring.five-question.workflow",
+      "skill-authoring.five-question.decision-rules",
+      "skill-authoring.five-question.evidence",
+      "skill-authoring.five-question.references",
+    ]);
+  });
+
+  test.each(["mstar-coding-behavior-extra", "mstar-other-topic", "third-party-tool"])(
+    "another identity does not gain the standalone heading exception: %s",
+    (name) => {
+      const profile = classifySkillLint(name);
+      const result = lintFiveQuestion(BODY_NO_LOAD_ORDER, profile.mode!);
+      expect(result.ok).toBe(false);
+      expect(result.violations.map((v) => v.code)).toContain("skill-authoring.five-question.load-order");
+    },
+  );
+
 
   test("missing Evidence → five-question.evidence", () => {
     const result = lintFiveQuestion(BODY_NO_EVIDENCE);
@@ -536,7 +558,7 @@ Open references/x.md.
     expect(corpus.length).toBeGreaterThan(0);
     const failures: string[] = [];
     for (const { name, body } of corpus) {
-      const result = lintFiveQuestion(body, "runtime");
+      const result = lintFiveQuestion(body, classifySkillLint(name).mode!);
       if (!result.ok) {
         failures.push(`${name}: ${result.violations.map((v) => v.code).join(", ")}`);
       }
@@ -557,6 +579,10 @@ describe("classifySkillLint", () => {
   test("exact mstar-skill-authoring → authoring (strict despite the mstar- prefix)", () => {
     expect(classifySkillLint("mstar-skill-authoring")).toEqual({ kind: "authoring", mode: "authoring" });
   });
+  test("exact coding behavior retains runtime checks with only the standalone load-heading exception", () => {
+    expect(classifySkillLint("mstar-coding-behavior")).toEqual({ kind: "runtime", mode: "standalone" });
+  });
+
 
   test("other mstar-* → runtime (locked alias table applies)", () => {
     expect(classifySkillLint("mstar-dispatch-gates")).toEqual({ kind: "runtime", mode: "runtime" });
@@ -664,7 +690,7 @@ describe("real corpus parity — before/after lint decisions (Task 3, spec A4)",
   test("after: the shared classifier's runtime mode is GREEN on the same unchanged bodies (dsh/CLI parity decision)", () => {
     for (const { name, body } of runtimeCorpus()) {
       const profile = classifySkillLint(name);
-      expect(profile).toEqual({ kind: "runtime", mode: "runtime" });
+      expect(profile.kind).toBe("runtime");
       expect(lintFiveQuestion(body, profile.mode!).ok).toBe(true);
     }
   });

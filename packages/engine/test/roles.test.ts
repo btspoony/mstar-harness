@@ -15,13 +15,12 @@
  * (`qc1.md`…`qc3.md` under `{SDD_DIR}/review/`).
  * - Load-order contract: `mstar-harness-core` SKILL.md § 与其它 `mstar-*`
  * skill 的加载契约 + `mstar-roles` SKILL.md § Load Order (Spec A2 —
- * single load-selection authority): directly-invoked topic skills declare
- * `mstar-harness-core` as first dependency; the `mstar-roles` hub
- * bootstrap is the ONE exception (keyed on the skill name — broad
- * exemptions rejected) and instead must declare the identity→preset
- * decision matrix (identity-first / `Skill presets:` none+standard /
- * role-owned methods / unknown-preset refusal) plus the conditional core
- * conflict-authority pointer.
+ * single load-selection authority): direct topics declare core-first
+ * except exact standalone `mstar-coding-behavior` (no mandatory load
+ * declaration) and the `mstar-roles` hub bootstrap (identity→preset
+ * decision matrix: identity-first / Skill presets none+standard /
+ * role-owned methods / unknown-preset refusal, plus conditional core
+ * conflict authority). Broad or text-claimed exemptions are rejected.
  *
  * Corpus fixtures use the read-only control checkout (assignment: "mapping
  * fixtures with real rolesDir from control checkout read-only"), overridable
@@ -336,7 +335,7 @@ describe("validateRoleMapping", () => {
 
 describe("lintLoadOrder", () => {
   test.skipIf(CORPUS === null)(
-    "real corpus: topics declare core-first; the mstar-roles hub bootstrap declares the decision matrix (Spec A2 exception)",
+    "real corpus: topics retain core-first except standalone coding behavior and the roles hub bootstrap",
     () => {
       const corpus = CORPUS as string;
       const record: Record<string, string> = {};
@@ -361,6 +360,41 @@ describe("lintLoadOrder", () => {
   test("non-mstar skills are not required to declare core", () => {
     const result = lintLoadOrder({ "grill-me": "# Grill\n## Workflow\nDo the thing.\n" });
     expect(result.ok).toBe(true);
+  });
+
+  test("exact coding-behavior is exempt without a Load Order section or core mention", () => {
+    const result = lintLoadOrder({
+      "mstar-coding-behavior": "# Coding Behavior\n## Workflow\nInspect the affected behavior.\n",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("exact coding-behavior is exempt from core-first even with a Load Order section", () => {
+    const result = lintLoadOrder({
+      "mstar-coding-behavior": "## Load Order\nNo dependency.\n",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test.each(["mstar-coding-behavior-extra", "mstar-other-topic"])(
+    "standalone claims do not exempt another topic: %s",
+    (name) => {
+      const result = lintLoadOrder({
+        [name]: "# Standalone topic\nStandalone use requires no other skill.\n",
+      });
+      expect(result.ok).toBe(false);
+      expect(violationsOf(result)).toEqual(["roles.loadorder.section.missing"]);
+    },
+  );
+
+  test("standalone claims inside another topic's Load Order do not waive core-first", () => {
+    const result = lintLoadOrder({
+      "mstar-other-topic": "## Load Order\nStandalone use requires no other skill.\n",
+    });
+    expect(result.ok).toBe(false);
+    expect(violationsOf(result)).toEqual(["roles.loadorder.core.missing"]);
   });
 
   test("missing Load Order section → roles.loadorder.section.missing", () => {
@@ -389,7 +423,7 @@ describe("lintLoadOrder", () => {
 
   test("Chinese-suffixed Load Order heading with core mention passes", () => {
     const result = lintLoadOrder({
-      "mstar-coding-behavior":
+      "mstar-dispatch-gates":
         "## Load order（必读顺序）\n\n**首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。**",
     });
     expect(result.ok).toBe(true);

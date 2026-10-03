@@ -248,4 +248,4 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 
 ## Assets
 
-- `assets/routing-evals.json` — canonical PM routing/gate cases (`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`), maintained with this skill in the same change. Current version: **34 · 72 cases**, including four `hash-record-only-*` cases with semantic negative controls. For this cutover, evaluate only those four affected cases; unrelated cases remain unchanged.
+- `assets/routing-evals.json` — canonical PM routing/gate cases (`cases[].prompt / expected_route / must_have_artifacts / hard_fail_if`), maintained with this skill in the same change. Current version: **35 · 73 cases**, including four `hash-record-only-*` cases with semantic negative controls and the standalone coding-behavior authority case. For this cutover, evaluate only those four affected cases; unrelated cases remain unchanged.

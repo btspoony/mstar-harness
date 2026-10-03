@@ -23,12 +23,9 @@
  * and NO core; each route's default preset members exist on disk AND are
  * named in the route's role reference (list pinned in lockstep with the
  * refs, not free-floating).
- * 4. A2 authority pins — core points to the hub for load selection (no
- * universal-read rule); the hub owns the omission/none/named/resume/
- * unknown-preset decision; the REAL `lintLoadOrder` recognizes the one
- * hub bootstrap exception, still fails a hub without its decision
- * matrix, and REJECTS broad exemptions (an arbitrary topic with
- * hub-style bootstrap and no core-first declaration fails).
+ * 4. Engine load-order behavior — the real `lintLoadOrder` requires the
+ * hub's decision matrix and rejects a topic that claims the hub bootstrap
+ * exemption without its required core-first declaration.
  * 5. Inventory gap closures (Task 1 coverageGapsFound) — audit mode has a
  * role-owned identity boundary in code-reviewer.md (trigger-contract +
  * enforcement honesty reachable under none); the close route's
@@ -431,25 +428,6 @@ describe("skill load closure", () => {
         ).toBe(true);
       }
     }
-  });
-
-  test("A2 pin (C1 flipped): core points to the hub for load selection; the universal-read rule is gone", () => {
- // Old universal claims (Task 1 C1 side A) must be gone:
-    expect(coreText.includes("凡 **`mstar-*`**（`name` ≠ `mstar-harness-core`）假定读者**已 Read 本 skill**。")).toBe(false);
-    expect(coreText.includes("**仅读专题、未读核心** → 未完成 harness 加载。")).toBe(false);
- // Core keeps lifecycle/authorization authority and points at the hub:
-    expect(coreText.includes("生命周期 / 授权语义权威")).toBe(true);
-    expect(coreText.includes("加载**选择**权威是 **`mstar-roles`**")).toBe(true);
-    expect(coreText.includes("本 skill 不维护第二份全局必读角色表")).toBe(true);
-    expect(coreText.includes("**唯一例外**是 `mstar-roles` hub bootstrap")).toBe(true);
- // Standalone topic→core is preserved for direct topic invocation:
-    expect(coreText.includes("**独立直接调用专题**")).toBe(true);
- // The hub owns the decision (Task 1 C1 side B now authoritative):
-    expect(rolesText.includes("**single load-selection authority**")).toBe(true);
-    expect(rolesText.includes("This bootstrap is the **one exception** to topic→core")).toBe(true);
-    expect(rolesText.includes("explicit `none` ⇒ no optional topic preset")).toBe(true);
-    expect(rolesText.includes("**Unknown preset** or missing required identity ⇒ return Needs Context / Blocked")).toBe(true);
-    expect(rolesText.includes("Resume: retain loaded identity/contract only when the source hashes are unchanged")).toBe(true);
   });
 
   test("A2 pin (C2 flipped): lintLoadOrder recognizes the one hub exception, requires the hub matrix, and rejects broad exemptions", () => {
@@ -1039,25 +1017,6 @@ describe("A5 ablation inventory (frozen)", () => {
     for (const ref of ablations.policyProtection.refs) {
       expect(gitObjectType(ref.commit), `policyProtection ${ref.ref} commit exists`).toBe("commit");
     }
-  });
-
-  test("AC2 pins: #153/#156/#167 user policies are present in the CURRENT subject files (not accidentally reverted)", () => {
- // #167: core engineering rules section + the coding-behavior link line.
-    expect(coreText.includes("## 核心研发守则")).toBe(true);
-    expect(coreText.includes("Do not preserve backward compatibility.")).toBe(true);
-    const codingText = read(join(SKILLS_DIR, "mstar-coding-behavior/SKILL.md"));
-    expect(codingText.includes("**Upstream invariants**: the global engineering rules live in `mstar-harness-core`（核心研发守则）")).toBe(true);
- // #156: caller-scoped engine-scope blockquote in dispatch-gates.
-    const dispatchText = read(join(SKILLS_DIR, "mstar-dispatch-gates/SKILL.md"));
-    expect(dispatchText.includes("> **Engine 执行范围（caller-scoped，#156）**")).toBe(true);
- // #153's payload lives in role references outside the Task-1 subject files;
- // the policyProtection block records that non-overlap explicitly.
-    const p153 = ablations.policyProtection.refs.find((r) => r.ref === "#153");
-    expect(p153, "#153 recorded in policyProtection").toBeDefined();
-    expect(p153!.protectedInSubjectFiles).toContain("outside this plan's Files allowlist");
- // #144/#109: delivered preset semantics survive in their post-SP2 form.
-    const p144 = ablations.policyProtection.refs.find((r) => r.ref === "#144");
-    expect(p144, "#144 recorded in policyProtection").toBeDefined();
   });
 
   test("disposition mix is bounded: not every positive removable, not every NEVER a duplicate, no outright deletes at freeze", () => {

@@ -7,10 +7,10 @@ description: Morning Star role prompt hub and the **single load-selection author
 
 This hub is the **single load-selection authority** for Morning Star roles (Spec A2): `mstar-harness-core` stays the lifecycle/authorization semantic authority and the global entry whenever it is loaded, but this hub owns the selection decision — core does not maintain a second mandatory-role table. When a Morning Star role starts work in a session:
 
-1. Read this `mstar-roles` skill; resolve role mapping and parameter tables below. This bootstrap is the **one exception** to topic→core: it does not require `mstar-harness-core` first.
+1. Read this `mstar-roles` skill; resolve role mapping and parameter tables below. This hub bootstrap does not require `mstar-harness-core` first.
 2. Read the corresponding `references/<role>.md` file — **identity-first**: mission, scope, and NEVER rules come before any skill list. Non-PM roles also read the linked minimal leaf boundary (`references/_shared/leaf-executor-core.md` — role-owned, always loads with the reference).
 3. Apply the Assignment **`Skill presets:`** decision — explicit `none` ⇒ no optional topic preset (identity + assignment + role-owned methods only); omitted on a substantive implementation / QC / QA round ⇒ the role's `standard` preset; explicit named preset ⇒ that role's supported members; omitted on a trivial route ⇒ identity only. **Role-owned** QC/QA methods and assigned evidence obligations load regardless of preset. `none` never grants delegation and never waives gates. **Unknown preset** or missing required identity ⇒ return Needs Context / Blocked — never infer `project-manager`.
-4. Whenever `mstar-harness-core` is loaded by that decision (PM required reads, `standard` routes, direct topic invocation) it remains the global entry (state machine, gates, routing); if any conflict appears, `mstar-harness-core` remains the authoritative source for lifecycle, gates, routing, and invariants.
+4. Whenever `mstar-harness-core` is loaded by that decision (PM required reads, `standard` routes, direct lifecycle-topic invocation) it remains the global entry (state machine, gates, routing); if any conflict appears, `mstar-harness-core` remains the authoritative source for lifecycle, gates, routing, and invariants.
 5. Resume: retain loaded identity/contract only when the source hashes are unchanged; read changed / phase-required material; never reinterpret `none` as permission.
 6. Expand placeholders from role parameters before execution.
 
@@ -82,7 +82,7 @@ Role `references/*.md` files include explicit **`NEVER`** sections (anti-recursi
 
 PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; no `<plan-id>` basename prefix) + durable main-plan summary. Naming SSOT: `mstar-artifacts/references/plan-files-and-reports.md`.
 
-> **Engine check (when available):** run `mstar roles validate` (or import `validateRoleMapping` / `lintLoadOrder` from `@mstar-harness/engine` in a host hook) to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint the load-order declarations (topics declare core-first; this hub's bootstrap is the single exception and must declare the § Load Order decision matrix). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check (when available):** run `mstar roles validate` (or import `validateRoleMapping` / `lintLoadOrder` from `@mstar-harness/engine` in a host hook) to validate the mapping and parameter tables above against the on-disk `references/*.md` layout (shared families included) and lint load-order declarations: `mstar-*` topics declare core-first with only exact-identity exemptions; this hub's bootstrap declares the § Load Order decision matrix. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
 ## Maintenance Rules
 
@@ -98,7 +98,7 @@ PM consolidated (tri mode): `{SDD_DIR}/review/qc-consolidated.md` (same folder; 
 
 ## Evidence
 
-正确结果 = 角色映射与加载契约可机器校验：`mstar roles validate` 通过（映射 0 violations；加载顺序 0 violations —— 专题声明 core-first，`mstar-roles` hub bootstrap 走唯一例外并声明 identity-first / none / standard / role-owned methods / unknown-preset 决策矩阵，见上方 Engine check blockquote 的 import 形态），`references/*.md` 布局与上表一一对应，shared-family 角色共用同一 reference 文件（引擎校验可用时先跑；不可用时以本文件为准）。
+Correct structural evidence = `mstar roles validate` reports zero mapping and load-order violations: lifecycle topics declare core-first, and the hub declares identity-first / none / standard / role-owned methods / unknown-preset decisions. Reference files match the mapping; shared families use one reference. This validation does not establish model compliance or waive lifecycle authority.
 
 ## References
 
