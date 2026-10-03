@@ -1997,6 +1997,7 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
     });
   }
   const recorded = prepared.assignment_intent;
+  if (recorded === undefined) return;
   const current = currentAssignmentIntent(assignmentPath, recorded);
   const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
   if (changed.length === 0) return;

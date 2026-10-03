@@ -377,8 +377,8 @@ export type PreparedCoordination = {
   plan_sha256: string;
   qa_gate: string;
   findings_cleanup: string;
-  /** Semantic Assignment projection captured when this plan was prepared. */
-  assignment_intent: AssignmentIntent;
+  /** Semantic Assignment projection when recorded by the Prepare producer. */
+  assignment_intent?: AssignmentIntent;
   prepared_by: string;
   prepared_at: string;
 };
@@ -727,20 +727,22 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     }
   }
   const intent = value.assignment_intent;
-  if (!isPlainObject(intent)) {
-    violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
-  } else {
-    const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
-    const unknown = Object.keys(intent).filter((key) => !(ASSIGNMENT_INTENT_FIELDS as readonly string[]).includes(key));
-    if (missing.length > 0) {
-      violations.push(
-        invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`),
-      );
-    }
-    if (unknown.length > 0) {
-      violations.push(
-        invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`),
-      );
+  if (intent !== undefined) {
+    if (!isPlainObject(intent)) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
+    } else {
+      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
+      const unknown = Object.keys(intent).filter((key) => !(ASSIGNMENT_INTENT_FIELDS as readonly string[]).includes(key));
+      if (missing.length > 0) {
+        violations.push(
+          invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`),
+        );
+      }
+      if (unknown.length > 0) {
+        violations.push(
+          invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`),
+        );
+      }
     }
   }
   if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {

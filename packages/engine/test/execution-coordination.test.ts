@@ -21,7 +21,6 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { assignmentIntentOf, parseAssignmentFile } from "../src/coordination.js";
 import { mutateExecutionPlan as publishedMutateExecutionPlan } from "../src/index.js";
 import {
   mutateExecutionPlan,
@@ -148,9 +147,6 @@ function preparePlanRow(context: StoreContext, planId: string, branch: string): 
           assignment_sha256: "a".repeat(64),
           plan_sha256: "b".repeat(64),
           qa_gate: "mandatory",
-          assignment_intent: assignmentIntentOf(
-            parseAssignmentFile(join(context.harnessDir, "assignments", `${planId}.md`)),
-          ),
           prepared_by: COORDINATOR_ID,
           prepared_at: TS,
         },
@@ -1125,7 +1121,6 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(receipt.data.coordination?.prepared).toMatchObject({
       assignment_path: join(harness, "assignments", `${OWN_PLAN}.md`),
       qa_gate: "mandatory",
-      assignment_intent: assignmentIntentOf(parseAssignmentFile(own.assignmentPath)),
       prepared_by: COORDINATOR_ID,
     });
     // §D the plan's own worktree/branch anchors — the scope the later bind
