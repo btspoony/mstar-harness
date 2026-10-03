@@ -43,6 +43,7 @@ import {
   WorkflowSnapshotValidationError,
   readWorkflowSnapshot,
   resolveProcessHarnessDir,
+  type ExecutionState,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
@@ -108,6 +109,31 @@ function rejected(id: string, result: GateResult, fallback: string): CommandEnve
   return refusal(id, first?.code ?? fallback, first?.message ?? fallback, { violations: result.violations });
 }
 function gateData(result: GateResult) { return { ok: result.ok, violations: result.violations }; }
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function activeGraphLifecycleBranches(graph: ExecutionState): string[] {
+  const branches = new Set<string>();
+  for (const workflow of graph.workflows) {
+    const integration = workflow.state.branch?.integration;
+    if (typeof integration === "string" && integration.trim() !== "") branches.add(integration);
+    for (const view of workflow.plans) {
+      const leaseBranch = view.executionLease?.working_branch;
+      if (typeof leaseBranch === "string" && leaseBranch.trim() !== "") branches.add(leaseBranch);
+      const metadata = view.plan.metadata;
+      if (!isPlainRecord(metadata)) continue;
+      const trackBranches = metadata.track_branches;
+      if (Array.isArray(trackBranches)) {
+        for (const branch of trackBranches) {
+          if (typeof branch === "string" && branch.trim() !== "") branches.add(branch);
+        }
+      }
+      const retainedBranch = metadata.working_branch;
+      if (typeof retainedBranch === "string" && retainedBranch.trim() !== "") branches.add(retainedBranch);
+    }
+  }
+  return [...branches];
+}
 function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
 
 const codeExtensions: Record<string, true> = Object.fromEntries([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".sh", ".bash", ".zsh", ".rb", ".java", ".kt", ".swift"].map((ext) => [ext, true]));
@@ -227,6 +253,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             ? registered.plans.length === 1 ? registered.plans[0] : undefined
             : registered.plans.find((candidate) => candidate.plan.id === plan);
           if (!planView) return refusal(id, "worktree.l1.plan-not-found", `plan "${plan}" not found in active execution authority graph workflow "${workflow}"`, { workflowId: workflow, planId: plan, authorityGraph: harness });
+          const selectedPlanId = planView.plan.id;
+          if (typeof selectedPlanId !== "string") return refusal(id, "worktree.l1.plan-not-found", `the selected plan row in workflow "${workflow}" has no string id`, { workflowId: workflow, authorityGraph: harness });
           const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
           if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed");
           const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
@@ -234,13 +262,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
           if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
           const branch = registered.state.branch ?? {};
-          const lifecycleBranches = new Set<string>();
-          for (const item of graph.workflows) {
-            for (const key of ["source", "target", "integration", "base"]) {
-              const value = item.state.branch?.[key];
-              if (typeof value === "string" && value !== "") lifecycleBranches.add(value);
-            }
-          }
+          const lifecycleBranches = activeGraphLifecycleBranches(graph);
           const lease = planView.executionLease;
           const selectedIntegration = input.integration ?? input.control;
           const gate = l1PreDispatchCheck({
@@ -254,7 +276,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             lifecycleBranches: [...lifecycleBranches],
             leaseWorktreePath: String(lease?.worktree_path ?? ""),
             leaseWorkingBranch: String(lease?.working_branch ?? ""),
-            planId: planView.plan.id,
+            planId: selectedPlanId,
           });
           const gateResult = gateData(gate);
           const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;

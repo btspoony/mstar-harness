@@ -87,6 +87,28 @@ function result(text: string, details: unknown, isError: boolean): AgentToolResu
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function activeGraphLifecycleBranches(graph: ExecutionState): string[] {
+  const branches = new Set<string>();
+  for (const workflow of graph.workflows) {
+    const integration = workflow.state.branch?.integration;
+    if (typeof integration === "string" && integration.trim() !== "") branches.add(integration);
+    for (const view of workflow.plans) {
+      const leaseBranch = view.executionLease?.working_branch;
+      if (typeof leaseBranch === "string" && leaseBranch.trim() !== "") branches.add(leaseBranch);
+      const metadata = view.plan.metadata;
+      if (!isPlainObject(metadata)) continue;
+      const tracks = metadata.track_branches;
+      if (Array.isArray(tracks)) {
+        for (const branch of tracks) {
+          if (typeof branch === "string" && branch.trim() !== "") branches.add(branch);
+        }
+      }
+      const retained = metadata.working_branch;
+      if (typeof retained === "string" && retained.trim() !== "") branches.add(retained);
+    }
+  }
+  return [...branches];
+}
 
 /** Workflow-id guard : reject "", ".", "..", separators. */
 function assertSafeWorkflowId(workflowId: string): string | null {
@@ -293,13 +315,7 @@ export default function mstarWorktreeCheck(pi: CustomToolAPI): CustomTool {
             : workflow.plans.find(({ plan }) => plan.id === params.planId);
           if (!planView) return result(`plan "${params.planId ?? "(sole plan)"}" not found in active execution authority graph workflow "${params.workflowId}"`, { kind: "l1", workflow_id: params.workflowId, plan_id: params.planId ?? null, authority_graph: harnessDir }, true);
           const branch = workflow.state.branch ?? {};
-          const lifecycleBranches = new Set<string>();
-          for (const item of active.graph.workflows) {
-            for (const key of ["source", "target", "integration", "base"] as const) {
-              const value = item.state.branch?.[key];
-              if (typeof value === "string" && value !== "") lifecycleBranches.add(value);
-            }
-          }
+          const lifecycleBranches = activeGraphLifecycleBranches(active.graph);
           const lease = planView.executionLease;
           const input: L1PreDispatchInput = {
             workflowType: workflow.state.type,
