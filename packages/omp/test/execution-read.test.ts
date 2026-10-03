@@ -419,19 +419,18 @@ describe("execution-omp-read — the validator surfaces answer the authority, ne
     expect(textOf(result)).not.toContain("gate ok");
   });
 
-  test("mstar_worktree_check kind=l1 refuses not-ready although the snapshot exists", async () => {
+  test("mstar_worktree_check kind=l1 serves ACTIVE graph-derived L1 violations", async () => {
     const fixture = makeFixture("worktree-l1");
     await seedActiveAuthority(fixture);
     plantLeftoverEvidence(fixture);
 
     const result = await runTool(mstarWorktreeCheck, fixture.main, { kind: "l1", workflowId: WORKFLOW_ID });
 
-    // The refusal must be THIS tool's own not-ready verdict (its documented
-    // `[severity] code: message` line, after the observed-main line) rather than
-    // the engine's raw file-reader throw: without the gate the tool would open
-    // the retired snapshot and report that exception instead.
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("[high] execution.consumer-not-ready:");
+    expect(textOf(result)).toContain("worktree.main.expected-branch-missing");
+    expect(textOf(result)).toContain("worktree.l1.lease-missing");
+    expect(textOf(result)).toContain("worktree.l1.lease-branch-missing");
+    expect(textOf(result)).not.toContain("execution.consumer-not-ready");
     expect(textOf(result)).toContain("main worktree:");
     expect(textOf(result)).not.toContain("snapshot not found");
   });
