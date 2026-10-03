@@ -59,8 +59,8 @@ export type CommandSchemaSelection =
  * explicit consumer metadata is published verbatim, the CLI adapter's argv
  * collection yields a `caller` hint on the `cli` route for every argument and
  * default-less option, and the session selector is `caller` on both routes:
- * CLI accepts the flag/environment fallback, while MCP requires the caller
- * to supply the session identity per call. Never derived from the input
+ * CLI accepts the flag/environment fallback, while MCP reads per-call input
+ * when the selected route requires identity; legacy routes can omit it, and
  * schema — its `required` array stays the separate enforcement fact. Explicit
  * entries override derived ones per name; anything unannotated stays unknown,
  * never all-optional.
@@ -81,7 +81,7 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
       requirements.push({ name: sessionOption.key, ownership: "caller", route: "cli" });
     }
     if (!overridden.has(`mcp:${sessionOption.key}`)) {
-      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "must be supplied by the caller on each MCP call, except `plan bind --resume`, which refuses a declared identity and ignores ambient environment identity" });
+      requirements.push({ name: sessionOption.key, ownership: "caller", route: "mcp", help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity" });
     }
   }
   return requirements;

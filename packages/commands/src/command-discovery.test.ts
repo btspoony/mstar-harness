@@ -164,7 +164,7 @@ describe("command discovery", () => {
       { name: "name", ownership: "caller", route: "cli" },
       { name: "title", ownership: "caller", route: "cli" },
       { name: "session", ownership: "caller", route: "cli" },
-      { name: "session", ownership: "caller", route: "mcp", help: "must be supplied by the caller on each MCP call, except `plan bind --resume`, which refuses a declared identity and ignores ambient environment identity" },
+      { name: "session", ownership: "caller", route: "mcp", help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity" },
     ]);
   });
 

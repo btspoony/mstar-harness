@@ -110,13 +110,18 @@ describe("active registration refusal diagnostics", () => {
     if (evidence.status !== "usage") throw new Error("expected usage refusal");
     expect(evidence.message).toContain("active session reference returned by the plan bind receipt");
     expect(evidence.message).toContain("pass it as --session-ref on the CLI or sessionRef in MCP input");
-    expect(evidence.message).toContain("For workflow.register, expect is the root token from the root entry in mstar status validate");
+    expect(evidence.message).toContain("For workflow.register and iteration.register, expect is the store's root execution token from mstar status validate");
     expect(evidence.message).toContain("for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate");
 
     const register = await refuse("workflow.register", ["operation"]);
     expect(register.status).toBe("usage");
     if (register.status !== "usage") throw new Error("expected usage refusal");
-    expect(register.message).toContain("For workflow.register, expect is the root token");
+    expect(register.message).toContain("For workflow.register and iteration.register, expect is the store's root execution token");
+
+    const iteration = await refuse("iteration.register", ["operation"]);
+    expect(iteration.status).toBe("usage");
+    if (iteration.status !== "usage") throw new Error("expected usage refusal");
+    expect(iteration.message).toContain("For workflow.register and iteration.register, expect is the store's root execution token");
   });
 
   test("legacy coordinator bind explains env identity refusal", async () => {
