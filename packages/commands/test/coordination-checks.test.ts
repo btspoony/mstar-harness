@@ -223,6 +223,47 @@ async function completeAndUnregister(
       .rejects.toMatchObject({ code: "execution.consumer-not-ready" });
   });
 
+  test("non-six ACTIVE gate rejects workflow and plan row identity mismatches", async () => {
+    for (const mismatch of ["workflow", "plan"] as const) {
+      const cwd = tempRoot();
+      const workflowId = `wf-${mismatch}-identity-mismatch`;
+      const { harness, storeContext, planId } = await activeWorkflow(cwd, workflowId);
+      const store = await openStore(storeContext, "write");
+      try {
+        if (mismatch === "workflow") {
+          const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string };
+          const state = JSON.parse(row.state_json) as Record<string, unknown>;
+          state.id = "wf-wrong-state-id";
+          store.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), workflowId);
+        } else {
+          const row = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string };
+          const plan = JSON.parse(row.state_json) as Record<string, unknown>;
+          plan.id = "plan-wrong-state-id";
+          store.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
+            .run(JSON.stringify(plan), workflowId, planId);
+        }
+      } finally {
+        store.close();
+      }
+      const compass = path.join(cwd, "compass.md");
+      writeFileSync(compass, `---
+iteration_id: iter-${mismatch}-identity
+start_date: "2026-09-01"
+status: active
+iteration_base_branch: main
+target_branch: main
+plans:
+  - ${planId}
+---
+`);
+      const result = await definition("iteration.gate").execute(
+        { workflow: workflowId, compass, harness } as never,
+        context(cwd),
+      );
+      expect(result).toMatchObject({ status: "refused", code: "execution.workflow-identity-mismatch" });
+    }
+  });
+
   test("ACTIVE phase-six gate reads workflow and served root state", async () => {
     const cwd = tempRoot();
     const { harness } = await activeWorkflow(cwd, "wf-active-running");

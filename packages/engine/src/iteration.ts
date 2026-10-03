@@ -740,16 +740,33 @@ export async function readRegisteredWorkflowFromExecutionAuthority(
       try {
         const parsed: unknown = JSON.parse(row.state_json);
         if (!isPlainObject(parsed)) throw new Error("workflow state is not an object");
+        if (parsed.id !== workflowId) {
+          throw new StoreError(
+            "execution.workflow-identity-mismatch",
+            `workflow identity mismatch: requested '${workflowId}', stored state identifies '${String(parsed.id)}'`,
+          );
+        }
         snapshot = parsed as unknown as WorkflowSnapshot;
-      } catch {
+      } catch (error) {
+        if (error instanceof StoreError) throw error;
         throw new StoreError("store.corrupt", `workflow '${workflowId}' state is not a valid object`);
       }
       const planRows = handle.db.prepare(
-        "select state_json from execution_plans where workflow_id = ? order by ordinal",
-      ).all(workflowId) as Array<{ state_json: string }>;
+        "select plan_id, state_json from execution_plans where workflow_id = ? order by ordinal",
+      ).all(workflowId) as Array<{ plan_id: string; state_json: string }>;
       try {
-        snapshot.plans = planRows.map(({ state_json }) => JSON.parse(state_json));
-      } catch {
+        snapshot.plans = planRows.map(({ plan_id, state_json }) => {
+          const plan: unknown = JSON.parse(state_json);
+          if (!isPlainObject(plan) || plan.id !== plan_id) {
+            throw new StoreError(
+              "execution.workflow-identity-mismatch",
+              `plan identity mismatch in workflow '${workflowId}': row key '${plan_id}', stored state identifies '${String(isPlainObject(plan) ? plan.id : undefined)}'`,
+            );
+          }
+          return plan;
+        });
+      } catch (error) {
+        if (error instanceof StoreError) throw error;
         throw new StoreError("store.corrupt", `workflow '${workflowId}' plan state is not valid JSON`);
       }
       return snapshot;
