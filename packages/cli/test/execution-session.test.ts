@@ -161,6 +161,12 @@ function dataOf(result: RunResult): Record<string, unknown> {
   return data as Record<string, unknown>;
 }
 
+/** One value read by name from a parsed envelope object, without a cast. */
+function fieldOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return Object.getOwnPropertyDescriptor(value, key)?.value;
+}
+
 function coordinatorIdentity(): ExecutionIdentity {
   return { source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator", planId: null };
 }
@@ -381,7 +387,7 @@ async function preparePlanSeat(
   return { coordinator: coordinator.ref, coordinatorWire: coordinator.wire, planPmWire: planPm.wire, planPmRef: planPm.ref };
 }
 
-describe("mstar session run \u2014 documented invocation", () => {
+describe("mstar session run — documented invocation", () => {
   test("launches argv under one minted local identity and propagates its exit code", async () => {
     const fixture = await activeFixture("mstar-session-run");
     const script =
@@ -509,6 +515,202 @@ describe("mstar session run \u2014 documented invocation", () => {
     if (!("plan" in stored.data)) throw new Error("the plan read did not return a plan view");
     const planView: ExecutionPlanView = stored.data;
     expect(planView.plan.status).toBe("InReview");
+  });
+});
+
+/** The full public `workflow register` argv the active route requires. */
+function registerArgs(fixture: Fixture, rootToken: string, operationId: string, extra: string[] = []): string[] {
+  return [
+    "workflow", "register",
+    "--workflow", WORKFLOW_ID,
+    "--plan-id", PLAN_ID,
+    "--plan-title", "Execution session transport plan",
+    "--plan-file", `plans/${PLAN_ID}.md`,
+    "--delivery-kind", "development",
+    "--branch-source", "feature/exec-session",
+    "--branch-target", "main",
+    "--expect", rootToken,
+    "--operation", operationId,
+    "--harness", fixture.harnessDir,
+    ...extra,
+  ];
+}
+
+/** The CLI child argv a `session run` launch executes inside the fixture. */
+function registerArgv(fixture: Fixture, rootToken: string, operationId: string): string[] {
+  return [process.execPath, "run", SRC_ENTRY, ...registerArgs(fixture, rootToken, operationId)];
+}
+
+/** The minted identity a `session run` receipt discloses for its one launch. */
+function mintedOf(launch: RunResult): ExecutionIdentity {
+  const identity = fieldOf(dataOf(launch), "identity");
+  if (identity === null || typeof identity !== "object") throw new Error(`no minted identity in the launch receipt: ${launch.stdout}`);
+  // The receipt is this adapter's own output: its identity member is the §3.1
+  // tuple the launcher minted, so it is read as that named type.
+  return identity as ExecutionIdentity;
+}
+
+/**
+ * The minted-local-identity transport. `session.run` mints one local identity,
+ * overwrites the identity channel and deletes the legacy one; these cases pin
+ * that a launched child actually consumes that channel against the real active
+ * authority — precedence, the ambient fallback, cross-scope refusal, and the
+ * launch/register/bind chain under ONE acquired identity.
+ */
+describe("mstar session run — minted identity transport", () => {
+  test("a launched child consumes its minted identity through register, and that same identity binds", async () => {
+    const fixture = await activeFixture("mstar-minted-launch");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+
+    // The launch writes no binding itself; the child CLI (register) runs with
+    // ONLY the minted channel — `session.run` deleted MSTAR_HOST_SESSION_ID.
+    const launched = runCli(
+      ["session", "run", "--workflow", WORKFLOW_ID, "--role", "coordinator", "--harness", fixture.harnessDir,
+        "--", ...registerArgv(fixture, rootToken, "register-minted")],
+      fixture,
+    );
+    expect(launched.exitCode).toBe(0);
+    const identity = mintedOf(launched);
+    expect(identity.source).toBe("local");
+    expect(identity.workflowId).toBe(WORKFLOW_ID);
+    expect(identity.role).toBe("coordinator");
+
+    // The child's own stdout is the register success of that minted identity.
+    const childStdout = JSON.parse(String(dataOf(launched).stdout).trim()) as Record<string, unknown>;
+    expect(childStdout).toMatchObject({ command: "workflow.register", status: "ok" });
+
+    // The SAME acquired identity is the workflow's creator, so its first bind
+    // succeeds — through the minted channel itself, with no --session-id.
+    const workflowToken = (await tokensOf(fixture)).workflow;
+    const bound = spawnCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", workflowToken, "--operation", "bind-minted", "--harness", fixture.harnessDir],
+      fixture,
+      { ...cliEnv(fixture, identity) },
+    );
+    expect(bound.exitCode).toBe(0);
+    expect(jsonOf(bound).command).toBe("plan.bind");
+
+    // The authority itself holds the coordinator row under that minted session.
+    const workflow = await workflowStateOf(fixture);
+    expect(workflow.coordinator?.sessionId).toBe(identity.sessionId);
+  });
+
+  test("a minted identity never authorizes a scope it does not declare", async () => {
+    const fixture = await activeFixture("mstar-minted-scope");
+    const foreign = { source: "local" as const, sessionId: "minted-foreign", workflowId: "wf-somewhere-else", role: "coordinator" as const, planId: null };
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    const refused = spawnCli(
+      registerArgs(fixture, rootToken, "register-scope"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(foreign) },
+    );
+    // The complete request reaches the identity/scope gate, which refuses before
+    // any write with its own typed cause (not a missing-field usage).
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused).code).toBe("command.invalid-input");
+    expect(fieldOf(jsonOf(refused), "details")).toMatchObject({ identity: { code: "command.identity-scope-mismatch" } });
+    // No register happened: the root register still holds no workflow.
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+  });
+
+  test("an active registration refuses a same-workflow identity addressing the wrong seat", async () => {
+    const fixture = await activeFixture("mstar-minted-seat");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    // A complete, otherwise-valid registration whose minted identity addresses the
+    // SAME workflow but the plan-pm seat: registration's caller seat is the
+    // coordinator, so this is refused before any mutation.
+    const planPm = { source: "local" as const, sessionId: "minted-plan-pm", workflowId: WORKFLOW_ID, role: "plan-pm" as const, planId: PLAN_ID };
+    const refused = spawnCli(
+      registerArgs(fixture, rootToken, "register-wrong-seat"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(planPm) },
+    );
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused).code).toBe("command.invalid-input");
+    expect(fieldOf(jsonOf(refused), "details")).toMatchObject({ identity: { code: "command.identity-scope-mismatch" } });
+    // Nothing was written: no workflow row and no catalog plan entity.
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+    await expect(getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).rejects.toThrow();
+  });
+
+  test("a malformed minted transport refuses before any write instead of falling back", async () => {
+    const fixture = await activeFixture("mstar-minted-malformed");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    for (const malformed of ["not-json", "[]", serializeExecutionValue({ source: "local", sessionId: "", workflowId: WORKFLOW_ID, role: "coordinator", planId: null })]) {
+      const refused = spawnCli(
+        registerArgs(fixture, rootToken, "register-malformed"),
+        fixture,
+        { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: malformed, MSTAR_HOST_SESSION_ID: "ambient-must-not-substitute" },
+      );
+      // The complete request still refuses on the malformed transport alone, and
+      // the ambient host value never substitutes for it.
+      expect(`${malformed} -> ${refused.exitCode}`).toBe(`${malformed} -> 2`);
+      expect(jsonOf(refused).code).toBe("command.invalid-input");
+      const cause = fieldOf(fieldOf(jsonOf(refused), "details"), "identity");
+      expect(String(fieldOf(cause, "code"))).toMatch(/^(command\.invalid-identity|coordination\.)/);
+    }
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+  });
+
+  test("with no minted identity the ambient host value is the fallback, and both absent is a usage refusal", async () => {
+    const fixture = await activeFixture("mstar-minted-ambient");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+
+    const ambient = spawnCli(
+      registerArgs(fixture, rootToken, "register-ambient"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_HOST_SESSION_ID: "ambient-host-session" },
+    );
+    expect(ambient.exitCode).toBe(0);
+    expect(jsonOf(ambient).command).toBe("workflow.register");
+
+    const second = await activeFixture("mstar-minted-absent");
+    const secondToken = (await readExecutionAuthority(second.context)).token;
+    const absent = spawnCli(
+      registerArgs(second, secondToken, "register-absent"),
+      second,
+      cliEnv(second),
+    );
+    // A complete active registration with neither identity channel refuses on
+    // the missing identity, not on any other field.
+    expect(absent.exitCode).toBe(2);
+    expect(String(jsonOf(absent).code)).toBe("command.invalid-input");
+    const state = await readExecutionAuthority(second.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+  });
+
+  test("an explicit --session-id overrides the minted identity", async () => {
+    const fixture = await activeFixture("mstar-minted-flag-wins");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    const minted = { source: "local" as const, sessionId: "minted-loses", workflowId: WORKFLOW_ID, role: "coordinator" as const, planId: null };
+    const registered = spawnCli(
+      registerArgs(fixture, rootToken, "register-flag-wins", ["--session-id", "explicit-wins"]),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(minted) },
+    );
+    expect(registered.exitCode).toBe(0);
+    // The explicit identity is the creator, so only it binds first.
+    const workflowToken = (await tokensOf(fixture)).workflow;
+    const byFlag = runCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--expect", workflowToken,
+        "--operation", "bind-flag", "--harness", fixture.harnessDir, "--session-id", "explicit-wins"],
+      fixture,
+    );
+    expect(byFlag.exitCode).toBe(0);
+    // …and the overridden minted identity cannot take the held scope: the same
+    // bind through the minted channel alone is refused by the creator fence.
+    const byMinted = spawnCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", (await tokensOf(fixture)).workflow, "--operation", "bind-minted-loses", "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, minted),
+    );
+    expect(byMinted.exitCode).toBe(1);
+    expect(String(jsonOf(byMinted).code)).toMatch(/^(coordination|execution)\./);
   });
 });
 

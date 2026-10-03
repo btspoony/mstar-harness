@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
+import { serializeExecutionValue } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mcpToolInputSchema, registerMcpCommands } from "../src/mcp/register";
 import { mapParserError, registerCliCommands, renderCommandContract, usageEnvelope } from "../src/command-adapter";
@@ -252,7 +253,9 @@ describe("generated CLI adapter", () => {
     expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
 
     const priorIdentity = process.env.MSTAR_HOST_SESSION_ID;
+    const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
     delete process.env.MSTAR_HOST_SESSION_ID;
+    delete process.env.MSTAR_EXECUTION_IDENTITY;
     try {
       const withoutRuntimeIdentity = await run(args);
       expect(JSON.parse(withoutRuntimeIdentity.stdout)).toMatchObject({
@@ -261,6 +264,7 @@ describe("generated CLI adapter", () => {
       });
     } finally {
       if (priorIdentity !== undefined) process.env.MSTAR_HOST_SESSION_ID = priorIdentity;
+      if (priorMinted !== undefined) process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
     }
   });
 
@@ -495,10 +499,81 @@ test("generated CLI adapter decodes schema-typed numeric options and registers b
     expect(numericResult.code).not.toBe("command.invalid-input");
     expect(numericResult.message ?? "").not.toContain("expected number");
 
-    const boolean = await run(["plan", "bind", "--execution"]);
-    const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
-    expect(booleanResult.message ?? "").not.toContain("argument missing");
+  const boolean = await run(["plan", "bind", "--execution"]);
+  const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
+  expect(booleanResult.message ?? "").not.toContain("argument missing");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+describe("generated CLI adapter — minted identity transport", () => {
+  const minted = (overrides: Record<string, unknown> = {}): string =>
+    serializeExecutionValue({ source: "local", sessionId: "minted-adapter", workflowId: "wf-adapter", role: "coordinator", planId: null, ...overrides });
+
+  /**
+   * One envelope field read by name. The parsed JSON is our own adapter's
+   * output; the object-ness is checked and the value read through the
+   * descriptor rather than by fabricating a shape.
+   */
+  function field(value: unknown, key: string): unknown {
+    if (typeof value !== "object" || value === null) return undefined;
+    return Object.getOwnPropertyDescriptor(value, key)?.value;
+  }
+
+  /** The typed identity cause the adapter discloses in `details.identity.code`. */
+  const identityCode = (envelope: unknown): unknown => field(field(envelope, "details"), "identity") === undefined
+    ? undefined
+    : field(field(field(envelope, "details"), "identity"), "code");
+
+  test("a malformed launched identity refuses through the adapter, never downgrading to the ambient value", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    const priorHost = process.env.MSTAR_HOST_SESSION_ID;
+    try {
+      process.env.MSTAR_HOST_SESSION_ID = "ambient-host";
+      for (const malformed of ["not json", "[]", '"scalar"', minted({ sessionId: "" })]) {
+        process.env.MSTAR_EXECUTION_IDENTITY = malformed;
+        const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator"]);
+        const envelope: unknown = JSON.parse(result.stdout);
+        expect(field(envelope, "exitCode")).toBe(2);
+        expect(field(envelope, "code")).toBe("command.invalid-input");
+        // The typed engine cause rides in details (attribution provenance, not a
+        // second shape): the ambient host value never substituted.
+        expect(String(identityCode(envelope))).toMatch(/^(command\.invalid-identity|coordination\.)/);
+      }
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+      if (priorHost === undefined) delete process.env.MSTAR_HOST_SESSION_ID; else process.env.MSTAR_HOST_SESSION_ID = priorHost;
+    }
+  });
+
+  test("a minted identity addressing another workflow refuses before the command runs", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    try {
+      process.env.MSTAR_EXECUTION_IDENTITY = minted({ workflowId: "wf-elsewhere" });
+      const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator"]);
+      const envelope: unknown = JSON.parse(result.stdout);
+      expect(result.status).toBe(2);
+      expect(field(envelope, "code")).toBe("command.invalid-input");
+      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+    }
+  });
+
+  test("an explicit --session-id wins even over a malformed launched identity", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    try {
+      process.env.MSTAR_EXECUTION_IDENTITY = "not json";
+      const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator", "--session-id", "explicit"]);
+      // The explicit override short-circuits the minted channel entirely: the
+      // invocation proceeds to the family's own required-field checks and never
+      // reports a broken minted transport.
+      const envelope: unknown = JSON.parse(result.stdout);
+      expect(field(envelope, "code")).toBe("command.invalid-input");
+      expect(identityCode(envelope)).not.toBe("command.identity-scope-mismatch");
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+    }
+  });
 });
