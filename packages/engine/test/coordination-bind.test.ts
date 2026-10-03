@@ -558,6 +558,20 @@ describe("binding", () => {
     expect(coordinatorView.scope).toBeNull();
   });
 });
+describe("historical coordination snapshots", () => {
+  test("accepts stored self-amendment audit history without validating retired digest gates", () => {
+    const result = validateSnapshotCoordination({
+      coordinator: {
+        session_id: "coordinator-1",
+        session_file: "/tmp/coordinator.json",
+        bound_at: "2026-10-03T00:00:00.000Z",
+      },
+      self_amendments: [{ old_sha256: "a".repeat(64), new_sha256: "b".repeat(64) }],
+    });
+
+    expect(result).toEqual([]);
+  });
+});
 describe("scope-and-revisions", () => {
   test("both address forms resolve to the same pinned scope", async () => {
     const fixture = makeFixture();

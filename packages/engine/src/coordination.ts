@@ -1856,9 +1856,8 @@ function partlyAppliedRecovery(recovery: RecoveryDetails, applied: readonly stri
  *   depends on having moved is its own typed refusal, disclosed with the exact
  *   fields and the one decision left — another writer's relevant work is never
  *   overwritten (A11/A13).
- * - an effect the fresh row ALREADY holds is current success with no byte
- *   churn: no revision advance, no timestamp, no write at all (R6/A09/A12).
- * - the seal's semantic re-authentication runs before all of it (A29).
+ * - ordinary row mutations retain the prepared Assignment's named semantic
+ *   field constraints; prepare and bind can replace recorded provenance.
  */
 async function withRowCommit(
   scope: ResolvedPlanScope,
@@ -1897,9 +1896,9 @@ async function withRowCommit(
       coordination,
       revision: coordination?.revision ?? 0,
     };
-    // Prepare and bind may mutate recorded provenance; other row mutations
-    // retain the Assignment's existing semantic field constraints.
-    if (opts.freshness !== false && coordination?.prepared !== undefined) {
+    // Prepare and bind may replace recorded provenance; row mutations retain
+    // the Assignment's semantic field constraints.
+    if (opts.kind !== "claim" && opts.kind !== "prepare" && coordination?.prepared !== undefined) {
       assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
     const warnings: readonly ResolutionWarning[] =
@@ -2755,8 +2754,6 @@ async function claimPlanSession(scope: ResolvedPlanScope, sessionId: string): Pr
   const result = await withRowCommit(scope, {
     kind: "claim",
     expectedRevision: null,
-    // The claim writes no pin, so there is none for it to re-authenticate.
-    freshness: false,
     precheck: async (context) => {
       const bound = context.coordination?.session;
       // (PR #309-3) A claim is IDEMPOTENT for the row's recorded holder: the same
@@ -3424,8 +3421,6 @@ async function mutatePrepare(
   const result = await withRowCommit(scope, {
     kind: "prepare",
     expectedRevision: request.expectedRevision,
-    // `prepare` is the writer of the pin; it must not re-check the pin it replaces.
-    freshness: false,
     precheck: async (context) => {
       const bound = context.coordination?.session;
       // Fixes #308, §D1: `prepare` admits a coordinator session for any row of
