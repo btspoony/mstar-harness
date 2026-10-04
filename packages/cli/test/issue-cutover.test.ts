@@ -621,6 +621,15 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     const seal = await openStore({ harnessDir: harness }, "read");
     seal.close();
 
+    for (const args of [
+      ["issue", "list", "--harness", harness],
+      ["issue", "show", "--id", "I-staged-fixture", "--harness", harness],
+    ]) {
+      const result = runCli(args, root);
+      expect(result.exitCode).toBe(1);
+      expect(jsonOf(result).code).toBe("store.not-active");
+      expect(jsonOf(result).data).toBeUndefined();
+    }
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
     expect(jsonOf(rollup).code).toBe("store.not-active");

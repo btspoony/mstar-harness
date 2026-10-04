@@ -424,9 +424,14 @@ export type ExecutionPlanRequest<Operation extends CoordinationOperation = Coord
  * be reached by a seat the shared rules refuse.
  */
 function assertPlanOperationAdmissible(caller: ExecutionCaller, kind: string, planId: string): void {
-  // §3 the accepted set is the closed union minus the legacy-only repair: a
-  // verb the shared table carries for the FILE route is still not a DB verb.
-  if (IMPLEMENTED_OPERATIONS[kind] !== true || LEGACY_ONLY_OPERATIONS[kind] === true) {
+  if (LEGACY_ONLY_OPERATIONS[kind] === true) {
+    throw new CoordinationError(
+      "coordination.legacy-only-operation",
+      `${kind} is available only through the file-backed plan route; run \`mstar plan ${kind}\` against the file-backed workflow.`,
+      { operation: kind },
+    );
+  }
+  if (IMPLEMENTED_OPERATIONS[kind] !== true) {
     throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
       operation: kind,
     });
@@ -1602,10 +1607,18 @@ function writeCoordinationFrame(
   input: { block: Record<string, unknown>; state?: Record<string, unknown>; what: string },
 ): void {
   const route = rowValidationRoute(frameSnapshot(frame), frame.view.plan as unknown as PlanRow);
+  const handoff = isPlainObject(input.block.handoff) ? input.block.handoff : undefined;
+  const submitterAssociated = handoff === undefined || (
+    typeof handoff.submitted_by === "string" &&
+    tx.db
+      .prepare("select 1 from execution_sessions where workflow_id = ? and role = 'plan-pm' and plan_id = ? and session_id = ?")
+      .get(frame.workflowId, frame.planId, handoff.submitted_by) !== undefined
+  );
   const violations = storedCoordinationViolations(input.block, {
     revision: frame.revision + 1,
     route,
-    sessionBound: frame.sessionBound,
+    submitterAssociated,
+    activeSessionBound: frame.sessionBound,
     what: input.what,
   });
   assertViolationFree(violations, input.what);
@@ -2319,7 +2332,14 @@ function assertCompletedReplayInvariants(
   assertViolationFree(
     storedCoordinationViolations(
       { ...(view.coordination ?? {}) } as Record<string, unknown>,
-      { revision: view.coordination?.revision ?? 0, route, sessionBound: view.session !== null, what: `plan ${planId} coordination` },
+      {
+        revision: view.coordination?.revision ?? 0,
+        route,
+        // This replay follows a database read, which has already verified the
+        // historical submitted_by-to-plan-pm association.
+        submitterAssociated: true,
+        what: `plan ${planId} coordination`,
+      },
     ),
     `plan ${planId} coordination`,
   );
@@ -3244,7 +3264,14 @@ export async function mutateExecutionPlan(
       // or a staged store's older vocabulary all refuse here instead of being
       // dispatched to something that is not theirs.
       const kind = "kind" in operation && typeof operation.kind === "string" ? operation.kind : String(operation);
-      throw new CoordinationError("coordination.unknown-operation", `${String(kind)} is not a coordination operation`, {
+      if (LEGACY_ONLY_OPERATIONS[kind] === true) {
+        throw new CoordinationError(
+          "coordination.legacy-only-operation",
+          `${kind} is available only through the file-backed plan route; run \`mstar plan ${kind}\` against the file-backed workflow.`,
+          { operation: kind },
+        );
+      }
+      throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
         operation: kind,
       });
     }

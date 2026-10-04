@@ -5,6 +5,7 @@ import {
   createFsStore,
   createLocalExecutionIdentity,
   executionContextFor,
+  recoverExecutionPlanSession,
   recoverExecutionCoordinator,
   resolveProcessHarnessDir,
   serializeExecutionValue,
@@ -33,7 +34,7 @@ function usage(id: string, message: string): CommandEnvelope<never> {
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
   const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), plan: z.string().min(1).optional(), argv: z.array(z.string()).optional(), harness: z.string().min(1).optional() });
-  const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
+  const recoverInput = z.object({ workflow: z.string().min(1), plan: z.string().min(1).optional(), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
   return [
     command({
       id: "session.run",
@@ -85,20 +86,20 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
     command({
       id: "session.recover",
       cli: { path: ["session", "recover"], aliases: [], arguments: [], options: [
-        { key: "workflow", flags: "--workflow <id>", required: true }, { key: "priorSession", flags: "--prior-session <id>", required: false },
+        { key: "workflow", flags: "--workflow <id>", required: true }, { key: "plan", flags: "--plan <id>", required: false }, { key: "priorSession", flags: "--prior-session <id>", required: false },
         { key: "unowned", flags: "--unowned", required: false }, { key: "reason", flags: "--reason <text>", required: true },
         { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: recoverInput, output: commandEnvelopeSchema, effects: ["write"],
-      description: "Recover a stopped workflow coordinator through active DB authority. Recovery never resumes a session.",
+      description: "Recover a stopped workflow coordinator, or an explicitly named stopped plan owner, through active DB authority. Recovery never resumes a session.",
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
         if (!parsed.success) return usage("session.recover", parsed.error.message);
-        const { workflow, priorSession, unowned, reason, attestation, expect, operation, harness } = parsed.data;
-        if ((priorSession === undefined) === (unowned !== true) || reason === undefined || attestation === undefined || expect === undefined || operation === undefined) {
-          return usage("session.recover", "session recover requires exactly one of priorSession or unowned, reason, attestation, expect and operation");
+        const { workflow, plan, priorSession, unowned, reason, attestation, expect, operation, harness } = parsed.data;
+        if ((priorSession === undefined) === (unowned !== true) || (plan !== undefined && (priorSession === undefined || unowned === true)) || reason === undefined || attestation === undefined || expect === undefined || operation === undefined) {
+          return usage("session.recover", "session recover requires exactly one priorSession or coordinator-only unowned, plus reason, attestation, expect and operation; plan recovery requires a named prior owner");
         }
         if (context.sessionId === undefined) return usage("session.recover", "active recovery requires the main conversation session identity");
         try {
@@ -106,10 +107,16 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           if (root === null) return usage("session.recover", "no control harness resolved; supply an absolute harness");
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator", planId: null };
           const parsedAttestation = JSON.parse(readFileSync(attestation, "utf8")) as ActivationAttestation;
-          const receipt = await recoverExecutionCoordinator(executionContextFor({ harnessDir: root }, identity), {
-            expected: expect as never, operationId: operation, priorSessionId: unowned ? null : priorSession!, reason,
-            attestation: parsedAttestation,
-          });
+          const contextForCaller = executionContextFor({ harnessDir: root }, identity);
+          const receipt = plan === undefined
+            ? await recoverExecutionCoordinator(contextForCaller, {
+              expected: expect as never, operationId: operation, priorSessionId: unowned ? null : priorSession!, reason,
+              attestation: parsedAttestation,
+            })
+            : await recoverExecutionPlanSession(contextForCaller, {
+              planId: plan, expected: expect as never, operationId: operation, priorSessionId: priorSession!, reason,
+              attestation: parsedAttestation,
+            });
           return ok("session.recover", receipt);
         } catch (error) {
           return refused("session.recover", error);

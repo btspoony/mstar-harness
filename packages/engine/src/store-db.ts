@@ -40,6 +40,11 @@ export type StoreErrorCode =
   | "store.schema-drift"
   | "store.corrupt"
   | "store.busy"
+  | "store.upgrade-state-changed"
+  | "store.upgrade-staged-record-missing"
+  | "store.upgrade-staged-record-malformed"
+  | "store.upgrade-staged-record-inconsistent"
+  | "store.upgrade-staged-manifest-missing"
   // The file-route guards below refuse through this boundary too: the control
   // harness's ACTIVE execution authority retires the root/snapshot/session file
   // route (primary spec §4.3), and that refusal is a store-authority verdict —

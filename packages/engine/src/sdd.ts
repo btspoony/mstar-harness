@@ -360,8 +360,8 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
  * `infence`; headings inside fences are ignored; printing starts at the
  * heading for `taskN` and continues until the NEXT `## Task` heading (or
  * EOF for the last task) — a later Task heading resets the section. A
- * missing task writes an empty file then fails with exit-3
- * (`SddScriptError.exitCode === 3`).
+ * Missing task fails with exit-3 (`SddScriptError.exitCode === 3`) without
+ * writing an output file or creating the default SDD directory.
  *
  * Bound mode (`opts.context`, spec A3): the artifact destination is gated
  * with `checkSddAction` BEFORE any mkdir/write — a refused destination
@@ -417,14 +417,12 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
         2,
       );
     }
-    mkdirSync(sddDir, { recursive: true });
     out = join(sddDir, `task-${taskN}-brief.md`);
   }
   if (bound) {
  // Gate BEFORE mkdir/write — a refused destination creates nothing.
     const gate = checkSddAction(bound, { kind: "artifact", cwd: observedCwd, target: out });
     if (!gate.ok) throwGateFail(gate.violations);
-    if (mkdirAfterGate !== null) mkdirSync(mkdirAfterGate, { recursive: true });
   }
 
  // awk records: every newline-terminated line plus a final unterminated
@@ -440,12 +438,14 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
     if (!infence && headingRe.test(line)) intask = targetRe.test(line);
     if (intask) printed.push(line);
   }
-  const output = printed.length > 0 ? `${printed.join("\n")}\n` : "";
-  writeFileSync(out, output);
-
   if (printed.length === 0) {
     throw new SddScriptError(`task ${taskN} not found in ${planFile} (no heading matching Task ${taskN})`, 3);
   }
+  if (mkdirAfterGate !== null || (!bound && !outFile)) {
+    mkdirSync(mkdirAfterGate ?? (opts.sddDir ?? process.env.SDD_DIR)!, { recursive: true });
+  }
+  writeFileSync(out, `${printed.join("\n")}\n`);
+
  // Bound mode emits absolute paths (A3: handoff producers carry absolute
  // destinations); unbound keeps the legacy literal return.
   return bound ? resolve(observedCwd, out) : out;

@@ -44,7 +44,7 @@ import {
 } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
-const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
+const SRC_ENTRY = process.env.MSTAR_CLI_ENTRY ?? join(CLI_ROOT, "src/index.ts");
 
 const WORKFLOW_ID = "wf-exec-session";
 const PLAN_ID = "20260921-execution-session-plan";
@@ -949,6 +949,132 @@ describe("mstar session recover \u2014 documented invocation", () => {
   });
 });
 
+describe("mstar session recover — named plan owner", () => {
+  test("recovers plan ownership into the current coordinator's independent identity", async () => {
+    const fixture = await activeFixture("mstar-plan-session-recover");
+    const coordinator = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, coordinator, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    const seat = activeBind(fixture, coordinator, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
+    const prepared = runCli(
+      ["plan", "prepare", "--session-ref", seat.wire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(prepared.exitCode).toBe(0);
+    const afterPrepare = await tokensOf(fixture);
+    activeBind(fixture, planPmIdentity(), ["--plan", PLAN_ID], afterPrepare.plan, "bind-plan-pm");
+    const attestationPath = join(fixture.root, "plan-owner-attestation.json");
+    writeJson(attestationPath, attestationFor(PLAN_PM_ID));
+    const recovered = runCli(
+      ["session", "recover", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--prior-session", PLAN_PM_ID,
+        "--reason", "the recorded plan owner stopped", "--attestation", attestationPath,
+        "--expect", (await tokensOf(fixture)).plan, "--operation", "recover-plan-owner", "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(recovered.exitCode, recovered.stdout).toBe(0);
+    expect(dataOf(recovered).data).toMatchObject({ role: "plan-pm", sessionId: COORDINATOR_ID, planId: PLAN_ID });
+    expect((await storedLease(fixture))?.holder_session_id).toBe(COORDINATOR_ID);
+    const progressPath = join(fixture.root, "old-owner-progress.json");
+    writeJson(progressPath, { status: "InProgress", summary: "stale owner attempt", evidence_paths: [fixture.evidencePath] });
+    const oldOwner = runCli(
+      ["plan", "progress", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
+      fixture,
+      planPmIdentity(),
+    );
+    expect(oldOwner.exitCode).toBe(1);
+    expect((await storedLease(fixture))?.holder_session_id).toBe(COORDINATOR_ID);
+  }, 30_000);
+  test("uses the recovered plan-PM binding for reviewed handoff, accept and completion", async () => {
+    const fixture = await activeDeliveryFixture("mstar-recovered-plan-delivery");
+    const coordinator = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, coordinator, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    const seat = activeBind(fixture, coordinator, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
+    const prepared = runCli(
+      ["plan", "prepare", "--session-ref", seat.wire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(prepared.exitCode).toBe(0);
+    const afterPrepare = await tokensOf(fixture);
+    activeBind(fixture, planPmIdentity(), ["--plan", PLAN_ID], afterPrepare.plan, "bind-plan-pm");
+
+    const attestationPath = join(fixture.root, "plan-owner-attestation.json");
+    writeJson(attestationPath, attestationFor(PLAN_PM_ID));
+    const recovered = runCli(
+      ["session", "recover", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--prior-session", PLAN_PM_ID,
+        "--reason", "the recorded plan owner stopped", "--attestation", attestationPath,
+        "--expect", (await tokensOf(fixture)).plan, "--operation", "recover-plan-owner-lifecycle", "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(recovered.exitCode, recovered.stdout).toBe(0);
+    const newPlanOwner = planPmIdentity(COORDINATOR_ID);
+    expect(dataOf(recovered).data).toMatchObject({ role: "plan-pm", sessionId: newPlanOwner.sessionId, planId: PLAN_ID });
+    expect((await storedLease(fixture))?.holder_session_id).toBe(newPlanOwner.sessionId);
+
+    const progressPath = join(fixture.root, "recovered-progress.json");
+    writeJson(progressPath, { status: "InReview", summary: "reviewed delivery ready", evidence_paths: [fixture.qaReport] });
+    const progressed = runCli(["plan", "progress", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir], fixture, newPlanOwner);
+    expect(progressed.exitCode, progressed.stdout).toBe(0);
+    const handoffPath = join(fixture.root, "recovered-handoff.json");
+    writeJson(handoffPath, {
+      source_sha: fixture.sourceSha,
+      review_base: fixture.baseSha,
+      review_head: fixture.sourceSha,
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+    const handed = runCli(["plan", "handoff", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--file", handoffPath, "--harness", fixture.harnessDir], fixture, newPlanOwner);
+    expect(handed.exitCode, handed.stdout).toBe(0);
+    const handoffId = handoffIdOf(handed);
+    const accepted = runCli(
+      ["plan", "accept", "--workflow", WORKFLOW_ID, "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(accepted.exitCode).toBe(0);
+    const completed = runCli(
+      ["plan", "complete", "--workflow", WORKFLOW_ID, "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(completed.exitCode).toBe(0);
+    expect(await storedRowStatus(fixture)).toBe("Done");
+  }, 30_000);
+
+  test("rejects coordinator-only unowned selection for plan recovery before changing the claim", async () => {
+    const fixture = await activeFixture("mstar-plan-session-recover-unowned");
+    const coordinator = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, coordinator, initial.token);
+    const tokens = await tokensOf(fixture);
+    const seat = activeBind(fixture, coordinator, ["--coordinator"], tokens.workflow, "bind-coordinator");
+    const prepared = runCli(
+      ["plan", "prepare", "--session-ref", seat.wire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(prepared.exitCode).toBe(0);
+    const afterPrepare = await tokensOf(fixture);
+    activeBind(fixture, planPmIdentity(), ["--plan", PLAN_ID], afterPrepare.plan, "bind-plan-pm");
+    const attestationPath = join(fixture.root, "attestation.json");
+    writeJson(attestationPath, attestationFor(PLAN_PM_ID));
+    const refused = runCli(
+      ["session", "recover", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--unowned",
+        "--reason", "must name prior plan owner", "--attestation", attestationPath,
+        "--expect", afterPrepare.plan, "--operation", "invalid-unowned-plan", "--harness", fixture.harnessDir],
+      fixture,
+      coordinator,
+    );
+    expect(refused.exitCode).toBe(2);
+    expect((await storedLease(fixture))?.holder_session_id).toBe(PLAN_PM_ID);
+  }, 30_000);
+});
 describe("mstar status validate \u2014 tokens of the active register", () => {
   test("reports the root and per-workflow tokens the active writes expect", async () => {
     const fixture = await activeFixture("mstar-session-tokens");

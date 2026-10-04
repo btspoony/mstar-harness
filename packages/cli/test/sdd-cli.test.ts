@@ -253,7 +253,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("missing task N → exit 3 with empty outfile", () => {
+  test("missing task N → exit 3, outfile not created (zero-write; default-dir case covered by engine suite)", () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
@@ -262,7 +262,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
       const result = runCli(["sdd", "task-brief", planFile, "9", outfile]);
       expect(result.exitCode).toBe(3);
       expectEnvelopeMessage(result, "task 9 not found");
-      expect(readFileSync(outfile, "utf8")).toBe("");
+      expect(existsSync(outfile)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

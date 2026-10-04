@@ -567,15 +567,28 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
     expect(err.message).toContain("no such plan file");
   });
 
-  test("missing task heading fails with exit code 3 and writes an empty out file", () => {
+  test("missing task heading fails with exit code 3 without writing an out file", () => {
     const out = tmpRoot("sdd-brief-");
     try {
       const file = join(out, "task-5-brief.md");
       const err = errOf(() => taskBrief(SAMPLE_PLAN, 5, file));
       expect(err.exitCode).toBe(3);
       expect(err.message).toContain("task 5 not found");
-      expect(existsSync(file)).toBe(true);
-      expect(statSync(file).size).toBe(0);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("missing task heading does not create the default SDD directory", () => {
+    const out = tmpRoot("sdd-brief-");
+    try {
+      const sddDir = join(out, "missing", "sdd");
+      withEnv(SDD_DIR, sddDir, () => {
+        const err = errOf(() => taskBrief(SAMPLE_PLAN, 5));
+        expect(err.exitCode).toBe(3);
+        expect(existsSync(sddDir)).toBe(false);
+      });
     } finally {
       rmSync(out, { recursive: true, force: true });
     }

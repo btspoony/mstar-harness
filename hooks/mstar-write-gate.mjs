@@ -11290,12 +11290,20 @@ function hasFiles(dir) {
   }
 }
 function storedCoordinationViolations(block, options) {
-  const { revision, route, sessionBound, what } = options;
+  const { revision, route, submitterAssociated, activeSessionBound, what } = options;
   const { handoff, ...rest } = block;
   const violations = validateRowCoordination({ revision, ...rest }, what, route);
   if (handoff !== undefined) {
     violations.push(...validatePlanHandoff(handoff, `${what}.handoff`, route));
-    if (!sessionBound) {
+    if (!submitterAssociated) {
+      violations.push({
+        ok: false,
+        severity: "high",
+        code: "coordination.row.handoff-field",
+        message: `${what}.handoff submitted_by has no matching historical plan-pm session for this plan`
+      });
+    }
+    if (activeSessionBound === false && !(isPlainObject(handoff) && handoff.state === "completed")) {
       violations.push({
         ok: false,
         severity: "high",
@@ -12757,7 +12765,7 @@ function readWorkflowView(db, store, workflowId) {
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState),
-      sessionBound: handoff === undefined || historicalSessionRow !== undefined,
+      submitterAssociated: handoff === undefined || historicalSessionRow !== undefined,
       what: `execution_plans(${workflowId},${planId}).coordination_json`
     });
     if (coordinationViolations.length > 0) {
