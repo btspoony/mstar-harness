@@ -1077,7 +1077,7 @@ describe("projection publication and last-good handling", () => {
       expect(existsSync(join(f.harness, "store.db"))).toBe(true);
       expect(actualError).toMatchObject({
         code: "projection.schema-outdated",
-        message: expect.stringContaining("mstar store safe-upgrade"),
+        message: expect.stringContaining("mstar store upgrade --operator <name>"),
       });
     } finally {
       rmSync(isolatedRoot, { recursive: true, force: true });

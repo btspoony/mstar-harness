@@ -1042,7 +1042,7 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     } finally {
       writer.close();
     }
-    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/store\.not-active/);
+    await expect(initializeExecutionAuthority(context)).rejects.toThrow(/mstar store upgrade --operator/);
 
     const raw = rawDb(storePath(context));
     try {

@@ -328,8 +328,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           return refused(
             id,
             "execution.not-active",
-            "plan release requires an ACTIVE execution authority; this control root is pre-activation. An authorized operator may run " +
-              "`mstar store safe-upgrade` with valid operator attestation to activate the store, then bind and release. This call does not authorize that route.",
+            "plan release requires an ACTIVE execution authority; this control root is pre-activation. An authorized operator may run `mstar store upgrade --operator <name>` to import legacy state and activate the authority, then bind and release. This call does not authorize that route.",
           );
         }
       }
@@ -398,7 +397,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       return ok(id, receipt);
     }
     if (id === "plan.release") {
-      return refused(id, "execution.not-active", "plan release is available only under ACTIVE execution authority; on a pre-activation control root, use the operator-authorized store safe-upgrade route before binding and releasing");
+      return refused(id, "execution.not-active", "plan release is available only under ACTIVE execution authority; run the operator-authorized `mstar store upgrade --operator <name>` before binding and releasing");
     }
     const operation = fileOperation(id, input);
     if (input.session === undefined) return usage(id, "operation requires session or active sessionRef");

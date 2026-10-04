@@ -111,11 +111,6 @@ export type ExecutionErrorCode =
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
-  // §5's two migration verdicts: the source inventory is not closed
-  // (`coverage-incomplete`) versus discovered legacy content that contradicts
-  // the execution model or a reviewed manifest that no longer matches the
-  // sources (`migration-conflict`).
-  | "execution.coverage-incomplete"
   | "execution.migration-conflict"
   | "store.not-active"
   | "store.stale-epoch";
@@ -1438,8 +1433,8 @@ function assertActiveStoreAuthority(db: StoreDb): void {
   if (row.authority_state !== "active") {
     throw new ExecutionError(
       "store.not-active",
-      `the issue/catalog store is ${row.authority_state}; execution authority is initialized only on an active ` +
-        `store. Complete the store activation barrier first \u2014 nothing was modified.`,
+      `the issue/catalog store is ${row.authority_state}; run \`mstar store upgrade --operator <name>\` to import legacy ` +
+        "workspace rows and activate both authorities; nothing was modified.",
     );
   }
 }
@@ -1449,8 +1444,8 @@ function assertExecutionDomainEmpty(db: StoreDb, meta: ExecutionMeta): void {
   if (meta.authorityState === "staged") {
     throw new ExecutionError(
       "execution.not-active",
-      "the execution authority is staged by a migration manifest. Initialization creates an EMPTY active " +
-        "authority and never adopts or discards staged rows; finish or abort that migration instead.",
+      "the execution authority is staged. Run `mstar store upgrade --operator <name>` to import workspace records " +
+        "and complete the minimal cutover; nothing was modified.",
     );
   }
   if (meta.authorityState === "active") {

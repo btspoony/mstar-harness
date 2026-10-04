@@ -53,7 +53,6 @@ import {
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
 import { prepareExecutionPlan } from "./execution-coordination.js";
-import { previewExecutionMigration } from "./execution-migrate.js";
 import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import {
@@ -130,21 +129,6 @@ async function activeFixture(label: string): Promise<Fixture> {
   };
 }
 
-/**
- * A workspace whose store is still on the LEGACY execution authority. The
- * control harness IS the `.mstar` dir here — that is where `store.db`, the v2
- * root register and the workflow tree live — exactly as the migration fixture
- * builds it.
- */
-async function legacyFixture(label: string): Promise<{ workspace: string; harnessRoot: string; context: StoreContext }> {
-  const workspace = mkdtempSync(join(ROOT, `${label}-`));
-  const harnessRoot = join(workspace, ".mstar");
-  mkdirSync(harnessRoot, { recursive: true });
-  const context: StoreContext = { harnessDir: harnessRoot };
-  const store = await initializeStore(context);
-  store.close();
-  return { workspace, harnessRoot, context };
-}
 
 /**
  * The §4 registered plan document a reviewed registration selects: its
@@ -311,47 +295,6 @@ async function plantPendingLegacyOperation(context: StoreContext, operationId: s
   );
 }
 
-/**
- * A real legacy source tree for the migration cases: the v2 root register plus
- * one workflow snapshot whose single plan row records `catalog_pin`. The
- * snapshot is written in the released shape (no coordinator block, so no session
- * envelope is implicated) and validated by the production reader before any case
- * runs against it.
- */
-function writeLegacySource(harnessRoot: string, pin: Record<string, unknown>): void {
-  const workflowDir = join(harnessRoot, "workflows", WORKFLOW_ID);
-  mkdirSync(workflowDir, { recursive: true });
-  writeFileSync(
-    join(harnessRoot, "status.json"),
-    `${JSON.stringify({
-      version: 2,
-      updated_at: ROOT_UPDATED_AT,
-      workflows: [{ id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` }],
-    })}\n`,
-  );
-  writeFileSync(
-    join(workflowDir, WORKFLOW_SNAPSHOT_FILE),
-    `${JSON.stringify({
-      schema_version: 1,
-      id: WORKFLOW_ID,
-      type: "plan",
-      status: "running",
-      started_at: TS,
-      updated_at: ROOT_UPDATED_AT,
-      delivery_kind: "development",
-      branch: { source: `feature/${WORKFLOW_ID}`, target: "main" },
-      plans: [
-        {
-          id: PLAN_ID,
-          title: PLAN_TITLE,
-          file: `plans/${PLAN_ID}.md`,
-          status: "Todo",
-          metadata: { catalog_pin: pin },
-        },
-      ],
-    })}\n`,
-  );
-}
 
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
   try {
@@ -881,48 +824,6 @@ describe("execution-registration", () => {
     expect(refusal.code).toBe("execution.scope-mismatch");
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
-  });
-});
-
-/* ------------------------------------------------------------------------ *
- * The migration boundary
- * ------------------------------------------------------------------------ */
-
-describe("execution-registration \u2014 migration boundary", () => {
-  test("execution-registration-blocks-migration-while-a-legacy-operation-is-pending", async () => {
-    const { context } = await legacyFixture("migration-pending");
-    await plantPendingLegacyOperation(context, "op-legacy-in-flight", WORKFLOW_ID);
-    const before = await footprint(context);
-
-    const refusal = await refusalOf(() =>
-      previewExecutionMigration({ context, operationId: "op-preview", operator: "ops-engineer" }),
-    );
-    expect(refusal.code).toBe("execution.migration-conflict");
-    expect(refusal.message).toContain("op-legacy-in-flight");
-    expect(refusal.message).toContain("pending");
-
-    // The planner saves nothing: the staged footprint and the journal row stand.
-    expect(await footprint(context)).toEqual(before);
-  });
-
-  test("execution-registration-imports-a-pin-whose-recorded-hash-has-drifted", async () => {
-    const { harnessRoot, context } = await legacyFixture("migration-pin");
-    const storeId = (await one<{ store_id: string }>(context, "select store_id from store_meta where id = 1"))!.store_id;
-
-    // §365 the recorded `document_hash` is provenance: a pin whose row has moved
-    // since preparation is imported with the digest it recorded rather than
-    // re-hashed to refuse the store's own documented selection.
-    writeLegacySource(harnessRoot, {
-      store_id: storeId,
-      entity_revision: 3,
-      document_hash: "2".repeat(64),
-      relation_hash: "3".repeat(64),
-    });
-    const manifest = await previewExecutionMigration({ context, operationId: "op-preview-pin", operator: "ops-engineer" });
-    expect(manifest.sources.length).toBeGreaterThan(0);
-    expect(manifest.pendingCatalogOperations).toEqual([]);
-    expect(existsSync(join(harnessRoot, "workflows", WORKFLOW_ID, WORKFLOW_SNAPSHOT_FILE))).toBe(true);
-    expect(readFileSync(join(harnessRoot, "status.json"), "utf8").length).toBeGreaterThan(0);
   });
 });
 

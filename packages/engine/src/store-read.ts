@@ -442,7 +442,7 @@ export async function withStoreRead<T>(context: StoreContext, query: StoreReadQu
         throw new ProjectionError(
           "projection.schema-outdated",
           `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). ` +
-            "Apply the pending migrations through the store safe-upgrade path (mstar store safe-upgrade) and retry; nothing was read.",
+            "Import legacy execution state and apply pending schemas with `mstar store upgrade --operator <name>`, then retry; nothing was read.",
         );
       }
       const projection = readProjectionBlock(db);

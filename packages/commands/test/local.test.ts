@@ -60,6 +60,18 @@ function writeText(root: string, relative: string, value: string): void {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, value);
 }
+function writeOmpPluginTree(
+  root: string,
+  options: { identityExtension?: boolean; registerIdentityExtension?: boolean } = {},
+): void {
+  writeJson(root, "plugin.json", { name: "@mstar-harness/omp" });
+  for (const skill of ["mstar-host", "mstar-harness-core", "pm"]) writeText(root, `skills/${skill}/SKILL.md`, "synthetic skill");
+  for (const command of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"]) writeText(root, `commands/${command}.md`, "synthetic command");
+  writeText(root, "skills/mstar-host/references/omp.md", "synthetic host reference");
+  if (options.identityExtension !== false) writeText(root, "extensions/mcp-identity.js", "synthetic identity extension");
+  writeJson(root, "package.json", { omp: { extensions: options.registerIdentityExtension === false ? [] : ["./extensions/mcp-identity.js"] } });
+}
+
 
 describe("shared host-health helpers", () => {
   test("shared path helpers resolve relative paths and reject lexical root escapes", () => {
@@ -232,43 +244,65 @@ describe("opencode host health", () => {
 });
 
 describe("omp host health", () => {
-  test("diagnoses a complete synthetic omp installation", () => {
+  test("validates the selected installed omp plugin tree", () => {
     const harnessRepo = fixture();
-    writeJson(harnessRepo, "packages/omp/plugin.json", { name: "@mstar-harness/omp" });
-    for (const skill of ["mstar-host", "mstar-harness-core", "pm"]) {
-      writeText(harnessRepo, `packages/omp/skills/${skill}/SKILL.md`, "synthetic skill");
-    }
-    for (const command of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit"]) {
-      writeText(harnessRepo, `packages/omp/commands/${command}.md`, "synthetic command");
-    }
-    writeText(harnessRepo, "packages/omp/skills/mstar-host/references/omp.md", "synthetic host reference");
-
+    const installedRoot = path.join(harnessRepo, "installed-omp");
+    writeOmpPluginTree(installedRoot);
     expect(diagnoseOmpHost({
       harnessRepoPath: harnessRepo,
       scope: "global",
       ompAvailable: true,
-      installedPlugins: [{ name: "@mstar-harness/omp", enabled: true }],
+      installedPlugins: [{ name: "@mstar-harness/omp", path: installedRoot, enabled: true }],
       localHarnessRepoErrors: [],
       missingGitignoreEntries: [],
     })).toEqual({ location: harnessRepo, errors: [] });
   });
 
-  test("reports missing omp package artifacts from a synthetic root", () => {
+  test("falls back to the repo package tree when no installed omp entry exists", () => {
     const harnessRepo = fixture();
     const result = diagnoseOmpHost({
       harnessRepoPath: harnessRepo,
       scope: "global",
       ompAvailable: true,
-      installedPlugins: [{ name: "@mstar-harness/omp", enabled: true }],
+      installedPlugins: [],
       localHarnessRepoErrors: [],
       missingGitignoreEntries: [],
     });
+    expect(result.errors).toContain(`Missing omp plugin marker: ${path.join(harnessRepo, "packages", "omp", "plugin.json")}`);
+    expect(result.errors).toContain(`Missing omp host reference: ${path.join(harnessRepo, "packages", "omp", "skills", "mstar-host", "references", "omp.md")}`);
+  });
 
+  test("reports a missing session identity extension in the installed omp plugin", () => {
+    const harnessRepo = fixture();
+    const installedRoot = path.join(harnessRepo, "installed-omp");
+    writeOmpPluginTree(installedRoot, { identityExtension: false });
+    const result = diagnoseOmpHost({
+      harnessRepoPath: harnessRepo,
+      scope: "global",
+      ompAvailable: true,
+      installedPlugins: [{ name: "@mstar-harness/omp", path: installedRoot, enabled: true }],
+      localHarnessRepoErrors: [],
+      missingGitignoreEntries: [],
+    });
     expect(result.errors).toContain(
-      `Missing omp plugin marker: ${path.join(harnessRepo, "packages", "omp", "plugin.json")}`,
+      `Missing omp MCP session identity injection extension: ${path.join(installedRoot, "extensions", "mcp-identity.js")}. Update @mstar-harness/omp and enable its mcp-identity extension; ACTIVE workflow registration requires the host to supply sessionId on each MCP call.`,
     );
+  });
+
+  test("reports when the installed omp manifest omits identity extension registration", () => {
+    const harnessRepo = fixture();
+    const installedRoot = path.join(harnessRepo, "installed-omp");
+    writeOmpPluginTree(installedRoot, { registerIdentityExtension: false });
+    const result = diagnoseOmpHost({
+      harnessRepoPath: harnessRepo,
+      scope: "global",
+      ompAvailable: true,
+      installedPlugins: [{ name: "@mstar-harness/omp", path: installedRoot, enabled: true }],
+      localHarnessRepoErrors: [],
+      missingGitignoreEntries: [],
+    });
     expect(result.errors).toContain(
-      `Missing omp host reference: ${path.join(harnessRepo, "packages", "omp", "skills", "mstar-host", "references", "omp.md")}`,
+      `omp MCP session identity injection is not registered in ${path.join(installedRoot, "package.json")}. Update @mstar-harness/omp so its mcp-identity extension supplies sessionId for ACTIVE workflow registration.`,
     );
   });
 });

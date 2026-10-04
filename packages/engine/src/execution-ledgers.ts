@@ -131,8 +131,8 @@ export class ExecutionLedgerError extends Error {
 /**
  * The canonical control harness root that owns `context`'s store — resolved
  * from the store's own path (never from a caller-supplied root) and
- * canonicalized, exactly as `execution-migrate.ts`/`execution-store.ts` resolve
- * theirs, so every recorded path and every comparison is one spelling.
+ * canonicalized, exactly as `execution-minimal-import.ts`/`execution-store.ts`
+ * resolve theirs, so every recorded path and every comparison is one spelling.
  */
 function controlRootOf(context: StoreContext): string {
   return canonicalTarget(dirname(storeDbPath(context)));
@@ -506,13 +506,11 @@ function ledgerLockWaitMs(): number {
 
 /**
  * The §4.3 outer **maintenance exclusion**, keyed EXACTLY like
- * `withExecutionMaintenanceLock` in `execution-migrate.ts` and
- * `execution-recovery.ts` (`<root>/.execution-maintenance/execution-migration`,
- * which `withStatusWriteLock` turns into
- * `<root>/.execution-maintenance/.status-write.lockdir`). The three spellings
- * must stay identical: an activation, a restore or a migration never
- * interleaves with a cooperative ledger append, and the append never
- * interleaves with them.
+ * `withExecutionMaintenanceLock` in `execution-recovery.ts`
+ * (`<root>/.execution-maintenance/execution-migration`, which
+ * `withStatusWriteLock` turns into `<root>/.execution-maintenance/.status-write.lockdir`).
+ * The two spellings must stay identical: a restore never interleaves with a
+ * cooperative ledger append, and the append never interleaves with it.
  *
  * The control root is proven to exist BEFORE the lock key is materialized:
  * `withStatusWriteLock` needs the key's parent directory, and creating one under

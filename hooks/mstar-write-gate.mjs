@@ -42,9 +42,9 @@ import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:
 import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
 import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
-import { createHash as createHash16 } from "node:crypto";
-import { readFileSync as readFileSync20 } from "node:fs";
-import { join as join33 } from "node:path";
+import { createHash as createHash14 } from "node:crypto";
+import { readFileSync as readFileSync19 } from "node:fs";
+import { join as join30 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
@@ -11072,7 +11072,7 @@ class IssueError extends Error {
 function assertIssueProvenanceSchema(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
   if ((schema?.version ?? 0) < MIGRATIONS.length) {
-    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store safe-upgrade" first.`);
+    throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
   }
 }
 var DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
@@ -11461,7 +11461,8 @@ function storeDbPath(context) {
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
   const start = resolve13(context.harnessDir);
   const resolved = resolveProcessHarnessDir(start);
-  return join18(resolved ?? start, "store.db");
+  const hijackedPlansFallback = resolved !== null && resolved === join18(start, "plans");
+  return join18(hijackedPlansFallback ? start : resolved ?? start, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -12202,7 +12203,7 @@ function requireRoadmapSchema(db) {
     throw new StoreError("store.corrupt", "The store database has no schema_version table.");
   const row = db.prepare("select max(version) as version from schema_version").get();
   if (typeof row?.version !== "number" || row.version < 6) {
-    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store safe-upgrade" first.');
+    throw new RoadmapError("roadmap.schema-outdated", 'Roadmap content requires store schema 6; run "mstar store upgrade --operator <name>" first.');
   }
 }
 function requireActive(db) {
@@ -12423,7 +12424,6 @@ var PR_REVIEW_TIER_BUDGETS = Object.freeze({
 var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
-var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 class ExecutionError extends Error {
   code;
   details;
@@ -12854,6 +12854,8 @@ async function readExecutionState(context) {
     epoch: tx.epoch
   }));
 }
+var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+var UNPARSEABLE_JSON = Symbol("unparseable-json");
 var SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
 class MilestoneError extends Error {
   code;
@@ -12869,7 +12871,7 @@ var fail = (code2, message) => {
 function guard(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
   if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7)
-    fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store safe-upgrade" first.');
+    fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store upgrade --operator <name>" first.');
   const active = db.prepare("select authority_state from store_meta where id=1").get();
   if (active?.authority_state !== "active")
     fail("store.not-active", "Milestone access requires an active store.");
@@ -12919,7 +12921,7 @@ function text4(value) {
 function readSource(spec) {
   let content3;
   try {
-    content3 = readFileSync20(spec.absolutePath, "utf8");
+    content3 = readFileSync19(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
@@ -12932,7 +12934,7 @@ function readSource(spec) {
       diagnostic: `inaccessible: read refused (${code2 === "" ? "unknown" : code2}) at ${spec.relativePath}`
     };
   }
-  return { state: "ok", sha256: createHash16("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
+  return { state: "ok", sha256: createHash14("sha256").update(content3, "utf8").digest("hex"), content: content3, diagnostic: null };
 }
 var CATALOG_ROOT_KINDS = {
   repository: true,
@@ -13240,12 +13242,12 @@ async function captureExecutionProjectionSources(context) {
     const diagnostics = [];
     const rows = { workflows: [], plans: [], leases: [], compasses: [] };
     const recordInvalid = (sourceSpec, content3, message, readState = "ok") => {
-      const sha2564 = readState === "invalid" ? null : createHash16("sha256").update(content3, "utf8").digest("hex");
+      const sha2564 = readState === "invalid" ? null : createHash14("sha256").update(content3, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "invalid", diagnostic: message, declared: true });
       diagnostics.push({ sourceKey: sourceSpec.sourceKey, reason: "invalid", message });
     };
     const record = (sourceSpec, content3, shaText = content3) => {
-      const sha2564 = createHash16("sha256").update(shaText, "utf8").digest("hex");
+      const sha2564 = createHash14("sha256").update(shaText, "utf8").digest("hex");
       sources.push({ sourceKey: sourceSpec.sourceKey, kind: sourceSpec.kind, rootKind: sourceSpec.rootKind, relativePath: sourceSpec.relativePath, sha256: sha2564, state: "ok", diagnostic: null, declared: sourceSpec.declared });
     };
     const spec = (kind, rel) => ({
@@ -13400,7 +13402,7 @@ async function captureExecutionProjectionSources(context) {
       rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text4(servedLease.holder), worktreePath: text4(servedLease.worktree_path), expiresAt: text4(servedLease.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
-      const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join33(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
+      const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
       const read = readSource(fspec);
       if (read.state !== "ok" || read.content === null) {
         sources.push({ sourceKey: fspec.sourceKey, kind: "compass", rootKind: fspec.rootKind, relativePath: fspec.relativePath, sha256: read.sha256, state: read.state, diagnostic: read.diagnostic, declared: true });
@@ -13480,7 +13482,7 @@ async function captureFileProjectionSources(context) {
     kind: "root",
     rootKind: "harness",
     relativePath: PROJECTION_ROOT_FILE,
-    absolutePath: join33(harness, PROJECTION_ROOT_FILE),
+    absolutePath: join30(harness, PROJECTION_ROOT_FILE),
     declared: true
   };
   const rootRead = readSource(rootSpec);
@@ -13505,22 +13507,22 @@ async function captureFileProjectionSources(context) {
       kind: "workflow",
       rootKind: "harness",
       relativePath,
-      absolutePath: join33(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join30(harness, entry.dir, WORKFLOW_SNAPSHOT_FILE),
       declared: true
     };
   });
-  for (const binding of inputs.bindings) {
-    if (declaredIds.has(binding.workflowId))
+  for (const binding2 of inputs.bindings) {
+    if (declaredIds.has(binding2.workflowId))
       continue;
-    const root = catalogRootDir(context, binding.rootKind);
-    const relativePath = `${binding.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
+    const root = catalogRootDir(context, binding2.rootKind);
+    const relativePath = `${binding2.relativePath}/${WORKFLOW_SNAPSHOT_FILE}`;
     workflowSpecs.push({
       source: "file",
-      sourceKey: sourceKeyOf2("workflow", binding.rootKind, relativePath),
+      sourceKey: sourceKeyOf2("workflow", binding2.rootKind, relativePath),
       kind: "workflow",
-      rootKind: binding.rootKind,
+      rootKind: binding2.rootKind,
       relativePath,
-      absolutePath: join33(root, binding.relativePath, WORKFLOW_SNAPSHOT_FILE),
+      absolutePath: join30(root, binding2.relativePath, WORKFLOW_SNAPSHOT_FILE),
       declared: false
     });
   }
@@ -13547,7 +13549,7 @@ async function captureFileProjectionSources(context) {
       kind: "compass",
       rootKind: doc.rootKind,
       relativePath: doc.relativePath,
-      absolutePath: join33(catalogRootDir(context, doc.rootKind), doc.relativePath),
+      absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath),
       declared: true
     };
     const read = readSource(spec);
@@ -13579,7 +13581,7 @@ function computeSourceSetHash(catalogRevision, sources) {
   const tuples = sources.map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\x00")).sort();
   const payload = [`projection-format:${PROJECTION_FORMAT_VERSION}`, `catalog-revision:${catalogRevision}`, ...tuples].join(`
 `);
-  return createHash16("sha256").update(payload, "utf8").digest("hex");
+  return createHash14("sha256").update(payload, "utf8").digest("hex");
 }
 var PROJECTION_TABLES = [
   "projection_sources",
@@ -13591,7 +13593,7 @@ var PROJECTION_TABLES = [
 function assertProjectionTables(handle) {
   const row = handle.db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'").get();
   if (!row?.n) {
-    throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Apply the pending migrations through the store safe-upgrade path (mstar store safe-upgrade) and retry; nothing was projected.`);
+    throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Import legacy execution state and apply pending schemas with "mstar store upgrade --operator <name>", then retry; nothing was projected.`);
   }
 }
 function readProjectionMeta(db) {
@@ -13954,7 +13956,7 @@ async function withStoreRead(context, query) {
       }
       const projectionTable = db.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'").get();
       if (!projectionTable?.n) {
-        throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Apply the pending migrations through the store safe-upgrade path (mstar store safe-upgrade) and retry; nothing was read.`);
+        throw new ProjectionError("projection.schema-outdated", `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). Import legacy execution state and apply pending schemas with \`mstar store upgrade --operator <name>\`, then retry; nothing was read.`);
       }
       const projection = readProjectionBlock(db);
       const data = query.run(handle);

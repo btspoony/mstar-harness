@@ -418,10 +418,20 @@ export type CoordinationIdentityRecovery = {
 };
 
 
+export type CoordinationSelfAmendment = {
+  at: string;
+  session_id: string;
+  old_sha256: string;
+  new_sha256: string;
+  operation_id: string;
+  prepared_by_matches?: boolean;
+};
+
 /** Snapshot-level coordination block. */
 export type SnapshotCoordination = {
   coordinator: CoordinatorBinding;
   identity_recoveries?: CoordinationIdentityRecovery[];
+  self_amendments?: CoordinationSelfAmendment[];
 };
 
 /** Row-level coordination block (one plan). */

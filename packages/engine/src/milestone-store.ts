@@ -17,7 +17,7 @@ export class MilestoneError extends Error { readonly code: MilestoneErrorCode; c
 const fail = (code: MilestoneErrorCode, message: string): never => { throw new MilestoneError(code, message); };
 function guard(db: StoreDb): void {
   const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
-  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store safe-upgrade" first.');
+  if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) fail("milestone.schema-outdated", 'Milestones require schema 7; run "mstar store upgrade --operator <name>" first.');
   const active = db.prepare("select authority_state from store_meta where id=1").get() as { authority_state?: string } | undefined;
   if (active?.authority_state !== "active") fail("store.not-active", "Milestone access requires an active store.");
 }

@@ -51,7 +51,7 @@ Git-derived checks derive the main worktree, the branch and clean-state facts fr
 
 ## 4. Identity and the execution authority
 
-A harness has two separate authority records: `store_meta.authority_state` governs issue/catalog operations, while `execution_meta.authority_state` selects the coordination route. Use `mstar status validate` to discriminate. Its `state` is `active`, `legacy`, or `unreadable`. Only `active` supports normal coordinated operations; `legacy` provides the upgrade entry resolved per observed files (an existing store uses `mstar store safe-upgrade`; legacy files without a store use `mstar store init` followed by `mstar store safe-upgrade`); `unreadable` reports what could not be read and how to make it readable.
+A harness has two separate authority records: `store_meta.authority_state` governs issue/catalog operations, while `execution_meta.authority_state` selects the coordination route. Use `mstar status validate` to discriminate. Its `state` is `active`, `legacy`, or `unreadable`. Only `active` supports normal coordinated operations; for `legacy`, the supported one-command upgrade is `mstar store upgrade --operator <name>`, which opens or creates the store and imports recognizable execution records; `unreadable` reports what could not be read and how to make it readable.
 
 On `active`, writes use the independently acquired caller identity, the addressed scope's full execution token, and an operation id. The session reference names a stored session row; it is not a bearer credential.
 

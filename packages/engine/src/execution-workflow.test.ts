@@ -1640,30 +1640,6 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
         release_operation_id: "op-release-recovered-claim" },
     ]);
   });
-  test("released-claim: staged release refusal names the operator safe-upgrade route and prerequisites", async () => {
-    const fixture = await workflowFixture("release-staged-guidance");
-    const planRead = await readExecutionPlan(
-      domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID,
-    );
-    const before = await workflowFootprint(fixture.context);
-    withRaw(fixture.context, (db) => {
-      db.prepare("update execution_meta set authority_state = 'staged' where id = 1").run();
-    });
-    const refusal = await refusalOf(() =>
-      mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
-        operationId: "op-release-staged",
-        session: fixture.coordinator,
-        expected: planRead.token,
-        planId: PLAN_ID,
-        operation: { kind: "release" },
-      }),
-    );
-    expect(refusal.code).toBe("execution.not-active");
-    withRaw(fixture.context, (db) => {
-      db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
-    });
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
-  });
   test("recovery adopts only the ownership the revocation it names orphaned", async () => {
     const fixture = await workflowFixture("recovery-foreign-orphan");
     // An UNRELATED plan-pm holder that stopped while holding a plan lease in the

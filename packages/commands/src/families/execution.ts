@@ -2,21 +2,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   SddScriptError,
-  abortExecutionMigration,
-  activateExecutionMigration,
-  applyExecutionMigration,
-  collectExecutionCoverage,
   exportExecutionState,
-  previewExecutionMigration,
   previewExecutionRestore,
-  restoreExecutionBackup,
-  retireExecutionSources,
   resolveProcessHarnessDir,
-  type ActivationAttestation,
-  type BackupReceipt,
-  type ExecutionCoverageSet,
-  type ExecutionManifestDocument,
-  type ExecutionManifest,
+  restoreExecutionBackup,
   type ExecutionRecoveryPreview,
   type StoreContext,
 } from "@mstar-harness/engine";
@@ -25,14 +14,16 @@ import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../t
 import { commandEnvelopeSchema } from "../definitions.js";
 
 const inputSchema = z.object({
-  harness: z.string().optional(), operation: z.string().optional(), operator: z.string().optional(), inventory: z.string().optional(),
-  out: z.string().optional(), coverageOut: z.string().optional(), manifest: z.string().optional(), coverage: z.string().optional(),
-  backup: z.string().optional(), attestation: z.string().optional(), reason: z.string().optional(), preview: z.string().optional(),
+  harness: z.string().optional(),
+  out: z.string().optional(),
+  backup: z.string().optional(),
+  operator: z.string().optional(),
+  preview: z.string().optional(),
   authorization: z.string().optional(),
 });
 type ExecutionInput = z.infer<typeof inputSchema>;
-const verbs = ["preview", "apply", "activate", "retire", "abort", "restore-preview", "restore", "export"] as const;
-const writeVerbs: Record<string, true> = { apply: true, activate: true, retire: true, abort: true, restore: true };
+const verbs = ["restore-preview", "restore", "export"] as const;
+const writeVerbs: Record<string, true> = { restore: true };
 
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -85,122 +76,11 @@ function executionContext(input: ExecutionInput, invocation: InvocationContext, 
 function document<T>(value: string | undefined, flag: string): T {
   return readJson(value, flag) as T;
 }
-function reviewedInventory(manifest: ExecutionManifestDocument, input: ExecutionInput, verb: string): string | undefined {
-  const supplied = absolute(input.inventory, "--inventory", true);
-  const expected = "inventoryPath" in manifest && typeof manifest.inventoryPath === "string" ? manifest.inventoryPath : undefined;
-  if (supplied !== undefined && supplied !== expected) {
-    throw new SddScriptError(`${verb}: --inventory must match the manifest's reviewed discovery scope`, 2);
-  }
-  return expected;
-}
-async function coverageSet(
-  input: ExecutionInput,
-  manifest: ExecutionManifestDocument,
-  context: StoreContext,
-  operationId: string,
-  operator: string,
-  verb: string,
-): Promise<ExecutionCoverageSet> {
-  const inventoryPath = reviewedInventory(manifest, input, verb);
-  if (input.coverage === undefined) {
-    if (inventoryPath === undefined) {
-      throw new SddScriptError(
-        `${verb}: --coverage is needed for a control-root-only manifest because no inventory exists to derive non-control coverage`,
-        2,
-      );
-    }
-    return collectExecutionCoverage({
-      context,
-      operationId,
-      operator,
-      inventoryPath,
-      manifest: manifest as ExecutionManifest,
-    });
-  }
-  const supplied = document<ExecutionCoverageSet>(input.coverage, "--coverage");
-  // The supplied set is a constraint on the reviewed scope, not proof: the
-  // engine recomputes every receipt from the named bytes under its locks. Only
-  // the declared shape and the addressed manifest identity are checked here; a
-  // recorded digest is history and is never recomputed or compared.
-  if (supplied.version !== 1 || !Array.isArray(supplied.receipts) || typeof supplied.digest !== "string") {
-    throw new SddScriptError(`${verb}: --coverage is not an execution coverage set`, 2);
-  }
-  if (supplied.manifestId !== manifest.id) {
-    throw new SddScriptError(`${verb}: --coverage belongs to a different reviewed manifest`, 2);
-  }
-  return supplied;
-}
 
 async function execute(id: string, input: ExecutionInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   try {
     const verb = id.slice("store.execution.".length);
     const context = executionContext(input, invocation, `store execution ${verb}`);
-    if (verb === "preview") {
-      const operationId = required(input.operation, "--operation");
-      const operator = required(input.operator, "--operator");
-      const inventoryPath = absolute(input.inventory, "--inventory", true);
-      const out = absolute(input.out, "--out", true);
-      const coverageOut = absolute(input.coverageOut, "--coverage-out", true);
-      if (coverageOut !== undefined && inventoryPath === undefined) throw new SddScriptError("--coverage-out requires --inventory", 2);
-      const manifest = await previewExecutionMigration({ context, operationId, operator, ...(inventoryPath === undefined ? {} : { inventoryPath }) });
-      if (out !== undefined) writeFileSync(out, `${JSON.stringify(manifest, null, 2)}\n`);
-      let coverage: ExecutionCoverageSet | undefined;
-      if (coverageOut !== undefined && inventoryPath !== undefined) {
-        coverage = await collectExecutionCoverage({ context, operationId, operator, inventoryPath, manifest });
-        writeFileSync(coverageOut, `${JSON.stringify(coverage, null, 2)}\n`);
-      }
-      return ok(id, {
-        version: manifest.version, manifestId: manifest.id, storeId: manifest.storeId,
-        epoch: manifest.epoch, schemaVersion: manifest.schemaVersion, root: manifest.root, inventoryPath: manifest.inventoryPath ?? null,
-        sources: manifest.sources.length, surfaces: manifest.surfaces.length, deferred: manifest.deferred.length, manifestFile: out ?? null,
-        coverageFile: coverage === undefined ? null : coverageOut,
-      });
-    }
-    if (verb === "apply") {
-      requireInputs(input, ["operation", "operator", "manifest", "backup"]);
-      const operationId = required(input.operation, "--operation");
-      const operator = required(input.operator, "--operator");
-      const reviewed = document<ExecutionManifestDocument>(input.manifest, "--manifest");
-      if (reviewed.version !== 3) throw new SddScriptError("apply requires the version 3 execution manifest", 2);
-      const manifest = reviewed as ExecutionManifest;
-      const inventoryPath = reviewedInventory(manifest, input, verb);
-      const coverage = await coverageSet(input, manifest, context, operationId, operator, verb);
-      const backup = document<BackupReceipt>(input.backup, "--backup");
-      if (typeof backup.backupPath !== "string" || backup.backupPath.trim() === "") throw new SddScriptError("--backup must be the recovery-point receipt", 2);
-      const receipt = await applyExecutionMigration({ context, operationId, operator, ...(inventoryPath === undefined ? {} : { inventoryPath }), manifest, backup, coverage });
-      return ok(id, receipt);
-    }
-    if (verb === "activate") {
-      requireInputs(input, ["operation", "operator", "manifest", "attestation"]);
-      const operationId = required(input.operation, "--operation");
-      const operator = required(input.operator, "--operator");
-      const manifest = document<ExecutionManifestDocument>(input.manifest, "--manifest");
-      const inventoryPath = reviewedInventory(manifest, input, verb);
-      // The engine recomputes the coverage itself at the activation barrier and
-      // takes no set as an input; this call only validates the operator's
-      // reviewed `--coverage` argument (its declared shape, the manifest it
-      // names, and the control-root-only usage refusal) before any write.
-      await coverageSet(input, manifest, context, operationId, operator, verb);
-      const attestation = document<ActivationAttestation>(input.attestation, "--attestation");
-      const receipt = await activateExecutionMigration({ context, operationId, operator, ...(inventoryPath === undefined ? {} : { inventoryPath }), manifestId: manifest.id, expectedEpoch: manifest.epoch, attestation });
-      return ok(id, receipt);
-    }
-    if (verb === "retire") {
-      const operationId = required(input.operation, "--operation");
-      const operator = required(input.operator, "--operator");
-      const manifest = document<ExecutionManifestDocument>(input.manifest, "--manifest");
-      const inventoryPath = reviewedInventory(manifest, input, verb);
-      const receipt = await retireExecutionSources({ context, operationId, operator, ...(inventoryPath === undefined ? {} : { inventoryPath }), manifestId: manifest.id });
-      return ok(id, receipt);
-    }
-    if (verb === "abort") {
-      const operationId = required(input.operation, "--operation");
-      const operator = required(input.operator, "--operator");
-      const reason = required(input.reason, "--reason");
-      const manifest = document<ExecutionManifestDocument>(input.manifest, "--manifest");
-      const receipt = await abortExecutionMigration({ context, operationId, operator, manifestId: manifest.id, reason });
-      return ok(id, receipt);
-    }
     if (verb === "restore-preview") {
       const backupPath = absolute(required(input.backup, "--backup"), "--backup")!;
       const preview = await previewExecutionRestore(context, backupPath);
@@ -229,18 +109,28 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
 }
 
 function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {
-  const verb = id.slice("store.execution.".length);
+  const verb = id.slice("store.execution.".length) as (typeof verbs)[number];
   const flags: Record<keyof ExecutionInput, string> = {
-    harness: "--harness <path>", operation: "--operation <id>", operator: "--operator <name>", inventory: "--inventory <path>",
-    out: "--out <path>", coverageOut: "--coverage-out <path>", manifest: "--manifest <path>", coverage: "--coverage <path>",
-    backup: "--backup <path>", attestation: "--attestation <path>", reason: "--reason <text>", preview: "--preview <path>",
-    authorization: "--authorization <ref>",
+    harness: "--harness <path>", out: "--out <path>", backup: "--backup <path>", operator: "--operator <name>",
+    preview: "--preview <path>", authorization: "--authorization <ref>",
   };
-  const options = Object.keys(inputSchema.shape).map((key) => ({ key, flags: flags[key as keyof ExecutionInput]!, required: false }));
+  const optionsByVerb: Record<(typeof verbs)[number], (keyof ExecutionInput)[]> = {
+    "restore-preview": ["harness", "backup", "out"],
+    restore: ["harness", "operator", "authorization", "preview", "out"],
+    export: ["harness", "out"],
+  };
+  const optionKeys = optionsByVerb[verb];
+  const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof ExecutionInput]?: true };
+  const options = optionKeys.map((key) => ({ key, flags: flags[key], required: false }));
   return {
-    id, cli: { path: ["store", "execution", verb], aliases: [], arguments: [], options }, input: inputSchema,
-    output: commandEnvelopeSchema, effects: writeVerbs[verb] === true ? ["read", "write"] : verb === "preview" ? ["read", "write"] : ["read"],
-    description: `Store execution ${verb} operation; engine enforces reviewed migration and recovery barriers.`,
+    id,
+    cli: { path: ["store", "execution", verb], aliases: [], arguments: [], options },
+    input: inputSchema.pick(shape),
+    output: commandEnvelopeSchema,
+    effects: writeVerbs[verb] === true ? ["read", "write"] : ["read"],
+    description: verb === "export"
+      ? "Export the current execution state as a canonical reporting artifact."
+      : `Store execution ${verb} from a standalone store backup.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }

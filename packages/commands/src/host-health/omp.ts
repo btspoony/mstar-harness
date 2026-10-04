@@ -49,7 +49,7 @@ export function findInstalledPlugin(plugins: Array<Record<string, unknown>>) {
   return plugins.find(isMorningStarPluginEntry);
 }
 
-function validatePluginTree(pluginRoot: string): string[] {
+function validatePluginTree(pluginRoot: string, installed = false): string[] {
   const errors: string[] = [];
   const markerPath = path.join(pluginRoot, "plugin.json");
   if (!fs.existsSync(markerPath)) errors.push(`Missing omp plugin marker: ${markerPath}`);
@@ -60,6 +60,23 @@ function validatePluginTree(pluginRoot: string): string[] {
   for (const command of COMMAND_SMOKE) {
     const commandPath = path.join(pluginRoot, "commands", `${command}.md`);
     if (!fs.existsSync(commandPath)) errors.push(`Missing command: ${commandPath}`);
+  }
+  const identityExtension = path.join(pluginRoot, ...(installed ? ["extensions", "mcp-identity.js"] : ["src", "extensions", "mcp-identity.ts"]));
+  if (!fs.existsSync(identityExtension)) {
+    errors.push(
+      `Missing omp MCP session identity injection extension: ${identityExtension}. Update @mstar-harness/omp and enable its mcp-identity extension; ACTIVE workflow registration requires the host to supply sessionId on each MCP call.`,
+    );
+  }
+  const packageManifest = path.join(pluginRoot, "package.json");
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageManifest, "utf8")) as { omp?: { extensions?: unknown } };
+    if (!Array.isArray(pkg.omp?.extensions) || !pkg.omp.extensions.includes("./extensions/mcp-identity.js")) {
+      errors.push(
+        `omp MCP session identity injection is not registered in ${packageManifest}. Update @mstar-harness/omp so its mcp-identity extension supplies sessionId for ACTIVE workflow registration.`,
+      );
+    }
+  } catch {
+    errors.push(`Cannot verify omp MCP session identity extension registration in ${packageManifest}; update @mstar-harness/omp.`);
   }
   const hostRef = path.join(pluginRoot, "skills", "mstar-host", "references", "omp.md");
   if (!fs.existsSync(hostRef)) errors.push(`Missing omp host reference: ${hostRef}`);
@@ -78,12 +95,18 @@ export type OmpDoctorInput = {
 /** Assemble read-only omp doctor findings from host artifacts and CLI probe results. */
 export function diagnoseOmpHost(input: OmpDoctorInput): { location: string; errors: string[] } {
   const errors = [...input.localHarnessRepoErrors];
-  errors.push(...validatePluginTree(path.join(input.harnessRepoPath, "packages", "omp")));
+  const installed = findInstalledPlugin(input.installedPlugins);
+  if (installed === undefined) {
+    errors.push(...validatePluginTree(path.join(input.harnessRepoPath, "packages", "omp")));
+  } else if (typeof installed.path === "string" && installed.path.trim() !== "") {
+    errors.push(...validatePluginTree(path.resolve(installed.path), true));
+  } else {
+    errors.push("Morning Star omp plugin is listed as installed but has no usable path; verify `omp plugin list` or reinstall the plugin.");
+  }
 
   if (!input.ompAvailable) {
     errors.push("omp CLI not found on PATH (required for omp target doctor checks).");
   } else {
-    const installed = findInstalledPlugin(input.installedPlugins);
     if (!installed) {
       errors.push(
         `Morning Star plugin not found in \`omp plugin list\` (expected one of: ${Object.keys(PACKAGE_NAMES).join(", ")}). Run: mstar-harness init --target omp --scope ${input.scope}`,

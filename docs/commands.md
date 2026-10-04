@@ -6,6 +6,12 @@ Two boundaries hold across the page. All seven are **user entry points** — a c
 
 For project roadmap content, use the CLI `mstar roadmap` family (not a slash command): show, reviewed import, revision-guarded replace and transport export. The authoring/read/write rules live only in `mstar-project-governance`; `mstar-use-cli` indexes the family and the built command's `--help` owns its options.
 
+## Store CLI upgrade and recovery
+
+`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing legacy workflow state. It creates or opens the local store, imports recognizable records, activates execution authority, and reports unrecognized or unresolvable items without moving them from their original paths. The import is intended for a stopped, disposable local workspace; it is not an online production cutover.
+
+The remaining `store` verbs are `init`, `migrate`, `backup`, `activate`, and `retire`. `migrate` / `activate` / `retire` remain the separate issue/catalog migration flow. The only remaining `store execution` verbs are `restore-preview`, `restore`, and `export`: restore previews and restores use a standalone `store backup` image; export reports the current execution state. Staged execution preview/apply/activate/retire/abort and the safe-upgrade verb are removed.
+
 | Command | Purpose | Owning skill |
 |---------|---------|--------------|
 | [`/iteration-start`](#iteration-start) | Start an iteration: interactive direction lock, then the full lifecycle | `mstar-iteration` |
