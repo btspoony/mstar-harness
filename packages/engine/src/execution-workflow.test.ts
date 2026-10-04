@@ -1909,7 +1909,7 @@ describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
         qa: { gate: "mandatory", decision: "pass", report },
       } },
     });
-    const handoffId = submitted.data.coordination.handoff!.id;
+    const handoffId = submitted.data.coordination!.handoff!.id;
     await mutateExecutionPlan(coordinatorContext, {
       operationId: "op-accept-transfer", session: fixture.coordinator, planId: PLAN_ID,
       operation: { kind: "accept", handoffId },
