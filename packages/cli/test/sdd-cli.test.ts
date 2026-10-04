@@ -253,7 +253,7 @@ describe("mstar sdd task-brief — extract `## Task N` sections", () => {
     }
   });
 
-  test("missing task N → exit 3, zero-write (no outfile, no default SDD dir)", () => {
+  test("missing task N → exit 3, outfile not created (zero-write; default-dir case covered by engine suite)", () => {
     const root = tmpRoot("mstar-sdd-brief-");
     try {
       const planFile = join(root, "plan.md");
