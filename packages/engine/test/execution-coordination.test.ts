@@ -280,6 +280,24 @@ async function seededWorkflow(label: string): Promise<Fixture> {
  * ------------------------------------------------------------------------ */
 
 describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorization", () => {
+  test("legacy-only repair reports its file-backed route instead of unknown-operation", async () => {
+    const fixture = await seededWorkflow("boundary-legacy-only-operation");
+    const before = footprint(fixture.context);
+    await expect(
+      mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+        operationId: "legacy-only-repair",
+        session: fixture.coordinator,
+        expected: (await readExecutionState(fixture.context)).data.workflows[0]!.planTokens[OWN_PLAN]!,
+        planId: OWN_PLAN,
+        operation: { kind: "repair-delivery-source", handoffId: "handoff-test" },
+      } as never),
+    ).rejects.toMatchObject({
+      code: "coordination.legacy-only-operation",
+      message: expect.stringContaining("mstar plan repair-delivery-source"),
+    });
+    expect(footprint(fixture.context)).toEqual(before);
+  });
+
   test("refuses a forged caller or role and a sibling plan without running the operation", async () => {
     const fixture = await seededWorkflow("boundary-scope");
     const { context, planTokens, coordinator, planPm, coordinatorCaller, planPmCaller } = fixture;
