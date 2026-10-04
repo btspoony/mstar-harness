@@ -976,7 +976,7 @@ describe("mstar status validate — disclosed authority state", () => {
       path: join(legacy.harnessDir, "status.json"),
       violations: [],
       state: "legacy",
-      upgrade: { entry: "mstar store safe-upgrade" },
+      upgrade: { entry: "mstar store upgrade --operator <name>" },
     });
     const legacyWithoutStore = await legacyFixture("mstar-session-legacy-without-store");
     rmSync(join(legacyWithoutStore.harnessDir, "store.db"));
@@ -991,7 +991,7 @@ describe("mstar status validate — disclosed authority state", () => {
       code: "status.workflow.snapshot-missing",
       details: {
         state: "legacy",
-        upgrade: { entry: "mstar store init → mstar store safe-upgrade" },
+        upgrade: { entry: "mstar store upgrade --operator <name>" },
       },
     });
     const missing = await legacyFixture("mstar-session-missing-status");
@@ -1001,10 +1001,10 @@ describe("mstar status validate — disclosed authority state", () => {
     expect(jsonOf(missingResult)).toMatchObject({
       details: {
         state: "legacy",
-        upgrade: { entry: "mstar store safe-upgrade" },
+        upgrade: { entry: "mstar store upgrade --operator <name>" },
         selfCheck: {
           couldNotRead: "legacy status register is missing",
-          recovery: expect.stringContaining("legacy upgrade path exists"),
+          recovery: "Run `mstar store upgrade --operator <name>` to create or upgrade the store, import recognizable workflows, and report skipped items without moving their source files.",
         },
       },
     });
@@ -1017,8 +1017,8 @@ describe("mstar status validate — disclosed authority state", () => {
       code: "status.file-not-found",
       details: {
         state: "legacy",
-        upgrade: { entry: "mstar harness scaffold" },
-        selfCheck: { recovery: expect.stringContaining("run mstar harness scaffold") },
+        upgrade: { entry: "mstar store upgrade --operator <name>" },
+        selfCheck: { recovery: expect.stringContaining("mstar store upgrade --operator <name>") },
       },
     });
     const scaffoldResult = runCli(["harness", "scaffold"], empty);
@@ -1146,7 +1146,7 @@ describe("workflow.register — state-aware transport refusals", () => {
     const legacyResponse = jsonOf(legacyResult);
     expect(legacyResponse.code).toBe("execution.not-active");
     expect(legacyResponse.message).toContain("state: legacy");
-    expect(legacyResponse.message).toContain("mstar store safe-upgrade");
+    expect(legacyResponse.message).toContain("mstar store upgrade --operator <name>");
     expect(legacyResponse.message).not.toContain(activeAuthority.token);
     expect(readFileSync(legacyDb).equals(legacyBefore)).toBe(true);
 

@@ -247,20 +247,15 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "roadmap.show": unverified("show roadmap content", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   "roadmap.export": unverified("export the roadmap", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   // store family
-  "store.init": unverified("initialize an empty workspace store", "requires an empty workspace fixture; the legacy-state refusal family is covered by the store.safe-upgrade witness"),
-  "store.migrate": unverified("stage a legacy migration", "requires manifests, coverage sets and recovery receipts; deferred to the versioned scenario set"),
-  "store.safe-upgrade": witnessed("a retirement failure refuses with a generic envelope that exposes no partial-applied facts; persisted state alone evidences the partial application; replay completes within budget", "partial-application-replay (2 calls; envelope-to-partial-state agreement unverified — asserted not exposed)", "warm", 2, "partial-application-then-resolved"),
+  "store.init": unverified("initialize an empty workspace store", "requires an empty workspace fixture; the legacy-state refusal family is covered by the store.upgrade path"),
+  "store.upgrade": unverified("one-command static import of legacy execution state", "covered by packages/commands/src/families/store.test.ts"),
+  "store.migrate": unverified("plan or apply a catalog migration", "requires manifests and catalog fixtures; independent of execution upgrade"),
   "store.backup": unverified("back up the store", "requires an initialized store fixture; deferred to the versioned scenario set"),
-  "store.activate": unverified("activate store authority", "requires staged authority state; no in-package fixture"),
-  "store.retire": unverified("retire store sources", "requires staged authority state; no in-package fixture"),
-  "store.execution.preview": unverified("preview an execution migration", "requires a staged manifest and coverage set; deferred to the versioned scenario set"),
-  "store.execution.apply": unverified("apply an execution migration", "requires a staged manifest, backup receipt and coverage set; deferred to the versioned scenario set"),
-  "store.execution.activate": unverified("activate an execution migration", "requires staged migration state; deferred to the versioned scenario set"),
-  "store.execution.retire": unverified("retire execution sources", "requires staged migration state; deferred to the versioned scenario set"),
-  "store.execution.abort": unverified("abort an execution migration", "requires staged migration state; deferred to the versioned scenario set"),
-  "store.execution.restore-preview": unverified("preview a recovery-point restore", "requires a recovery-point receipt; deferred to the versioned scenario set"),
-  "store.execution.restore": unverified("restore from a recovery point", "requires a recovery-point receipt and operator authorization; deferred to the versioned scenario set"),
-  "store.execution.export": unverified("export execution state", "requires an active execution authority; deferred to the versioned scenario set"),
+  "store.activate": unverified("activate a catalog migration", "requires an applied catalog manifest and attestation; no in-package fixture"),
+  "store.retire": unverified("retire catalog migration sources", "requires an activated catalog migration; no in-package fixture"),
+  "store.execution.restore-preview": unverified("preview restoring a plain store backup", "requires a standalone store backup fixture; covered in store-execution.test.ts"),
+  "store.execution.restore": unverified("restore from a plain store backup", "requires a standalone store backup and operator authorization; covered in store-execution.test.ts"),
+  "store.execution.export": unverified("export live execution state", "reporting utility over live state; covered in store-execution.test.ts"),
   // sdd family
   "sdd.workspace": unverified("bootstrap an SDD workspace", "requires plan/iteration artifacts; no in-package fixture"),
   "sdd.task-brief": unverified("emit a task brief", "requires SDD workspace state; no in-package fixture"),
@@ -428,47 +423,6 @@ function persistContext(): { root: string; harness: string; context: InvocationC
   return { root, harness, context: testContext(root) };
 }
 
-function legacyWorkspace(harness: string): void {
-  const workflowId = "bounded-resolution-fixture-workflow";
-  const workflowDir = join(harness, "workflows", workflowId);
-  mkdirSync(workflowDir, { recursive: true });
-  writeFileSync(join(harness, "status.json"), JSON.stringify({
-    version: 2,
-    updated_at: "2026-09-30",
-    workflows: [{ id: workflowId, type: "plan", started_at: "2026-09-30", dir: `workflows/${workflowId}` }],
-  }));
-  writeFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
-    schema_version: 1,
-    id: workflowId,
-    type: "plan",
-    status: "running",
-    started_at: "2026-09-30",
-    updated_at: "2026-09-30",
-    delivery_kind: "development",
-    project: "_default",
-    branch: { source: "feature/bounded-fixture", target: "main" },
-    plans: [{ id: `${workflowId}-plan`, title: "Bounded fixture", file: "plan.md", status: "Todo", metadata: {} }],
-  }));
-}
-
-// Synthetic attestation for the local store fixture; it authorizes nothing
-// outside this temp directory (controlled setup only).
-const fixtureAttestation = {
-  version: 1,
-  attestedAt: "2026-09-30T00:00:00.000Z",
-  operator: { actor: "fixture-operator", authorizationRef: "fixture-only-activation" },
-  consumers: [{
-    entryId: "fixture-coordinator",
-    kind: "coordinator",
-    entrypoint: "/fixture/commands",
-    runtime: "bun",
-    runtimeVersion: "1.4.0",
-    version: "fixture",
-    current: true,
-    disposition: "reloaded",
-  }],
-  stoppedSessions: [],
-};
 
 function writeLeaseSnapshot(harness: string, workflowId: string, plans: unknown[]): void {
   const workflowDir = join(harness, "workflows", workflowId);
@@ -817,80 +771,6 @@ describe("lease witness", () => {
   });
 });
 
-describe("store.safe-upgrade partial-application witness", () => {
-  test("a retirement failure leaves a partially applied state; replay completes within the budget", async () => {
-    const root = mkdtempSync(join(tmpdir(), "bounded-store-"));
-    roots.push(root);
-    const harness = join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    legacyWorkspace(harness);
-    await (await initializeStore({ harnessDir: harness })).close();
-    const attestation = join(root, "attestation.json");
-    writeFileSync(attestation, `${JSON.stringify(fixtureAttestation)}\n`);
-    const interaction: Interaction = {
-      label: "upgrade with replay",
-      context: "warm",
-      extraDependency: "",
-      calls: [],
-    };
-
-    // Call 1 fails at the induced retirement stage — after the activation has
-    // committed and the legacy files were renamed away. The envelope is the
-    // unclassified-failure refusal (the induced error carries no producer
-    // code) and carries NO partial-applied facts.
-    useEnv({ MSTAR_STORE_TEST_RUNNER: "1", MSTAR_STORE_FAIL_EXECUTION_RETIREMENT: "after-rename" });
-    const first = await countedCall(interaction, "execute", "store.safe-upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
-    expect(first).toMatchObject({ status: "refused", code: "store.safe-upgrade.unexpected-failure", exitCode: 1 });
-    // Surface limitation, asserted: the first envelope exposes no receipt or
-    // diagnostic of what applied, so envelope-to-partial-state agreement is
-    // unverifiable — the persisted state below is the only partial evidence,
-    // and the refusal itself proves non-completion.
-    expect(first.details).toBeUndefined();
-    delete process.env.MSTAR_STORE_FAIL_EXECUTION_RETIREMENT;
-
-    // The on-disk state is partially applied: the archive exists and the
-    // authority flipped, but the migration has not retired. Receipt and disk
-    // must agree — this is partial-write accounting, not completion.
-    expect(existsSync(join(harness, "archived", "execution"))).toBe(true);
-    const partial = await openStore({ harnessDir: harness }, "read");
-    try {
-      expect(partial.execution?.authorityState).toBe("active");
-      const row = partial.db.prepare("select phase from execution_migrations").get() as { phase: string }; // migration ledger row written by the engine
-      expect(row.phase).not.toBe("retired");
-    } finally {
-      partial.close();
-    }
-
-    // Call 2 (replay) resumes and completes.
-    const second = await countedCall(interaction, "execute", "store.safe-upgrade", { harness, operator: "fixture-operator", attestation }, testContext(root));
-    expect(second.status).toBe("ok");
-    if (second.status === "ok") {
-      expect(second.data).toMatchObject({ verdict: "upgraded", authorityState: "active", sourcesRetired: true });
-    }
-    expect(existsSync(join(harness, "status.json"))).toBe(false);
-    const done = await openStore({ harnessDir: harness }, "read");
-    try {
-      expect(done.execution?.authorityState).toBe("active");
-      expect(done.db.prepare("select phase from execution_migrations").get()).toEqual({ phase: "retired" });
-    } finally {
-      done.close();
-    }
-
-    // Two counted calls; the instruction completed only after the replay.
-    // receiptsMatchStore covers ONLY the replay receipt (sourcesRetired +
-    // retired phase + status.json gone); the first envelope exposes no
-    // receipt, so its agreement is carried as explicitly unverified below.
-    const verdict = audit(interaction, {
-      unvalidatedMutation: false,
-      refusalBypassed: false,
-      receiptsMatchStore: true,
-      receiptUnverifiableLegs: ["upgrade attempt (refused; no receipt or partial-applied facts exposed)"],
-      complete: true,
-    });
-    expect(verdict).toMatchObject({ compliant: true, countedCalls: 2 });
-    expect(verdict.unverifiedReceiptLegs).toEqual(["upgrade attempt (refused; no receipt or partial-applied facts exposed)"]);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Call-depth controls

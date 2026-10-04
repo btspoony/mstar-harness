@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 
 /** Minimum Bun runtime floor (contract §8). */
@@ -176,14 +176,19 @@ function loadSqliteDriverSync(): SqliteModule {
 }
 
 /** `{resolved process/control harness root}/store.db` via
- * `resolveProcessHarnessDir` (contract §2): linked feature worktrees and
- * `.mstarc` resolvers cannot select a cwd-local database. An isolated
- * non-git directory (test harness root) falls back to the supplied path. */
+ * `resolveProcessHarnessDir` for Git worktrees. A supplied non-Git harness
+ * directory is already an explicit root; do not mistake its own `plans/`
+ * child for a nested harness. */
 export function storeDbPath(context: { harnessDir: string }): string {
   if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
   const start = resolve(context.harnessDir);
+  // Keep the linked-checkout failure closed; the resolver throws when Git's
+  // main worktree cannot be determined from a linked worktree.
   const resolved = resolveProcessHarnessDir(start);
-  return join(resolved ?? start, "store.db");
+  const relativeRoot = resolved === null ? "" : relative(start, resolved);
+  const nestedHarness = relativeRoot !== "" && relativeRoot !== ".." &&
+    !relativeRoot.startsWith(`..${sep}`) && !relativeRoot.startsWith(sep);
+  return join(nestedHarness ? start : resolved ?? start, "store.db");
 }
 
 /** Bounded wait is fixed at 5000ms in production (contract §2). The

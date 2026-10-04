@@ -65,7 +65,7 @@ function authorityRecoveryHint(code: string): string {
   if (code === "store.runtime-unsupported") return "Run with a supported Bun or Node runtime with native SQLite support, then retry `status validate`.";
   if (code === "store.schema-unsupported") return "Use a harness build that supports this store schema, then retry `status validate`.";
   if (code === "store.schema-drift") return "Use the harness build that owns the applied schema and retry `status validate`.";
-  if (code === "execution.not-active") return "Complete the supported `store safe-upgrade` workflow, then retry `status validate`.";
+  if (code === "execution.not-active") return "Run `mstar store upgrade --operator <name>` to import legacy state and activate authority, then retry `status validate`.";
   return "Restore the store file, schema, or runtime capability indicated by the cause, then retry `status validate`.";
 }
 
@@ -108,20 +108,11 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         try {
           const defaultTarget = parsed.data.path === undefined;
           let target = parsed.data.path;
-          let legacyUpgradeEntry = "mstar store safe-upgrade";
-          let legacyUpgradeDetails: { entry: string; limitation?: string } = { entry: legacyUpgradeEntry };
+          const legacyUpgradeEntry = "mstar store upgrade --operator <name>";
+          const legacyUpgradeDetails: { entry: string; limitation?: string } = { entry: legacyUpgradeEntry };
           if (defaultTarget) {
             const harnessDir = executionHarness(context);
             if (harnessDir === null) return refused("status.validate", "status.harness-not-found", "Harness directory not found");
-            const hasIssueStore = existsSync(path.join(harnessDir, "store.db"));
-            const statusPath = path.join(harnessDir, "status.json");
-            const hasLegacyStatus = existsSync(statusPath);
-            legacyUpgradeEntry = hasIssueStore
-              ? "mstar store safe-upgrade"
-              : hasLegacyStatus
-                ? "mstar store init → mstar store safe-upgrade"
-                : "mstar harness scaffold";
-            legacyUpgradeDetails = { entry: legacyUpgradeEntry };
             try {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {
@@ -157,11 +148,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                 upgrade: legacyUpgradeDetails,
                 selfCheck: {
                   couldNotRead: "legacy status register is missing",
-                  recovery: legacyUpgradeEntry === "mstar harness scaffold"
-                    ? "No issue store or legacy status exists; run mstar harness scaffold to initialize this empty workspace."
-                    : legacyUpgradeEntry === "mstar store init → mstar store safe-upgrade"
-                      ? "A legacy status register exists without an issue store; first run mstar store init, then run mstar store safe-upgrade with its required inputs."
-                      : "The legacy upgrade path exists; run mstar store safe-upgrade after supplying its required inputs.",
+                  recovery: "Run `mstar store upgrade --operator <name>` to create or upgrade the store, import recognizable workflows, and report skipped items without moving their source files.",
                 },
               });
             }

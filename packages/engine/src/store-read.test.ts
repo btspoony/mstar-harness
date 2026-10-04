@@ -577,7 +577,7 @@ describe("milestone views", () => {
     });
     const failure = await withStoreRead(context, queryMilestones("proj-a")).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: "milestone.schema-outdated" });
-    expect((failure as Error).message).toContain("mstar store safe-upgrade");
+    expect((failure as Error).message).toContain("mstar store upgrade --operator <name>");
     await expect(withStoreRead(context, queryDashboard("roadmap", { projectId: "proj-a" }))).rejects.toMatchObject({
       code: "milestone.schema-outdated",
     });
@@ -769,7 +769,7 @@ describe("read envelope and transaction", () => {
     });
     const failure = await withStoreRead(context, queryDashboard("issues")).catch((error: unknown) => error);
     expect(failure).toMatchObject({ code: "projection.schema-outdated" });
-    expect((failure as Error).message).toContain("mstar store safe-upgrade");
+    expect((failure as Error).message).toContain("mstar store upgrade --operator <name>");
   });
 
   test("request shapes outside the contract are usage refusals, not empty pages", async () => {

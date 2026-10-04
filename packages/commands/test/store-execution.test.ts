@@ -67,13 +67,12 @@ async function storeSnapshot(harnessDir: string): Promise<{ revision: number; ep
 }
 
 describe("store and execution command surface", () => {
-  test("registers the six store and eight store execution identities", () => {
+  test("registers six surviving store verbs and three independent execution utilities", () => {
     expect(getStoreCommandDefinitions().map(({ id }) => id)).toEqual([
-      "store.init", "store.migrate", "store.safe-upgrade", "store.backup", "store.activate", "store.retire",
+      "store.init", "store.upgrade", "store.migrate", "store.backup", "store.activate", "store.retire",
     ]);
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
-      "store.execution.preview", "store.execution.apply", "store.execution.activate", "store.execution.retire",
-      "store.execution.abort", "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
+      "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
     ]);
   });
 
@@ -97,9 +96,9 @@ describe("store and execution command surface", () => {
     expect(dataOf(migrate).blocksApply).toBe(false);
     expect(dataOf(migrate).manifestFile).toBe(null);
 
-    const upgraded = await invoke(definition("store.safe-upgrade"), { harness }, root);
+    const upgraded = await invoke(definition("store.upgrade"), { harness, operator: "fixture-operator" }, root);
     expect(upgraded.status).toBe("ok");
-    expect(typeof dataOf(upgraded).schemaVersion).toBe("number");
+    expect(dataOf(upgraded)).toMatchObject({ verdict: "upgraded", authorityState: "active" });
 
     const backup = await invoke(definition("store.backup"), { harness, out: join(root, "recovery.db") }, root);
     expect(backup.status).toBe("ok");
@@ -126,78 +125,6 @@ describe("store and execution command surface", () => {
     }
   });
 
-  test("a control-root-only manifest without --coverage is a usage refusal naming the flag", async () => {
-    const root = fixture("execution-control-root-only");
-    const harness = join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    // No inventoryPath: the reviewed scope is control-root-only, so coverage
-    // cannot be derived and must be supplied explicitly. The adapter decides
-    // this before the engine is entered, so the operator sees the flag it needs
-    // rather than an engine-internal "inventory is not closed" verdict.
-    const manifestPath = join(root, "control-root-manifest.json");
-    writeJson(manifestPath, { version: 3, id: "control-root-manifest", root: harness, surfaces: [] });
-    const apply = await invoke(definition("store.execution.apply"), {
-      harness,
-      operation: "control-root-only",
-      operator: "ops-engineer",
-      manifest: manifestPath,
-      backup: join(root, "unused-recovery-receipt.json"),
-    }, root);
-    expect(apply.status).toBe("usage");
-    if (apply.status === "usage") expect(apply.message).toContain("--coverage");
-  });
-
-  test("maintenance input derives inventory from the reviewed manifest and aggregates irreducible requirements", async () => {
-    const root = fixture("execution-sparse-maintenance");
-    const harness = join(root, ".mstar");
-    mkdirSync(harness, { recursive: true });
-    const inventory = join(harness, "execution-inventory", "inventory.json");
-    const evidenceRoot = dirname(inventory);
-    for (const name of ["sdd", "host", "package"]) mkdirSync(join(evidenceRoot, name), { recursive: true });
-    writeJson(inventory, {
-      version: 2,
-      roots: {
-        sdd: join(evidenceRoot, "sdd"),
-        host: join(evidenceRoot, "host"),
-        package: join(evidenceRoot, "package"),
-      },
-      hostSessions: [],
-      sddEvidence: [],
-      consumers: [],
-      injectors: [],
-      injectorInventory: null,
-      backup: null,
-    });
-    const manifestPath = join(root, "execution-manifest.json");
-    writeJson(manifestPath, { version: 3, id: "fixture-manifest", root: harness, inventoryPath: inventory, surfaces: [] });
-    const apply = await invoke(definition("store.execution.apply"), {
-      harness,
-      operation: "sparse-apply",
-      operator: "ops-engineer",
-      manifest: manifestPath,
-      backup: join(root, "unused-recovery-receipt.json"),
-    }, root);
-    expect(apply.status).toBe("refused");
-    if (apply.status === "refused") {
-      expect(apply.code).toBe("execution.coverage-incomplete");
-      expect(apply.message).not.toContain("--inventory");
-    }
-
-    const missingStoreMaintenance = await invoke(definition("store.activate"), { harness }, root);
-    expect(missingStoreMaintenance.status).toBe("usage");
-    if (missingStoreMaintenance.status === "usage") {
-      expect(missingStoreMaintenance.message).toContain("--manifest");
-      expect(missingStoreMaintenance.message).toContain("--attestation");
-    }
-    const missingExecutionMaintenance = await invoke(definition("store.execution.apply"), { harness }, root);
-    expect(missingExecutionMaintenance.status).toBe("usage");
-    if (missingExecutionMaintenance.status === "usage") {
-      expect(missingExecutionMaintenance.message).toContain("--operation");
-      expect(missingExecutionMaintenance.message).toContain("--operator");
-      expect(missingExecutionMaintenance.message).toContain("--manifest");
-      expect(missingExecutionMaintenance.message).toContain("--backup");
-    }
-  });
 
 
   test("refuses the control-root store and refuses an un-applied migration at activation", async () => {
@@ -284,24 +211,4 @@ describe("store and execution command surface", () => {
     expect(await storeSnapshot(harness)).toEqual(before);
   });
 
-  test("execution activation does not accept a caller-only control-root target", async () => {
-    const root = fixture("execution-control-root");
-    const harness = join(root, "control");
-    mkdirSync(harness, { recursive: true });
-    const init = await invoke(definition("store.init"), { harness }, root);
-    expect(init.status).toBe("ok");
-    const before = await storeSnapshot(harness);
-    const activateDefinition = definition("store.execution.activate");
-    const activate = await activateDefinition.execute(activateDefinition.input.parse({
-      harness,
-      operation: "fixture-operation",
-      operator: "fixture-operator",
-      manifest: join(root, "manifest.json"),
-      coverage: join(root, "coverage.json"),
-      attestation: join(root, "attestation.json"),
-    }), invocation(root, harness));
-    expect(activate.status).not.toBe("ok");
-    if (activate.status !== "ok") expect(activate.message).toContain("control-root");
-    expect(await storeSnapshot(harness)).toEqual(before);
-  });
 });

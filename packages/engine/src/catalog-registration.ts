@@ -697,21 +697,14 @@ function rowFileByIdOf(row: unknown): unknown {
  * outside the identity, so a progressed or reordered orphan still recovers. No
  * field is compared through a serialized or compact form.
  */
-function migrationIdentityMatches(
-  kind: CatalogExecutionKind,
-  snapshot: WorkflowSnapshot,
-  identity: string,
-  policy: "strict" | "legacy-retirement" = "strict",
-): boolean {
+function migrationIdentityMatches(kind: CatalogExecutionKind, snapshot: WorkflowSnapshot, identity: string): boolean {
   let recorded: Record<string, unknown>;
   try {
     const parsed = JSON.parse(identity) as unknown;
-    if (!isPlainObject(parsed)) {
-      return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
-    }
+    if (!isPlainObject(parsed)) return false;
     recorded = parsed;
   } catch {
-    return policy === "legacy-retirement" && kind === "plan" && snapshot.type === "plan" && snapshot.plans.length === 0;
+    return false;
   }
 
   const branch = isPlainObject(snapshot.branch) ? (snapshot.branch as Record<string, unknown>) : {};
@@ -1020,12 +1013,6 @@ function recordAborted(db: StoreDb, operationId: string, reason: string): void {
   db.prepare("update catalog_operations set phase = 'aborted', result_json = ?, updated_at = ? where operation_id = ?").run(
     JSON.stringify({ aborted: true, reason }),
     nowRfc3339(),
-    operationId,
-  );
-}
-function recordMigrationRetirement(db: StoreDb, operationId: string, reason: string): void {
-  db.prepare("update catalog_operations set phase = 'aborted', result_json = ? where operation_id = ?").run(
-    JSON.stringify({ aborted: true, reason }),
     operationId,
   );
 }
@@ -1736,75 +1723,6 @@ export async function abortCatalogExecution(
   }
   await withJournalWrite(context, (db) => recordAborted(db, id, reason ?? "abandoned by the operator"));
   return { operationId: id, workflowId: journal.workflow.workflowId, phase: "aborted" };
-}
-/**
- * Retire stale, already-written registrations that block the staged
- * store-upgrade route. Kept out of the package entry point: this is not a
- * general catalog-abort verb.
- */
-export async function retireStaleCatalogExecutionsForMigration(
-  context: StoreContext,
-  operationIds: readonly string[],
-  disposition: string,
-): Promise<void> {
-  if (!Array.isArray(operationIds) || operationIds.length === 0) invalid("operationIds must name at least one pending registration");
-  if (typeof disposition !== "string" || disposition.trim() === "") invalid("disposition must be a non-empty string");
-  const ids = operationIds.map((operationId) => requireText(operationId, "operationId"));
-  const recordedDisposition = disposition;
-  await withJournalWrite(context, (db) => {
-    const rows = ids.map((id) => {
-      const row = readRow(db, id);
-      if (row === undefined) throw new CatalogError("catalog.not-found", `No catalog registration operation ${JSON.stringify(id)} is recorded in this store.`);
-      if (row.phase === "committed") failReconcile(`operation ${JSON.stringify(id)} is committed and cannot be retired with a file route`);
-      if (row.phase !== "execution-written") {
-        failReconcile(`operation ${JSON.stringify(id)} is ${row.phase}, not an execution-written migration leftover`);
-      }
-      return row;
-    });
-    const pending = pendingRows(db);
-    if (pending.length !== rows.length || pending.some((row) => !ids.includes(row.operation_id))) {
-      failReconcile("the pending catalog journal changed while migration was preparing its retirement; nothing was retired");
-    }
-    const catalogRevision = readJournalVersions(db).catalogRevision;
-    for (const row of rows) {
-      const journal = parseJournalDelta(row);
-      const snapshot = readSnapshotIfPresent(resolve(journal.workflow.snapshotPath, ".."))?.snapshot;
-      const rootEntry = findRegisteredWorkflow(journal.workflow.harnessDir, journal.workflow.workflowId);
-      // A terminal historical snapshot may outlive its root entry. When a root
-      // entry still exists, it must identify this workflow semantically.
-      const expectedType = journal.workflow.kind === "iteration" ? "iteration" : "plan";
-      const terminalWithoutRoot =
-        rootEntry === undefined &&
-        (WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(snapshot?.status ?? "");
-      const entryMatches =
-        rootEntry !== undefined &&
-        rootEntry.id === journal.workflow.workflowId &&
-        rootEntry.type === expectedType &&
-        rootEntry.dir === `workflows/${journal.workflow.workflowId}`;
-      if (
-        snapshot === undefined ||
-        snapshot.id !== journal.workflow.workflowId ||
-        snapshot.type !== expectedType ||
-        (!entryMatches && !terminalWithoutRoot) ||
-        !migrationIdentityMatches(journal.workflow.kind, snapshot, journal.workflow.identity, "legacy-retirement")
-      ) {
-        failReconcile(
-          `operation ${JSON.stringify(row.operation_id)} does not have its own current snapshot and matching root execution entry; ` +
-            "the registration bytes are missing or belong to a different workflow and cannot be retired",
-        );
-      }
-      if (hasPublishedDelta(db, row.operation_id) || journal.expectedCatalogRevision === catalogRevision) {
-        failReconcile(`operation ${JSON.stringify(row.operation_id)} is not a stale unpublished registration and cannot be retired`);
-      }
-    }
-    for (const row of rows) {
-      recordMigrationRetirement(
-        db,
-        row.operation_id,
-        `retired with the file route; unpublished catalog delta disposition: ${recordedDisposition}`,
-      );
-    }
-  });
 }
 
 

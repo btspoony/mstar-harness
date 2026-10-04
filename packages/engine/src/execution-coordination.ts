@@ -727,7 +727,7 @@ function withExecutionPlanOperation<T>(
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
       const releaseUpgrade = request.operation.kind === "release"
-        ? " ACTIVE-only release is unavailable here. An authorized operator may use `mstar store safe-upgrade --harness <dir> --operator <name> --attestation <file>` with valid operator attestation; `--inventory <file>` is optional because the upgrader obtains current migration/coverage. If legacy sources exist without an issue store, first initialize via `mstar store init --harness <dir>`. This call does not authorize that route."
+        ? " ACTIVE-only release is unavailable here. An authorized operator may run `mstar store upgrade --harness <dir> --operator <name>` to import legacy state and activate the authority. This call does not authorize that route."
         : "";
       throw new ExecutionError(
         "execution.not-active",

@@ -622,17 +622,7 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
-// Staging derives reviewed inputs and recovery points; the second call performs
-// the authority flip and source retirement.
-export {
-  activateStoreUpgrade,
-  stageStoreUpgrade,
-  type StagedStoreUpgrade,
-  type StoreUpgradeInput,
-} from "./store-upgrade.js";
-export { archiveStoreUpgradeFiles, type StoreUpgradeArchive } from "./store-upgrade-archive.js";
-export { probeStoreUpgradeState, type StoreUpgradeReason, type StoreUpgradeState } from "./store-upgrade-state.js";
-export { upgradeStoreWithRecoveryPoint } from "./store-upgrade.js";
+export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
 // Execution authority: the canonical value form and `exec-v1` version tokens
 // (§3.1), the one-transaction ownership boundary, the create-only empty
 // execution initializer (§3/§4.1) and the create-only workflow/registry/sealed
@@ -991,79 +981,6 @@ export {
   StoreActivationError,
   validateActivationAttestation,
 } from "./store-activation.js";
-// Execution migration: the executable §6 protocol (stages R1-R3). R1 landed
-// the read-only preview and the staged apply: `previewExecutionMigration` reads
-// the legacy workspace as evidence (plus the explicit operator inventory named
-// by `inventoryPath`) and returns the canonical, content-addressed version 2
-// manifest with its exact per-surface source assignment;
-// `applyExecutionMigration` stages every core row plus the manifest record and
-// the validated coverage in one transaction against a verified recovery point,
-// and never activates. R2 adds the three separate crash-safe steps:
-// `activateExecutionMigration` takes the §4.2 maintenance → root → workflow lock
-// ladder, re-reads current semantic identities and coverage, and performs the
-// single store-wide all-or-nothing cutover (one epoch advance, imported
-// references revoked, held ownership represented). Recorded digests do not
-// admit or veto the transition; a deferred (2b) surface is diagnostic evidence
-// only and is never an activation
-// precondition. `retireExecutionSources` moves the exact core sources and the
-// `retire`-disposition session envelopes into manifest-addressed history under a
-// resumable, fsynced per-item ledger, and `abortExecutionMigration` returns a
-// STAGED manifest to legacy without touching active data.
-// `collectExecutionCoverage` is the read-only coverage collector, and
-// `executionManifestHash` produces historical provenance, not an approval input.
-export type {
-  ExecutionDeferredSurface,
-  ExecutionManifest,
-  ExecutionManifestDocument,
-  ExecutionManifestSurface,
-  ExecutionMigrationAbortInput,
-  ExecutionMigrationActivationInput,
-  ExecutionMigrationApplyInput,
-  ExecutionMigrationCoverageInput,
-  ExecutionMigrationHostSession,
-  ExecutionMigrationInput,
-  ExecutionMigrationInventory,
-  ExecutionMigrationReceipt,
-  ExecutionMigrationRetireInput,
-  ExecutionMigrationRoots,
-  ExecutionSourceWitness,
-  HostDiscoveryProof,
-} from "./execution-migrate.js";
-export {
-  abortExecutionMigration,
-  activateExecutionMigration,
-  applyExecutionMigration,
-  collectExecutionCoverage,
-  EXECUTION_MIGRATION_INVENTORY_VERSION,
-  EXECUTION_MIGRATION_LEGACY_MANIFEST_VERSION,
-  EXECUTION_MIGRATION_MANIFEST_VERSION,
-  executionManifestHash,
-  previewExecutionMigration,
-  retireExecutionSources,
-} from "./execution-migrate.js";
-// §4.1/§4.2 the pure coverage substrate (C2): the closed 18-surface inventory,
-// the canonical receipt/codec table, the producer entry point C3 builds its
-// receipts with and the one validator every boundary closes through. ADDITIVE
-// export — the engine package's exports map is the only reachable surface for
-// the migration transport (`collectExecutionCoverage`) and for consumers that
-// must recompute a receipt.
-export type {
-  ConsumerDiscoveryProof,
-  CoverageWitness,
-  ExecutionCoverageEvidence,
-  ExecutionCoverageManifest,
-  ExecutionCoverageReceipt,
-  ExecutionCoverageSet,
-  ExecutionSurface,
-} from "./execution-coverage.js";
-export {
-  EXECUTION_COVERAGE_SURFACES,
-  buildExecutionCoverageReceipt,
-  coverageWitnessKey,
-  executionCoverageDigest,
-  executionCoverageSurfaceScope,
-  validateExecutionCoverage,
-} from "./execution-coverage.js";
 // §5 F1 the retained workflow-notes ledger: the append-only accepted-record
 // writer plus its pure coverage normalizer. ADDITIVE export — the accepted
 // record shape, its receipt and the coverage facts are the whole published
@@ -1082,18 +999,13 @@ export {
   normalizeWorkflowNotesCoverage,
   workflowNotesLedgerPath,
 } from "./execution-ledgers.js";
-// Execution recovery: the consistent whole-store backup, the explicit-loss
-// atomic restore and the diagnostic export (primary spec §8, R3 of the
-// migration protocol). `previewExecutionRestore` is the
-// read-only loss inventory whose canonical `lossDigest` an operator approves;
-// `restoreExecutionBackup` is the whole-store replacement that requires that
-// exact digest, a quiesced store, a current pre-restore recovery point and a
-// verified sibling image before it renames anything; `exportExecutionState` is
-// canonical diagnostic data with every session identity, CAS token and
-// credential path removed and no import verb. `inspectBackupCopy` and
-// `BackupInspection` are the ONE §8 copy verdict the backup, migration and
-// restore paths share. ADDITIVE export — the engine package's exports map is
-// the only reachable surface for consumers.
+// Execution disaster recovery: standalone store-backup inspection, explicit
+// whole-store restore from that image, and live-state diagnostic export.
+// `previewExecutionRestore` is read-only; `restoreExecutionBackup` verifies
+// the operator-approved loss digest and backup before replacing the store;
+// `exportExecutionState` emits canonical reporting data without session
+// identity or credential paths. `inspectBackupCopy` is shared by backup and
+// restore validation. The package export map is the public surface.
 export type { BackupInspection } from "./store-activation.js";
 export type {
   ProjectMilestoneStatus,

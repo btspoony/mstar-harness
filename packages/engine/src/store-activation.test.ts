@@ -40,7 +40,6 @@ import {
   type StoreActivationErrorCode,
 } from "./store-activation.js";
 import { initializeStore, MIGRATION_1_SQL, MIGRATIONS, migrationChecksum, openStore, SCHEMA_VERSION_TABLE_SQL, type StoreContext } from "./store-db.js";
-import { upgradeStoreWithRecoveryPoint } from "./store-upgrade.js";
 import { applyStoreMigration, planStoreMigration, type MigrationManifest, type MigrationReceipt } from "./store-migrate.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-activation-"));
@@ -1251,60 +1250,6 @@ describe("store backup", () => {
     }
   });
 
-  test("backup covers the migration receipts an activation will rely on", async () => {
-    const { context, apply } = await stagedFixture("backup-staged-");
-    const receipt = await backupStore(context);
-    expect(receipt.authorityState).toBe("staged");
-    expect(receipt.counts.issues).toBe(apply.counts.issues);
-    expect(receipt.counts.migrationReceipts).toBe(1);
-    expect(existsSync(receipt.backupPath)).toBe(true);
-    const stagedRow = await openStore(context, "read");
-    try {
-      const meta = stagedRow.db.prepare("select authority_state, authority_epoch from store_meta where id = 1").get() as {
-        authority_state: "staged" | "active";
-        authority_epoch: number;
-      };
-      expect(receipt.authorityState).toBe(meta.authority_state);
-      expect(receipt.epoch).toBe(meta.authority_epoch);
-    } finally {
-      stagedRow.close();
-    }
-  });
-  test("v1 backup is verified before the upgrade and counts only observed tables", async () => {
-    const fixture = freshWorkspace("backup-v1-upgrade-");
-    const dbPath = join(fixture.harness, "store.db");
-    const db = new DatabaseSync(dbPath);
-    let sourceStoreId: string;
-    try {
-      db.exec(SCHEMA_VERSION_TABLE_SQL);
-      db.exec(MIGRATION_1_SQL);
-      const migration = MIGRATIONS[0]!;
-      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
-        .run(migration.version, migration.name, migrationChecksum(migration), "2026-09-30T00:00:00.000Z");
-      const row = db.prepare("select store_id from store_meta where id = 1").get();
-      if (row === undefined || !("store_id" in row) || typeof row.store_id !== "string") {
-        throw new Error("v1 fixture did not create its store identity");
-      }
-      sourceStoreId = row.store_id;
-    } finally {
-      db.close();
-    }
-
-    const result = await upgradeStoreWithRecoveryPoint(fixture.context, "v1-upgrade");
-    expect(result.schemaVersion).toBe(MIGRATIONS.length);
-    expect(result.schemaBackup.schemaVersion).toBe(1);
-    expect(result.schemaBackup.storeId).toBe(sourceStoreId);
-    expect(result.schemaBackup.counts).toEqual({
-      issues: 0,
-      occurrences: 0,
-      transitions: 0,
-      migrationReceipts: 0,
-    });
-    const inspected = await inspectBackupCopy(result.schemaBackup.backupPath);
-    expect(inspected.storeId).toBe(sourceStoreId);
-    expect(inspected.schemaVersion).toBe(1);
-    expect(inspected.counts).toEqual(result.schemaBackup.counts);
-  });
 });
 
 describe("retained bodies", () => {

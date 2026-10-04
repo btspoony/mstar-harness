@@ -1244,46 +1244,31 @@
         "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
       },
       "store.init": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "requires an empty-store fixture; no bounded interaction scenario is represented"
+      },
+      "store.upgrade": {
+        "excluded": "minimal import behavior is covered by targeted command and engine tests, not the bounded interaction runner"
       },
       "store.migrate": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
-      },
-      "store.safe-upgrade": {
-        "scenario": "bounded-res-replay-partial"
+        "excluded": "requires a reviewed issue/catalog migration manifest; independent of execution upgrade"
       },
       "store.backup": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "requires an initialized store fixture; no bounded interaction scenario is represented"
       },
       "store.activate": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "requires an applied issue/catalog migration manifest and attestation"
       },
       "store.retire": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
-      },
-      "store.execution.preview": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
-      },
-      "store.execution.apply": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
-      },
-      "store.execution.activate": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
-      },
-      "store.execution.retire": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
-      },
-      "store.execution.abort": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "requires an activated issue/catalog migration"
       },
       "store.execution.restore-preview": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "requires a standalone store backup fixture; covered by targeted command tests"
       },
       "store.execution.restore": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "requires a standalone backup image and operator authorization; covered by targeted command tests"
       },
       "store.execution.export": {
-        "excluded": "requires staged migration authority; only the partial-receipt replay is represented concretely"
+        "excluded": "reports live execution state; covered by targeted command tests"
       },
       "sdd.workspace": {
         "excluded": "spawns processes or needs a report corpus; explicit unverified route"

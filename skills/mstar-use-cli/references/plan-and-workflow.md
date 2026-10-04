@@ -10,12 +10,12 @@ Payload discovery: `mstar-harness schema PlanProgress` describes `plan progress`
 
 ## Transports
 
-The execution route is selected by `execution_meta.authority_state`, not by `store_meta.authority_state`: `store_meta` governs issue/catalog authority, while `execution_meta` governs coordinated workflow operations. Use `mstar status validate` as the discriminating read. Its `state` is `active`, `legacy`, or `unreadable`: `active` is the supported operating route; `legacy` is unsupported and resolves `upgrade.entry` per observed files—an existing store uses `mstar store safe-upgrade`; legacy files without a store use `mstar store init` → `mstar store safe-upgrade`, which keeps the files authoritative until the upgrade confirmation and imports them during the authority switch; a truly empty workspace uses `mstar harness scaffold`. `unreadable` reports what could not be read and the recovery needed to make it readable.
+Execution coordination is selected by `execution_meta.authority_state`. Use `mstar status validate` as the discriminating read. For `state: legacy`, the supported upgrade is always `mstar store upgrade --operator <name>`: it opens or creates the local store, imports recognizable records, activates authority, and reports skipped sources without moving them. `unreadable` reports the cause and recovery needed to make the store readable.
 
 | State | Supported action |
 |---|---|
 | `active` | Use the active DB route below. |
-| `legacy` | Do not use file-form operation flags; follow this read's `upgrade.entry`. A storeless legacy workflow uses the init-then-safe-upgrade sequence; files remain authoritative until upgrade confirms and activates. |
+| `legacy` | Do not use file-form operation flags; run `mstar store upgrade --operator <name>` to import recognizable records and activate authority. |
 | `unreadable` | Follow the reported self-check recovery, then rerun `mstar status validate`. |
 
 | Transport | Write flags | Caller identity |
@@ -165,14 +165,14 @@ The failure object at any step names the code; the row is unchanged, so the retr
 
 ## Retired file-route operations
 
-Pre-activation file-route forms (Prepare amendments, coordinator recovery and session envelopes) are not supported operating procedures in this release: when `mstar status validate` reports `state: legacy`, use only `mstar store safe-upgrade` (or the init-then-safe-upgrade sequence); do not invoke retired file forms.
+Pre-activation file-route forms (Prepare amendments, coordinator recovery and session envelopes) are not supported operating procedures in this release: when `mstar status validate` reports `state: legacy`, run `mstar store upgrade --operator <name>` to import legacy state; do not invoke retired file forms.
 
 Historical snapshot/compass versions and recovery audit digests are informational records, not admission tokens. The retained Prepare contracts concern current coordinator authorization, a registered running Prepare workflow with no execution ownership, canonical plan pointers, permitted append/correction deltas, and compass plan-id set/branch/path declarations. Set membership is order-insensitive. Recovery concerns the named prior holder, explicit replacement identity, authorization and stop assertion; it transfers no lease. Same operation id with a different request remains a replay conflict; receipt replay does not depend on current output-byte equality. No snapshot/compass hash preflight or byte-restoration recipe applies.
 
 ## Standalone plan registration and delivery evidence
 
 - Registration is create-only: it writes the workflow snapshot and root register under one lock, recording the owned plan row, project, delivery kind and branch anchors. The delivery kind is declared, never inferred. Supply `--plan-file` as `plans/<id>.md` (harness-relative) or the canonical absolute path — both are accepted; the repository-relative `.mstar/plans/<id>.md` form is refused. The active creation call uses the root token from `mstar status validate` plus an operation id under an independently acquired identity; it takes no session reference because no session row exists before the workflow.
-- Delivery evidence uses the active DB route and workflow-scope token. Legacy file-route forms are unsupported; on `state: legacy`, use only `mstar store safe-upgrade`.
+- Delivery evidence uses the active DB route and workflow-scope token. Legacy file-route forms are unsupported; on `state: legacy`, run `mstar store upgrade --operator <name>` first.
 - **Completion ordering per kind.** Development records compound disposition, PR identity and verified merge after every row is `Done`; report-only records fulfilment of its registered completion policy before `Done`. No merge or integration branch is synthesized for report-only.
 - A registered `branch.source` is not amended by ordinary evidence; the legacy repair verb is not a general anchor editor. The close consults evidence before writing terminal state. See `references/status-and-registers.md` for close order and refusal conditions.
 

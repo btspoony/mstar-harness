@@ -700,7 +700,7 @@ export function assertIssueProvenanceSchema(db: StoreDb): void {
   if ((schema?.version ?? 0) < MIGRATIONS.length) {
     throw new IssueError(
       "issue.schema-outdated",
-      `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store safe-upgrade" first.`,
+      `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`,
     );
   }
 }
@@ -1776,7 +1776,7 @@ export async function assignIssueMilestone(
     const db = handle.db;
     const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
     if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) {
-      throw new IssueError("milestone.schema-outdated", 'Milestone assignment requires schema 7; run "mstar store safe-upgrade" first.');
+      throw new IssueError("milestone.schema-outdated", 'Milestone assignment requires schema 7; run "mstar store upgrade --operator <name>" first.');
     }
     const existing = lookupOperation(db, mutation.operationId);
     if (existing) return replayOrConflict(existing, hash);
