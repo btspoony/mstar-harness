@@ -107,7 +107,6 @@ interface RuntimeReport {
   startUnsafeWorkflow: { ok: boolean; isError: boolean; code: string; message: string };
   fireWithoutBinding: { ok: boolean; isError: boolean; code: string; message: string };
   hook: { errors: string[]; handlers: string[]; toolCallHandlers: number; benignResult: string | null };
-  tools: { loaded: string[]; errors: string[]; pathResolve: string };
   engineFromPackedRoot: { resolved: string } | { error: string };
 }
 
@@ -125,7 +124,6 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getEnabledPlugins, getPluginSettings, PluginManager, resolvePluginExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import { discoverAndLoadCustomTools } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools";
 
 const project = process.env.MSTAR_BUNDLE_PROJECT;
 const pluginsRoot = process.env.MSTAR_BUNDLE_PLUGINS;
@@ -224,10 +222,6 @@ const report = await (async () => {
         { cwd: project },
       );
 
-  const loadedTools = await discoverAndLoadCustomTools([], project, []);
-  const pathResolve = loadedTools.tools.find((entry) => entry.tool.name === "mstar_path_resolve");
-  const pathResolveResult = pathResolve === undefined ? null : await pathResolve.tool.execute("probe-paths", {}, undefined, { cwd: project });
-
   let engineFromPackedRoot;
   try {
     engineFromPackedRoot = { resolved: Bun.resolveSync("@mstar-harness/engine", plugin.path) };
@@ -256,11 +250,6 @@ const report = await (async () => {
       handlers: [...(hookExtension?.handlers.keys() ?? [])],
       toolCallHandlers: toolCallHandlers.length,
       benignResult: benign === undefined ? null : JSON.stringify(benign),
-    },
-    tools: {
-      loaded: loadedTools.tools.map((entry) => entry.tool.name),
-      errors: loadedTools.errors.map((entry) => entry.error),
-      pathResolve: pathResolveResult === null ? "" : textOf(pathResolveResult),
     },
     engineFromPackedRoot,
   };
@@ -667,15 +656,12 @@ describe("@mstar-harness/omp packed artifact", () => {
       expect(report.startUnsafeWorkflow).toMatchObject({ ok: false, isError: true, code: "invalid-workflow" });
       expect(report.fireWithoutBinding).toMatchObject({ ok: false, isError: true, code: "not-pending" });
 
-      // Legacy custom-tool discovery remains empty; canonical commands are
-      // registered by the generated native extension instead.
+      // The hook loads from the same packed artifact: exactly one tool_call
+      // handler, and a benign write passes untouched.
       expect(report.hook.errors).toEqual([]);
       expect(report.hook.handlers).toEqual(["tool_call"]);
       expect(report.hook.toolCallHandlers).toBe(1);
       expect(report.hook.benignResult).toBeNull();
-      expect(report.tools.errors).toEqual([]);
-      expect(report.tools.loaded).toEqual([]);
-      expect(report.tools.pathResolve).toBe("");
     },
     240_000,
   );

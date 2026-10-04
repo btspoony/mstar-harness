@@ -89,8 +89,8 @@ bun install
 bun run omp:build   # bundle-assets + dist bundles + root discovery mirrors
 ```
 
-Plugin sources: `packages/omp/src/hooks/pre/mstar-gates.ts` + `packages/omp/src/tools/mstar_*/index.ts` (moved here from the repo root 2026-09-03) + `packages/omp/src/extensions/model-handoff.ts` (model-handoff extension).
-Plugin sources: `packages/omp/src/hooks/pre/mstar-gates.ts` + `packages/omp/src/tools/mstar_*/index.ts` (moved here from the repo root 2026-09-03) + `packages/omp/src/extensions/phase2-orchestration.ts` (the published entry; its runtime modules are `packages/omp/src/phase2-orchestration.ts` and `phase2-launches.ts`).
+Plugin sources: `packages/omp/src/hooks/pre/mstar-gates.ts` + `packages/omp/src/extensions/model-handoff.ts` (model-handoff extension).
+Plugin sources: `packages/omp/src/hooks/pre/mstar-gates.ts` + `packages/omp/src/extensions/phase2-orchestration.ts` (the published entry; its runtime modules are `packages/omp/src/phase2-orchestration.ts` and `phase2-launches.ts`).
 
 ## License
 

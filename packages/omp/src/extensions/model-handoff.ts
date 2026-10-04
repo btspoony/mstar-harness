@@ -764,8 +764,7 @@ type ToolOutcome = Readonly<{ ok: boolean; isError: boolean; text: string; detai
 
 /**
  * Test seams for this adapter's awaited steps, following this package's own
- * convention (`mstar-gates`' `dispatchGateLoader`,
- * `mstar_lease_verify`'s `workflowDirResolverLoader`). The runtime behavior is
+ * convention (`mstar-gates`' `dispatchGateLoader`). The runtime behavior is
  * always the real one: a probe replaces `inspectReadiness` only to hold that step
  * open and prove that the preference is re-read *after* it, and
  * `bindingModeFor` is exposed because its verdict is the whole observable of the

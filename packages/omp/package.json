@@ -26,7 +26,7 @@
   ],
   "scripts": {
     "bundle-assets": "bun run scripts/bundle-harness-assets.ts",
-    "build": "bun run bundle-assets && rm -rf dist hooks tools extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions",
+    "build": "bun run bundle-assets && rm -rf dist hooks extensions && bun build src/hooks/pre/mstar-gates.ts --target node --outfile dist/hooks/pre/mstar-gates.js && bun build src/extensions/model-handoff.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/model-handoff.js && bun build src/extensions/phase2-orchestration.ts --target node --external '@oh-my-pi/*' --outfile dist/extensions/phase2-orchestration.js && bunx tsc && cp -R dist/hooks hooks && cp -R dist/extensions extensions",
     "test": "bun test",
     "prepublishOnly": "bun run build"
   },

@@ -11,7 +11,7 @@
  *   (`<pkg>/skills/`, `<pkg>/hooks/pre|post/`, `<pkg>/tools/`,
  *   `<pkg>/commands/`), not from `dist/` or `harness-*` (verified against
  *   pi-coding-agent `discovery/omp-plugins.ts` + omp 18.1.5 scratch install
- *   2026-09-03). The `hooks/` + `tools/` root mirrors are produced by the
+ *   2026-09-03). The `hooks/` + `extensions/` root mirrors are produced by the
  *   `build` script from the `dist/` bundles.
  */
 import fs from "node:fs";

@@ -682,7 +682,7 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
 /**
  * Validate one dispatch entry via the engine's single shared composition
  * `dispatch.composeDispatchGate` (the same composition
- * opencode `validateDispatchAssignment` and `mstar_dispatch_validate` use,
+ * opencode `validateDispatchAssignment` uses,
  * incl. the `$MSTAR_WORKING_BRANCH` env fallback /
  * ): field validation with `writable: false` for read-only roles,
  * and the default-branch gate for writable roles. NO anti-recursion leg on
