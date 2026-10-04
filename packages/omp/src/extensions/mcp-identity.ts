@@ -60,10 +60,13 @@ export function mcpIdentityInjection(
   toolDeclaresSessionId: boolean,
 ): ToolCallEventResult | undefined {
   if (!event.toolName.startsWith(MSTAR_TOOL_PREFIX)) return undefined;
-  if (!isInputRecord(event.input)) return undefined;
-  if (event.input.sessionId !== undefined) return undefined;
+  // The concrete event union carries per-tool input types; the keyed rules
+  // read it as the plain record it is at runtime.
+  const input: unknown = event.input;
+  if (!isInputRecord(input)) return undefined;
+  if (input.sessionId !== undefined) return undefined;
   if (!toolDeclaresSessionId) return undefined;
-  return { input: { ...event.input, sessionId } };
+  return { input: { ...input, sessionId } };
 }
 
 /** Whether the host's tool registry declares `sessionId` on this exact tool. */
@@ -79,7 +82,8 @@ export default function mcpIdentity(pi: ExtensionAPI): void {
   pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
     // Prefilter first: only Morning Star MCP tool names can ever be eligible.
     if (!event.toolName.startsWith(MSTAR_TOOL_PREFIX)) return undefined;
-    if (!isInputRecord(event.input) || event.input.sessionId !== undefined) return undefined;
+    const input: unknown = event.input;
+    if (!isInputRecord(input) || input.sessionId !== undefined) return undefined;
     // Schema-aware eligibility from the host's own tool metadata: a tool the
     // registry cannot resolve (or an unreadable registry) is never eligible.
     const declares = registryDeclaresSessionId(pi, event.toolName);
