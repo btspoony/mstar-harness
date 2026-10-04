@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { IDENTITY_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const progressPayloadSchema = z.record(z.string(), z.unknown());
@@ -177,7 +178,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
     if (id === "plan.bind") {
       const cwd = context.cwd;
       if (input.resumeRef !== undefined) {
-        if (context.sessionId === undefined) return usage(id, "active resume requires runtime session identity");
+        if (context.sessionId === undefined) return usage(id, `active resume requires runtime session identity (${IDENTITY_SUPPLIES}).`);
         const ref = decodeExecutionSessionRef(input.resumeRef);
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
@@ -193,7 +194,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       }
       if (input.execution === true) {
         if (context.sessionId === undefined || input.workflow === undefined) {
-          return usage(id, "active bind requires runtime session identity and workflow");
+          return usage(id, `active bind requires runtime session identity and workflow (identity ${IDENTITY_SUPPLIES}).`);
         }
         if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active bind requires a full execution token");
         const coordinator = input.coordinator === true;
@@ -244,7 +245,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         if (context.sessionId === undefined || context.sessionId.trim() === "" || context.sessionIdSource === "env") {
           const message = context.sessionIdSource === "env"
             ? "legacy pre-activation coordinator bootstrap does not accept env-provided identity; pass --session-id explicitly"
-            : "coordinator bind requires runtime session identity";
+            : `coordinator bind requires runtime session identity (${IDENTITY_SUPPLIES}).`;
           return usage(id, message);
         }
         if (input.workflow === undefined) return usage(id, "coordinator bind requires workflow");
@@ -258,7 +259,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           ...(input.harness !== undefined ? { harnessDir: absolutePath(input.harness, "harness") } : {}),
         };
       } else if (input.assignment !== undefined) {
-        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage(id, "plan-session bind requires runtime session identity");
+        if (context.sessionId === undefined || context.sessionId.trim() === "") {
+          return usage(id, `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).`);
+        }
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
         bindInput = {
@@ -287,7 +290,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd));
       }
       if (input.sessionRef === undefined || input.plan === undefined || context.sessionId === undefined) {
-        return usage(id, "show requires a session file or sessionRef, plan selector, and runtime session identity");
+        return usage(id, `show requires a session file or sessionRef, plan selector, and runtime session identity (identity ${IDENTITY_SUPPLIES}).`);
       }
       const ref = decodeExecutionSessionRef(input.sessionRef);
       const root = resolveProcessHarnessDir(context.cwd, input.harness);
@@ -309,7 +312,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
     // selector-less invocation still routes here: the engine's own authority
     // check then reports the truthful ACTIVE/upgrade fact instead of a dead end.
     if (input.sessionRef !== undefined || (input.session === undefined && (sparseSelectors || id === "plan.release"))) {
-      if (context.sessionId === undefined) return usage(id, "active operation requires an acquired runtime session identity");
+      if (context.sessionId === undefined) {
+        return usage(id, `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).`);
+      }
       if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
       // Release is ACTIVE-only: a pre-activation control root has no DB claim to
       // release, so it reports the supported operator-authorized store upgrade

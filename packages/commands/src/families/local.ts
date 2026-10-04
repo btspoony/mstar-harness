@@ -235,7 +235,14 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
           mcpHealth,
           target: input.target,
           scope: input.scope,
-          pluginVersionNote: formatPluginVersionDoctorNote(input.target, context.versions.cli ?? "unknown", null),
+          // The transport that owns per-host discovery supplies the installed
+          // version; without the hook the note degrades to the not-installed
+          // text instead of inventing a version.
+          pluginVersionNote: formatPluginVersionDoctorNote(
+            input.target,
+            context.versions.cli ?? "unknown",
+            context.effects.detectPluginVersion?.({ target: input.target, scope: input.scope }) ?? null,
+          ),
           ...(input.output === undefined ? {} : { output: input.output }),
         };
         return errors.length === 0
