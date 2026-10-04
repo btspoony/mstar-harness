@@ -65,7 +65,8 @@
  *   an interrupted attempt.
  *
  * Nothing here is a public arbitrary writer: the package index publishes exactly
- * `mutateExecutionWorkflow` and `recoverExecutionCoordinator`.
+ * `mutateExecutionWorkflow`, `recoverExecutionCoordinator` and
+ * `recoverExecutionPlanSession`.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -104,6 +105,7 @@ import {
   assertOperationId,
   bindRecoveredSession,
   executionToken,
+  parseExecutionToken,
   readExecutionState,
   readExecutionStateGraph,
   readExecutionWorkflowWitness,
@@ -1893,6 +1895,235 @@ export async function recoverExecutionCoordinator(
   });
 }
 
+/**
+ * Recover one stopped plan-PM binding without widening coordinator recovery to
+ * plan ownership. The caller is the already-live coordinator; its native
+ * session identity becomes the plan-PM identity in the same transaction that
+ * revokes the stopped owner and transfers that plan's current claim.
+ */
+export async function recoverExecutionPlanSession(
+  context: ExecutionContext,
+  input: {
+    planId: string;
+    expected: ExecutionToken;
+    operationId: string;
+    priorSessionId: string;
+    reason: string;
+    attestation: ActivationAttestation;
+  },
+): Promise<ExecutionReceipt<ExecutionSessionRef>> {
+  const caller = context.caller;
+  if (caller?.role !== "coordinator" || caller.planId !== null) {
+    throw new ExecutionError(
+      "execution.scope-mismatch",
+      "recovering a plan-PM identity requires the workflow's coordinator; the identity is never taken from request JSON",
+    );
+  }
+  const workflowId = caller.workflowId;
+  const planId = input?.planId;
+  if (!isNonEmptyString(workflowId) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(planId)) {
+    throw invalidWorkflowInput("plan-PM recovery needs a coordinator identity, workflow and plan");
+  }
+  const operationId = assertOperationId(input?.operationId);
+  const priorSessionId = input?.priorSessionId;
+  const reason = input?.reason;
+  if (!isNonEmptyString(priorSessionId) || !isNonEmptyString(reason)) {
+    throw invalidWorkflowInput("plan-PM recovery needs the named prior session and recorded reason");
+  }
+  const attestation = validateActivationAttestation(input?.attestation);
+  const requestHash = createHash("sha256")
+    .update(
+      serializeExecutionValue({
+        operation: "recoverExecutionPlanSession",
+        workflow_id: workflowId,
+        plan_id: planId,
+        expected: input.expected,
+        caller: { session_id: caller.sessionId, role: caller.role, workflow_id: workflowId, plan_id: null },
+        prior_session_id: priorSessionId,
+        reason,
+        attestation,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", "plan-PM recovery requires an active execution authority");
+    }
+    const sessionKey = [workflowId, "plan-pm", caller.sessionId] as const;
+    const replay = readOperationReplay<ExecutionSessionRef>(tx, {
+      operationId,
+      requestHash,
+      workflowId,
+      planId,
+      token: { kind: "session", key: sessionKey },
+    });
+    if (replay !== null) {
+      requirePlanRecoveryCoordinator(tx, workflowId, caller.sessionId);
+      const binding = readWorkflowSessionRows(tx, workflowId, "plan-pm").find(
+        (row) => row.ref.sessionId === caller.sessionId && row.ref.planId === planId && row.state === "active" && row.ref.epoch === tx.epoch,
+      );
+      const claim = readHeldExecutionLeases(tx, workflowId).find((lease) => lease.planId === planId);
+      const receiptRevision = parseExecutionToken(replay.token).revision;
+      if (
+        binding === undefined ||
+        binding.revision !== receiptRevision ||
+        claim === undefined ||
+        claim.ownerEpoch !== tx.epoch ||
+        claim.lease.holder_role !== "plan-pm" ||
+        claim.lease.holder_session_id !== caller.sessionId ||
+        claim.lease.transferred_from !== priorSessionId
+      ) {
+        throw new ExecutionError(
+          "execution.session-unavailable",
+          `plan-PM recovery replay for ${workflowId}/${planId} no longer owns its original current-epoch binding and held claim`,
+        );
+      }
+      return replay;
+    }
+    requirePlanRecoveryCoordinator(tx, workflowId, caller.sessionId);
+    const header = requireWorkflowState(tx, workflowId);
+    const workflowStatus = String(header.state.status ?? "");
+    if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(workflowStatus)) {
+      throw invalidWorkflowTransition(`workflow ${workflowId} is terminal; plan-PM recovery cannot reopen it`);
+    }
+    const planRow = tx.db
+      .prepare("select revision, state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(workflowId, planId) as { revision?: unknown; state_json?: unknown; coordination_json?: unknown } | undefined;
+    if (planRow === undefined) {
+      throw new CoordinationError("coordination.plan-not-found", `workflow ${workflowId} holds no plan ${planId}`, {
+        workflow_id: workflowId,
+        plan_id: planId,
+      });
+    }
+    const revision = Number(planRow.revision);
+    assertExecutionToken(input.expected, {
+      kind: "plan",
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+      key: [workflowId, planId],
+      revision,
+    });
+    let planState: Record<string, unknown>;
+    let coordination: Record<string, unknown>;
+    try {
+      planState = JSON.parse(String(planRow.state_json)) as Record<string, unknown>;
+      coordination = JSON.parse(String(planRow.coordination_json)) as Record<string, unknown>;
+    } catch {
+      throw new StoreError("store.corrupt", `plan ${workflowId}/${planId} has unreadable stored state`);
+    }
+    const status = rowStatusOf(planState as unknown as PlanRow);
+    if (["Done", "Canceled"].includes(status)) {
+      throw invalidWorkflowTransition(`plan ${planId} is terminal (${status}); recovery cannot reopen it`);
+    }
+    const handoff = coordination.handoff;
+    if (handoff !== undefined) {
+      if (!isPlainObject(handoff) || (handoff.state !== "returned" && handoff.state !== "completed")) {
+        throw invalidWorkflowTransition(
+          `plan ${planId} has a submitted, accepted, or malformed handoff; recovery cannot replace its completion path`,
+        );
+      }
+      if (handoff.state === "completed") {
+        throw invalidWorkflowTransition(`plan ${planId} has a completed handoff; use the existing completion path`);
+      }
+    }
+    const prior = readWorkflowSessionRows(tx, workflowId, "plan-pm").find(
+      (row) => row.ref.sessionId === priorSessionId && row.ref.planId === planId,
+    );
+    if (prior === undefined) {
+      throw new CoordinationError("coordination.session-not-found", `workflow ${workflowId} records no plan-PM session ${priorSessionId} for plan ${planId}`);
+    }
+    if (prior.state === "active" && prior.ref.epoch === tx.epoch) {
+      throw new CoordinationError(
+        "coordination.duplicate-holder",
+        `plan ${planId} still has a live plan-PM owner ${priorSessionId}; recovery requires attested stopped ownership`,
+      );
+    }
+    if (!attestation.stoppedSessions.some((session) => session.sessionId === priorSessionId)) {
+      throw invalidWorkflowTransition(`the attestation does not name prior plan-PM ${priorSessionId} as stopped/reloaded`);
+    }
+    if (prior.ref.epoch !== tx.epoch) {
+      throw invalidWorkflowTransition(
+        `the named plan-PM binding ${priorSessionId} belongs to epoch ${prior.ref.epoch}, not current epoch ${tx.epoch}`,
+      );
+    }
+    const planPmRows = readWorkflowSessionRows(tx, workflowId, "plan-pm");
+    const competing = planPmRows.find(
+      (row) =>
+        row.ref.sessionId === caller.sessionId &&
+        row.state === "active" &&
+        row.ref.epoch === tx.epoch &&
+        row.ref.planId !== planId,
+    );
+    if (competing !== undefined) {
+      throw new CoordinationError(
+        "coordination.session-mismatch",
+        `the coordinator's native identity already owns plan ${String(competing.ref.planId)} as plan-PM and cannot be rebound to ${planId}`,
+      );
+    }
+    if (
+      planPmRows.some(
+        (row) => row.ref.sessionId === caller.sessionId && row.ref.planId === planId && row.state === "active" && row.ref.epoch === tx.epoch,
+      ) &&
+      caller.sessionId !== priorSessionId
+    ) {
+      throw new CoordinationError("coordination.duplicate-holder", `plan ${planId} already has this coordinator identity as its live plan-PM owner`);
+    }
+    const held = readHeldExecutionLeases(tx, workflowId).find((lease) => lease.planId === planId);
+    if (
+      held === undefined ||
+      held.ownerEpoch !== tx.epoch ||
+      held.lease.holder_role !== "plan-pm" ||
+      held.lease.holder_session_id !== priorSessionId
+    ) {
+      throw invalidWorkflowTransition(`plan ${planId} does not have the named prior owner’s held current-epoch execution claim`);
+    }
+    const now = new Date().toISOString();
+    if (priorSessionId !== caller.sessionId) {
+      revokeSessionRow(tx, { workflowId, role: "plan-pm", sessionId: priorSessionId });
+    }
+    const sessionRevision = bindRecoveredSession(tx, {
+      workflowId,
+      role: "plan-pm",
+      sessionId: caller.sessionId,
+      planId,
+      epoch: tx.epoch,
+      now,
+    });
+    transferExecutionLease(tx, {
+      workflowId,
+      planId,
+      lease: held.lease,
+      to: { sessionId: caller.sessionId, role: "plan-pm" },
+      now,
+    });
+    const receipt: ExecutionRead<ExecutionSessionRef> = {
+      data: { storeId: tx.storeId, epoch: tx.epoch, workflowId, role: "plan-pm", sessionId: caller.sessionId, planId },
+      token: executionToken("session", tx.storeId, tx.epoch, sessionKey, sessionRevision),
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+    };
+    writeOperationReceipt(tx, {
+      operationId,
+      requestHash,
+      workflowId,
+      planId,
+      receipt: {
+        ...receipt,
+        recovery: {
+          prior_session_id: priorSessionId,
+          reason,
+          attested_at: attestation.attestedAt,
+          operator: attestation.operator,
+          stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
+        },
+      } as ExecutionRead<ExecutionSessionRef>,
+      now,
+    });
+    return { ...receipt, operationId, replayed: false };
+  });
+}
+
 /** §2.2 the coordinator rows of one workflow, including the non-active ones. */
 function readCoordinatorRows(tx: ExecutionTransaction, workflowId: string): SessionRow[] {
   return readWorkflowSessionRows(tx, workflowId, "coordinator");
@@ -1911,6 +2142,17 @@ function requireLiveCoordinator(tx: ExecutionTransaction, workflowId: string, se
     );
   }
 }
+/** Plan recovery requires the caller to be the sole current coordinator. */
+function requirePlanRecoveryCoordinator(tx: ExecutionTransaction, workflowId: string, sessionId: string): void {
+  const live = readCoordinatorRows(tx, workflowId).filter((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+  if (live.length !== 1 || live[0]!.ref.sessionId !== sessionId) {
+    throw new CoordinationError(
+      "coordination.duplicate-holder",
+      `workflow ${workflowId} must have exactly one active coordinator, the plan-recovery caller ${sessionId}`,
+    );
+  }
+}
+
 
 /**
  * §2.3/§4.2 the lease half of the recovery: recovery replaces exactly ONE

@@ -33,6 +33,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   mutateExecutionWorkflow as publishedMutateExecutionWorkflow,
   recoverExecutionCoordinator as publishedRecoverExecutionCoordinator,
+  recoverExecutionPlanSession as publishedRecoverExecutionPlanSession,
   type WorkflowExecutionOperation,
 } from "../src/index.js";
 import {
@@ -58,6 +59,7 @@ import {
 import {
   mutateExecutionWorkflow,
   recoverExecutionCoordinator,
+  recoverExecutionPlanSession,
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
@@ -1660,6 +1662,110 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(leaseRows(fixture.context)).toEqual(before);
   });
 });
+
+describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
+  test("recovers only the named stopped plan owner and keeps the exact claim lineage", async () => {
+    const fixture = await preparedPlanFixture("stopped-plan-owner-recovery");
+    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
+    const planToken = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
+    const beforeLease = parsedJson(leaseRows(fixture.context)[0]!.lease_json);
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'suspended' where workflow_id = ? and role = 'plan-pm' and session_id = ?")
+        .run(WORKFLOW_ID, PLAN_PM_ID);
+    });
+    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
+
+    const input = {
+      planId: PLAN_ID,
+      expected: planToken,
+      operationId: "op-recover-plan-owner",
+      priorSessionId: PLAN_PM_ID,
+      reason: "the prior plan owner stopped",
+      attestation: attestation([PLAN_PM_ID]),
+    };
+    const recovered = await publishedRecoverExecutionPlanSession(coordinatorContext, input);
+    expect(recovered.replayed).toBe(false);
+    expect(recovered.data).toMatchObject({
+      workflowId: WORKFLOW_ID,
+      role: "plan-pm",
+      sessionId: COORDINATOR_ID,
+      planId: PLAN_ID,
+    });
+    expect(sessionState(fixture.context, PLAN_PM_ID)).toBe("revoked");
+    expect((await refusalOf(() => readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID))).code)
+      .toBe("execution.session-unavailable");
+    const afterLease = parsedJson(leaseRows(fixture.context)[0]!.lease_json);
+    expect(afterLease).toMatchObject({
+      holder_session_id: COORDINATOR_ID,
+      holder_role: "plan-pm",
+      transferred_from: PLAN_PM_ID,
+      claimed_at: beforeLease.claimed_at,
+      source_branch: beforeLease.source_branch,
+      worktree_path: beforeLease.worktree_path,
+    });
+    expect(Number(leaseRows(fixture.context)[0]!.owner_epoch)).toBe(fixture.coordinator.epoch);
+    expect((await readExecutionState(fixture.context)).data.workflows[0]!.plans[0]!.plan.id).toBe(PLAN_ID);
+
+    const footprint = await workflowFootprint(fixture.context);
+    const replay = await publishedRecoverExecutionPlanSession(coordinatorContext, input);
+    expect(replay.replayed).toBe(true);
+    expect(replay.data).toEqual(recovered.data);
+    expect(await workflowFootprint(fixture.context)).toEqual(footprint);
+  });
+
+  test("requires attested stop and the coordinator role without partial writes", async () => {
+    const fixture = await preparedPlanFixture("stopped-plan-owner-refusal");
+    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
+    const expected = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'suspended' where workflow_id = ? and role = 'plan-pm' and session_id = ?")
+        .run(WORKFLOW_ID, PLAN_PM_ID);
+    });
+    const before = await workflowFootprint(fixture.context);
+    const request = {
+      planId: PLAN_ID,
+      expected,
+      operationId: "op-recover-plan-owner-refused",
+      priorSessionId: PLAN_PM_ID,
+      reason: "stop evidence required",
+      attestation: attestation([]),
+    };
+    expect((await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, request))).code).toBe("coordination.invalid-transition");
+    const foreign = domainContext(fixture.context, fixture.planCaller);
+    expect((await refusalOf(() => recoverExecutionPlanSession(foreign, request))).code).toBe("execution.scope-mismatch");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+  test("a saved recovery replay cannot restore a claim after its release", async () => {
+    const fixture = await preparedPlanFixture("stopped-plan-owner-replay-after-release");
+    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
+    const input = {
+      planId: PLAN_ID,
+      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
+      operationId: "op-recover-plan-owner-replay-release",
+      priorSessionId: PLAN_PM_ID,
+      reason: "the prior plan owner stopped",
+      attestation: attestation([PLAN_PM_ID]),
+    };
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'suspended' where workflow_id = ? and role = 'plan-pm' and session_id = ?")
+        .run(WORKFLOW_ID, PLAN_PM_ID);
+    });
+    const recovered = await recoverExecutionPlanSession(coordinatorContext, input);
+    const newPlanCaller = trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID);
+    const planRead = await readExecutionPlan(domainContext(fixture.context, newPlanCaller), recovered.data, PLAN_ID);
+    await mutateExecutionPlan(domainContext(fixture.context, newPlanCaller), {
+      operationId: "op-release-recovered-plan-claim",
+      session: recovered.data,
+      expected: planRead.token,
+      planId: PLAN_ID,
+      operation: { kind: "release" },
+    });
+    const replay = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, input));
+    expect(replay.code).toBe("execution.session-unavailable");
+    expect(parsedJson(leaseRows(fixture.context)[0]!.lease_json).status).toBe("released");
+  });
+});
+
 
 /* ------------------------------------------------------------------------ *
  * E08 - the Prepare amendment's components on the ACTIVE DB route
