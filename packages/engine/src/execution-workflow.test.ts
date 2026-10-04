@@ -162,7 +162,7 @@ function workflowFootprint(context: StoreContext): Record<string, unknown> {
 /** Exact owner records used to prove refusal and out-of-scope preservation. */
 function workflowOwnershipSnapshot(context: StoreContext): Record<string, unknown> {
   return {
-    workflow: rows(context, `select revision, epoch, creator_session_id, state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`),
+    workflow: rows(context, `select revision, creator_session_id, state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`),
     sessions: rows(
       context,
       `select role, session_id, plan_id, epoch, revision, state, bound_at from execution_sessions where workflow_id = '${WORKFLOW_ID}' order by role, session_id`,
@@ -318,6 +318,7 @@ async function workflowFixture(label: string, additionalPlanIds: readonly string
   const initialized = await initializeExecutionAuthority(context);
   const integrationPath = join(repoRoot, "wt-integration");
   runGit(["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], repoRoot);
+  const compassPath = join(harnessRoot, COMPASS_REF);
   const planIds = [PLAN_ID, ...additionalPlanIds];
   writeCompass(compassPath, { status: "active", plans: planIds, targetBranch: "main" });
 
@@ -1737,7 +1738,7 @@ describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
     plantMergeClaim(fixture.context, { ownerEpoch: fixture.coordinator.epoch, holder: COORDINATOR_ID });
     const planToken = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
     const before = workflowOwnershipSnapshot(fixture.context);
-    const beforeClaims = leaseRows(fixture.context);
+    const beforeClaims = before.claims as Array<Record<string, unknown>>;
     const targetClaimBefore = beforeClaims.find((row) => row.plan_id === PLAN_ID)!;
     const siblingClaimBefore = beforeClaims.find((row) => row.plan_id === "p-sibling")!;
     const beforeLease = parsedJson(targetClaimBefore.lease_json);
@@ -1783,7 +1784,7 @@ describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
       holder_role: "plan-pm",
       transferred_from: PLAN_PM_ID,
       claimed_at: beforeLease.claimed_at,
-      source_branch: beforeLease.source_branch,
+      plan_branch: beforeLease.plan_branch,
       worktree_path: beforeLease.worktree_path,
     });
     expect(afterLease).toEqual({
@@ -1871,6 +1872,60 @@ describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
     const replay = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, input));
     expect(replay.code).toBe("execution.session-unavailable");
     expect(planRecoveryIssue(replay)).toMatchObject({ code: "plan-owner.replay-stale", availableWork: expect.any(Array) });
+    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(beforeReplay);
+  });
+
+  test("a saved recovery receipt cannot reclaim an accepted then returned handoff", async () => {
+    const fixture = await preparedPlanFixture("stopped-plan-owner-transfer-aba");
+    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
+    const worktree = join(fixture.harnessRoot, "worktrees", PLAN_ID);
+    mkdirSync(dirname(worktree), { recursive: true });
+    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, worktree], dirname(fixture.harnessRoot));
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
+    writeText(join(worktree, "recovery.txt"), "reviewed recovery fixture\n");
+    runGit(["add", "recovery.txt"], worktree);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fixture change"], worktree);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
+    const report = join(fixture.harnessRoot, "sdd", PLAN_ID, "review", "accepted.md");
+    writeText(report, "# Fixture review\nDecision: Approve\nQA: pass\n");
+    const input = {
+      planId: PLAN_ID,
+      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
+      operationId: "op-recover-before-handoff-transfer",
+      priorSessionId: PLAN_PM_ID,
+      reason: "the operator confirmed the prior session stopped",
+      attestation: attestation([PLAN_PM_ID]),
+    };
+    const recovered = await recoverExecutionPlanSession(coordinatorContext, input);
+    const currentContext = domainContext(fixture.context, trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID));
+    const recoveredOwners = workflowOwnershipSnapshot(fixture.context);
+    const submitted = await mutateExecutionPlan(currentContext, {
+      operationId: "op-submit-before-transfer",
+      session: recovered.data,
+      planId: PLAN_ID,
+      operation: { kind: "handoff", evidence: {
+        source_sha: head, review_base: base, review_head: head,
+        qc: { decision: "Approve", reports: [report], consolidated: report },
+        qa: { gate: "mandatory", decision: "pass", report },
+      } },
+    });
+    const handoffId = submitted.data.coordination.handoff!.id;
+    await mutateExecutionPlan(coordinatorContext, {
+      operationId: "op-accept-transfer", session: fixture.coordinator, planId: PLAN_ID,
+      operation: { kind: "accept", handoffId },
+    });
+    await mutateExecutionPlan(coordinatorContext, {
+      operationId: "op-return-transfer", session: fixture.coordinator, planId: PLAN_ID,
+      operation: { kind: "return", handoffId, reason: "return fixture for another revision" },
+    });
+    const beforeReplay = workflowOwnershipSnapshot(fixture.context);
+    expect(beforeReplay.sessions).toEqual(recoveredOwners.sessions);
+    const originalClaim = (recoveredOwners.claims as Array<Record<string, unknown>>).find((row) => row.plan_id === PLAN_ID)!;
+    const returnedClaim = (beforeReplay.claims as Array<Record<string, unknown>>).find((row) => row.plan_id === PLAN_ID)!;
+    expect(Number(returnedClaim.revision)).toBeGreaterThan(Number(originalClaim.revision));
+    expect(parsedJson(returnedClaim.lease_json)).toMatchObject({ holder_session_id: COORDINATOR_ID, holder_role: "plan-pm" });
+    const replay = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, input));
+    expect(replay.code).toBe("execution.session-unavailable");
     expect(workflowOwnershipSnapshot(fixture.context)).toEqual(beforeReplay);
   });
 
