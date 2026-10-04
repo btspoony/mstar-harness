@@ -1277,9 +1277,8 @@ export async function assertCatalogCompleteness(
  * iteration-compass-template.md` Fields guide); `validateCompassFrontmatter`
  * validates the parsed doc. The engine deliberately has no YAML dependency,
  * so this hand-rolled flat-subset parser lives here — the single shared
- * parser used by the CLI, the omp `mstar_iteration_gate` tool, and the
- * roadmap validator (no fork). Path wrapper over
- * `parseCompassFrontmatterText`.
+ * parser used by the CLI and the roadmap validator (no fork). Path wrapper
+ * over `parseCompassFrontmatterText`.
  *
  * Throws with the file path on structural errors (no fence / unterminated
  * fence / unsupported line) so callers can fail with a precise message.

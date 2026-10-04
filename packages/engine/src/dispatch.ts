@@ -775,8 +775,8 @@ export type ComposeDispatchGateResult = GateResult & {
 
 /**
  * Shared host dispatch-gate composition — the SINGLE dispatch-validation composition consumed by
- * the opencode adapter (`validateDispatchAssignment`), the omp blocking hook
- * (Gate 2) and the `mstar_dispatch_validate` tool:
+ * the opencode adapter (`validateDispatchAssignment`) and the omp blocking
+ * hook (Gate 2):
  *
  * 1. Shape guard: `## Assignment` heading OR any core field line
  * (`Execute as` / `Delegation` / `Task category`). Text that is not
