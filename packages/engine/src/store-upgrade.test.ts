@@ -6,7 +6,7 @@ import { openStore, initializeStore, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { listPendingCatalogRegistrations, retireStaleCatalogExecutionsForMigration } from "./catalog-registration.js";
 import { previewExecutionMigration } from "./execution-migrate.js";
-import { stageStoreUpgrade, activateStoreUpgrade } from "./store-upgrade.js";
+import { stageStoreUpgrade, activateStoreUpgrade, upgradeStoreWithRecoveryPoint } from "./store-upgrade.js";
 import type { ActivationAttestation } from "./store-activation.js";
 function validAttestation(): ActivationAttestation {
   return {
@@ -174,6 +174,89 @@ async function fixture(name: string): Promise<{ context: StoreContext; operation
   db.close();
   return { context, operationId };
 }
+
+async function stagedFixture(name: string): Promise<StoreContext> {
+  const { context } = await fixture(name);
+  const handle = await openStore(context, "write");
+  handle.db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+  handle.close();
+  await stageStoreUpgrade({
+    context,
+    operator: "owner",
+    operationId: `stage-${name}`,
+    catalogDeltaDisposition: "preserve for regression fixture",
+  });
+  return context;
+}
+
+test("safe-upgrade blocked readiness has a stable code and recovery action", async () => {
+  const context = { harnessDir: join(ROOT, "blocked-no-store", ".mstar") };
+  await expect(
+    stageStoreUpgrade({ context, operator: "owner", operationId: "blocked-no-store", catalogDeltaDisposition: "n/a" }),
+  ).rejects.toMatchObject({
+    code: "store.upgrade-state-changed",
+    message: expect.stringContaining("initialize it first with `mstar store init`"),
+  });
+  await expect(upgradeStoreWithRecoveryPoint(context, "blocked-recovery-point")).rejects.toMatchObject({
+    code: "store.upgrade-state-changed",
+    message: expect.stringContaining("initialize it first with `mstar store init`"),
+  });
+});
+
+test("safe-upgrade missing staged record has a stable code and recovery action", async () => {
+  const context = await stagedFixture("record-missing");
+  const handle = await openStore(context, "write");
+  handle.db.prepare("update execution_migrations set coverage_json = null").run();
+  handle.close();
+  await expect(
+    stageStoreUpgrade({ context, operator: "owner", operationId: "retry-record-missing", catalogDeltaDisposition: "n/a" }),
+  ).rejects.toMatchObject({
+    code: "store.upgrade-staged-record-missing",
+    message: expect.stringContaining("mstar store backup --out <backup-file>"),
+  });
+});
+
+test("safe-upgrade malformed staged record has a stable code and recovery action", async () => {
+  const context = await stagedFixture("record-malformed");
+  const handle = await openStore(context, "write");
+  handle.db.prepare("update execution_migrations set manifest_json = '{'").run();
+  handle.close();
+  await expect(
+    stageStoreUpgrade({ context, operator: "owner", operationId: "retry-record-malformed", catalogDeltaDisposition: "n/a" }),
+  ).rejects.toMatchObject({
+    code: "store.upgrade-staged-record-malformed",
+    message: expect.stringContaining("mstar store backup --out <backup-file>"),
+  });
+});
+
+test("safe-upgrade inconsistent staged identity has a stable code and recovery action", async () => {
+  const context = await stagedFixture("record-inconsistent");
+  const handle = await openStore(context, "write");
+  const row = handle.db.prepare("select manifest_id, manifest_json from execution_migrations").get() as { manifest_id: string; manifest_json: string };
+  const manifest = JSON.parse(row.manifest_json) as Record<string, unknown>;
+  manifest.id = "different-manifest";
+  handle.db.prepare("update execution_migrations set manifest_json = ? where manifest_id = ?").run(JSON.stringify(manifest), row.manifest_id);
+  handle.close();
+  await expect(
+    stageStoreUpgrade({ context, operator: "owner", operationId: "retry-record-inconsistent", catalogDeltaDisposition: "n/a" }),
+  ).rejects.toMatchObject({
+    code: "store.upgrade-staged-record-inconsistent",
+    message: expect.stringContaining("mstar store backup --out <backup-file>"),
+  });
+});
+
+test("safe-upgrade staged authority without its manifest has a stable code and recovery action", async () => {
+  const context = await stagedFixture("manifest-missing");
+  const handle = await openStore(context, "write");
+  handle.db.prepare("update execution_meta set manifest_id = null where id = 1").run();
+  handle.close();
+  await expect(
+    stageStoreUpgrade({ context, operator: "owner", operationId: "retry-manifest-missing", catalogDeltaDisposition: "n/a" }),
+  ).rejects.toMatchObject({
+    code: "store.upgrade-staged-manifest-missing",
+    message: expect.stringContaining("mstar store backup --out <backup-file>"),
+  });
+});
 
 test("stageStoreUpgrade retires a stale unresolved journal row before read-only preview", async () => {
   const { context, operationId } = await fixture("stale");

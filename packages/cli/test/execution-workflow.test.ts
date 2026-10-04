@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  ACTIVATION_PROTOCOL_VERSION,
   encodeExecutionSessionRef,
   initializeExecutionAuthority,
   initializeStore,
@@ -722,5 +723,63 @@ describe("mstar workflow \u2014 documented invocation", () => {
     // No file-route bytes were created by the refusal.
     expect(existsSync(join(fixture.harnessDir, "workflows", "wf-legacy-form", "snapshot.json"))).toBe(false);
     expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
+  });
+  test("session recover --unowned accepts empty stoppedSessions only for a workflow with no coordinator", async () => {
+    const fixture = await activeFixture("mstar-session-recover-unowned");
+    const registrationIdentity = coordinatorIdentity();
+    const registered = registerPlanWorkflow(fixture, registrationIdentity, await rootTokenOf(fixture));
+    expect(registered.exitCode).toBe(0);
+
+    const attestationPath = join(fixture.root, "recovery-attestation.json");
+    writeJson(attestationPath, {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: "2026-10-04T00:00:00.000Z",
+      operator: { actor: "ops-engineer", authorizationRef: "isolated fixture recovery decision" },
+      consumers: [{
+        entryId: "coordinator-omp",
+        kind: "coordinator",
+        entrypoint: "/opt/mstar/coordinator/dist/index.js",
+        runtime: "node",
+        runtimeVersion: "24.18.0",
+        version: "3.11.2",
+        current: true,
+        disposition: "reloaded",
+      }],
+      stoppedSessions: [],
+    });
+    const recoveryIdentity: ExecutionIdentity = {
+      source: "local",
+      sessionId: "coord-unowned-recovered",
+      workflowId: WORKFLOW_ID,
+      role: "coordinator",
+      planId: null,
+    };
+    const recovered = runCli([
+      "session", "recover",
+      "--workflow", WORKFLOW_ID,
+      "--unowned",
+      "--reason", "recover workflow with no recorded coordinator",
+      "--attestation", attestationPath,
+      "--expect", await workflowTokenOf(fixture),
+      "--operation", "recover-unowned-fixture",
+      "--harness", fixture.harnessDir,
+      "--session-id", recoveryIdentity.sessionId,
+    ], fixture, recoveryIdentity);
+    if (recovered.exitCode !== 0) throw new Error(`unowned recovery failed: ${recovered.stdout}${recovered.stderr}`);
+    expect(jsonOf(recovered).status).toBe("ok");
+    expect(dataOf(recovered).data).toMatchObject({ role: "coordinator", sessionId: recoveryIdentity.sessionId });
+    const refused = runCli([
+      "session", "recover",
+      "--workflow", WORKFLOW_ID,
+      "--unowned",
+      "--reason", "try claiming unowned after recovery",
+      "--attestation", attestationPath,
+      "--expect", await workflowTokenOf(fixture),
+      "--operation", "recover-unowned-again",
+      "--harness", fixture.harnessDir,
+      "--session-id", "coord-unowned-second",
+    ], fixture, { ...recoveryIdentity, sessionId: "coord-unowned-second" });
+    expect(refused.exitCode).toBe(1);
+    expect(String(jsonOf(refused).message)).toContain("must NAME the holder");
   });
 });

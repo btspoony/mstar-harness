@@ -164,15 +164,18 @@ describe("SDD command family", () => {
     }
   });
 
-  test("task brief preserves missing-task exit 3", async () => {
+  test("task brief preserves missing-task exit 3 and writes nothing", async () => {
     const root = tempDir("commands-sdd-brief-");
     try {
       const plan = join(root, "plan.md");
+      const outfile = join(root, "brief.md");
       writeFileSync(plan, "# Plan\n\n## Task 1: Present\nbody\n");
-      const result = await command("sdd.task-brief").execute({ planFile: plan, taskNumber: "2", outfile: join(root, "brief.md") }, invocation(root));
+      const result = await command("sdd.task-brief").execute({ planFile: plan, taskNumber: "2", outfile }, invocation(root));
       expect(result.status).toBe("refused");
       expect(result.exitCode).toBe(3);
-      expect(readFileSync(join(root, "brief.md"), "utf8")).toBe("");
+      expect(result.message).toContain("task 2 not found");
+      expect(existsSync(outfile)).toBe(false);
+      expect(existsSync(join(root, ".mstar", "sdd"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

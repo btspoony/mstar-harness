@@ -2947,17 +2947,17 @@ function importWorkflow(tx: ExecutionTransaction, workflow: DiscoveredWorkflow):
     const block: Record<string, unknown> = isPlainObject(row.coordination) ? { ...row.coordination } : {};
     delete block.revision;
     delete block.session;
-    // §2.2/§D the stored block is validated by the SHARED rules; the bound plan
-    // session lives in `execution_sessions`, so the handoff's "requires a bound
-    // plan session" half is checked against the row this import actually
-    // inserts — exactly the DB reader's own rule (`sessionBound: sessionRow !==
-    // undefined`). A handoff whose plan records no session binding therefore
-    // refuses here instead of being staged as a graph the reader would reject
-    // as corrupt after activation.
+    // §2.2/§D the shared validator keeps historical submitter association
+    // separate from session liveness; both are verified against the binding
+    // this import will insert.
+    const blockHandoff = isPlainObject(block.handoff) ? block.handoff : undefined;
     const violations = storedCoordinationViolations(block, {
       revision: 1,
       route: rowValidationRoute(routeSnapshot, state as never),
-      sessionBound: plan.session !== null,
+      submitterAssociated: blockHandoff === undefined || (
+        plan.session !== null && blockHandoff.submitted_by === plan.session.session_id
+      ),
+      activeSessionBound: plan.session !== null,
       what: `execution_plans(${workflowId},${planId}).coordination_json`,
     });
     if (violations.length > 0) {
