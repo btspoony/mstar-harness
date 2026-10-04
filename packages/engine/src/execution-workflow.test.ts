@@ -1999,6 +1999,11 @@ describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
       }),
     );
     expect(planRecoveryIssue(refused)).toMatchObject({ code: "plan-owner.target-binding-conflict", availableWork: expect.any(Array) });
+    expect(refused.message).toContain("Finish the already recovered plan through its ordinary reviewed handoff, coordinator acceptance, and completion");
+    expect(refused.message).toContain("releasing its claim alone does not free this identity's immutable plan binding");
+    expect(refused.message).toContain("obtain a genuinely new native coordinator session");
+    expect(refused.message).toContain("session recover --workflow <workflow-id> --prior-session <previous-coordinator-session>");
+    expect(refused.message).toContain("session recover --workflow <workflow-id> --plan <second-plan-id>");
     expect(workflowOwnershipSnapshot(fixture.context)).toEqual(before);
   });
   test("does not use another plan's binding even when the coordinator has a valid token for the selected plan", async () => {
