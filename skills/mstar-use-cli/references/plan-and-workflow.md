@@ -66,6 +66,7 @@ mstar session recover --workflow <id> [--plan <plan-id>] \
 - Without `--plan`, `--prior-session` names the prior coordinator, or `--unowned` explicitly declares that no coordinator holder is recorded. These choices are mutually exclusive.
 - The stop attestation must name the holder stopped/reloaded. `--expect` is the exact workflow token for coordinator recovery or the exact addressed plan token for plan recovery; `--operation` is the replay key.
 - Plan recovery creates a plan-PM reference for the current coordinator's own independently acquired session identity and transfers only that plan's held claim. It does not borrow the stopped identity, resume a session, adopt integration ownership, or change another plan. Continue with the ordinary plan-owner flow; a genuine reviewed handoff still goes through `plan handoff` → coordinator `plan accept` → `plan complete`.
+
 A coordinator’s plan-PM binding is retained across plan completion and remains tied to that native identity; completion does not erase it or make that identity available for another plan. For two stopped plan owners in one workflow, finish the first recovered plan through genuine reviewed completion, then explicitly stop the old coordinator and acquire a genuinely new native coordinator identity. The native launcher form is `mstar session run --workflow <workflow-id> --role coordinator --harness <absolute-harness-path> -- <argv>`; alternatively use the host’s supported native session launch. The new coordinator uses the existing coordinator recovery (no `--plan`) with the previous coordinator as `--prior-session`, its actual stop attestation, the current workflow token and a fresh operation id; then it recovers the second exact plan with that plan’s actual stopped owner, stop attestation, current plan token and a fresh operation id:
 
 ```sh
@@ -79,6 +80,8 @@ mstar session recover --workflow <workflow-id> --plan <second-plan-id> \
   --attestation <second-plan-owner-stop-attestation.json> \
   --expect <current-second-plan-token> --operation <second-plan-recovery-operation-id> \
   --session-id <same-new-native-coordinator-session-id>
+```
+
 Both recoveries run as the genuinely new coordinator identity acquired by the native host launcher or `mstar session run`; on the CLI route, supply that actual identity as `--session-id` on each invocation. The operation id must be fresh for each action. Each placeholder must be replaced with the real identifier, evidence path, token or operation id from the corresponding current authority; the stop evidence must assert that exact named holder stopped. Reusing the old `nativeID` or copying its `--session-ref` is not a new acquisition and cannot retarget the retained binding. Coordinator recovery with no `--plan` does not transfer any plan-PM binding; if the new coordinator has no applicable plan-PM binding, the documented default/unowned behavior remains unchanged. Never fabricate a first-plan Done or stop state to reach the second recovery.
 
 - If a valid handoff is already submitted or accepted, continue its normal accept/completion route instead of resetting ownership through recovery.
