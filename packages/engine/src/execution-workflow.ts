@@ -2317,7 +2317,7 @@ export async function recoverExecutionPlanSession(
     ) {
       const currentClaim = held === undefined ? "no held claim" : `holder ${String(held.lease.holder_session_id)} (${held.lease.holder_role}), epoch ${held.ownerEpoch}`;
       throw planRecoveryRefusal(
-        invalidWorkflowTransition(`plan ${planId} does not have the named prior owner’s held current-epoch execution claim`),
+        invalidWorkflowTransition(`plan ${planId} does not have the named prior owner's held current-epoch execution claim`),
         {
           workflowId,
           planId,
