@@ -5,9 +5,15 @@ import { join } from "node:path";
 import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
+import { readExecutionState } from "./execution-store.js";
+import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
+import { createFsStore, setArtifactStore } from "./store.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-"));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+afterAll(() => {
+  setArtifactStore(undefined);
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 function legacyWorkspace(name: string): { context: StoreContext; unknownBytes: Buffer } {
   const harnessDir = join(ROOT, name, ".mstar");
@@ -126,6 +132,47 @@ test("one store upgrade completes staged store and execution authorities with po
     expect(upgraded.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
   } finally {
     upgraded.close();
+  }
+});
+
+test("active-store import advances the epoch for imported held leases", async () => {
+  const { context } = legacyWorkspace("active-held-lease");
+  const initialized = await initializeStore(context);
+  try {
+    const now = "2026-10-04T00:00:00Z";
+    initialized.db.prepare("update execution_meta set authority_state = 'active', revision = revision + 1, root_updated_at = ?, activated_at = ? where id = 1")
+      .run(now, now);
+  } finally {
+    initialized.close();
+  }
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-held-lease" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  const state = await readExecutionState(context);
+  expect(state.data.workflows[0]?.plans[0]?.executionLease).toMatchObject({
+    status: "held",
+    holder_session_id: "session-active-held-lease",
+  });
+});
+
+test("minimal import canonicalizes legacy plan_id rows into id", async () => {
+  const { context } = legacyWorkspace("plan-id-alias");
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-plan-id-alias", WORKFLOW_SNAPSHOT_FILE);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<Record<string, unknown>> };
+  const plan = snapshot.plans[0]!;
+  plan.plan_id = plan.id;
+  delete plan.id;
+  writeFileSync(snapshotPath, JSON.stringify(snapshot));
+
+  await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-plan-id-alias" });
+  const store = await openStore(context, "read");
+  try {
+    const row = store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get("wf-plan-id-alias", "wf-plan-id-alias-plan") as { state_json: string };
+    const imported = JSON.parse(row.state_json) as Record<string, unknown>;
+    expect(imported).toMatchObject({ id: "wf-plan-id-alias-plan" });
+    expect(imported).not.toHaveProperty("plan_id");
+  } finally {
+    store.close();
   }
 });
 
@@ -348,4 +395,61 @@ test("same operation replays and a reused operation id with a different operator
   const first = await upgradeStoreMinimal(input);
   expect(await upgradeStoreMinimal(input)).toEqual(first);
   await expect(upgradeStoreMinimal({ ...input, operator: "another" })).rejects.toMatchObject({ code: "execution.operation-conflict" });
+});
+
+test("pending execution-written catalog registration remains publicly reconcilable after minimal activation", async () => {
+  const context: StoreContext = { harnessDir: join(ROOT, "pending-catalog", ".mstar") };
+  const workflowId = "wf-pending-catalog";
+  const planId = "pending-catalog-plan";
+  const title = "Pending catalog plan";
+  mkdirSync(join(context.harnessDir, "plans"), { recursive: true });
+  writeFileSync(join(context.harnessDir, "plans", `${planId}.md`), `# ${title}\n\n**plan_id:** ${planId}\n`);
+  const store = await initializeStore(context);
+  try {
+    store.db.exec(`CREATE TRIGGER fail_catalog_publish BEFORE INSERT ON catalog_entities
+      BEGIN SELECT RAISE(ABORT, 'injected publish failure'); END;`);
+  } finally {
+    store.close();
+  }
+  setArtifactStore(createFsStore(context.harnessDir));
+  await expect(registerCatalogExecution(context, {
+    operationId: "op-pending-catalog",
+    actor: "project-manager",
+    expectedCatalogRevision: 0,
+    workflow: {
+      kind: "plan",
+      workflowId,
+      options: {
+        harnessDir: context.harnessDir,
+        plan: { id: planId, title, file: `plans/${planId}.md` },
+        deliveryKind: "development",
+        branchSource: "feature/pending-catalog",
+        branchTarget: "main",
+        project: "harness",
+        startedAt: "2026-10-04T00:00:00.000Z",
+      },
+    },
+    delta: {
+      entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: `${planId}.md` }],
+      binding: { catalogKind: "plan", catalogId: planId },
+    },
+  })).rejects.toThrow();
+
+  const before = await listPendingCatalogRegistrations(context);
+  expect(before).toContainEqual(expect.objectContaining({ operationId: "op-pending-catalog", workflowId, phase: "execution-written" }));
+  const storeAfterFailure = await openStore(context, "write");
+  try {
+    storeAfterFailure.db.exec("DROP TRIGGER fail_catalog_publish");
+  } finally {
+    storeAfterFailure.close();
+  }
+  const imported = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-import-pending-catalog" });
+  expect(imported).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(await listPendingCatalogRegistrations(context)).toContainEqual(
+    expect.objectContaining({ operationId: "op-pending-catalog", workflowId, phase: "execution-written" }),
+  );
+
+  const receipt = await reconcileCatalogExecution(context, "op-pending-catalog");
+  expect(receipt).toMatchObject({ operationId: "op-pending-catalog", workflowId });
+  expect(await listPendingCatalogRegistrations(context)).not.toContainEqual(expect.objectContaining({ operationId: "op-pending-catalog" }));
 });

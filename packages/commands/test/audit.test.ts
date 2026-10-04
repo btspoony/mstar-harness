@@ -83,7 +83,7 @@ describe("audit command family", () => {
     const harness = path.join(root, ".mstar");
     mkdirSync(path.join(harness, "plans"), { recursive: true });
     setArtifactStore(createFsStore(harness));
-    const store = await initializeStore({ harnessDir: path.join(harness, "plans") });
+    const store = await initializeStore({ harnessDir: harness });
     store.close();
     await scaffoldHarness(root);
     const findings = path.join(root, "findings.json");

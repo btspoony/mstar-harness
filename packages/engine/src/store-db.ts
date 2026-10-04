@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
-import { join, relative, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 
 /** Minimum Bun runtime floor (contract §8). */

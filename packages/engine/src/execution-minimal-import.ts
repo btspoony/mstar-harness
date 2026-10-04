@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readSessionEnvelope, type CoordinationSession } from "./coordination.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { validateExecutionLease, withStatusWriteLock } from "./lease.js";
-import { validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
+import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin } from "./store-activation.js";
@@ -196,18 +196,20 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
     const planIds = new Set<string>();
     for (const rawPlan of snapshot.plans ?? []) {
       if (!isPlainObject(rawPlan)) continue;
-      const id = typeof rawPlan.id === "string" ? rawPlan.id : "";
+      const id = rowPlanId(rawPlan) ?? "";
       if (!id || planIds.has(id)) conflict(`workflow ${entry.id} has a missing or duplicate plan id; repair its plans array, then rerun store upgrade.`);
-      planIds.add(id);
-      const planSessionValue = isPlainObject(rawPlan.coordination) ? rawPlan.coordination.session : undefined;
-      const session = planSessionValue === undefined ? null : binding(planSessionValue);
-      if (planSessionValue !== undefined && session === null) conflict(`plan ${id} of workflow ${entry.id} has a malformed session binding; repair or remove it, then rerun store upgrade.`);
-      const lease = isPlainObject(rawPlan.execution_lease) ? rawPlan.execution_lease : null;
-      if (lease !== null && !validateExecutionLease(lease).ok) conflict(`plan ${id} of workflow ${entry.id} has an invalid execution lease; repair or remove the lease, then rerun store upgrade.`);
-      const rowGate = validatePlanRow({ ...rawPlan, id });
+      const rowGate = validatePlanRow(rawPlan);
       if (!rowGate.ok) conflict(`plan ${id} of workflow ${entry.id} is invalid (${rowGate.violations.map((v) => v.code).join(", ")}); repair or remove the plan row, then rerun store upgrade.`);
+      planIds.add(id);
+      const planRow: Record<string, unknown> = { ...rawPlan, id };
+      delete planRow.plan_id;
+      const planSessionValue = isPlainObject(planRow.coordination) ? planRow.coordination.session : undefined;
+      const session = planSessionValue === undefined ? null : binding(planSessionValue);
+      if (planSessionValue !== undefined && session === null) conflict(`plan ${id} of workflow ${entry.id} has a malformed session binding; repair or remove the binding, then rerun store upgrade.`);
+      const lease = isPlainObject(planRow.execution_lease) ? planRow.execution_lease : null;
+      if (lease !== null && !validateExecutionLease(lease).ok) conflict(`plan ${id} of workflow ${entry.id} has an invalid execution lease; repair or remove the lease, then rerun store upgrade.`);
       if (session !== null) verifyBinding(session, { root, dir, workflowId: entry.id, role: "plan-pm", planId: id });
-      plans.push({ id, row: rawPlan, session, lease, pin: suppliedCatalogPin(rawPlan, entry.id, id) });
+      plans.push({ id, row: planRow, session, lease, pin: suppliedCatalogPin(planRow, entry.id, id) });
     }
     if (coordinator !== null) verifyBinding(coordinator, { root, dir, workflowId: entry.id, role: "coordinator", planId: null });
     for (const dirent of readdirSync(dir, { withFileTypes: true })) {
@@ -253,11 +255,13 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       }
       const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
       let imported = 0;
+      let importedHeldLease = false;
       for (const row of source.rows) {
         if (existing.has(row.id)) continue;
         writeImportedExecutionWorkflow(tx, row);
         existing.add(row.id);
         imported++;
+        importedHeldLease ||= row.plans.some((plan) => plan.lease !== null);
       }
       const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
       if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
@@ -281,6 +285,10 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
         const store = tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1 and authority_epoch = ?")
           .run(tx.epoch) as { changes?: unknown };
         if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun \`store upgrade\` against the current store.");
+      } else if (importedHeldLease) {
+        const store = tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1 and authority_epoch = ?")
+          .run(tx.epoch) as { changes?: unknown };
+        if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun `store upgrade` against the current store.");
       } else if (imported > 0) {
         tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
       }

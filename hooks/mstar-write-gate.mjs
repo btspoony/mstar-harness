@@ -11461,7 +11461,8 @@ function storeDbPath(context) {
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
   const start = resolve13(context.harnessDir);
   const resolved = resolveProcessHarnessDir(start);
-  return join18(resolved ?? start, "store.db");
+  const hijackedPlansFallback = resolved !== null && resolved === join18(start, "plans");
+  return join18(hijackedPlansFallback ? start : resolved ?? start, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -12854,6 +12855,7 @@ async function readExecutionState(context) {
   }));
 }
 var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+var UNPARSEABLE_JSON = Symbol("unparseable-json");
 var SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
 class MilestoneError extends Error {
   code;
