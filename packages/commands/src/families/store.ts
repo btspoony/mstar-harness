@@ -129,22 +129,9 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
     : "";
   const pendingOperationIds = errorMessage.match(/catalog operation\(s\) are still pending \(([^)]*)\)/)?.[1];
   const isPendingRegistration = rawCode === "execution.migration-conflict" && pendingOperationIds !== undefined;
-  const unclassifiedCode = rawCode === undefined
-    ? errorMessage.includes("persisted staged migration record is missing or incomplete")
-      ? "store.upgrade-staged-record-missing"
-      : errorMessage.includes("malformed JSON in the persisted staged manifest or coverage record")
-        ? "store.upgrade-staged-record-malformed"
-        : errorMessage.includes("persisted manifest or coverage identity is inconsistent")
-          ? "store.upgrade-staged-record-inconsistent"
-          : errorMessage.includes("retry inventory") && errorMessage.includes("does not match the staged manifest scope")
-            ? "store.upgrade-staged-inventory-mismatch"
-            : errorMessage.includes("staged execution authority without its matching recorded manifest")
-              ? "store.upgrade-staged-manifest-missing"
-              : errorMessage.startsWith("store safe-upgrade is blocked:") || errorMessage === "unreachable store safe-upgrade state"
-                ? "store.upgrade-state-changed"
-                : undefined
-    : undefined;
-  const errorCode = isPendingRegistration ? "store.upgrade-pending-registration" : rawCode ?? unclassifiedCode;
+  const errorCode = isPendingRegistration ? "store.upgrade-pending-registration" : rawCode;
+  const readinessReason = ["store-missing", "schema-upgrade-pending", "execution-authority-legacy", "execution-authority-staged"]
+    .find((reason) => errorMessage.includes(reason));
   const diagnostics: Record<string, { blocker: string; recovery: string }> = {
     "execution.migration-conflict": { blocker: "A legacy source or catalog registration conflicts with the execution migration.", recovery: "Do not abort this catalog operation: its staged snapshot or root registration is protected by the execution guard. Resolve the ownership or evidence conflict through the supported catalog reconciliation flow, then retry `store safe-upgrade --operator <name> --attestation <file>`." },
     "execution.coverage-incomplete": { blocker: "The legacy execution source does not provide complete migration evidence.", recovery: "Restore the missing workflow or stop-session evidence from the operator's backup; provide an inventory only if discovery inventory is the missing item, using `--inventory <inventory-file>`, then run `store safe-upgrade --operator <name> --attestation <file>`." },
@@ -163,14 +150,16 @@ export function storeUpgradeFailure(id: string, error: unknown): CommandEnvelope
     "store.busy": { blocker: "Another store writer currently holds the database.", recovery: "Wait for that writer to finish, then retry the requested upgrade." },
     "store.corrupt": { blocker: "The store database is unreadable or structurally invalid.", recovery: "A restore preview requires inventory of the live database, so `store execution restore-preview` cannot recover an unreadable live store. No online operator restore is available in this state. If no verified backup can be restored through a supported recovery process, rebuild the store with `store init` only after preserving the corrupt database and legacy sources; rebuilding loses SQLite-only catalog/execution data." },
     "store.schema-drift": { blocker: "Applied schema history is inconsistent with this build.", recovery: "Install the harness build that owns this store schema with `npm i -g @mstar-harness/cli@latest` and retry. If the live store remains readable and the schema owner confirms restore is appropriate, run `store execution restore-preview --backup <backup-file> --out <preview-file>`, review its loss inventory, then `store execution restore --preview <preview-file> --operator <name> --authorization <ref>`." },
-    "store.upgrade-staged-record-missing": { blocker: "A staged execution migration is missing its complete saved record.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and is not reachable for a missing saved record. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
-    "store.upgrade-staged-record-malformed": { blocker: "The saved staged migration manifest or coverage JSON is malformed.", recovery: "Do not edit or delete the live store or workflow files. Preserve the entire harness store before rebuilding; the archive-first recovery path is required to retain the malformed record and all SQLite-only data." },
-    "store.upgrade-staged-record-inconsistent": { blocker: "The saved staged migration identity does not verify.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and cannot repair an inconsistent saved identity. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
-    "store.upgrade-staged-manifest-missing": { blocker: "The staged authority has no matching recorded migration manifest.", recovery: "The staged-abandon confirmation applies only when changed evidence is detected and cannot repair a missing manifest. No operator-executable in-place recovery is available. Preserve the legacy sources; rebuild with `store init` only after preserving the store and source bytes, understanding that SQLite-only catalog/execution data will be lost." },
+    "store.upgrade-staged-record-missing": { blocker: "A staged execution migration is missing its complete saved record.", recovery: "No supported in-place repair is available. Preserve legacy sources and create a store backup with `mstar store backup --out <backup-file>`; provide that backup and the refusal to the store recovery owner before rebuilding." },
+    "store.upgrade-staged-record-malformed": { blocker: "The saved staged migration manifest or coverage JSON is malformed.", recovery: "Do not edit the live store or workflow files. Preserve the entire store with `mstar store backup --out <backup-file>` and provide the backup and refusal to the store recovery owner; rebuilding before preservation can lose SQLite-only catalog and execution data." },
+    "store.upgrade-staged-record-inconsistent": { blocker: "The saved staged migration identity does not verify.", recovery: "No supported in-place repair is available. Preserve legacy sources and create a store backup with `mstar store backup --out <backup-file>`; provide that backup and the refusal to the store recovery owner before rebuilding." },
+    "store.upgrade-staged-manifest-missing": { blocker: "The staged authority has no matching recorded migration manifest.", recovery: "No supported in-place repair is available. Preserve legacy sources and create a store backup with `mstar store backup --out <backup-file>`; provide that backup and the refusal to the store recovery owner before rebuilding." },
     "store.schema-unsupported": { blocker: "This build does not support the store schema version.", recovery: "Install the current harness CLI with `npm i -g @mstar-harness/cli@latest`, then rerun `store safe-upgrade` on that build." },
     "store.runtime-unsupported": { blocker: "The current runtime lacks native SQLite support or is below the supported version floor.", recovery: "Run the harness with Bun >=1.4.0 from `https://bun.sh` or Node >=24.18.0 from `https://nodejs.org`, then retry `store safe-upgrade`." },
     "store.upgrade-staged-inventory-mismatch": { blocker: "The retry inventory differs from the staged migration's reviewed scope.", recovery: "Resume with the reviewed inventory, or omit `--inventory` to reuse that saved scope, then rerun `store safe-upgrade`." },
-    "store.upgrade-state-changed": { blocker: "The upgrade preconditions changed while the upgrade was being prepared.", recovery: "Read the current store state with the supported `store safe-upgrade` command, correct the named blocking condition, and rerun `store safe-upgrade`." },
+    "store.upgrade-state-changed": { blocker: `The upgrade is blocked by ${readinessReason ?? "changed store readiness preconditions"}.`, recovery: readinessReason === "store-missing"
+      ? "Initialize the empty workspace with `mstar store init`, then retry `mstar store safe-upgrade` with its required operator attestation."
+      : "Correct the named readiness condition and retry `mstar store safe-upgrade` with its required operator attestation." },
   };
   const diagnostic = isPendingRegistration
       ? {
@@ -390,7 +379,11 @@ async function runStoreUpgrade(
     return ok(id, { verdict: "upgraded", schemaVersion: state.schemaVersion, authorityState: "active", sourcesRetired: receipt.phase === "retired" });
   }
   if (state.verdict === "blocked") {
-    throw new Error("unreachable store safe-upgrade state");
+    throw new StoreError(
+      "store.upgrade-state-changed",
+      `store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}. ` +
+        "Correct the readiness condition and retry `mstar store safe-upgrade`; if the store is missing, initialize it first with `mstar store init`.",
+    );
   }
 
   if (!hasLegacyExecutionFiles(context.harnessDir)) {

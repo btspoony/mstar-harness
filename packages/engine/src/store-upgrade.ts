@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { backupStore, canonicalPath, type ActivationAttestation, type BackupReceipt } from "./store-activation.js";
-import { openStore, storeDbPath, upgradeStore, type StoreContext } from "./store-db.js";
+import { openStore, storeDbPath, StoreError, upgradeStore, type StoreContext } from "./store-db.js";
 import {
   activateExecutionMigration,
   applyExecutionMigration,
@@ -60,7 +60,11 @@ export async function upgradeStoreWithRecoveryPoint(
 ): Promise<{ schemaVersion: number; schemaBackup: BackupReceipt }> {
   const state = await probeStoreUpgradeState(context);
   if (!state.storeExists || state.verdict === "blocked" || state.schemaVersion === null) {
-    throw new Error(`store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
+    throw new StoreError(
+      "store.upgrade-state-changed",
+      `store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}. ` +
+        "Read current readiness with `mstar store safe-upgrade`, correct the named condition, then retry; if the store is missing, initialize it first with `mstar store init`.",
+    );
   }
   const schemaBackup = await backupStore(context, {
     out: join(context.harnessDir, "archived", "store-migration", "backups", `${operationId}-pre-schema.db`),
@@ -83,9 +87,9 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
       typeof row.manifest_json !== "string" ||
       typeof row.coverage_json !== "string"
     ) {
-      throw new Error(
-        `store safe-upgrade found execution authority staged under ${JSON.stringify(manifestId)}, but its persisted staged migration ` +
-          "record is missing or incomplete; do not re-preview or apply a different manifest",
+      throw new StoreError(
+        "store.upgrade-staged-record-missing",
+        `store safe-upgrade found execution authority staged under ${JSON.stringify(manifestId)}, but its persisted staged migration record is missing or incomplete. Preserve the legacy sources and store with \`mstar store backup --out <backup-file>\` and give the backup and refusal to the store recovery owner; no supported in-place repair exists.`,
       );
     }
     let manifest: ExecutionManifest;
@@ -94,9 +98,9 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
       manifest = JSON.parse(row.manifest_json) as ExecutionManifest;
       coverage = JSON.parse(row.coverage_json) as ExecutionCoverageSet;
     } catch {
-      throw Object.assign(
-        new Error("store safe-upgrade found malformed JSON in the persisted staged manifest or coverage record"),
-        { code: "store.upgrade-staged-record-malformed" },
+      throw new StoreError(
+        "store.upgrade-staged-record-malformed",
+        "store safe-upgrade found malformed JSON in the persisted staged manifest or coverage record. Preserve the entire store with `mstar store backup --out <backup-file>` and provide the backup and refusal to the store recovery owner; do not edit the live database or workflow files.",
       );
     }
     // Resuming must act on the SAME migration the row records. The row is
@@ -112,9 +116,9 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
       manifest.epoch !== store.epoch ||
       canonicalPath(manifest.root) !== canonicalPath(dirname(storeDbPath(input.context)))
     ) {
-      throw new Error(
-        `store safe-upgrade found a staged migration ${JSON.stringify(manifestId)} whose persisted manifest or coverage identity is ` +
-          "inconsistent; refusing to re-preview or apply another manifest",
+      throw new StoreError(
+        "store.upgrade-staged-record-inconsistent",
+        `store safe-upgrade found a staged migration ${JSON.stringify(manifestId)} whose persisted manifest or coverage identity is inconsistent. Preserve the legacy sources and store with \`mstar store backup --out <backup-file>\` and give the backup and refusal to the store recovery owner; no supported in-place repair exists.`,
       );
     }
     if (input.inventoryPath !== undefined && input.inventoryPath !== manifest.inventoryPath) {
@@ -142,11 +146,18 @@ async function resumeStagedStoreUpgrade(input: StoreUpgradeInput, manifestId: st
 export async function stageStoreUpgrade(input: StoreUpgradeInput): Promise<StagedStoreUpgrade> {
   const state = await probeStoreUpgradeState(input.context);
   if (!state.storeExists || state.verdict === "blocked") {
-    throw new Error(`store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}`);
+    throw new StoreError(
+      "store.upgrade-state-changed",
+      `store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}. ` +
+        "Read current readiness with `mstar store safe-upgrade`, correct the named condition, then retry; if the store is missing, initialize it first with `mstar store init`.",
+    );
   }
   if (state.executionAuthorityState === "staged") {
     if (state.manifestId === null || state.executionMigrationPhase !== "staged") {
-      throw new Error("store safe-upgrade found a staged execution authority without its matching recorded manifest; refusing to re-preview");
+      throw new StoreError(
+        "store.upgrade-staged-manifest-missing",
+        "store safe-upgrade found a staged execution authority without its matching recorded manifest; preserve the legacy sources and store with `mstar store backup --out <backup-file>` and give the backup and refusal to the store recovery owner; no supported in-place repair exists.",
+      );
     }
     return await resumeStagedStoreUpgrade(input, state.manifestId);
   }

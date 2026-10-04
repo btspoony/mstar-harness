@@ -47,15 +47,15 @@ describe("store safe-upgrade refusal diagnostics", () => {
   });
 
   test.each([
-    ["store.upgrade-staged-record-missing", "persisted staged migration record is missing or incomplete", "missing saved record", "No operator-executable in-place recovery is available"],
-    ["store.upgrade-staged-record-malformed", "malformed JSON in the persisted staged manifest or coverage record", "staged migration manifest or coverage JSON is malformed", "archive-first recovery path"],
-    ["store.upgrade-staged-record-inconsistent", "persisted manifest or coverage identity is inconsistent", "identity does not verify", "cannot repair an inconsistent saved identity"],
+    ["store.upgrade-staged-record-missing", "persisted staged migration record is missing or incomplete", "missing its complete saved record", "mstar store backup --out <backup-file>"],
+    ["store.upgrade-staged-record-malformed", "malformed JSON in the persisted staged manifest or coverage record", "staged migration manifest or coverage JSON is malformed", "Preserve the entire store"],
+    ["store.upgrade-staged-record-inconsistent", "persisted manifest or coverage identity is inconsistent", "identity does not verify", "mstar store backup --out <backup-file>"],
     ["store.upgrade-staged-inventory-mismatch", "retry inventory /somewhere does not match the staged manifest scope", "reviewed inventory", "rerun `store safe-upgrade`"],
-    ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest", "cannot repair a missing manifest"],
-    ["store.upgrade-state-changed", "store safe-upgrade is blocked: changed precondition", "preconditions changed", "rerun `store safe-upgrade`"],
-    ["store.upgrade-state-changed", "unreachable store safe-upgrade state", "preconditions changed", "rerun `store safe-upgrade`"],
+    ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest", "mstar store backup --out <backup-file>"],
+    ["store.upgrade-state-changed", "store safe-upgrade is blocked: changed precondition", "changed store readiness preconditions", "mstar store safe-upgrade"],
+    ["store.upgrade-state-changed", "unreachable store safe-upgrade state", "changed store readiness preconditions", "mstar store safe-upgrade"],
   ])("%s maps a producer refusal to a cause-specific action", (code, producerMessage, cause, recovery) => {
-    const result = storeUpgradeFailure("store.safe-upgrade", new Error(producerMessage));
+    const result = storeUpgradeFailure("store.safe-upgrade", Object.assign(new Error(producerMessage), { code }));
     expect(result.code).toBe(code);
     expect(result.message).toContain(cause);
     expect(result.message).toContain(recovery);
@@ -70,7 +70,7 @@ describe("store safe-upgrade refusal diagnostics", () => {
     const corrupt = storeUpgradeFailure("store.safe-upgrade", { code: "store.corrupt", message: "database cannot be read" });
     expect(staged.code).toBe("store.upgrade-staged-record-malformed");
     expect(staged.message).toContain("staged migration manifest or coverage JSON is malformed");
-    expect(staged.message).toContain("archive-first recovery path");
+    expect(staged.message).toContain("mstar store backup --out <backup-file>");
     expect(corrupt.code).toBe("store.corrupt");
     expect(corrupt.message).toContain("unreadable or structurally invalid");
     expect(corrupt.message).toContain("store init");

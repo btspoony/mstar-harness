@@ -1080,7 +1080,7 @@ function readWorkflowView(
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState as PlanRow),
-      sessionBound: handoff === undefined || historicalSessionRow !== undefined,
+      submitterAssociated: handoff === undefined || historicalSessionRow !== undefined,
       what: `execution_plans(${workflowId},${planId}).coordination_json`,
     });
     if (coordinationViolations.length > 0) {

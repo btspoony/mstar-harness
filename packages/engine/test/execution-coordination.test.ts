@@ -2662,6 +2662,78 @@ describe("execution-handoff-integration: §3/§D/§E handoff, accept, return and
     );
     expect(second.code).toBe("coordination.session-mismatch");
   });
+  test("accepted handoff completes after its submitting plan-pm session is revoked", async () => {
+    const fixture = await lifecycleFixture("complete-stopped-submitter", "development");
+    const handoffId = await acceptedAttempt(fixture, "complete-stopped-submitter");
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where session_id = ?").run(PLAN_PM_ID);
+    });
+
+    const returnRefusal = await refusalOf(() =>
+      planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "return-stopped-submitter", {
+        kind: "return",
+        handoffId,
+        reason: "rework",
+      }),
+    );
+    expect(returnRefusal.code).toBe("coordination.session-mismatch");
+    expect(returnRefusal.message).toContain("requires plan p-1's handoff submitter host-pm to be the plan's active plan-pm session");
+
+    // Before the fix, this completion was refused by the stored coordination
+    // validator with `complete.handoff requires a bound plan session`.
+    const completed = await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-stopped-submitter", {
+      kind: "complete",
+      handoffId,
+    });
+    expect(completed.data.plan.status).toBe("Done");
+    expect(completed.data.coordination!.handoff).toMatchObject({ id: handoffId, state: "completed" });
+    expect(completed.data.executionLease).toMatchObject({ status: "released", released_by: COORDINATOR_ID });
+  });
+
+  test("completed handoff refuses a missing historical submitter association", async () => {
+    const fixture = await lifecycleFixture("completed-handoff-missing-submitter", "development");
+    const handoffId = await acceptedAttempt(fixture, "complete-missing-submitter");
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-missing-submitter", {
+      kind: "complete",
+      handoffId,
+    });
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(WORKFLOW_ID, OWN_PLAN) as { coordination_json: string };
+      const block = JSON.parse(row.coordination_json) as { handoff: { submitted_by: string } };
+      block.handoff.submitted_by = "missing-plan-pm-session";
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify(block), WORKFLOW_ID, OWN_PLAN);
+    });
+    const refusal = await refusalOf(() =>
+      readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN),
+    );
+    expect(refusal.code).toBe("store.corrupt");
+    expect(refusal.message).toContain("no matching historical plan-pm session");
+  });
+
+  test("completed handoff refuses submitter attribution to a different role", async () => {
+    const fixture = await lifecycleFixture("completed-handoff-wrong-submitter", "development");
+    const handoffId = await acceptedAttempt(fixture, "complete-wrong-submitter");
+    await planMutation(fixture, fixture.coordinatorSeat, OWN_PLAN, "complete-wrong-submitter", {
+      kind: "complete",
+      handoffId,
+    });
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(WORKFLOW_ID, OWN_PLAN) as { coordination_json: string };
+      const block = JSON.parse(row.coordination_json) as { handoff: { submitted_by: string } };
+      block.handoff.submitted_by = COORDINATOR_ID;
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify(block), WORKFLOW_ID, OWN_PLAN);
+    });
+    const refusal = await refusalOf(() =>
+      readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, OWN_PLAN),
+    );
+    expect(refusal.code).toBe("store.corrupt");
+    expect(refusal.message).toContain("no matching historical plan-pm session");
+  });
+
 
   test("return restores the plan session's ownership of its own plan", async () => {
     const fixture = await lifecycleFixture("return-ownership", "integration");
