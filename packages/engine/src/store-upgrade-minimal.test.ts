@@ -282,7 +282,7 @@ test("minimal import keeps a prepared InProgress plan recoverable through public
   const sessionId = `session-${name}`;
   const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
   const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
-    plans: Array<{ status: string; coordination: Record<string, unknown> }>;
+    plans: Array<{ status: string; coordination: Record<string, unknown>; metadata?: Record<string, string> }>;
   };
   snapshot.plans[0]!.status = "InProgress";
   snapshot.plans[0]!.metadata = {
@@ -306,7 +306,7 @@ test("minimal import keeps a prepared InProgress plan recoverable through public
   // Imported sessions are suspended historical facts. Reachability = a NEW
   // public plan-pm identity binds cleanly (no lease row blocks the fresh
   // claim) and takes over the InProgress plan.
-  const caller = { sessionId: `${sessionId}-rebind`, role: "plan-pm", workflowId, planId };
+  const caller = { sessionId: `${sessionId}-rebind`, role: "plan-pm" as const, workflowId, planId };
   const st = await readExecutionState(context);
   const planToken = st.data.workflows[0]!.planTokens[planId]!;
   const rebound = await bindExecutionSession(
