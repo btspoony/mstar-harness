@@ -227,10 +227,11 @@ describe("generated CLI adapter", () => {
     delete process.env.MSTAR_EXECUTION_IDENTITY;
     try {
       const withoutRuntimeIdentity = await run(args);
-      expect(JSON.parse(withoutRuntimeIdentity.stdout)).toMatchObject({
-        status: "usage",
-        message: "recovery requires the main conversation session identity",
-      });
+      const usageEnvelope = JSON.parse(withoutRuntimeIdentity.stdout);
+      expect(usageEnvelope).toMatchObject({ status: "usage" });
+      expect(String(usageEnvelope.message)).toContain("recovery requires the main conversation session identity");
+      expect(String(usageEnvelope.message)).toContain("--session-id");
+      expect(String(usageEnvelope.message)).toContain("sessionId");
     } finally {
       if (priorIdentity !== undefined) process.env.MSTAR_HOST_SESSION_ID = priorIdentity;
       if (priorMinted !== undefined) process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
