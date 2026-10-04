@@ -1624,6 +1624,12 @@ export function suppliedCatalogPin(row: Record<string, unknown>, workflowId: str
  * authority. A snapshot that carries coordinator binding, leases, delivery
  * evidence or a terminal status is a historical lifecycle: it belongs on the
  * migration route, never on the create-only path.
+ *
+ * The caller's session id is creator ATTRIBUTION, not a creation requirement:
+ * an ACTIVE registration from a transport that carries no session identity
+ * creates the workflow with a NULL `creator_session_id`, and the trust
+ * boundary lives at bind time — the first coordinator bind adopts a
+ * NULL-creator workflow once (§2.3), after which the creator fence holds.
  */
 export function resolveCreateWorkflow(
   caller: ExecutionCaller,
@@ -1631,8 +1637,8 @@ export function resolveCreateWorkflow(
   snapshot: unknown,
   operationId: unknown,
 ): ResolvedCreation {
-  if (!isNonEmptyString(caller?.sessionId)) {
-    throw invalidInput("the execution caller needs a non-empty session identity");
+  if (!isPlainObject(caller)) {
+    throw invalidInput("the execution caller needs a coordinator caller object");
   }
   assertOperationId(operationId);
   const entryGate = validateWorkflowEntry(entry);
@@ -1881,7 +1887,7 @@ function assertSelectedCatalogEntities(
 /** §2.2: the registry row order is creation order, so rows are inserted in list order. */
 function writeCreatedWorkflow(
   db: StoreDb,
-  input: { workflowId: string; entry: WorkflowEntry; snapshot: WorkflowSnapshot; plans: readonly ResolvedCreationPlan[]; creatorSessionId: string; now: string },
+  input: { workflowId: string; entry: WorkflowEntry; snapshot: WorkflowSnapshot; plans: readonly ResolvedCreationPlan[]; creatorSessionId: string | null; now: string },
 ): void {
   const { workflowId, entry, snapshot, plans, creatorSessionId, now } = input;
   // §2.2: the workflow header is the snapshot minus the plan collection it does
@@ -1948,7 +1954,10 @@ export function writeExecutionCreation(
     entry: input.creation.entry,
     snapshot: input.creation.snapshot,
     plans: input.creation.plans,
-    creatorSessionId: input.caller.sessionId,
+    // Creator attribution: a caller with no session identity (the empty-string
+    // spelling of an unset id) registers a NULL creator that the first
+    // coordinator bind adopts; an explicit id is recorded as given.
+    creatorSessionId: isNonEmptyString(input.caller.sessionId) ? input.caller.sessionId : null,
     now: input.now,
   });
   // Registry membership is a root change: the root revision and its timestamp

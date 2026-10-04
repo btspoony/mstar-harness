@@ -83,6 +83,17 @@ export type ExecutionIdentity = Readonly<{
   planId: string | null;
 }>;
 
+/** Per-call relaxations of the acquired-identity rule; default is strict. */
+export type ExecutionIdentityOptions = Readonly<{
+  /**
+   * ACTIVE registration only: creator attribution is optional, so the empty
+   * string (the normalized spelling of an unset id) is accepted and the create
+   * path records a NULL `creator_session_id` that the first coordinator bind
+   * adopts (§2.3). Every other consumer keeps the acquired-identity rule.
+   */
+  allowUnsetSessionId?: boolean;
+}>;
+
 /** The scope an identity is validated against (the workflow/role/plan it addresses). */
 export type ExecutionIdentityScope = Readonly<{
   workflowId: string;
@@ -106,8 +117,16 @@ function isSource(value: unknown): value is "host" | "local" {
  * a plan scope, a plan-pm without one, and any workflow/role/plan disagreement
  * with `scope`. Canonical-root equality is the caller's explicit check, not
  * this function's: the root is not a member of the identity.
+ *
+ * `allowUnsetSessionId` is the ACTIVE registration exception: the empty string
+ * passes as "unset" and the create path records a NULL creator. A missing or
+ * non-string session id refuses under every option.
  */
-export function validateExecutionIdentity(identity: ExecutionIdentity, scope: ExecutionIdentityScope): void {
+export function validateExecutionIdentity(
+  identity: ExecutionIdentity,
+  scope: ExecutionIdentityScope,
+  options: ExecutionIdentityOptions = {},
+): void {
   if (!isPlainObject(identity)) {
     throw new CoordinationError("coordination.identity-missing", "an execution identity tuple is required");
   }
@@ -133,11 +152,14 @@ export function validateExecutionIdentity(identity: ExecutionIdentity, scope: Ex
     );
   }
   if (!isNonEmptyString(value.sessionId)) {
-    throw new CoordinationError(
-      "coordination.identity-missing",
-      "the execution identity carries no session id \u2014 an identity is acquired explicitly and is never generated; supply a native or local id",
-      { workflow_id: value.workflowId },
-    );
+    if (!(options.allowUnsetSessionId === true && typeof value.sessionId === "string")) {
+      throw new CoordinationError(
+        "coordination.identity-missing",
+        "the execution identity carries no session id \u2014 an identity is acquired explicitly and is never generated; " +
+          "supply a native or local id (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call)",
+        { workflow_id: value.workflowId },
+      );
+    }
   }
   if (!isRole(value.role)) {
     throw new CoordinationError(

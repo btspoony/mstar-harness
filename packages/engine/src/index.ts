@@ -530,7 +530,7 @@ export { WorkflowSnapshotValidationError } from "./workflow.js";
 // Adapter-only execution identity (prerequisite contract §3.1): one shared
 // tuple + scope validator every adapter and later DB consumer imports instead
 // of declaring a second shape.
-export type { ExecutionIdentity, ExecutionIdentityRole, ExecutionIdentityScope } from "./session-identity.js";
+export type { ExecutionIdentity, ExecutionIdentityOptions, ExecutionIdentityRole, ExecutionIdentityScope } from "./session-identity.js";
 export { SESSION_ID_MAX_LENGTH, assertSafeSessionId, validateExecutionIdentity } from "./session-identity.js";
 
 export {
