@@ -270,7 +270,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           sessionId: context.sessionId,
         };
       } else if (input.workflow !== undefined && input.plan !== undefined) {
-        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage(id, "plan-session bind requires runtime session identity");
+        if (context.sessionId === undefined || context.sessionId.trim() === "") {
+          return usage(id, `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).`);
+        }
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
         bindInput = {

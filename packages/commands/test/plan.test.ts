@@ -114,10 +114,16 @@ describe("plan command family", () => {
     const ctx = context(data.root);
     const coordinatorDefinition = definition("plan.bind");
     const suppliedOnly = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
-    expect(suppliedOnly).toMatchObject({ status: "usage", code: "command.invalid-input", message: "coordinator bind requires runtime session identity (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call)." });
+    expect(suppliedOnly).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(String(suppliedOnly.message)).toContain("coordinator bind requires runtime session identity");
+    expect(String(suppliedOnly.message)).toContain("--session-id");
+    expect(String(suppliedOnly.message)).toContain("sessionId");
     expect(coordinatorDefinition.input.safeParse({ sessionId: "caller-chosen" }).data).not.toHaveProperty("sessionId");
     const planSessionWithoutRuntime = await coordinatorDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
-    expect(planSessionWithoutRuntime).toMatchObject({ status: "usage", code: "command.invalid-input", message: "plan-session bind requires runtime session identity" });
+    expect(planSessionWithoutRuntime).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(String(planSessionWithoutRuntime.message)).toContain("plan-session bind requires runtime session identity");
+    expect(String(planSessionWithoutRuntime.message)).toContain("--session-id");
+    expect(String(planSessionWithoutRuntime.message)).toContain("sessionId");
     const bound = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness } as never, context(data.root, "runtime-coordinator"));
     if (bound.status !== "ok" || typeof bound.data !== "object" || bound.data === null || !("session_file" in bound.data)) {
       throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
