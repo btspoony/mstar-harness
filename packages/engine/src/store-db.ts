@@ -190,10 +190,12 @@ export function storeDbPath(context: { harnessDir: string }): string {
   // Keep the linked-checkout failure closed; the resolver throws when Git's
   // main worktree cannot be determined from a linked worktree.
   const resolved = resolveProcessHarnessDir(start);
-  const relativeRoot = resolved === null ? "" : relative(start, resolved);
-  const nestedHarness = relativeRoot !== "" && relativeRoot !== ".." &&
-    !relativeRoot.startsWith(`..${sep}`) && !relativeRoot.startsWith(sep);
-  return join(nestedHarness ? start : resolved ?? start, "store.db");
+  // The resolver's legacy `plans/` fallback mis-reads an explicitly supplied
+  // non-git root that merely CONTAINS a plans/ directory (its own child) as
+  // the harness root. The explicit root wins there. Standard harness
+  // selections (.mstar/.agents children, ancestor walks) stay authoritative.
+  const hijackedPlansFallback = resolved !== null && resolved === join(start, "plans");
+  return join(hijackedPlansFallback ? start : resolved ?? start, "store.db");
 }
 
 /** Bounded wait is fixed at 5000ms in production (contract §2). The
