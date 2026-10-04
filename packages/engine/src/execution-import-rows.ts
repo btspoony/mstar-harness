@@ -63,7 +63,16 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     const block: Record<string, unknown> = isPlainObject(row.coordination) ? { ...row.coordination } : {};
     delete block.revision;
     delete block.session;
-    const violations = storedCoordinationViolations(block, { revision: 1, route: rowValidationRoute(routeSnapshot, state as never), sessionBound: session !== null, what: `execution_plans(${id},${planId}).coordination_json` });
+    const violations = storedCoordinationViolations(block, {
+      revision: 1,
+      route: rowValidationRoute(routeSnapshot, state as never),
+      submitterAssociated: !isPlainObject(block.handoff) || (
+        typeof block.handoff.submitted_by === "string" &&
+        session !== null && session.session_id === block.handoff.submitted_by
+      ),
+      activeSessionBound: session !== null,
+      what: `execution_plans(${id},${planId}).coordination_json`,
+    });
     if (violations.length > 0) conflict(`plan ${planId} of workflow ${id} has malformed coordination data (${violations.map((v) => v.code).join(", ")}).`);
     insertPlan.run(id, planId, ordinal, JSON.stringify(state), JSON.stringify(block));
     insertInput.run(id, planId, JSON.stringify(executionInputSelection(row, planId)), executionInputHash(row, planId), pin === null ? null : JSON.stringify(pin));
