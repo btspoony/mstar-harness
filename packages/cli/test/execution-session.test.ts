@@ -954,9 +954,9 @@ describe("mstar session recover — named plan owner", () => {
     const initial = await readExecutionAuthority(fixture.context);
     registerThroughAuthority(fixture, coordinator, initial.token);
     const beforeBind = await tokensOf(fixture);
-    activeBind(fixture, coordinator, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
+    const seat = activeBind(fixture, coordinator, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
     const prepared = runCli(
-      ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      ["plan", "prepare", "--session-ref", seat.wire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
@@ -991,9 +991,9 @@ describe("mstar session recover — named plan owner", () => {
     const initial = await readExecutionAuthority(fixture.context);
     registerThroughAuthority(fixture, coordinator, initial.token);
     const beforeBind = await tokensOf(fixture);
-    activeBind(fixture, coordinator, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
+    const seat = activeBind(fixture, coordinator, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
     const prepared = runCli(
-      ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      ["plan", "prepare", "--session-ref", seat.wire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
@@ -1051,9 +1051,9 @@ describe("mstar session recover — named plan owner", () => {
     const initial = await readExecutionAuthority(fixture.context);
     registerThroughAuthority(fixture, coordinator, initial.token);
     const tokens = await tokensOf(fixture);
-    activeBind(fixture, coordinator, ["--coordinator"], tokens.workflow, "bind-coordinator");
+    const seat = activeBind(fixture, coordinator, ["--coordinator"], tokens.workflow, "bind-coordinator");
     const prepared = runCli(
-      ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      ["plan", "prepare", "--session-ref", seat.wire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
