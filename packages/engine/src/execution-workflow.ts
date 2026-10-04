@@ -1965,6 +1965,16 @@ export async function recoverExecutionPlanSession(
       );
       const claim = readHeldExecutionLeases(tx, workflowId).find((lease) => lease.planId === planId);
       const receiptRevision = parseExecutionToken(replay.token).revision;
+      const recorded = tx.db
+        .prepare("select result_json from execution_operations where epoch = ? and operation_id = ?")
+        .get(tx.epoch, operationId) as { result_json?: unknown } | undefined;
+      let transferredAt: unknown;
+      try {
+        const receipt = JSON.parse(String(recorded?.result_json)) as Record<string, unknown>;
+        transferredAt = isPlainObject(receipt.recovery) ? receipt.recovery.claim_transferred_at : undefined;
+      } catch {
+        transferredAt = undefined;
+      }
       if (
         binding === undefined ||
         binding.revision !== receiptRevision ||
@@ -1972,7 +1982,10 @@ export async function recoverExecutionPlanSession(
         claim.ownerEpoch !== tx.epoch ||
         claim.lease.holder_role !== "plan-pm" ||
         claim.lease.holder_session_id !== caller.sessionId ||
-        claim.lease.transferred_from !== priorSessionId
+        claim.lease.holder_session_id === priorSessionId ||
+        claim.lease.transferred_from !== priorSessionId ||
+        !isNonEmptyString(transferredAt) ||
+        claim.lease.transferred_at !== transferredAt
       ) {
         throw new ExecutionError(
           "execution.session-unavailable",
@@ -2116,6 +2129,7 @@ export async function recoverExecutionPlanSession(
           attested_at: attestation.attestedAt,
           operator: attestation.operator,
           stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
+          claim_transferred_at: now,
         },
       } as ExecutionRead<ExecutionSessionRef>,
       now,
