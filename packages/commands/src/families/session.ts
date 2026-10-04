@@ -42,7 +42,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         { key: "plan", flags: "--plan <id>", required: false }, { key: "harness", flags: "--harness <path>", required: false },
       ] },
       input: runInput, output: commandEnvelopeSchema, effects: ["process"],
-      description: "Launch argv under a freshly minted local execution identity; this does not resume or bind a session.",
+      description: "Launch argv under a freshly minted local execution identity; this is a launch, not a binding \u2014 it writes no session row or lease, and the child binds through the public `plan bind --execution --workflow <id> --coordinator|--plan <id>` route, whose creator/ownerless/foreign-holder conditions still apply.",
       async execute(raw, context) {
         const parsed = runInput.safeParse(raw);
         if (!parsed.success) return usage("session.run", parsed.error.message);
@@ -55,16 +55,27 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         const env: Record<string, string> = { ...process.env as Record<string, string>, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) };
         delete env.MSTAR_HOST_SESSION_ID;
         if (root !== null) env.MSTAR_HARNESS_DIR = root;
+        // The receipt is a launch fact, never an ownership claim: the minted
+        // identity is attribution the CLI now consumes, and no session row or
+        // lease was written. Binding is a separate public step whose real
+        // conditions (creator first-bind, ownerless adoption, foreign/live
+        // holder refusal) are the engine's, not this launcher's.
+        const binding = {
+          written: false,
+          route: `mstar plan bind --execution --workflow ${workflow} --${role === "coordinator" ? "coordinator" : `plan ${plan!}`}`,
+          conditions: "the workflow's creating identity binds first; a workflow with no coordinator record may be adopted; a live or foreign holder is refused and never replaced by a launch",
+        };
         try {
           const child = await context.effects.spawn({ argv, cwd: context.cwd, env, signal: context.signal });
           const childCode = child.signal === null
             ? child.exitCode ?? 0
             : 128 + (constants.signals[child.signal as keyof typeof constants.signals] ?? 0);
-          if (childCode === 0) return ok("session.run", { exitCode: childCode, signal: child.signal, stdout: child.stdout, stderr: child.stderr });
+          const launched = { identity, binding, exitCode: childCode, signal: child.signal, stdout: child.stdout, stderr: child.stderr };
+          if (childCode === 0) return ok("session.run", launched);
           return {
             version: 1, command: "session.run", status: "error", code: "session.child-exit", exitCode: childCode,
             message: child.signal === null ? `child exited with status ${childCode}` : `child terminated by ${child.signal}`,
-            details: { signal: child.signal, stdout: child.stdout, stderr: child.stderr },
+            details: launched,
           };
         } catch (error) {
           return refused("session.run", error);

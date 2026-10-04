@@ -83,7 +83,7 @@ A scoped actor writes **only its own row and the issues linked to it that it cap
 |---|---|
 | row `coordination.*`（`prepared` / `progress` / `handoff`）, row `status`, row `revision`, retained `metadata.working_branch` / `metadata.worktree_path` / `metadata.track_branches` | sibling rows, lifecycle anchors, snapshot `branch` / `integration_worktree_path` / `execution_policy`, `compass_ref` |
 | issues in `{HARNESS_DIR}/store.db` linked to this plan, via `issue-add` / `issue-close` | any other plan's issues, the retired `projects/<project-id>/residuals.json` register bucket, the v2 root `status.json` register, shared indexes (`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}`), iteration PR, Phase 3–6 |
-| `progress` / `issue-add` / `issue-close` / `handoff`（plan session） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, a lease-release verb |
+| `progress` / `issue-add` / `issue-close` / `handoff`（plan session）；`release`（acquired holder releases its own claim only） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, another holder's lease release |
 
 Field semantics, ownership and lock rules → **`mstar-artifacts/references/status-and-residuals.md`**（「Plan coordination」）.
 

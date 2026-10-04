@@ -847,7 +847,7 @@ export { commitExecutionRegistration } from "./execution-registration.js";
 // selection type are the whole published surface; the stored-row assembly and
 // the token grammar stay module-scoped in `execution-store.ts`.
 export type { ExecutionReadSelection } from "./execution-read.js";
-export { readExecutionAuthority } from "./execution-read.js";
+export { readExecutionAuthority, readExecutionCleanupState } from "./execution-read.js";
 // Disposable execution/roadmap projections: the ONE source-I/O boundary
 // (`refreshProjections`) over the JSON execution authority, plus its two
 // halves -- the pure validated capture and the atomic publication/last-good

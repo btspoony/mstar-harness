@@ -7,35 +7,12 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
+import { serializeExecutionValue } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mcpToolInputSchema, registerMcpCommands } from "../src/mcp/register";
 import { mapParserError, registerCliCommands, renderCommandContract, usageEnvelope } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
-const census = [
-  "harness.scaffold", "doctor", "plugin.validate", "path.resolve", "status.validate", "status.workflow-close",
-  "status.archive-residuals", "status.findings-cleanup", "status.tech-debt", "status.backlog-register", "status.backlog-close",
-  "workflow.register", "workflow.evidence", "workflow.show-prepare", "workflow.amend-prepare", "workflow.recover-coordinator",
-  "workflow.phase", "workflow.lifecycle", "workflow.execution-policy", "workflow.integration-worktree", "migrate",
-  "persist.get", "persist.list", "persist.delete", "persist.write", "lease.verify", "lease.verify-integration",
-  "sdd.workspace", "sdd.task-brief", "sdd.review-package", "sdd.check-context", "sdd.exec", "sdd.evidence.capture",
-  "sdd.evidence.verify", "iteration.gate", "iteration.register", "iteration.push-cadence", "dispatch.validate",
-  "worktree.check", "worktree.qc-alignment", "worktree.cleanup", "review.seats", "lint", "design-md.validate",
-  "audit.scaffold", "audit.promote", "audit.secret-scan", "audit.supply-chain", "compound.validate", "host.detect",
-  "host.skill-root", "skill.lint", "roles.validate", "pr-review.tally", "pr-review.report-path", "pr-review.validate-report",
-  "pr-review.post", "pr-review.worktree-cleanup", "pr-review.size", "pr-review.seat-prompt", "pr-review.worktree-setup",
-  "milestone.add", "milestone.update", "milestone.assign", "milestone.list", "milestone.status",
-  "pr-review.budget", "qc.validate-report",
-  "catalog.discover", "catalog.import", "catalog.register", "catalog.update", "catalog.link", "catalog.list", "catalog.show", "catalog.export", "catalog.reconcile", "roadmap.import", "roadmap.replace",
-  "roadmap.show", "roadmap.export", "issue.add", "issue.list", "issue.show", "issue.occurrence", "issue.triage", "issue.close",
-  "issue.waive", "issue.duplicate", "issue.supersede", "issue.link", "issue.export", "schema", "plan.bind", "plan.show",
-  "plan.prepare", "plan.progress", "plan.issue-add", "plan.issue-close", "plan.residual-add", "plan.residual-close",
-  "plan.handoff", "plan.accept", "plan.return", "plan.integration-start", "plan.integration-accept", "plan.complete",
-  "plan.reconcile", "plan.repair-delivery-source", "session.recover", "session.run", "store.init", "store.migrate",
-  "store.safe-upgrade", "store.backup", "store.activate", "store.retire", "store.execution.preview", "store.execution.apply",
-  "store.execution.activate", "store.execution.retire", "store.execution.abort", "store.execution.restore-preview",
-  "store.execution.restore", "store.execution.export", "judgment.review-advice", "dashboard", "report",
-];
 
 function context(): InvocationContext {
   return {
@@ -159,13 +136,6 @@ describe("generated CLI adapter", () => {
     expect(paths.every((entry) => entry.startsWith("payload."))).toBe(true);
   });
 
-  test("report census accounts for every canonical identity and excludes installer init", () => {
-    const ids = getCommandDefinitions().map(({ id }) => id);
-    expect(new Set(ids)).toEqual(new Set(census));
-    expect(ids).toHaveLength(128);
-    expect(ids).not.toContain("init");
-    expect(ids).toContain("report");
-  });
   test("report accepts empty input and invokes the bounded canonical handler", async () => {
     const empty = await run(["report"]);
     expect(empty.status).toBe(0);
@@ -252,7 +222,9 @@ describe("generated CLI adapter", () => {
     expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
 
     const priorIdentity = process.env.MSTAR_HOST_SESSION_ID;
+    const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
     delete process.env.MSTAR_HOST_SESSION_ID;
+    delete process.env.MSTAR_EXECUTION_IDENTITY;
     try {
       const withoutRuntimeIdentity = await run(args);
       expect(JSON.parse(withoutRuntimeIdentity.stdout)).toMatchObject({
@@ -261,6 +233,7 @@ describe("generated CLI adapter", () => {
       });
     } finally {
       if (priorIdentity !== undefined) process.env.MSTAR_HOST_SESSION_ID = priorIdentity;
+      if (priorMinted !== undefined) process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
     }
   });
 
@@ -495,10 +468,94 @@ test("generated CLI adapter decodes schema-typed numeric options and registers b
     expect(numericResult.code).not.toBe("command.invalid-input");
     expect(numericResult.message ?? "").not.toContain("expected number");
 
-    const boolean = await run(["plan", "bind", "--execution"]);
-    const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
-    expect(booleanResult.message ?? "").not.toContain("argument missing");
+  const boolean = await run(["plan", "bind", "--execution"]);
+  const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
+  expect(booleanResult.message ?? "").not.toContain("argument missing");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+describe("generated CLI adapter — minted identity transport", () => {
+  const minted = (overrides: Record<string, unknown> = {}): string =>
+    serializeExecutionValue({ source: "local", sessionId: "minted-adapter", workflowId: "wf-adapter", role: "coordinator", planId: null, ...overrides });
+
+  /**
+   * One envelope field read by name. The parsed JSON is our own adapter's
+   * output; the object-ness is checked and the value read through the
+   * descriptor rather than by fabricating a shape.
+   */
+  function field(value: unknown, key: string): unknown {
+    if (typeof value !== "object" || value === null) return undefined;
+    return Object.getOwnPropertyDescriptor(value, key)?.value;
+  }
+
+  /** The typed identity cause the adapter discloses in `details.identity.code`. */
+  const identityCode = (envelope: unknown): unknown => field(field(envelope, "details"), "identity") === undefined
+    ? undefined
+    : field(field(field(envelope, "details"), "identity"), "code");
+
+  test("a malformed launched identity refuses through the adapter, never downgrading to the ambient value", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    const priorHost = process.env.MSTAR_HOST_SESSION_ID;
+    try {
+      process.env.MSTAR_HOST_SESSION_ID = "ambient-host";
+      for (const malformed of ["not json", "[]", '"scalar"', minted({ sessionId: "" })]) {
+        process.env.MSTAR_EXECUTION_IDENTITY = malformed;
+        const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator"]);
+        const envelope: unknown = JSON.parse(result.stdout);
+        expect(field(envelope, "exitCode")).toBe(2);
+        expect(field(envelope, "code")).toBe("command.invalid-input");
+        // The typed engine cause rides in details (attribution provenance, not a
+        // second shape): the ambient host value never substituted.
+        expect(String(identityCode(envelope))).toMatch(/^(command\.invalid-identity|coordination\.)/);
+      }
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+      if (priorHost === undefined) delete process.env.MSTAR_HOST_SESSION_ID; else process.env.MSTAR_HOST_SESSION_ID = priorHost;
+    }
+  });
+
+  test("a minted identity addressing another workflow refuses before the command runs", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    try {
+      process.env.MSTAR_EXECUTION_IDENTITY = minted({ workflowId: "wf-elsewhere" });
+      const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator"]);
+      const envelope: unknown = JSON.parse(result.stdout);
+      expect(result.status).toBe(2);
+      expect(field(envelope, "code")).toBe("command.invalid-input");
+      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+    }
+  });
+
+
+  test("sparse ACTIVE close preserves the minted plan-pm seat instead of reinterpreting it as coordinator", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    try {
+      process.env.MSTAR_EXECUTION_IDENTITY = minted({ role: "plan-pm", planId: "plan-adapter" });
+      const result = await run(["status", "workflow-close", "--workflow", "wf-adapter", "--reason", "synthetic close"]);
+      const envelope: unknown = JSON.parse(result.stdout);
+      expect(result.status).toBe(2);
+      expect(field(envelope, "code")).toBe("command.invalid-input");
+      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+    }
+  });
+
+  test("sparse plan operation rejects an explicit plan selector outside the minted own plan", async () => {
+    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
+    try {
+      process.env.MSTAR_EXECUTION_IDENTITY = minted({ role: "plan-pm", planId: "plan-own" });
+      const result = await run(["plan", "release", "--workflow", "wf-adapter", "--plan", "plan-foreign"]);
+      const envelope: unknown = JSON.parse(result.stdout);
+      expect(result.status).toBe(2);
+      expect(field(envelope, "code")).toBe("command.invalid-input");
+      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
+    } finally {
+      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
+    }
+  });
 });

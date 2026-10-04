@@ -437,7 +437,8 @@ export type PlanCoordinationOperation =
   | { kind: "integration-accept"; handoffId: string }
   | { kind: "complete"; handoffId: string }
   | { kind: "repair-delivery-source"; handoffId: string }
-  | { kind: "reconcile"; handoffId: string };
+  | { kind: "release"; reason?: string }
+  | { kind: "reconcile"; handoffId: string }
 
 /**
  * One whole coordination request: one session, one operation, one precondition.

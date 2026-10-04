@@ -78,6 +78,7 @@ export const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   complete: true,
   "repair-delivery-source": true,
   reconcile: true,
+  release: true,
 };
 
 /** Operations only a coordinator session may issue (spec §D/§E). */
@@ -166,6 +167,14 @@ export function allowedOperations(
       default:
         break;
     }
+    const lease = isPlainObject(row.execution_lease) ? row.execution_lease : undefined;
+    if (
+      lease?.holder === sessionId &&
+      lease.status === "held" &&
+      (handoff === undefined || handoff.state === "returned")
+    ) {
+      out.push("release");
+    }
   } else if (coordination?.session?.session_id === sessionId) {
     // Identity is not ownership (§D): the four plan-session operations below are
     // lease-gated (`assertExecutionHolder`), so a row this session is bound to
@@ -181,7 +190,7 @@ export function allowedOperations(
     } else if (ownsLease && (handoff === undefined || handoff.state === "returned")) {
       // A plan session keeps only `handoff`: returning a handoff restores the
       // same session, so both directions stay available to it without rebinding.
-      out.push("progress", "residual-add", "residual-close", "handoff");
+      out.push("progress", "residual-add", "residual-close", "handoff", "release");
     }
   }
   return out.filter((kind) => IMPLEMENTED_OPERATIONS[kind] === true);
@@ -197,6 +206,7 @@ export function allowedOperations(
  * coordinator session coordinates, it does not execute.
  */
 export function assertOperationRole(seat: CoordinationSeat, kind: string): void {
+  if (kind === "release") return;
   const coordinatorOperation = COORDINATOR_OPERATIONS.includes(kind);
   if (coordinatorOperation && seat.role !== "coordinator") {
     throw new CoordinationError(
@@ -420,6 +430,18 @@ export function requireProgressStatus(row: PlanRow, target: string, planId: stri
     );
   }
   return status;
+}
+
+/** Release preserves claimable states and blocks in-flight work through the shared transition. */
+export function releaseStatus(row: PlanRow, planId: string): string {
+  const status = rowStatusOf(row);
+  if (status === "Todo" || status === "Blocked") return status;
+  if (status === "InProgress" || status === "InReview") return "Blocked";
+  throw new CoordinationError(
+    "coordination.plan-status",
+    `plan ${planId} is ${status || "unstatused"} \u2014 release requires a claimable or executing row`,
+    { plan_id: planId, status: row.status },
+  );
 }
 
 /** Working branches a plan row reports (`metadata.working_branch` / `metadata.track_branches`). */

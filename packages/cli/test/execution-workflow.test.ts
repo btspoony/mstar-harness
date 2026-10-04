@@ -407,13 +407,15 @@ describe("mstar workflow \u2014 documented invocation", () => {
     expect(String(jsonOf(refused).code)).toBe("coordination.invalid-transition");
     expect((await storedHeader(fixture)).status).toBe("running");
 
-    // The retired file close has no route at all on an active authority.
-    const legacy = runCli(
+    // The retired file credential is no longer demanded: the same selector now
+    // reaches the ACTIVE route, which reports the genuinely missing caller
+    // identity (a real supported route — bind the caller — not a dead end).
+    const noIdentity = runCli(
       ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", fixture.harnessDir],
       fixture,
     );
-    expect(legacy.exitCode).toBe(1);
-    expect(String(jsonOf(legacy).code)).toBe("execution.consumer-not-ready");
+    expect(noIdentity.exitCode).toBe(1);
+    expect(String(jsonOf(noIdentity).code)).toBe("coordination.identity-missing");
 
     // A terminal `stopped` transition carries no Done requirement, so it closes
     // the lifecycle in ONE transaction.

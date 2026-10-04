@@ -1,22 +1,43 @@
-import { getCommandDefinitions } from "@mstar-harness/commands";
-import { renderCommandContract, resolveCliSessionIdentity } from "./command-adapter";
+import { encodeExecutionSessionRef, serializeExecutionValue, type ExecutionIdentity } from "@mstar-harness/engine";
+import { mintedIdentityScopeProblem, resolveCliSessionIdentity } from "./command-adapter";
 
 const originalSessionId = process.env.MSTAR_HOST_SESSION_ID;
+const originalMinted = process.env.MSTAR_EXECUTION_IDENTITY;
 
 afterEach(() => {
   if (originalSessionId === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
   else process.env.MSTAR_HOST_SESSION_ID = originalSessionId;
+  if (originalMinted === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY;
+  else process.env.MSTAR_EXECUTION_IDENTITY = originalMinted;
 });
 
-test("CLI session identity prefers the flag and attributes its source", () => {
+/** The canonical tuple a launcher writes, exactly as `session.run` serializes it. */
+function mintedIdentity(overrides: Partial<ExecutionIdentity> = {}): ExecutionIdentity {
+  return { source: "local", sessionId: "minted-session", workflowId: "wf-launched", role: "coordinator", planId: null, ...overrides };
+}
+
+test("CLI session identity accepts an explicit override without parsing a malformed launched identity", () => {
   process.env.MSTAR_HOST_SESSION_ID = "env-session";
+  process.env.MSTAR_EXECUTION_IDENTITY = "not json";
   expect(resolveCliSessionIdentity("flag-session")).toEqual({
     sessionId: "flag-session",
     sessionIdSource: "flag",
   });
 });
 
+test("CLI session identity consumes the launcher-minted identity ahead of the ambient host value", () => {
+  process.env.MSTAR_HOST_SESSION_ID = "env-session";
+  const identity = mintedIdentity();
+  process.env.MSTAR_EXECUTION_IDENTITY = serializeExecutionValue(identity);
+  expect(resolveCliSessionIdentity(undefined)).toEqual({
+    sessionId: identity.sessionId,
+    sessionIdSource: "env",
+    executionIdentity: identity,
+  });
+});
+
 test("CLI session identity resolves and attributes the environment fallback", () => {
+  delete process.env.MSTAR_EXECUTION_IDENTITY;
   process.env.MSTAR_HOST_SESSION_ID = "env-session";
   expect(resolveCliSessionIdentity(undefined)).toEqual({
     sessionId: "env-session",
@@ -24,6 +45,7 @@ test("CLI session identity resolves and attributes the environment fallback", ()
   });
 });
 test("CLI session identity treats empty and whitespace environment values as unset", () => {
+  delete process.env.MSTAR_EXECUTION_IDENTITY;
   for (const value of ["", "   ", "\t\n"]) {
     process.env.MSTAR_HOST_SESSION_ID = value;
     expect(resolveCliSessionIdentity(undefined)).toEqual({});
@@ -33,33 +55,63 @@ test("CLI session identity treats empty and whitespace environment values as uns
 
 test("CLI session identity omits both value and source when unset", () => {
   delete process.env.MSTAR_HOST_SESSION_ID;
+  delete process.env.MSTAR_EXECUTION_IDENTITY;
   expect(resolveCliSessionIdentity(undefined)).toEqual({});
 });
 
-test("CLI contract declares session resolution and legacy-route exceptions", () => {
-  const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.bind");
-  expect(definition).toBeDefined();
-  const contract = renderCommandContract(definition!, "cli");
-  expect(contract).toContain("Session identity resolves --session-id first, then MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset");
-  expect(contract).toContain("active token-authorized writes it is attribution, not authorization");
-  expect(contract).toContain("legacy pre-activation coordinator bootstrap");
-  expect(contract).toContain("requires an explicit --session-id and rejects the environment value");
-  expect(contract).toContain("Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity");
+test("CLI session identity refuses a malformed minted transport instead of downgrading to the ambient value", () => {
+  process.env.MSTAR_HOST_SESSION_ID = "env-session";
+  for (const malformed of [
+    "not json",
+    "[]",
+    '"scalar"',
+    serializeExecutionValue({ source: "local", sessionId: "", workflowId: "wf-launched", role: "coordinator", planId: null }),
+    serializeExecutionValue({ source: "local", sessionId: "minted", workflowId: "wf-launched", role: "coordinator", planId: "plan-x" }),
+    serializeExecutionValue({ source: "local", sessionId: "../escape", workflowId: "wf-launched", role: "coordinator", planId: null }),
+  ]) {
+    process.env.MSTAR_EXECUTION_IDENTITY = malformed;
+    // A broken launch refuses; it never silently binds the ambient host session
+    // or a fabricated id.
+    expect(() => resolveCliSessionIdentity(undefined)).toThrow();
+  }
 });
-test("MCP contract renders the route-conditional identity requirement", () => {
-  const definition = getCommandDefinitions().find((candidate) => candidate.id === "plan.bind");
-  expect(definition).toBeDefined();
-  const mcpDefinition = {
-    ...definition!,
-    requirements: [{
-      name: "sessionId",
-      ownership: "caller" as const,
-      route: "mcp" as const,
-      help: "when the selected route requires session identity, it must be supplied by the caller (host per call); legacy pre-activation routes do not require it, and legacy `plan bind --resume` refuses declared identity while ignoring ambient environment identity",
-    }],
-  };
-  const contract = renderCommandContract(mcpDefinition, "mcp");
-  expect(contract).toContain("when the selected route requires session identity, it must be supplied by the caller");
-  expect(contract).not.toContain("connection context");
-  expect(contract).not.toContain("Derived:");
+
+test("CLI scope gate constrains a minted identity to the scope it declares", () => {
+  const identity = mintedIdentity();
+  // The same workflow as a sessionRef, an active bind and an active token route
+  // is accepted; only a genuinely different declared scope is refused.
+  const sameWorkflowRef = encodeExecutionSessionRef({
+    storeId: "stores/scope", epoch: 1, workflowId: identity.workflowId, role: "coordinator", sessionId: "s", planId: null,
+  });
+  expect(mintedIdentityScopeProblem(identity, { sessionRef: sameWorkflowRef, operation: "op" }, "plan.progress")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: identity.workflowId, coordinator: true }, "plan.bind")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeUndefined();
+  // An ambient identity that addresses nothing derivable is never constrained.
+  expect(mintedIdentityScopeProblem(undefined, { workflow: "wf-other" }, "workflow.register")).toBeUndefined();
+
+  // A reference whose declared workflow differs is refused, and so is an active
+  // bind to another workflow — the refusal is a presence, not a prose match.
+  const otherRef = encodeExecutionSessionRef({
+    storeId: "stores/scope", epoch: 1, workflowId: "wf-elsewhere", role: "coordinator", sessionId: "s", planId: null,
+  });
+  expect(mintedIdentityScopeProblem(identity, { sessionRef: otherRef }, "plan.progress")).toBeDefined();
+  expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: "wf-elsewhere", coordinator: true }, "plan.bind")).toBeDefined();
+
+  // A coordinator-seat registration addresses the coordinator seat regardless of
+  // its registered plan selector: a same-workflow plan-pm minted tuple is
+  // refused (the registered plan is a row, not the caller seat), while a
+  // coordinator tuple passes.
+  const planPm = { ...identity, role: "plan-pm" as const, planId: "plan-registered" };
+  expect(mintedIdentityScopeProblem(planPm, { workflow: identity.workflowId, planId: "plan-registered", expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeDefined();
+  expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, planId: "plan-registered", expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeUndefined();
+  // The explicit active bind's seat is part of the declared scope.
+  expect(mintedIdentityScopeProblem(planPm, {
+    execution: true, workflow: identity.workflowId, coordinator: true,
+  }, "plan.bind")).toBeDefined();
+
+  // A legacy route that ignores the identity is not constrained by this gate.
+  expect(mintedIdentityScopeProblem(identity, { coordinator: true, workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
+  expect(mintedIdentityScopeProblem(identity, { resume: "/tmp/x.json", workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
+  // A malformed reference stays the family's own typed refusal.
+  expect(mintedIdentityScopeProblem(identity, { sessionRef: "not-a-wire", operation: "op" }, "plan.progress")).toBeUndefined();
 });

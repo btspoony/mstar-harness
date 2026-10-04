@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
+import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -297,23 +297,38 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
   if (!main) throw new Error("cannot resolve the main worktree of the current repository — run inside the repo");
   const harness = resolveProcessHarnessDir(invocation.cwd, input.harness);
   if (!harness) throw new Error("harness directory not found");
-  const root = resolveWorkflowDir(harness, { harnessDir: harness });
-  const selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
-  const snapshots: WorkflowSnapshot[] = [selected];
+  // Source selection: an ACTIVE execution authority answers with ONE
+  // authoritative read (`readExecutionCleanupState`) that addresses the
+  // workflow independently of registry membership and carries the complete
+  // protective inventory of every retained sibling — retired/absent JSON
+  // snapshots are never consulted, and a corrupt authority refuses rather than
+  // degrading. The pre-activation route keeps the file reader and its
+  // degraded/unreadable-sibling safety policy unchanged.
+  let selected: WorkflowSnapshot;
+  let snapshots: WorkflowSnapshot[];
   let unreadable = false;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name === input.workflow) continue;
-    const snapshotPath = path.join(root, entry.name, WORKFLOW_SNAPSHOT_FILE);
-    if (!fs.existsSync(snapshotPath)) continue;
-    try {
-      snapshots.push(readWorkflowSnapshot(path.dirname(snapshotPath)).snapshot);
-    } catch {
+  if ((await resolveExecutionReadRoute({ harnessDir: harness })) === "execution") {
+    const read = await readExecutionCleanupState({ harnessDir: harness }, input.workflow);
+    selected = read.selected;
+    snapshots = [...read.workflows];
+  } else {
+    const root = resolveWorkflowDir(harness, { harnessDir: harness });
+    selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
+    snapshots = [selected];
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === input.workflow) continue;
+      const snapshotPath = path.join(root, entry.name, WORKFLOW_SNAPSHOT_FILE);
+      if (!fs.existsSync(snapshotPath)) continue;
       try {
-        const degraded = degradedCleanupSnapshot(JSON.parse(fs.readFileSync(snapshotPath, "utf8")), entry.name);
-        if (degraded) snapshots.push(degraded);
-        else if (!input.ignoreUnreadableSnapshots) unreadable = true;
+        snapshots.push(readWorkflowSnapshot(path.dirname(snapshotPath)).snapshot);
       } catch {
-        if (!input.ignoreUnreadableSnapshots) unreadable = true;
+        try {
+          const degraded = degradedCleanupSnapshot(JSON.parse(fs.readFileSync(snapshotPath, "utf8")), entry.name);
+          if (degraded) snapshots.push(degraded);
+          else if (!input.ignoreUnreadableSnapshots) unreadable = true;
+        } catch {
+          if (!input.ignoreUnreadableSnapshots) unreadable = true;
+        }
       }
     }
   }

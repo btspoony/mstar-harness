@@ -52,6 +52,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` | `mstar-sdd`, `mstar-project-governance` (capture contract) |
 | Finish a plan (handoff; row stays InReview) | `mstar plan handoff` | `mstar-sdd`, `mstar-artifacts` |
 | Transfer execution ownership / return a handoff | `mstar plan accept`, `mstar plan return` | `mstar-iteration` |
+| Release the caller's own held execution claim; explicitly bind to reacquire | `mstar plan release`, `mstar plan bind` | `mstar-iteration` |
 | Run the pinned integration and record Done; recover a crashed attempt | `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile` | `mstar-branch-worktree`, `mstar-iteration` |
 | Amend an approved Prepare scope | `mstar workflow show-prepare`, `mstar workflow amend-prepare` | `mstar-artifacts` |
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` | `mstar-artifacts` |

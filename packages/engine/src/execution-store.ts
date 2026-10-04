@@ -1327,6 +1327,48 @@ export async function readExecutionState(context: StoreContext): Promise<Executi
     epoch: tx.epoch,
   }));
 }
+/**
+ * Read the cleanup safety universe from ACTIVE authority, including retained
+ * workflow rows that are no longer members of the root registry.
+ */
+export async function readExecutionCleanupSnapshots(
+  context: StoreContext,
+  workflowId: string,
+): Promise<{ selected: WorkflowSnapshot; workflows: readonly WorkflowSnapshot[] }> {
+  if (!isNonEmptyString(workflowId)) throw new CoordinationError("coordination.invalid-input", "workflowId must be non-empty");
+  return withExecutionReadTransaction(context, (tx) => {
+    const store = { storeId: tx.storeId, epoch: tx.epoch };
+    const registered = readExecutionGraph(tx.db, store, tx.execution);
+    const byId = new Map<string, WorkflowSnapshot>();
+    for (const workflow of registered.workflows) byId.set(workflow.state.id, cleanupSnapshot(workflow));
+    const retained = tx.db.prepare("select workflow_id from execution_workflows order by rowid").all() as Array<{ workflow_id?: unknown }>;
+    for (const row of retained) {
+      const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+      if (!byId.has(id)) byId.set(id, cleanupSnapshot(readWorkflowView(tx.db, store, id)));
+    }
+    const selected = byId.get(workflowId);
+    if (selected === undefined) {
+      throw new CoordinationError(
+        "coordination.workflow-not-found",
+        `the execution authority holds no workflow ${JSON.stringify(workflowId)}.`,
+        { workflow_id: workflowId },
+      );
+    }
+    return { selected, workflows: [...byId.values()] };
+  });
+}
+
+function cleanupSnapshot(workflow: ExecutionState["workflows"][number]): WorkflowSnapshot {
+  return {
+    ...(workflow.state as unknown as WorkflowSnapshot),
+    ...(workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease }),
+    plans: workflow.plans.map(({ plan, coordination, executionLease }) => ({
+      ...plan,
+      ...(coordination === null ? {} : { coordination }),
+      ...(executionLease?.status === "held" ? { execution_lease: executionLease } : {}),
+    })),
+  };
+}
 
 /**
  * §3 the same consistent state read INSIDE a transaction the caller already
@@ -2422,7 +2464,7 @@ function writeExecutionSession(
  */
 function writeInitialExecutionLease(
   db: StoreDb,
-  input: { workflowId: string; planId: string; address: SessionAddress; epoch: number; lease: ExecutionLease },
+  input: { workflowId: string; planId: string; address: SessionAddress; epoch: number; lease: ExecutionLease; operationId: string },
 ): void {
   const lease = {
     ...input.lease,
@@ -2433,10 +2475,75 @@ function writeInitialExecutionLease(
     plan_branch: input.lease.working_branch,
     heartbeat_at: input.lease.claimed_at,
     status: "held",
+    claim_operation_id: input.operationId,
   };
   db.prepare(
     "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)",
   ).run(input.workflowId, input.planId, input.epoch, JSON.stringify(lease));
+}
+
+function reclaimExecutionLease(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; planId: string; address: SessionAddress; lease: ExecutionLease; operationId: string },
+): void {
+  const row = tx.db
+    .prepare("select revision, owner_epoch, lease_json from execution_leases where workflow_id = ? and plan_id = ?")
+    .get(input.workflowId, input.planId) as { revision?: unknown; owner_epoch?: unknown; lease_json?: unknown } | undefined;
+  if (row === undefined) throw corrupt(`execution lease lineage for ${input.workflowId}/${input.planId} is absent`);
+  const prior = readExecutionLease(row.lease_json, `execution_leases(${input.workflowId},${input.planId}).lease_json`) as
+    ExecutionLease & { release_operation_id?: string; claim_operation_id?: string; lease_id?: string };
+  if (
+    prior.status !== "released" ||
+    prior.holder_session_id !== input.address.sessionId ||
+    prior.holder_role !== input.address.role ||
+    storedRevision(row.owner_epoch, "execution lease owner epoch") !== tx.epoch ||
+    prior.release_operation_id === undefined
+  ) {
+    throw new CoordinationError("coordination.duplicate-holder", `plan ${input.planId} has no current own releasable claim`, {
+      plan_id: input.planId,
+    });
+  }
+  const receiptRow = tx.db.prepare(
+    "select result_json from execution_operations where epoch = ? and operation_id = ? and workflow_id = ? and plan_id = ?",
+  ).get(tx.epoch, prior.release_operation_id, input.workflowId, input.planId) as { result_json?: unknown } | undefined;
+  if (receiptRow === undefined) {
+    throw new CoordinationError("coordination.execution-lease-required", `plan ${input.planId} release has no committed operation receipt`, {
+      plan_id: input.planId,
+    });
+  }
+  const receipt = storedJsonObject(receiptRow.result_json, `execution_operations(${prior.release_operation_id}).result_json`);
+  const receiptLease = isPlainObject(receipt.data) ? receipt.data.executionLease : undefined;
+  if (
+    !isPlainObject(receiptLease) ||
+    receiptLease.status !== "released" ||
+    receiptLease.holder_session_id !== input.address.sessionId ||
+    receiptLease.release_operation_id !== prior.release_operation_id
+  ) {
+    throw corrupt(`execution lease ${input.workflowId}/${input.planId} does not match its retained release receipt`);
+  }
+  const claimed = {
+    ...input.lease,
+    lease_id: prior.lease_id,
+    holder_session_id: input.address.sessionId,
+    holder_role: input.address.role,
+    plan_worktree_path: input.lease.worktree_path,
+    plan_branch: input.lease.working_branch,
+    heartbeat_at: input.lease.claimed_at,
+    status: "held",
+    prior_claim: {
+      lease_id: prior.lease_id,
+      released_by: prior.released_by,
+      released_at: prior.released_at,
+      release_reason: prior.release_reason,
+      release_operation_id: prior.release_operation_id,
+      claim_operation_id: prior.claim_operation_id,
+    },
+    claim_operation_id: input.operationId,
+    release_operation_id: undefined,
+  };
+  tx.db.prepare(
+    "update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?",
+  ).run(JSON.stringify(claimed), input.workflowId, input.planId);
 }
 
 /**
@@ -2657,6 +2764,14 @@ export function readHeldExecutionLeases(
   }
   return held;
 }
+/** The owner epoch stored beside one execution-lease lineage. */
+export function executionLeaseOwnerEpoch(tx: ExecutionTransaction, workflowId: string, planId: string): number {
+  const row = tx.db
+    .prepare("select owner_epoch from execution_leases where workflow_id = ? and plan_id = ?")
+    .get(workflowId, planId) as { owner_epoch?: unknown } | undefined;
+  if (row === undefined) throw corrupt(`execution lease ${workflowId}/${planId} has no retained owner epoch`);
+  return storedRevision(row.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`);
+}
 
 /**
  * §2.2 the stored session rows of one workflow and role, INCLUDING the
@@ -2840,6 +2955,7 @@ export function releaseExecutionLease(
     releasedBy: string;
     reason: string;
     now: string;
+    operationId?: string;
   },
 ): void {
   const released = {
@@ -2848,6 +2964,7 @@ export function releaseExecutionLease(
     released_by: input.releasedBy,
     released_at: input.now,
     release_reason: input.reason,
+    ...(input.operationId === undefined ? {} : { release_operation_id: input.operationId }),
   };
   tx.db
     .prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
@@ -3215,7 +3332,18 @@ export async function bindExecutionSession(
       );
     }
     const existing = mine ?? holder;
-    if (existing !== undefined) {
+    const releasedLease = view.plans.find((candidate) => candidate.plan.id === bind.planId)?.executionLease;
+    const releasedClaimRebind =
+      bind.role === "plan-pm" &&
+      mine?.state === "active" &&
+      mine.ref.epoch === tx.epoch &&
+      mine.ref.sessionId === bind.sessionId &&
+      mine.ref.planId === bind.planId &&
+      (holder === undefined || (holder.ref.sessionId === bind.sessionId && holder.ref.planId === bind.planId)) &&
+      releasedLease?.status === "released" &&
+      releasedLease.holder_session_id === bind.sessionId &&
+      releasedLease.holder_role === bind.role;
+    if (existing !== undefined && !releasedClaimRebind) {
       throw new CoordinationError(
         "coordination.duplicate-holder",
         `workflow ${bind.workflowId} already records ${bind.role} session ${existing.ref.sessionId}` +
@@ -3276,7 +3404,12 @@ export async function bindExecutionSession(
           { workflow_id: bind.workflowId, plan_id: bind.planId },
         );
       }
-      if (plan.executionLease !== null) {
+      const releasedClaim =
+        plan.executionLease?.status === "released" &&
+        plan.executionLease.holder_session_id === bind.sessionId &&
+        plan.executionLease.holder_role === bind.role &&
+        releasedClaimRebind;
+      if (plan.executionLease !== null && !releasedClaim) {
         throw new CoordinationError(
           "coordination.duplicate-holder",
           `plan ${bind.planId} already holds an execution lease (holder session ` +
@@ -3285,6 +3418,14 @@ export async function bindExecutionSession(
             `Nothing was bound.`,
           { workflow_id: bind.workflowId, plan_id: bind.planId, holder: plan.executionLease.holder_session_id },
         );
+      }
+      if (
+        releasedClaim &&
+        (view.state.status !== "running" || !["Todo", "Blocked"].includes(String(plan.plan.status)))
+      ) {
+        throw new CoordinationError("coordination.invalid-transition", `released plan ${bind.planId} is not claimable in a running workflow`, {
+          workflow_id: bind.workflowId, plan_id: bind.planId, status: plan.plan.status,
+        });
       }
       const scope = planLeaseScope(plan.plan as Record<string, unknown>, bind.workflowId, bind.planId);
       // The same pure transition the legacy transport runs; the row the DB
@@ -3298,13 +3439,21 @@ export async function bindExecutionSession(
             `held no lease`,
         );
       }
-      writeInitialExecutionLease(tx.db, {
-        workflowId: bind.workflowId,
-        planId: bind.planId,
-        address: bind,
-        epoch: tx.epoch,
-        lease: transition.row.execution_lease as ExecutionLease,
-      });
+      if (releasedClaim) {
+        reclaimExecutionLease(tx, {
+          workflowId: bind.workflowId, planId: bind.planId, address: bind, operationId: bind.operationId,
+          lease: transition.row.execution_lease as ExecutionLease,
+        });
+      } else {
+        writeInitialExecutionLease(tx.db, {
+          workflowId: bind.workflowId,
+          planId: bind.planId,
+          address: bind,
+          epoch: tx.epoch,
+          lease: transition.row.execution_lease as ExecutionLease,
+          operationId: bind.operationId,
+        });
+      }
       // §2.2: the lease lives in `execution_leases`, never in the row state.
       const state: Record<string, unknown> = { ...(transition.row as Record<string, unknown>) };
       delete state.execution_lease;
@@ -3316,7 +3465,7 @@ export async function bindExecutionSession(
       });
     }
 
-    writeExecutionSession(tx.db, { workflowId: bind.workflowId, address: bind, epoch: tx.epoch, now });
+    if (!releasedClaimRebind) writeExecutionSession(tx.db, { workflowId: bind.workflowId, address: bind, epoch: tx.epoch, now });
     // A session (and, for a plan, its lease) is a child of the workflow: the
     // workflow revision and its timestamp advance once, and the multi-domain
     // transaction bumps the store revision once. Registry membership did not
@@ -3335,8 +3484,10 @@ export async function bindExecutionSession(
         sessionId: bind.sessionId,
         planId: bind.planId,
       },
-      // A new session row starts at revision 1 (§2.2), so its token does too.
-      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, bind.role, bind.sessionId], 1),
+      token: executionToken(
+        "session", tx.storeId, tx.epoch, [bind.workflowId, bind.role, bind.sessionId],
+        releasedClaimRebind ? mine!.revision : 1,
+      ),
       storeId: tx.storeId,
       epoch: tx.epoch,
     };
