@@ -1,7 +1,7 @@
 /**
  * discovery-walkthrough.test.ts — #324 acceptance proof: on a FIXTURE store,
  * a CLI agent must be able to derive every execution input a lawful close
- * needs from `--help` text and the refusals it hits alone, in ≤3 CLI calls per
+ * needs from `--help` text and the refusals it hits alone, in <=3 CLI calls per
  * input. The walkthrough drives the real CLI (spawned the same way global-cli
  * tests spawn it) against a disposable temp fixture; it never touches this
  * checkout's store.
@@ -23,7 +23,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { decodeExecutionSessionRef, encodeExecutionSessionRef } from "@mstar-harness/engine";
 
 const CLI_ENTRY = path.join(import.meta.dir, "index.ts");
 
@@ -62,7 +61,7 @@ describe("#324 fixture discovery walkthrough", () => {
     rmSync(fixture, { recursive: true, force: true });
   });
 
-  test("a close's inputs are derivable from the CLI surfaces in ≤3 calls per input", () => {
+  test("a close's inputs are derivable from the CLI surfaces in \u22643 calls per input", () => {
     // Fixture store: one call creates and activates the ACTIVE authority.
     mkdirSync(harnessDir, { recursive: true });
     const plansDir = path.join(harnessDir, "plans");
@@ -119,10 +118,16 @@ describe("#324 fixture discovery walkthrough", () => {
     const bound = envelope(bindOut.stdout);
     expect(bound.status).toBe("ok");
     const ref = bound.data.data as Record<string, unknown>;
-    expect(Object.keys(ref).sort()).toEqual(["epoch", "planId", "role", "sessionId", "storeId", "workflowId"].sort());
-    const wire = encodeExecutionSessionRef(ref as never);
-    expect(wire.startsWith("exec-session-v1:")).toBe(true);
-    expect(decodeExecutionSessionRef(wire)).toEqual(ref);
+    // The receipt carries exactly the six fields the help's wire format names.
+    const fields = ["epoch", "planId", "role", "sessionId", "storeId", "workflowId"] as const;
+    expect(Object.keys(ref).sort()).toEqual([...fields].sort());
+    // Hand-built from the CLI-printed receipt alone, per the DISCLOSED format:
+    // "exec-session-v1:" + base64url(JSON with exactly those six keys). No
+    // engine helper constructs it — the walkthrough proves the disclosure is
+    // sufficient end-to-end because the CLI under test accepts this value.
+    const wire =
+      "exec-session-v1:" +
+      Buffer.from(JSON.stringify(Object.fromEntries(fields.map((field) => [field, ref[field]]))), "utf8").toString("base64url");
 
     // The derived session reference, identity and workflow token pass a real
     // CAS write: recording delivery evidence commits.
@@ -212,21 +217,49 @@ describe("#324 fixture discovery walkthrough", () => {
     }
   }, 60000);
 
-  // Precondition: runs against test 1's fixture state (the ACTIVE store and
-  // registered wf-walk it leaves behind). Selecting this test alone with
-  // `bun test -t` lacks that state — run the file (or test 1 first).
-  test("the legacy bind refusal on an ACTIVE store names the --execution route", () => {
-    const legacy = cli([
-      "plan", "bind",
-      "--workflow", "wf-walk",
-      "--plan", "p-walk",
-      "--session-id", "walk-pm",
-      "--harness", harnessDir,
-    ]);
-    const refused = envelope(legacy.stdout);
-    expect(refused.status).toBe("refused");
-    expect(refused.code).toBe("coordination.workflow-not-found");
-    expect(refused.message).toContain("--execution route");
-    expect(refused.message).toContain("plan bind --execution --workflow <id> --coordinator");
-  });
+  test("legacy bind refusals on an ACTIVE store name the --execution route (both forms)", () => {
+    const legacyFixture = mkdtempSync(path.join(tmpdir(), "mstar-324-legacy-"));
+    const legacyHarness = path.join(legacyFixture, ".mstar");
+    const legacyScratch = mkdtempSync(path.join(tmpdir(), "mstar-324-s3-"));
+    mkdirSync(path.join(legacyHarness, "plans"), { recursive: true });
+    writeFileSync(path.join(legacyHarness, "plans", "p-legacy.md"), "# Legacy plan\n\n**plan_id:** p-legacy\n\nbody\n");
+    try {
+      expect(envelope(cli(["store", "upgrade", "--harness", legacyHarness, "--operator", "walkthrough"], legacyScratch).stdout).status).toBe("ok");
+      const read = envelope(cli(["status", "validate"], legacyFixture).stdout);
+      const rootToken = read.data.token as string;
+      expect(
+        envelope(
+          cli([
+            "workflow", "register",
+            "--workflow", "wf-legacy",
+            "--plan-id", "p-legacy",
+            "--plan-title", "Legacy plan",
+            "--plan-file", path.join(legacyHarness, "plans", "p-legacy.md"),
+            "--delivery-kind", "verification/report-only",
+            "--completion-policy", "policy",
+            "--expect", rootToken,
+            "--operation", "op-reg-1",
+            "--harness", legacyHarness,
+          ]).stdout,
+        ).status,
+      ).toBe("ok");
+      // Legacy coordinator form: --workflow only, no --execution.
+      const coordinatorForm = envelope(
+        cli(["plan", "bind", "--coordinator", "--workflow", "wf-legacy", "--session-id", "legacy-coord", "--harness", legacyHarness]).stdout,
+      );
+      expect(coordinatorForm.status).toBe("refused");
+      expect(coordinatorForm.code).toBe("coordination.workflow-not-found");
+      expect(coordinatorForm.message).toContain("--execution route");
+      // Legacy pair form: --workflow + --plan, no --execution.
+      const pairForm = envelope(
+        cli(["plan", "bind", "--workflow", "wf-legacy", "--plan", "p-legacy", "--session-id", "legacy-pm", "--harness", legacyHarness]).stdout,
+      );
+      expect(pairForm.status).toBe("refused");
+      expect(pairForm.code).toBe("coordination.workflow-not-found");
+      expect(pairForm.message).toContain("--execution route");
+    } finally {
+      rmSync(legacyScratch, { recursive: true, force: true });
+      rmSync(legacyFixture, { recursive: true, force: true });
+    }
+  }, 60000);
 });

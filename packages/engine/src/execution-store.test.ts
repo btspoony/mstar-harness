@@ -792,7 +792,7 @@ describe("execution-tokens: \u00A73.1 canonical value form and version tokens", 
     );
     // Workflow expectation: names the entry for the addressed workflow.
     expect(() => assertExecutionToken(plan, { kind: "workflow", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1"] })).toThrow(
-      /Read the current workflow token with `mstar status validate` \(the data\.workflows\[\] entry for workflow "wf-1" → token\)\.$/,
+      /Read the current workflow token with `mstar status validate` \(the data\.workflows\[\] entry for workflow "wf-1" \u2192 token\)\.$/,
     );
     // Plan expectation: names the planTokens entry for the addressed plan.
     expect(() =>
@@ -805,7 +805,7 @@ describe("execution-tokens: \u00A73.1 canonical value form and version tokens", 
     expect(() =>
       assertExecutionToken(workflow, { kind: "session", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "coordinator", "s-1"] }),
     ).toThrow(
-      /expected a session token — got a workflow token\. The address kind is never inferred from a supplied token\.$/,
+      /expected a session token \u2014 got a workflow token\. The address kind is never inferred from a supplied token\.$/,
     );
   });
 });
