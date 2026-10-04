@@ -28,7 +28,8 @@ import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extens
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
-import mcpIdentityFactory, { mcpIdentityInjection, toolDeclaresSessionId } from "../src/extensions/mcp-identity";
+import mcpIdentityFactory, { MSTAR_TOOL_PREFIX, mcpIdentityInjection, toolDeclaresSessionId } from "../src/extensions/mcp-identity";
+import { createMCPToolName } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 
 const SCRATCH: string[] = [];
 
@@ -197,6 +198,16 @@ describe("mcp-identity extension (host tool_call path)", () => {
 });
 
 describe("mcp-identity pure decision and schema probe", () => {
+  test("the host's own MCP name minter composes names this extension's prefix matches (naming drift guard)", () => {
+    // The extension's prefilter hardcodes the `mcp__<sanitized server>_<tool>`
+    // spelling for the shipped `morning-star` server; the HOST mints tool
+    // names with `createMCPToolName`. If either side's convention drifts, this
+    // fails instead of every injection silently skipping.
+    const minted = createMCPToolName("morning-star", "mstar_workflow_register");
+    expect(minted).toBe(`${MSTAR_TOOL_PREFIX}workflow_register`);
+    expect(minted.startsWith(MSTAR_TOOL_PREFIX)).toBe(true);
+  });
+
   test("toolDeclaresSessionId reads TypeBox-shaped parameters only", () => {
     expect(toolDeclaresSessionId(schemaWith({ sessionId: { type: "string" } }))).toBe(true);
     expect(toolDeclaresSessionId(schemaWith({ workflow: { type: "string" } }))).toBe(false);

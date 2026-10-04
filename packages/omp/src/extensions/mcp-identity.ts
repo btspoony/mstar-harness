@@ -28,8 +28,9 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult
  * Sanitized MCP tool prefix minted by the host's `createMCPToolName` for the
  * shipped `morning-star` server (`mcp__<sanitized server>_<tool>`); the MCP
  * tool itself is `mstar_<command id>` (e.g. `mcp__morning_star_mstar_plan_bind`).
+ * Exported so tests can pin the host's own minter against this exact prefix.
  */
-const MSTAR_TOOL_PREFIX = "mcp__morning_star_mstar_";
+export const MSTAR_TOOL_PREFIX = "mcp__morning_star_mstar_";
 
 /** The plain-object input record of one tool call; narrows for keyed access. */
 function isInputRecord(input: unknown): input is Record<string, unknown> {
