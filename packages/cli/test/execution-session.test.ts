@@ -968,11 +968,11 @@ describe("mstar session recover — named plan owner", () => {
     const recovered = runCli(
       ["session", "recover", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--prior-session", PLAN_PM_ID,
         "--reason", "the recorded plan owner stopped", "--attestation", attestationPath,
-        "--expect", afterPrepare.plan, "--operation", "recover-plan-owner", "--harness", fixture.harnessDir],
+        "--expect", (await tokensOf(fixture)).plan, "--operation", "recover-plan-owner", "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
-    expect(recovered.exitCode).toBe(0);
+    expect(recovered.exitCode, recovered.stdout).toBe(0);
     expect(dataOf(recovered).data).toMatchObject({ role: "plan-pm", sessionId: COORDINATOR_ID, planId: PLAN_ID });
     expect((await storedLease(fixture))?.holder_session_id).toBe(COORDINATOR_ID);
     const progressPath = join(fixture.root, "old-owner-progress.json");
@@ -1006,11 +1006,11 @@ describe("mstar session recover — named plan owner", () => {
     const recovered = runCli(
       ["session", "recover", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--prior-session", PLAN_PM_ID,
         "--reason", "the recorded plan owner stopped", "--attestation", attestationPath,
-        "--expect", afterPrepare.plan, "--operation", "recover-plan-owner-lifecycle", "--harness", fixture.harnessDir],
+        "--expect", (await tokensOf(fixture)).plan, "--operation", "recover-plan-owner-lifecycle", "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
-    expect(recovered.exitCode).toBe(0);
+    expect(recovered.exitCode, recovered.stdout).toBe(0);
     const newPlanOwner = planPmIdentity(COORDINATOR_ID);
     expect(dataOf(recovered).data).toMatchObject({ role: "plan-pm", sessionId: newPlanOwner.sessionId, planId: PLAN_ID });
     expect((await storedLease(fixture))?.holder_session_id).toBe(newPlanOwner.sessionId);
