@@ -1017,8 +1017,8 @@ describe("mstar session recover — named plan owner", () => {
 
     const progressPath = join(fixture.root, "recovered-progress.json");
     writeJson(progressPath, { status: "InReview", summary: "reviewed delivery ready", evidence_paths: [fixture.qaReport] });
-    const progressed = runCli(["plan", "progress", "--file", progressPath, "--harness", fixture.harnessDir], fixture, newPlanOwner);
-    expect(progressed.exitCode).toBe(0);
+    const progressed = runCli(["plan", "progress", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir], fixture, newPlanOwner);
+    expect(progressed.exitCode, progressed.stdout).toBe(0);
     const handoffPath = join(fixture.root, "recovered-handoff.json");
     writeJson(handoffPath, {
       source_sha: fixture.sourceSha,
@@ -1027,17 +1027,17 @@ describe("mstar session recover — named plan owner", () => {
       qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
       qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
     });
-    const handed = runCli(["plan", "handoff", "--file", handoffPath, "--harness", fixture.harnessDir], fixture, newPlanOwner);
-    expect(handed.exitCode).toBe(0);
+    const handed = runCli(["plan", "handoff", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--file", handoffPath, "--harness", fixture.harnessDir], fixture, newPlanOwner);
+    expect(handed.exitCode, handed.stdout).toBe(0);
     const handoffId = handoffIdOf(handed);
     const accepted = runCli(
-      ["plan", "accept", "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
+      ["plan", "accept", "--workflow", WORKFLOW_ID, "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
     expect(accepted.exitCode).toBe(0);
     const completed = runCli(
-      ["plan", "complete", "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
+      ["plan", "complete", "--workflow", WORKFLOW_ID, "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
       fixture,
       coordinator,
     );
