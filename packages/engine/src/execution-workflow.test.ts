@@ -1535,6 +1535,64 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(Number(lease!.owner_epoch)).toBe(fixture.epoch);
   });
 
+  test("released-claim: a recovered coordinator may release only its own adopted execution claim", async () => {
+    const fixture = await workflowFixture("recovery-release-owned-claim");
+    plantLease(fixture.context, {
+      ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator",
+    });
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?")
+        .run(WORKFLOW_ID, COORDINATOR_ID);
+    });
+    const recovered = await recoverExecutionCoordinator(
+      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)),
+      {
+        expected: workflowTokenOfRow(fixture.context),
+        operationId: "op-recover-release-own-claim",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator stopped while holding a plan lease",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    );
+    const caller = trustedCaller(RECOVERY_ID, "coordinator", null);
+    const planRead = await readExecutionPlan(domainContext(fixture.context, caller), recovered.data, PLAN_ID);
+    const released = await mutateExecutionPlan(domainContext(fixture.context, caller), {
+      operationId: "op-release-recovered-claim",
+      session: recovered.data,
+      expected: planRead.token,
+      planId: PLAN_ID,
+      operation: { kind: "release" },
+    });
+    expect(released.data.plan.status).toBe("Todo");
+    expect(leaseRows(fixture.context).map((row) => parsedJson(row.lease_json))).toMatchObject([
+      { status: "released", holder_session_id: RECOVERY_ID, released_by: RECOVERY_ID,
+        release_operation_id: "op-release-recovered-claim" },
+    ]);
+  });
+  test("released-claim: staged release refusal names the operator safe-upgrade route and prerequisites", async () => {
+    const fixture = await workflowFixture("release-staged-guidance");
+    const planRead = await readExecutionPlan(
+      domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID,
+    );
+    const before = await workflowFootprint(fixture.context);
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_meta set authority_state = 'staged' where id = 1").run();
+    });
+    const refusal = await refusalOf(() =>
+      mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+        operationId: "op-release-staged",
+        session: fixture.coordinator,
+        expected: planRead.token,
+        planId: PLAN_ID,
+        operation: { kind: "release" },
+      }),
+    );
+    expect(refusal.code).toBe("execution.not-active");
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+    });
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
   test("recovery adopts only the ownership the revocation it names orphaned", async () => {
     const fixture = await workflowFixture("recovery-foreign-orphan");
     // An UNRELATED plan-pm holder that stopped while holding a plan lease in the

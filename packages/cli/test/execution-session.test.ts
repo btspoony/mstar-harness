@@ -27,11 +27,13 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { executeCommand } from "@mstar-harness/commands";
 import {
   encodeExecutionSessionRef,
   getCatalog,
   initializeExecutionAuthority,
   initializeStore,
+  openStore,
   readExecutionAuthority,
   serializeExecutionValue,
   type ExecutionIdentity,
@@ -85,16 +87,25 @@ function writeJson(path: string, value: unknown): void {
 }
 
 /** The header block `parseAssignmentFile` accepts (the DB prepare seals it). */
-function assignmentText(input: { harnessDir: string; planMarkdown: string; worktreePath: string; sddDir: string }): string {
+function assignmentText(input: {
+  harnessDir: string;
+  planMarkdown: string;
+  worktreePath: string;
+  sddDir: string;
+  workingBranch?: string;
+  workflowId?: string;
+  planId?: string;
+}): string {
+  const planId = input.planId ?? PLAN_ID;
   return [
-    `# Assignment \u2014 ${PLAN_ID}`,
+    `# Assignment \u2014 ${planId}`,
     "",
     `**Control harness root**: ${input.harnessDir}`,
-    `**Workflow id**: ${WORKFLOW_ID}`,
-    `**Plan id**: ${PLAN_ID}`,
+    `**Workflow id**: ${input.workflowId ?? WORKFLOW_ID}`,
+    `**Plan id**: ${planId}`,
     `**Plan Path**: ${input.planMarkdown}`,
     `**Worktree Path**: ${input.worktreePath}`,
-    "**Working branch**: feature/exec-session",
+    `**Working branch**: ${input.workingBranch ?? "feature/exec-session"}`,
     `**SDD dir**: ${input.sddDir}`,
     "**Execute as**: project-manager",
     "**Execution scope**: plan",
@@ -159,6 +170,12 @@ function dataOf(result: RunResult): Record<string, unknown> {
     throw new Error(`expected a data object, got ${result.stdout}`);
   }
   return data as Record<string, unknown>;
+}
+
+/** One value read by name from a parsed envelope object, without a cast. */
+function fieldOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return Object.getOwnPropertyDescriptor(value, key)?.value;
 }
 
 function coordinatorIdentity(): ExecutionIdentity {
@@ -381,7 +398,7 @@ async function preparePlanSeat(
   return { coordinator: coordinator.ref, coordinatorWire: coordinator.wire, planPmWire: planPm.wire, planPmRef: planPm.ref };
 }
 
-describe("mstar session run \u2014 documented invocation", () => {
+describe("mstar session run — documented invocation", () => {
   test("launches argv under one minted local identity and propagates its exit code", async () => {
     const fixture = await activeFixture("mstar-session-run");
     const script =
@@ -509,6 +526,202 @@ describe("mstar session run \u2014 documented invocation", () => {
     if (!("plan" in stored.data)) throw new Error("the plan read did not return a plan view");
     const planView: ExecutionPlanView = stored.data;
     expect(planView.plan.status).toBe("InReview");
+  });
+});
+
+/** The full public `workflow register` argv the active route requires. */
+function registerArgs(fixture: Fixture, rootToken: string, operationId: string, extra: string[] = []): string[] {
+  return [
+    "workflow", "register",
+    "--workflow", WORKFLOW_ID,
+    "--plan-id", PLAN_ID,
+    "--plan-title", "Execution session transport plan",
+    "--plan-file", `plans/${PLAN_ID}.md`,
+    "--delivery-kind", "development",
+    "--branch-source", "feature/exec-session",
+    "--branch-target", "main",
+    "--expect", rootToken,
+    "--operation", operationId,
+    "--harness", fixture.harnessDir,
+    ...extra,
+  ];
+}
+
+/** The CLI child argv a `session run` launch executes inside the fixture. */
+function registerArgv(fixture: Fixture, rootToken: string, operationId: string): string[] {
+  return [process.execPath, "run", SRC_ENTRY, ...registerArgs(fixture, rootToken, operationId)];
+}
+
+/** The minted identity a `session run` receipt discloses for its one launch. */
+function mintedOf(launch: RunResult): ExecutionIdentity {
+  const identity = fieldOf(dataOf(launch), "identity");
+  if (identity === null || typeof identity !== "object") throw new Error(`no minted identity in the launch receipt: ${launch.stdout}`);
+  // The receipt is this adapter's own output: its identity member is the §3.1
+  // tuple the launcher minted, so it is read as that named type.
+  return identity as ExecutionIdentity;
+}
+
+/**
+ * The minted-local-identity transport. `session.run` mints one local identity,
+ * overwrites the identity channel and deletes the legacy one; these cases pin
+ * that a launched child actually consumes that channel against the real active
+ * authority — precedence, the ambient fallback, cross-scope refusal, and the
+ * launch/register/bind chain under ONE acquired identity.
+ */
+describe("mstar session run — minted identity transport", () => {
+  test("a launched child consumes its minted identity through register, and that same identity binds", async () => {
+    const fixture = await activeFixture("mstar-minted-launch");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+
+    // The launch writes no binding itself; the child CLI (register) runs with
+    // ONLY the minted channel — `session.run` deleted MSTAR_HOST_SESSION_ID.
+    const launched = runCli(
+      ["session", "run", "--workflow", WORKFLOW_ID, "--role", "coordinator", "--harness", fixture.harnessDir,
+        "--", ...registerArgv(fixture, rootToken, "register-minted")],
+      fixture,
+    );
+    expect(launched.exitCode).toBe(0);
+    const identity = mintedOf(launched);
+    expect(identity.source).toBe("local");
+    expect(identity.workflowId).toBe(WORKFLOW_ID);
+    expect(identity.role).toBe("coordinator");
+
+    // The child's own stdout is the register success of that minted identity.
+    const childStdout = JSON.parse(String(dataOf(launched).stdout).trim()) as Record<string, unknown>;
+    expect(childStdout).toMatchObject({ command: "workflow.register", status: "ok" });
+
+    // The SAME acquired identity is the workflow's creator, so its first bind
+    // succeeds — through the minted channel itself, with no --session-id.
+    const workflowToken = (await tokensOf(fixture)).workflow;
+    const bound = spawnCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", workflowToken, "--operation", "bind-minted", "--harness", fixture.harnessDir],
+      fixture,
+      { ...cliEnv(fixture, identity) },
+    );
+    expect(bound.exitCode).toBe(0);
+    expect(jsonOf(bound).command).toBe("plan.bind");
+
+    // The authority itself holds the coordinator row under that minted session.
+    const workflow = await workflowStateOf(fixture);
+    expect(workflow.coordinator?.sessionId).toBe(identity.sessionId);
+  });
+
+  test("a minted identity never authorizes a scope it does not declare", async () => {
+    const fixture = await activeFixture("mstar-minted-scope");
+    const foreign = { source: "local" as const, sessionId: "minted-foreign", workflowId: "wf-somewhere-else", role: "coordinator" as const, planId: null };
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    const refused = spawnCli(
+      registerArgs(fixture, rootToken, "register-scope"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(foreign) },
+    );
+    // The complete request reaches the identity/scope gate, which refuses before
+    // any write with its own typed cause (not a missing-field usage).
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused).code).toBe("command.invalid-input");
+    expect(fieldOf(jsonOf(refused), "details")).toMatchObject({ identity: { code: "command.identity-scope-mismatch" } });
+    // No register happened: the root register still holds no workflow.
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+  });
+
+  test("an active registration refuses a same-workflow identity addressing the wrong seat", async () => {
+    const fixture = await activeFixture("mstar-minted-seat");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    // A complete, otherwise-valid registration whose minted identity addresses the
+    // SAME workflow but the plan-pm seat: registration's caller seat is the
+    // coordinator, so this is refused before any mutation.
+    const planPm = { source: "local" as const, sessionId: "minted-plan-pm", workflowId: WORKFLOW_ID, role: "plan-pm" as const, planId: PLAN_ID };
+    const refused = spawnCli(
+      registerArgs(fixture, rootToken, "register-wrong-seat"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(planPm) },
+    );
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused).code).toBe("command.invalid-input");
+    expect(fieldOf(jsonOf(refused), "details")).toMatchObject({ identity: { code: "command.identity-scope-mismatch" } });
+    // Nothing was written: no workflow row and no catalog plan entity.
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+    await expect(getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).rejects.toThrow();
+  });
+
+  test("a malformed minted transport refuses before any write instead of falling back", async () => {
+    const fixture = await activeFixture("mstar-minted-malformed");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    for (const malformed of ["not-json", "[]", serializeExecutionValue({ source: "local", sessionId: "", workflowId: WORKFLOW_ID, role: "coordinator", planId: null })]) {
+      const refused = spawnCli(
+        registerArgs(fixture, rootToken, "register-malformed"),
+        fixture,
+        { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: malformed, MSTAR_HOST_SESSION_ID: "ambient-must-not-substitute" },
+      );
+      // The complete request still refuses on the malformed transport alone, and
+      // the ambient host value never substitutes for it.
+      expect(`${malformed} -> ${refused.exitCode}`).toBe(`${malformed} -> 2`);
+      expect(jsonOf(refused).code).toBe("command.invalid-input");
+      const cause = fieldOf(fieldOf(jsonOf(refused), "details"), "identity");
+      expect(String(fieldOf(cause, "code"))).toMatch(/^(command\.invalid-identity|coordination\.)/);
+    }
+    const state = await readExecutionAuthority(fixture.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+  });
+
+  test("with no minted identity the ambient host value is the fallback, and both absent is a usage refusal", async () => {
+    const fixture = await activeFixture("mstar-minted-ambient");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+
+    const ambient = spawnCli(
+      registerArgs(fixture, rootToken, "register-ambient"),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_HOST_SESSION_ID: "ambient-host-session" },
+    );
+    expect(ambient.exitCode).toBe(0);
+    expect(jsonOf(ambient).command).toBe("workflow.register");
+
+    const second = await activeFixture("mstar-minted-absent");
+    const secondToken = (await readExecutionAuthority(second.context)).token;
+    const absent = spawnCli(
+      registerArgs(second, secondToken, "register-absent"),
+      second,
+      cliEnv(second),
+    );
+    // A complete active registration with neither identity channel refuses on
+    // the missing identity, not on any other field.
+    expect(absent.exitCode).toBe(2);
+    expect(String(jsonOf(absent).code)).toBe("command.invalid-input");
+    const state = await readExecutionAuthority(second.context);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+  });
+
+  test("an explicit --session-id overrides the minted identity", async () => {
+    const fixture = await activeFixture("mstar-minted-flag-wins");
+    const rootToken = (await readExecutionAuthority(fixture.context)).token;
+    const minted = { source: "local" as const, sessionId: "minted-loses", workflowId: WORKFLOW_ID, role: "coordinator" as const, planId: null };
+    const registered = spawnCli(
+      registerArgs(fixture, rootToken, "register-flag-wins", ["--session-id", "explicit-wins"]),
+      fixture,
+      { ...cliEnv(fixture), MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(minted) },
+    );
+    expect(registered.exitCode).toBe(0);
+    // The explicit identity is the creator, so only it binds first.
+    const workflowToken = (await tokensOf(fixture)).workflow;
+    const byFlag = runCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--expect", workflowToken,
+        "--operation", "bind-flag", "--harness", fixture.harnessDir, "--session-id", "explicit-wins"],
+      fixture,
+    );
+    expect(byFlag.exitCode).toBe(0);
+    // …and the overridden minted identity cannot take the held scope: the same
+    // bind through the minted channel alone is refused by the creator fence.
+    const byMinted = spawnCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator",
+        "--expect", (await tokensOf(fixture)).workflow, "--operation", "bind-minted-loses", "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, minted),
+    );
+    expect(byMinted.exitCode).toBe(1);
+    expect(String(jsonOf(byMinted).code)).toMatch(/^(coordination|execution)\./);
   });
 });
 
@@ -952,4 +1165,433 @@ describe("workflow.register — state-aware transport refusals", () => {
     expect(activeResponse.message).toContain("active DB form");
     expect(readFileSync(activeDb).equals(activeBefore)).toBe(true);
   });
+});
+
+/* ------------------------------------------------------------------------ *
+ * ACTIVE public holder / delivery tail (T4b)
+ *
+ * These cases drive the ordinary sparse own-binding routes — no routine
+ * `--session-ref`/`--expect`/`--operation` copying — against the SAME public
+ * engine verbs and a real temporary ACTIVE authority. They cover the owned
+ * release → explicit bind → repair/prepare/progress path and the independent
+ * truthful stopped path (A6/A7), plus a successful development delivery that
+ * completes, unregisters and passes the phase-6 projection (A4/A8). Every
+ * mutation reads its authoritative state back through the engine, never from
+ * the CLI's own claim.
+ * ------------------------------------------------------------------------ */
+
+/** The fixture root's HEAD as a commit id (the pinned review base). */
+function headOf(cwd: string): string {
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+}
+
+/** Commit inside one checkout with a pinned fixture identity (no ambient config). */
+function commitIn(cwd: string, message: string): void {
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", message], { cwd });
+}
+
+interface DeliveryFixture extends Fixture {
+  /** The real feature checkout the standalone development completes from. */
+  featurePath: string;
+  sourceSha: string;
+  baseSha: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
+
+/**
+ * A temp Git workspace whose `.mstar` holds an ACTIVE authority and whose plan
+ * worktree is a REAL feature checkout on `feature/exec-session` — the delivery
+ * source the standalone development completion reads. The Assignment pins that
+ * same worktree and branch, so `prepare` records the scope the tail completes
+ * against.
+ */
+async function activeDeliveryFixture(label: string): Promise<DeliveryFixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  const store = await initializeStore(context);
+  store.close();
+  await initializeExecutionAuthority(context);
+  const baseSha = headOf(root);
+
+  const featurePath = join(root, "wt-feature");
+  execFileSync("git", ["worktree", "add", "-q", "-b", "feature/exec-session", featurePath], { cwd: root });
+  writeText(join(featurePath, "slice.txt"), "slice\n");
+  execFileSync("git", ["add", "slice.txt"], { cwd: featurePath });
+  commitIn(featurePath, "feat: slice");
+  const sourceSha = headOf(featurePath);
+
+  const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
+  const sddDir = join(harnessDir, "sdd", PLAN_ID);
+  const assignmentPath = join(sddDir, "assignment.md");
+  const evidencePath = join(sddDir, "evidence.md");
+  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(evidencePath, "# evidence\n");
+  writeText(assignmentPath, assignmentText({ harnessDir, planMarkdown, worktreePath: featurePath, sddDir }));
+
+  const qcReport = join(sddDir, "review", "qc1.md");
+  const qcConsolidated = join(sddDir, "review", "qc.md");
+  const qaReport = join(sddDir, "qa.md");
+  writeText(qcReport, "# QC 1\ndecision: Approve\n");
+  writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+  writeText(qaReport, "# QA\nverdict: pass\n");
+  return {
+    root, harnessDir, context, planMarkdown, assignmentPath, worktreePath: featurePath,
+    sddDir, evidencePath, featurePath, sourceSha, baseSha, qcReport, qcConsolidated, qaReport,
+  };
+}
+
+/** Read the row's stored status through the engine, never the CLI's own claim. */
+async function storedRowStatus(fixture: Fixture): Promise<unknown> {
+  const read = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
+  if (!("plan" in read.data)) throw new Error("the plan read did not return a plan view");
+  return (read.data.plan as { status?: unknown }).status;
+}
+
+/** The row's stored execution lease through the engine. */
+async function storedLease(fixture: Fixture): Promise<{ status?: unknown; holder_session_id?: unknown } | null> {
+  const read = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
+  if (!("executionLease" in read.data)) throw new Error("the plan read did not return a plan view");
+  return (read.data.executionLease as { status?: unknown; holder_session_id?: unknown } | null);
+}
+
+/**
+ * The handoff id a `plan handoff` receipt discloses, read through `in`/`typeof`
+ * narrowing rather than an unchecked inline cast: the CLI envelope is the
+ * adapter's own output, but its nested members are still runtime data.
+ */
+function handoffIdOf(result: RunResult): string {
+  const receipt = jsonOf(result).data;
+  if (typeof receipt !== "object" || receipt === null) throw new Error(`no receipt in ${result.stdout}`);
+  if (!("data" in receipt)) throw new Error(`no plan view in ${result.stdout}`);
+  const view = receipt.data;
+  if (typeof view !== "object" || view === null) throw new Error(`no plan view object in ${result.stdout}`);
+  if (!("coordination" in view)) throw new Error(`no coordination block in ${result.stdout}`);
+  const coordination = view.coordination;
+  if (typeof coordination !== "object" || coordination === null) throw new Error(`no coordination object in ${result.stdout}`);
+  if (!("handoff" in coordination)) throw new Error(`no handoff record in ${result.stdout}`);
+  const handoff = coordination.handoff;
+  if (typeof handoff !== "object" || handoff === null) throw new Error(`no handoff object in ${result.stdout}`);
+  if (!("id" in handoff) || typeof handoff.id !== "string") throw new Error(`no handoff id in ${result.stdout}`);
+  return handoff.id;
+}
+
+/** The whole root register the authority serves right now. */
+async function servedRoot(fixture: Fixture): Promise<readonly { id: string }[]> {
+  const read = await readExecutionAuthority(fixture.context);
+  if (!("workflows" in read.data)) throw new Error("the register read did not return the whole state");
+  return read.data.root.workflows;
+}
+
+/**
+ * The stored terminal header of one closed workflow, read from the real store
+ * row (the execution registry no longer serves a terminal lifecycle, so the
+ * register view is empty by design — the persisted state is the authoritative
+ * witness).
+ */
+async function storedTerminalState(fixture: Fixture): Promise<{ status?: unknown; ended_at?: unknown }> {
+  const handle = await openStore(fixture.context, "read");
+  try {
+    const row = handle.db
+      .prepare("select state_json from execution_workflows where workflow_id = ?")
+      .get(WORKFLOW_ID);
+    if (typeof row !== "object" || row === null || !("state_json" in row) || typeof row.state_json !== "string") {
+      throw new Error(`no stored row for ${WORKFLOW_ID}`);
+    }
+    const parsed: unknown = JSON.parse(row.state_json);
+    if (typeof parsed !== "object" || parsed === null) throw new Error("stored row is not an object");
+    return {
+      ...("status" in parsed ? { status: parsed.status } : {}),
+      ...("ended_at" in parsed ? { ended_at: parsed.ended_at } : {}),
+    };
+  } finally {
+    handle.close();
+  }
+}
+
+describe("mstar plan — owned release, reacquisition and the delivery tail (ACTIVE sparse)", () => {
+  test("release → explicit same-holder bind → restore content → prepare → progress", async () => {
+    const fixture = await activeFixture("mstar-owned-release-reacquire");
+    await preparePlanSeat(fixture);
+    const planPm = planPmIdentity();
+    const assignmentBytes = readFileSync(fixture.assignmentPath);
+
+    // A release never reads the Assignment bytes: remove them first so a
+    // lingering read would refuse rather than pass.
+    rmSync(fixture.assignmentPath);
+    const released = spawnCli(
+      ["plan", "release", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(released.exitCode).toBe(0);
+    expect(jsonOf(released).command).toBe("plan.release");
+    // The public effect is the persisted state, not the receipt echo: the row
+    // is Blocked and the claim reads back released.
+    expect(await storedRowStatus(fixture)).toBe("Blocked");
+    expect((await storedLease(fixture))?.status).toBe("released");
+
+    // The holder explicitly reacquires through the ordinary bind, without a
+    // copied reference, token or operation id.
+    const rebound = spawnCli(
+      ["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(rebound.exitCode).toBe(0);
+    expect(jsonOf(rebound).command).toBe("plan.bind");
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
+
+    // The repaired content restores the prepared scope, so a re-prepare is the
+    // satisfied no-op and progress resumes under the reacquired claim.
+    writeText(fixture.assignmentPath, assignmentBytes.toString("utf8"));
+    const reprepped = spawnCli(
+      ["plan", "prepare", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--assignment", fixture.assignmentPath, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, coordinatorIdentity()),
+    );
+    expect(reprepped.exitCode).toBe(0);
+    expect(jsonOf(reprepped).command).toBe("plan.prepare");
+
+    const progressPath = join(fixture.root, "progress-reacquired.json");
+    // The released row is Blocked; its own allowed edges run Blocked → InProgress
+    // → InReview, so the resume reports both.
+    for (const status of ["InProgress", "InReview"]) {
+      writeJson(progressPath, { status, summary: `resumed after reacquisition (${status})`, evidence_paths: [fixture.evidencePath] });
+      const progressed = spawnCli(
+        ["plan", "progress", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
+        fixture,
+        cliEnv(fixture, planPm),
+      );
+      expect(progressed.exitCode).toBe(0);
+      expect(jsonOf(progressed).command).toBe("plan.progress");
+    }
+    expect(await storedRowStatus(fixture)).toBe("InReview");
+  }, 30_000);
+
+  test("release → truthful stopped terminal unregisters without fabricating completion", async () => {
+    const fixture = await activeFixture("mstar-owned-release-stopped");
+    await preparePlanSeat(fixture);
+    const planPm = planPmIdentity();
+    rmSync(fixture.assignmentPath);
+    const released = spawnCli(
+      ["plan", "release", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(released.exitCode).toBe(0);
+
+    const stopped = spawnCli(
+      ["workflow", "lifecycle", "--status", "stopped", "--reason", "assignment content unavailable; truthful stop", "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, coordinatorIdentity()),
+    );
+    expect(stopped.exitCode).toBe(0);
+    expect(jsonOf(stopped).command).toBe("workflow.lifecycle");
+    expect(await servedRoot(fixture)).toHaveLength(0);
+    // The terminal state persists in the store row (the registry unregister is
+    // what the adapter's register view reflects), read through the real store.
+    const stoppedRow = await storedTerminalState(fixture);
+    expect(stoppedRow.status).toBe("stopped");
+    expect(typeof stoppedRow.ended_at).toBe("string");
+  }, 30_000);
+
+  test("owned success: handoff → accept → complete → evidence → close → phase 6, generic routes", async () => {
+    const fixture = await activeDeliveryFixture("mstar-owned-delivery-success");
+    const identity = coordinatorIdentity();
+    const initial = await readExecutionAuthority(fixture.context);
+    registerThroughAuthority(fixture, identity, initial.token);
+    const beforeBind = await tokensOf(fixture);
+    const coordinator = activeBind(fixture, identity, ["--coordinator"], beforeBind.workflow, "bind-coordinator");
+    const prepared = runCli(
+      [
+        "plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
+        "--assignment", fixture.assignmentPath, "--expect", beforeBind.plan,
+        "--operation", "prepare-1", "--harness", fixture.harnessDir,
+      ],
+      fixture,
+      identity,
+    );
+    expect(prepared.exitCode).toBe(0);
+    const afterPrepare = await tokensOf(fixture);
+    const planPm = activeBind(fixture, planPmIdentity(), ["--plan", PLAN_ID], afterPrepare.plan, "bind-plan-pm");
+    expect(planPm.ref.sessionId).toBe(PLAN_PM_ID);
+
+    // Progress and handoff through the sparse own-binding route: no token or
+    // reference is copied; the plan-pm tuple is the caller.
+    const progressPath = join(fixture.root, "progress-review.json");
+    writeJson(progressPath, { status: "InReview", summary: "ready for review", evidence_paths: [fixture.qaReport] });
+    const progressed = spawnCli(
+      ["plan", "progress", "--file", progressPath, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPmIdentity()),
+    );
+    expect(progressed.exitCode).toBe(0);
+    expect(await storedRowStatus(fixture)).toBe("InReview");
+
+    const handoffPath = join(fixture.root, "handoff.json");
+    writeJson(handoffPath, {
+      source_sha: fixture.sourceSha,
+      review_base: fixture.baseSha,
+      review_head: fixture.sourceSha,
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
+    const handed = spawnCli(
+      ["plan", "handoff", "--file", handoffPath, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPmIdentity()),
+    );
+    expect(handed.exitCode).toBe(0);
+    const handoffId = handoffIdOf(handed);
+    expect(typeof handoffId).toBe("string");
+
+    const accepted = spawnCli(
+      ["plan", "accept", "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, identity),
+    );
+    expect(accepted.exitCode).toBe(0);
+
+    const completed = spawnCli(
+      ["plan", "complete", "--coordinator", "--plan", PLAN_ID, "--handoff", handoffId, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, identity),
+    );
+    expect(completed.exitCode).toBe(0);
+    expect(await storedRowStatus(fixture)).toBe("Done");
+    expect(await servedRoot(fixture)).toHaveLength(1);
+
+    // Record the development delivery tail, then close through the generic
+    // workflow-close route and confirm the root unregister plus the phase-6
+    // projection. All delivery facts are synthetic fixture evidence.
+    const deliveryPath = join(fixture.root, "delivery.json");
+    writeJson(deliveryPath, {
+      compound: { outcome: "skipped", reason: "fixture-only compound disposition" },
+      pr: { repo: "synthetic/example", head: "feature/exec-session", target: "main" },
+      merge: { provider: "synthetic-fixture", evidence: "fixture verified-merge record; no live provider" },
+    });
+    const evidence = spawnCli(
+      ["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", deliveryPath, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, identity),
+    );
+    expect(evidence.exitCode).toBe(0);
+    expect(jsonOf(evidence).command).toBe("workflow.evidence");
+
+    const closed = spawnCli(
+      ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--reason", "delivery complete", "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, identity),
+    );
+    expect(closed.exitCode).toBe(0);
+    expect(jsonOf(closed).command).toBe("status.workflow-close");
+    expect(await servedRoot(fixture)).toHaveLength(0);
+    const completedRow = await storedTerminalState(fixture);
+    expect(completedRow.status).toBe("completed");
+    expect(typeof completedRow.ended_at).toBe("string");
+
+    const phase6 = runCli(
+      ["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", fixture.harnessDir],
+      fixture,
+    );
+    expect(phase6.exitCode).toBe(0);
+    expect(jsonOf(phase6)).toMatchObject({ status: "ok", data: { phase: 6 } });
+  }, 30_000);
+});
+
+
+/**
+ * Explicit seat selector vs the acquired role — the release regressions for the
+ * role-constraint bypass. A request that STATES the coordinator seat while the
+ * acquired/declared caller is the plan's own plan-pm must refuse as usage
+ * before any mutation; the family must never silently reinterpret the declared
+ * seat. Every leg asserts the typed refusal AND the persisted facts (row
+ * unchanged, own lease still held by the plan-pm), never a prose echo.
+ */
+describe("mstar plan release — explicit coordinator selector vs the acquired plan-pm seat", () => {
+  /** One prepared row whose plan-pm seat holds the execution lease. */
+  async function heldSeatFixture(label: string): Promise<Fixture & { planPmWire: string }> {
+    const fixture = await activeFixture(label);
+    const seat = await preparePlanSeat(fixture);
+    return { ...fixture, planPmWire: seat.planPmWire };
+  }
+
+  test("an explicit --coordinator selector with a full plan token refuses and keeps the claim held", async () => {
+    const fixture = await heldSeatFixture("mstar-release-seat-expect");
+    const planPm = planPmIdentity();
+    const tokens = await tokensOf(fixture);
+    const before = await storedRowStatus(fixture);
+
+    const released = spawnCli(
+      ["plan", "release", "--coordinator", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--expect", tokens.plan, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(released.exitCode).toBe(2);
+    expect(jsonOf(released).code).toBe("command.invalid-input");
+    expect(await storedRowStatus(fixture)).toBe(before);
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
+  }, 30_000);
+
+  test("an explicit --coordinator selector with the caller's own session reference refuses and keeps the claim held", async () => {
+    const fixture = await heldSeatFixture("mstar-release-seat-ref");
+    const planPm = planPmIdentity();
+    const before = await storedRowStatus(fixture);
+
+    const released = spawnCli(
+      ["plan", "release", "--coordinator", "--session-ref", fixture.planPmWire, "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--harness", fixture.harnessDir],
+      fixture,
+      cliEnv(fixture, planPm),
+    );
+    expect(released.exitCode).toBe(2);
+    expect(jsonOf(released).code).toBe("command.invalid-input");
+    expect(await storedRowStatus(fixture)).toBe(before);
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
+  }, 30_000);
+
+  test("a direct command-context release with an explicit --coordinator selector refuses and keeps the claim held", async () => {
+    const fixture = await heldSeatFixture("mstar-release-seat-direct");
+    const planPm = planPmIdentity();
+    const before = await storedRowStatus(fixture);
+
+    const direct = await executeCommand("plan.release", {
+      coordinator: true,
+      workflow: WORKFLOW_ID,
+      plan: PLAN_ID,
+      harness: fixture.harnessDir,
+    }, {
+      cwd: fixture.root,
+      controlRoot: null,
+      sessionId: planPm.sessionId,
+      sessionIdSource: "env",
+      executionIdentity: planPm,
+      versions: { engine: null, cli: "direct-context", plugin: null, host: null, platform: "test" },
+      signal: new AbortController().signal,
+      effects: {
+        async readInput() { return ""; },
+        async spawn() { throw new Error("release must not spawn a process"); },
+        async startDashboard() { throw new Error("dashboard is unavailable in this test"); },
+        async openBrowser() { throw new Error("browser is unavailable in this test"); },
+      },
+    });
+    expect(direct.exitCode).toBe(2);
+    expect(direct.code).toBe("command.invalid-input");
+    expect(await storedRowStatus(fixture)).toBe(before);
+    const lease = await storedLease(fixture);
+    expect(lease?.status).toBe("held");
+    expect(lease?.holder_session_id).toBe(PLAN_PM_ID);
+  }, 30_000);
 });

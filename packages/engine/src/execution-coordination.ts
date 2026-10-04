@@ -82,6 +82,7 @@ import {
   requireProgressStatus,
   requireRowStatus,
   rowStatusOf,
+  releaseStatus,
   standaloneDeliveryAnchors,
   storedCoordinationViolations,
   summarize,
@@ -93,6 +94,7 @@ import {
   assertExecutionToken,
   assertOperationId,
   claimIntegrationMergeLease,
+  executionLeaseOwnerEpoch,
   readExecutionPlan,
   readExecutionPlanWitness,
   readExecutionState,
@@ -724,10 +726,13 @@ function withExecutionPlanOperation<T>(
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
+      const releaseUpgrade = request.operation.kind === "release"
+        ? " ACTIVE-only release is unavailable here. An authorized operator may use `mstar store safe-upgrade --harness <dir> --operator <name> --attestation <file>` with valid operator attestation; `--inventory <file>` is optional because the upgrader obtains current migration/coverage. If legacy sources exist without an issue store, first initialize via `mstar store init --harness <dir>`. This call does not authorize that route."
+        : "";
       throw new ExecutionError(
         "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
+        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority.` +
+          releaseUpgrade + ` A staged store is inspectable only through migration diagnostics.`,
       );
     }
     const witness = readExecutionPlanWitness(tx, read);
@@ -1102,6 +1107,102 @@ export async function progressExecutionPlan(
     });
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+  });
+}
+
+/** Release the caller's own execution claim without consulting mutable Assignment bytes. */
+export async function releaseExecutionPlan(
+  context: ExecutionContext,
+  request: ExecutionPlanRequest<Extract<CoordinationOperation, { kind: "release" }>>,
+): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  const resolved = resolvePlanOperationRequest(context.caller, request, "release");
+  const operation = resolved.call.operation;
+  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "reason"], "release operation");
+  if (operation.reason !== undefined && !isNonEmptyString(operation.reason)) {
+    throw invalidPlanInput("a release reason, when supplied, must be a non-empty string");
+  }
+  const reason = operation.reason ?? "holder-requested release";
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
+  const { planId } = resolved.read;
+  return withExecutionPlanOperation(context, resolved, requestHash, (witness, tx, at) => {
+    const coordination = witness.view.coordination ?? undefined;
+    const lease = requireExecutionLease(planRowOf(witness.view), planId, "release");
+    if (executionLeaseOwnerEpoch(tx, witness.workflowId, planId) !== tx.epoch) {
+      throw new ExecutionError(
+        "execution.stale-token",
+        `plan ${planId}'s held execution claim belongs to an earlier authority epoch and cannot be released by the current session`,
+        { workflow_id: witness.workflowId, plan_id: planId },
+      );
+    }
+    if (lease.holder_session_id !== witness.session.sessionId || lease.holder_role !== witness.session.role) {
+      throw new CoordinationError(
+        "coordination.session-mismatch",
+        `release requires plan ${planId}'s own held execution claim`,
+        { plan_id: planId, holder: lease.holder_session_id },
+      );
+    }
+    if (
+      witness.session.role === "plan-pm" &&
+      witness.view.session?.sessionId !== witness.session.sessionId
+    ) {
+      throw new CoordinationError("coordination.session-mismatch", `release requires the caller's acquired plan binding`, {
+        plan_id: planId,
+      });
+    }
+    if (coordination?.handoff !== undefined && coordination.handoff.state !== "returned") {
+      assertNoHandoffTransition(coordination, planId);
+    }
+    const status = releaseStatus(witness.view.plan as PlanRow, planId);
+    releaseExecutionLease(tx, {
+      workflowId: witness.workflowId,
+      planId,
+      lease,
+      releasedBy: witness.session.sessionId,
+      reason,
+      now: at,
+      operationId: request.operationId,
+    });
+    const state: Record<string, unknown> = { ...(witness.view.plan as unknown as Record<string, unknown>), status };
+    writePlanCoordinationRow(tx, {
+      workflowId: witness.workflowId,
+      planId,
+      state,
+      coordination: storedCoordinationOf(witness.view),
+      revision: witness.revision + 1,
+    });
+    const committed = readExecutionPlanWitness(tx, resolved.read);
+    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+  }, (witness, tx) => {
+    const lease = witness.view.executionLease;
+    if (lease?.status !== "released" || lease.holder_session_id !== witness.session.sessionId) return undefined;
+    if (lease.holder_role !== witness.session.role) {
+      throw new CoordinationError("coordination.session-mismatch", `released claim for plan ${planId} belongs to a different role`, {
+        plan_id: planId,
+      });
+    }
+    if (executionLeaseOwnerEpoch(tx, witness.workflowId, planId) !== tx.epoch) {
+      throw new ExecutionError(
+        "execution.stale-token",
+        `plan ${planId}'s released execution claim belongs to an earlier authority epoch`,
+        { workflow_id: witness.workflowId, plan_id: planId },
+      );
+    }
+    if (witness.session.role === "plan-pm" && witness.view.session?.sessionId !== witness.session.sessionId) {
+      throw new CoordinationError("coordination.session-mismatch", `release requires the caller's acquired plan binding`, {
+        plan_id: planId,
+      });
+    }
+    const coordination = witness.view.coordination ?? undefined;
+    if (coordination?.handoff !== undefined && coordination.handoff.state !== "returned") {
+      assertNoHandoffTransition(coordination, planId);
+    }
+    if (!["Todo", "Blocked"].includes(rowStatusOf(witness.view.plan as PlanRow))) {
+      throw new CoordinationError("coordination.plan-status", `plan ${planId} has no claimable released status`, {
+        plan_id: planId,
+        status: witness.view.plan.status,
+      });
+    }
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
   });
 }
 
@@ -3121,6 +3222,8 @@ export async function mutateExecutionPlan(
       return residualAddExecutionPlan(context, { ...resolved, operation: strict });
     case "residual-close":
       return residualCloseExecutionPlan(context, { ...resolved, operation: strict });
+    case "release":
+      return releaseExecutionPlan(context, { ...resolved, operation: strict });
     case "handoff":
       return handoffExecutionPlan(context, { ...resolved, operation: strict });
     case "accept":

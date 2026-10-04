@@ -1111,6 +1111,9 @@
       "plan.reconcile": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
+      "plan.release": {
+        "excluded": "requires a live bound plan execution claim fixture; explicit unverified route"
+      },
       "plan.residual-add": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },

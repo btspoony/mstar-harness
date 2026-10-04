@@ -47,7 +47,9 @@ import {
   type ExecutionPlanView,
   type ExecutionRead,
   type ExecutionState,
+  readExecutionCleanupSnapshots,
 } from "./execution-store.js";
+import type { WorkflowSnapshot } from "./workflow.js";
 import type { StoreContext } from "./store-db.js";
 
 /**
@@ -130,4 +132,12 @@ export async function readExecutionAuthority(
     );
   }
   return { data: view, token, storeId: state.storeId, epoch: state.epoch };
+}
+
+/** Address cleanup facts independently of registry membership. */
+export async function readExecutionCleanupState(
+  context: StoreContext,
+  workflowId: string,
+): Promise<{ selected: WorkflowSnapshot; workflows: readonly WorkflowSnapshot[] }> {
+  return readExecutionCleanupSnapshots(context, workflowId);
 }

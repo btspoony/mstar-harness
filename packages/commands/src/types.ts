@@ -1,5 +1,5 @@
 import type { z, ZodType } from "zod";
-import type { RecoveryProblem } from "@mstar-harness/engine";
+import type { ExecutionIdentity, RecoveryProblem } from "@mstar-harness/engine";
 
 export type CommandStatus = "ok" | "refused" | "usage" | "error";
 
@@ -77,6 +77,17 @@ export interface InvocationContext {
   readonly host?: string;
   readonly sessionId?: string;
   readonly sessionIdSource?: "flag" | "env";
+  /**
+   * The launcher-minted execution identity this invocation resolved from
+   * `MSTAR_EXECUTION_IDENTITY` (`session.run` and the managed host gates write
+   * it), already validated as one §3.1 tuple. It is an attribution/scope fact
+   * only: the engine's own live-binding and owner checks still decide, and the
+   * tuple's declared `workflowId`/`role`/`planId` constrain which request the
+   * identity may address — it is never itself a credential and never authorizes
+   * a scope other than the one it declares. Absent on the flag and ambient
+   * environment routes, whose identity carries no scope transport.
+   */
+  readonly executionIdentity?: ExecutionIdentity;
   readonly versions: SurfaceVersions;
   readonly signal: AbortSignal;
   readonly effects: CommandEffects;

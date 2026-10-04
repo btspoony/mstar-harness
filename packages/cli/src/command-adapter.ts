@@ -11,6 +11,12 @@ import {
   type CommandEffects,
   type InvocationContext,
 } from "@mstar-harness/commands";
+import {
+  assertSafeSessionId,
+  decodeExecutionSessionRef,
+  validateExecutionIdentity,
+  type ExecutionIdentity,
+} from "@mstar-harness/engine";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
 
 export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
@@ -113,7 +119,7 @@ export function renderCommandContract(definition: CommandDefinition, route: "cli
   const descriptor = getCommandSchemas([definition])[0]!;
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
-    lines.push("Session identity resolves --session-id first, then MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset; for active token-authorized writes it is attribution, not authorization. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and rejects the environment value. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity.");
+    lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY (the active-route caller identity, validated against the addressed workflow/role/plan), then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset; for active token-authorized writes it is attribution, not authorization. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and rejects the environment value. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity.");
   }
   if (route === "mcp") {
     // The CLI route prints this same syntax as commander's Usage line, built
@@ -286,12 +292,221 @@ function collectInput(definition: CommandDefinition, args: readonly unknown[]): 
   return input;
 }
 
-export function resolveCliSessionIdentity(sessionId: unknown): Pick<InvocationContext, "sessionId" | "sessionIdSource"> {
+/**
+ * One malformed launcher-minted identity transport. The launcher (`session.run`,
+ * the managed host gates) writes `MSTAR_EXECUTION_IDENTITY` with the engine's own
+ * `serializeExecutionValue`, so a value that is not one valid §3.1 tuple is a
+ * broken launch: it is refused before any command runs, never repaired, guessed
+ * or silently downgraded to the ambient host identity.
+ */
+export class CliIdentityError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "CliIdentityError";
+  }
+}
+
+/**
+ * One parsed JSON value that is one §3.1 identity tuple. This is transport
+ * shaping only — the primitives must be present in their declared form; the
+ * engine's own `validateExecutionIdentity` below still owns every semantic rule
+ * (non-empty ids, the safe-session-id guard, the coordinator/plan-pm plan rule),
+ * so no second identity framework is created.
+ */
+function isMintedTuple(value: unknown): value is ExecutionIdentity {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const record: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  return (record.source === "host" || record.source === "local")
+    && typeof record.sessionId === "string" && typeof record.workflowId === "string"
+    && (record.role === "coordinator" || record.role === "plan-pm")
+    && (record.planId === null || typeof record.planId === "string");
+}
+
+/**
+ * Parse and validate one `MSTAR_EXECUTION_IDENTITY` transport through the
+ * engine's own identity validator (`validateExecutionIdentity` plus the shared
+ * safe-session-id guard) — the same §3.1 rules every adapter applies, never a
+ * second shape. The declared scope is validated as the tuple it is; the
+ * identity is attribution, so this proves the tuple is well formed, not that
+ * the caller owns anything.
+ */
+function parseMintedExecutionIdentity(serialized: string): ExecutionIdentity {
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized) as unknown;
+  } catch {
+    throw new CliIdentityError(
+      "command.invalid-identity",
+      "MSTAR_EXECUTION_IDENTITY is not the canonical JSON the launcher writes; a hand-set value is refused rather than guessed",
+    );
+  }
+  if (!isMintedTuple(value)) {
+    throw new CliIdentityError(
+      "command.invalid-identity",
+      "MSTAR_EXECUTION_IDENTITY must carry one \u00a73.1 identity tuple (source, sessionId, workflowId, role, planId); a hand-set value is refused rather than guessed",
+    );
+  }
+  try {
+    validateExecutionIdentity(value, { workflowId: value.workflowId, role: value.role, planId: value.planId });
+    assertSafeSessionId(value.sessionId, "MSTAR_EXECUTION_IDENTITY session id");
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "command.invalid-identity";
+    throw new CliIdentityError(code, error instanceof Error ? error.message : String(error));
+  }
+  return value;
+}
+
+/**
+ * Resolve one invocation's caller session identity with the launcher-minted
+ * identity as a real transport. Precedence is explicit override, then the
+ * launched session's minted local identity, then the ambient host environment.
+ *
+ * `MSTAR_EXECUTION_IDENTITY` is the channel `session.run` (and the managed host
+ * gates) write, so a launched child actually carries its identity instead of
+ * only the ambient host one. It is an **environment** channel, exactly like
+ * `MSTAR_HOST_SESSION_ID`, so it resolves to `sessionIdSource: "env"` — the
+ * legacy pre-activation forms keep their existing source semantics (resume
+ * ignores an environment identity, a coordinator bootstrap rejects one) rather
+ * than gaining a new declared-identity spelling. The parsed tuple rides along as
+ * `executionIdentity` so the ACTIVE route can check its declared scope.
+ *
+ * The minted value is validated through the engine's own identity rules; a
+ * malformed one refuses (throws) rather than silently falling back to another
+ * channel.
+ */
+export function resolveCliSessionIdentity(
+  sessionId: unknown,
+): Pick<InvocationContext, "sessionId" | "sessionIdSource" | "executionIdentity"> {
   if (typeof sessionId === "string") return { sessionId, sessionIdSource: "flag" };
+  const minted = process.env.MSTAR_EXECUTION_IDENTITY;
+  if (typeof minted === "string" && minted.trim() !== "") {
+    const executionIdentity = parseMintedExecutionIdentity(minted);
+    return { sessionId: executionIdentity.sessionId, sessionIdSource: "env", executionIdentity };
+  }
   const environmentSessionId = process.env.MSTAR_HOST_SESSION_ID;
   return typeof environmentSessionId === "string" && environmentSessionId.trim() !== ""
     ? { sessionId: environmentSessionId, sessionIdSource: "env" }
     : {};
+}
+
+/**
+ * The routes whose active-token caller seat is the workflow's coordinator,
+ * independent of any session reference. Each family below constructs exactly
+ * `{workflowId, role: "coordinator", planId: null}` from the trusted caller, so a
+ * minted identity addressing that workflow in any other seat is refused here.
+ * Every other active route either carries its whole scope in a session reference
+ * or states its seat in the bind selectors; this set is the command-aware fact
+ * the sparse routes can consume instead of treating token-only calls as
+ * workflow-only.
+ */
+const COORDINATOR_SEAT_ROUTES: Record<string, true> = {
+  "workflow.register": true,
+  "workflow.evidence": true,
+  "workflow.phase": true,
+  "workflow.lifecycle": true,
+  "workflow.execution-policy": true,
+  "workflow.integration-worktree": true,
+  "iteration.register": true,
+  "status.workflow-close": true,
+  "session.recover": true,
+};
+
+/**
+ * The scope-consistency check the adapter can make without restating a family's
+ * role/plan grammar: a launcher-minted identity declares the workflow, role and
+ * plan it addresses, and a command that consumes that identity may only address
+ * the scope it declares. The addressed scope is derived from the request the
+ * same way the families do — a canonical session reference carries it, else the
+ * selected command's own seat plus the explicit workflow/plan selectors do — and
+ * a mismatch is refused here, before the command runs, so a minted identity never
+ * silently authorizes a scope it does not declare. Identity stays attribution:
+ * this proves the request is the one the launch declares, not that the caller
+ * owns anything.
+ */
+export function mintedIdentityScopeProblem(
+  identity: ExecutionIdentity | undefined,
+  input: Record<string, unknown>,
+  commandId: string,
+): string | undefined {
+  if (identity === undefined) return undefined;
+  const planSparseRoute = commandId.startsWith("plan.") &&
+    commandId !== "plan.bind" && commandId !== "plan.show" &&
+    input.sessionRef === undefined && input.expect === undefined && input.execution !== true;
+  if (planSparseRoute) {
+    const workflowMismatch = typeof input.workflow === "string" && input.workflow !== identity.workflowId;
+    const coordinatorMismatch = input.coordinator === true && (identity.role !== "coordinator" || identity.planId !== null);
+    const planMismatch = typeof input.plan === "string" && identity.role === "plan-pm" && input.plan !== identity.planId;
+    if (workflowMismatch || coordinatorMismatch || planMismatch) {
+      return `the launched identity addresses ${describeMintedScope(identity)}; this sparse plan request selects a different workflow, role or plan`;
+    }
+    return undefined;
+  }
+  const addressed = addressedMintedScope(input, commandId, identity);
+  if (addressed === undefined) return undefined;
+  const mismatched = addressed.workflowId !== identity.workflowId ||
+    (addressed.role !== undefined && addressed.role !== identity.role) ||
+    (addressed.planId !== undefined && addressed.planId !== identity.planId);
+  if (!mismatched) return undefined;
+  return `the launched identity addresses ${describeMintedScope(identity)}; this invocation addresses ${describeMintedScope(addressed)}`;
+}
+
+/** The scope one invocation addresses, derived exactly as its family would. */
+function addressedMintedScope(
+  input: Record<string, unknown>,
+  commandId: string,
+  identity?: ExecutionIdentity,
+): { workflowId: string; role?: "coordinator" | "plan-pm"; planId?: string | null } | undefined {
+  // A canonical session reference is itself an ACTIVE transport and carries the
+  // whole addressed scope.
+  for (const key of ["sessionRef", "resumeRef"]) {
+    const wire = input[key];
+    if (typeof wire !== "string" || wire === "") continue;
+    try {
+      const ref = decodeExecutionSessionRef(wire);
+      // A stated `--coordinator` seat is a role constraint: the reference still
+      // names the addressed workflow, but the compared seat is the declared
+      // one, never the reference's own role.
+      if (input.coordinator === true) return { workflowId: ref.workflowId, role: "coordinator", planId: null };
+      return { workflowId: ref.workflowId, role: ref.role, planId: ref.planId };
+    } catch {
+      // A malformed reference is the family's own typed refusal; the scope gate
+      // never pre-empts it or guesses a scope from a broken one.
+      return undefined;
+    }
+  }
+  // ACTIVE consumption includes sparse own-binding workflow operations. These
+  // commands derive their session/token from the selected coordinator seat;
+  // missing --expect must not bypass the minted identity's scope check.
+  const sparseCoordinatorRoute = COORDINATOR_SEAT_ROUTES[commandId] === true &&
+    commandId !== "workflow.register" && commandId !== "iteration.register" &&
+    commandId !== "session.recover";
+  if (input.execution !== true && typeof input.expect !== "string" && !sparseCoordinatorRoute) return undefined;
+  const workflowId = typeof input.workflow === "string" && input.workflow.trim() !== ""
+    ? input.workflow
+    : sparseCoordinatorRoute ? identity?.workflowId : undefined;
+  if (workflowId === undefined) return undefined;
+  // The explicit active bind states its seat unambiguously …
+  if (input.execution === true && input.coordinator === true) return { workflowId, role: "coordinator", planId: null };
+  if (input.execution === true && typeof input.plan === "string") return { workflowId, role: "plan-pm", planId: input.plan };
+  // … and a coordinator-seat registration/close/recovery states its seat from
+  // the command's own contract, never from the registered plan selector (that
+  // names the row being registered, not the caller's seat).
+  if (COORDINATOR_SEAT_ROUTES[commandId] === true) return { workflowId, role: "coordinator", planId: null };
+  // A stated `--coordinator` seat is a role constraint on every minted plan
+  // write, including the reference/token variants: the acquired plan-pm tuple
+  // may not be reinterpreted as the coordinator seat it does not declare.
+  if (input.coordinator === true) return { workflowId, role: "coordinator", planId: null };
+  return { workflowId };
+}
+
+/** The declared tuple in the one wording both refusal sides share. */
+function describeMintedScope(scope: { workflowId: string; role?: "coordinator" | "plan-pm"; planId?: string | null }): string {
+  if (scope.role === undefined) return `workflow ${scope.workflowId}`;
+  return scope.role === "coordinator"
+    ? `workflow ${scope.workflowId} as coordinator`
+    : `workflow ${scope.workflowId} plan ${scope.planId ?? "none"} as plan-pm`;
 }
 
 function ensureCommand(program: Command, pathParts: readonly string[]): Command {
@@ -420,9 +635,30 @@ export function registerCliCommands(
           return;
         }
         const sessionOption = definition.cli.options.find((option) => option.context === "sessionId");
-        const sessionIdentity = resolveCliSessionIdentity(
-          sessionOption === undefined ? undefined : collected[sessionOption.key],
-        );
+        // The identity transport is consumed only where a command names it as
+        // its caller context: a command with no session selector never reads
+        // `context.sessionId`, and a malformed ambient minted value must not
+        // break an unrelated read.
+        let sessionIdentity: Pick<InvocationContext, "sessionId" | "sessionIdSource" | "executionIdentity"> = {};
+        if (sessionOption !== undefined) {
+          try {
+            sessionIdentity = resolveCliSessionIdentity(collected[sessionOption.key]);
+          } catch (error) {
+            if (error instanceof CliIdentityError) {
+              writeEnvelope(usageEnvelope(definition.id, error.message, { identity: { code: error.code } }));
+              return;
+            }
+            throw error;
+          }
+          const minted = sessionIdentity.executionIdentity;
+          const scopeProblem = mintedIdentityScopeProblem(minted, collected, definition.id);
+          if (scopeProblem !== undefined && minted !== undefined) {
+            writeEnvelope(usageEnvelope(definition.id, scopeProblem, {
+              identity: { code: "command.identity-scope-mismatch", workflow: minted.workflowId },
+            }));
+            return;
+          }
+        }
         const envelope = await executeCommand(definition.id, input ?? payload.input, {
           ...baseContext,
           ...sessionIdentity,

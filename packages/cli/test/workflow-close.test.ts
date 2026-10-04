@@ -330,11 +330,11 @@ describe("mstar status workflow-close", () => {
     });
   });
 
-  test("missing --workflow is a usage error (exit 2)", () => {
+  test("missing workflow selector remains a usage error when no minted workflow scope is acquired", () => {
     setupHarness((harness) => {
       const result = runCli(["status", "workflow-close", "--harness", harness]);
       expect(result.exitCode).toBe(2);
-      expect(String(envelope(result).message)).toContain("required option '--workflow <id>' not specified");
+      expect(envelope(result).code).toBe("command.invalid-input");
     });
   });
 
