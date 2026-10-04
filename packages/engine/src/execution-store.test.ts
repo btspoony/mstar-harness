@@ -782,6 +782,32 @@ describe("execution-tokens: \u00A73.1 canonical value form and version tokens", 
       assertExecutionToken(plan, { kind: "plan", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "p-1"], revision: 3 }),
     ).toThrow(/execution\.stale-token/);
   });
+
+  test("the wrong-kind refusal names where the expected kind is read from", () => {
+    const workflow = executionToken("workflow", TOKEN_STORE, 5, ["wf-1"], 2);
+    const plan = executionToken("plan", TOKEN_STORE, 5, ["wf-1", "p-1"], 2);
+    // Root expectation: names the status validate root field.
+    expect(() => assertExecutionToken(workflow, { kind: "root", storeId: TOKEN_STORE, epoch: 5, key: [] })).toThrow(
+      /Read the current root token with `mstar status validate` \(output field data\.token\)\.$/,
+    );
+    // Workflow expectation: names the entry for the addressed workflow.
+    expect(() => assertExecutionToken(plan, { kind: "workflow", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1"] })).toThrow(
+      /Read the current workflow token with `mstar status validate` \(the data\.workflows\[\] entry for workflow "wf-1" → token\)\.$/,
+    );
+    // Plan expectation: names the planTokens entry for the addressed plan.
+    expect(() =>
+      assertExecutionToken(workflow, { kind: "plan", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "p-1"] }),
+    ).toThrow(/planTokens\["p-1"\]\)\.$/);
+    expect(() =>
+      assertExecutionToken(workflow, { kind: "plan", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "p-1"] }),
+    ).toThrow(/data\.authority\.workflows\[\] entry for workflow "wf-1"/);
+    // A session-token expectation has no CLI read path: the message stays pointer-free.
+    expect(() =>
+      assertExecutionToken(workflow, { kind: "session", storeId: TOKEN_STORE, epoch: 5, key: ["wf-1", "coordinator", "s-1"] }),
+    ).toThrow(
+      /expected a session token — got a workflow token\. The address kind is never inferred from a supplied token\.$/,
+    );
+  });
 });
 
 /* ------------------------------------------------------------------------ *

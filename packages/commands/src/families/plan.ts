@@ -24,7 +24,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
-import { IDENTITY_SUPPLIES } from "../identity-supplies.js";
+import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const progressPayloadSchema = z.record(z.string(), z.unknown());
@@ -283,7 +283,26 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       } else {
         return usage(id, "bind requires a session, coordinator workflow, assignment, or workflow and plan");
       }
-      return ok(id, await bindPlanSession(bindInput));
+      // The confirmed #324 surface: this legacy file route reads a snapshot
+      // directory, and an ACTIVE execution authority keeps its workflows in
+      // the store database — so `coordination.workflow-not-found` here is the
+      // missing `--execution` route fact. The refusal itself carries it.
+      try {
+        return ok(id, await bindPlanSession(bindInput));
+      } catch (error) {
+        const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+          ? error.code
+          : undefined;
+        const pairScope = "scope" in bindInput && bindInput.scope !== null && typeof bindInput.scope === "object" && "workflowId" in bindInput.scope;
+        if (code === "coordination.workflow-not-found" && pairScope) {
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            message:
+              `${error instanceof Error ? error.message : String(error)} If this workflow is under the ACTIVE execution ` +
+              "authority it has no snapshot file; bind it through the --execution route (`mstar plan bind --execution --workflow <id> --coordinator` or `--plan <planId>`, with the runtime session identity).",
+          });
+        }
+        throw error;
+      }
     }
     if (id === "plan.show") {
       if (input.session !== undefined) {
@@ -440,9 +459,26 @@ const payloadFieldsByVerb: Partial<Record<(typeof commandNames)[number], readonl
   "issue-close": ["evidence"],
   handoff: ["evidence"],
 };
+/**
+ * Per-verb supply disclosure for the shared `--expect` / `--session-ref`
+ * options, stated only where the ACTIVE route consumes them: bind expects the
+ * bound seat's token (workflow for `--coordinator`, plan for `--plan`), every
+ * other plan mutation the addressed plan's token, and `show` only carries the
+ * session reference. Retired verbs disclose nothing (they refuse up front).
+ */
+const PLAN_EXPECT_HELP = `CAS expectation: ${TOKEN_SUPPLIES.plan}`;
+const PLAN_BIND_EXPECT_HELP =
+  `CAS expectation for the bound seat: coordinator bind takes ${TOKEN_SUPPLIES.workflow}; --plan bind takes ${TOKEN_SUPPLIES.plan}; read at bind time when omitted`;
+function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<string, string>> {
+  if (verb === "residual-add" || verb === "residual-close") return {};
+  if (verb === "bind") return { expect: PLAN_BIND_EXPECT_HELP, sessionRef: `session transport: ${SESSION_REF_SUPPLIES}` };
+  if (verb === "show") return { sessionRef: `session transport: ${SESSION_REF_SUPPLIES}` };
+  return { expect: PLAN_EXPECT_HELP, sessionRef: `session transport: ${SESSION_REF_SUPPLIES}` };
+}
 export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
   return commandNames.map((verb) => {
     const id = `plan.${verb}`;
+    const help = optionHelpFor(verb);
     return command<PlanInput, unknown>({
       id,
       cli: {
@@ -450,7 +486,12 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         aliases: [],
         arguments: [],
         options: [
-          ...optionKeys.map((key) => ({ key, flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`, required: false })),
+          ...optionKeys.map((key) => ({
+            key,
+            flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`,
+            required: false,
+            ...(help[key] === undefined ? {} : { help: help[key] }),
+          })),
           { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
         ],
       },

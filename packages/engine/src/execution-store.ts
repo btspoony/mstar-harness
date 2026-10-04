@@ -494,7 +494,25 @@ export function assertExecutionToken(value: unknown, expected: ExecutionTokenExp
  * `execution.scope-mismatch` — the address a supplied token names is never
  * inferred, normalized or guessed. Epoch and revision stay with the caller,
  * so the two comparisons below share exactly this gate.
+ *
+ * The wrong-kind refusal names where the EXPECTED kind is read from (`mstar
+ * status validate` and its JSON path, the CLI emitter of these tokens) for the
+ * three kinds a CLI `--expect` carries; internal kinds have no CLI read path
+ * and stay pointer-free.
  */
+function tokenKindReadPointer(expected: Omit<ExecutionTokenExpectation, "revision">): string {
+  if (expected.kind === "root") {
+    return " Read the current root token with `mstar status validate` (output field data.token).";
+  }
+  if (expected.kind === "workflow") {
+    return ` Read the current workflow token with \`mstar status validate\` (the data.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} \u2192 token).`;
+  }
+  if (expected.kind === "plan") {
+    return ` Read the current plan token with \`mstar status validate\` (the data.authority.workflows[] entry for workflow ${JSON.stringify(expected.key[0] ?? "")} \u2192 planTokens[${JSON.stringify(expected.key[1] ?? "")}]).`;
+  }
+  return "";
+}
+
 function parseTokenForAddress(
   value: unknown,
   expected: Omit<ExecutionTokenExpectation, "revision">,
@@ -503,7 +521,7 @@ function parseTokenForAddress(
   if (parsed.kind !== expected.kind) {
     throw new ExecutionError(
       "execution.token-kind",
-      `expected a ${expected.kind} token \u2014 got a ${parsed.kind} token. The address kind is never inferred from a supplied token.`,
+      `expected a ${expected.kind} token \u2014 got a ${parsed.kind} token. The address kind is never inferred from a supplied token.${tokenKindReadPointer(expected)}`,
     );
   }
   const sameKey =
