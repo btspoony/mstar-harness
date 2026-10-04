@@ -667,7 +667,7 @@ describe("mstar session run — minted identity transport", () => {
     expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
   });
 
-  test("with no minted identity the ambient host value is the fallback, and both absent is a usage refusal", async () => {
+  test("with no minted identity the ambient host value is the fallback, and both absent registers with a NULL creator", async () => {
     const fixture = await activeFixture("mstar-minted-ambient");
     const rootToken = (await readExecutionAuthority(fixture.context)).token;
 
@@ -686,12 +686,14 @@ describe("mstar session run — minted identity transport", () => {
       second,
       cliEnv(second),
     );
-    // A complete active registration with neither identity channel refuses on
-    // the missing identity, not on any other field.
-    expect(absent.exitCode).toBe(2);
-    expect(String(jsonOf(absent).code)).toBe("command.invalid-input");
+    // Unset identity is creator ATTRIBUTION, not a registration requirement
+    // (issue #383 T1): the registration succeeds, the creator column stays
+    // NULL, and the first coordinator bind adopts. The creator-NULL detail is
+    // pinned by the engine tests and the T4 stdio MCP regression.
+    expect(absent.exitCode).toBe(0);
+    expect(jsonOf(absent).command).toBe("workflow.register");
     const state = await readExecutionAuthority(second.context);
-    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(0);
+    expect("workflows" in state.data ? state.data.workflows.length : -1).toBe(1);
   });
 
   test("an explicit --session-id overrides the minted identity", async () => {
