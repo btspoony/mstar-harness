@@ -18,6 +18,8 @@ import {
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js";
+import { detectInstalledPluginVersion } from "./plugin-version-alignment";
+import type { Scope, Target } from "./types";
 
 export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
   return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(details === undefined ? {} : { details }) };
@@ -587,6 +589,7 @@ function cliEffects(services: Array<{ close(): Promise<void> }>): CommandEffects
     },
     captureSddEvidence: captureSddEvidenceFromFile,
     verifySddEvidence,
+    detectPluginVersion: ({ target, scope }) => detectInstalledPluginVersion(target as Target, scope as Scope),
   };
 }
 

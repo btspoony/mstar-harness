@@ -2208,6 +2208,63 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
   });
 
 
+  test("registration without a session identity creates a NULL creator the first coordinator bind adopts", async () => {
+    // The create caller carries no session identity (the empty string is the
+    // normalized spelling of an unset id): creation succeeds with attribution
+    // unset, and the whole trust boundary moves to bind time.
+    const fixture = await createdWorkflow("session-unset-creator", "");
+    const { context, workflowToken } = fixture;
+    let db = rawDb(storePath(context));
+    try {
+      expect(one(db, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
+        creator_session_id: null,
+      });
+    } finally {
+      db.close();
+    }
+
+    // The FIRST coordinator bind adopts the unowned workflow and records itself.
+    const bound = await bindExecutionSession(
+      domainContext(context, sessionCaller("wf-1", "adopter-a")),
+      sessionBind("wf-1", null, workflowToken, "adopt-unset"),
+    );
+    expect(bound.data.sessionId).toBe("adopter-a");
+    db = rawDb(storePath(context));
+    try {
+      expect(one(db, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
+        creator_session_id: "adopter-a",
+      });
+    } finally {
+      db.close();
+    }
+
+    // Post-adoption the trust boundary holds: a foreign coordinator bind is
+    // refused — a live holder first refuses as a duplicate holder (the
+    // duplicate-holder gate precedes the creator fence; the fence itself is
+    // pinned by the foreign-vs-explicit-creator case above)…
+    await expect(
+      bindExecutionSession(
+        domainContext(context, sessionCaller("wf-1", "foreign-b")),
+        sessionBind("wf-1", null, (await readExecutionState(context)).data.workflows[0]!.workflowToken, "foreign-after-adopt"),
+      ),
+    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    // …and adoption is once-only: the recorded holder is never replaced.
+    await expect(
+      bindExecutionSession(
+        domainContext(context, sessionCaller("wf-1", "adopter-c")),
+        sessionBind("wf-1", null, (await readExecutionState(context)).data.workflows[0]!.workflowToken, "adopt-again"),
+      ),
+    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    db = rawDb(storePath(context));
+    try {
+      expect(one(db, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
+        creator_session_id: "adopter-a",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test("refuses a wrong kind, a foreign store, another address and a stale epoch without binding", async () => {
     const fixture = await createdWorkflow("session-cas");
     const { context, storeId, epoch, planTokens } = fixture;

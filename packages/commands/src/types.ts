@@ -69,6 +69,14 @@ export interface CommandEffects {
     runId: string;
     targetPath?: string;
   }): Promise<unknown>;
+  /**
+   * The installed Morning Star plugin version for one host target, detected by
+   * the transport that owns per-host discovery (the CLI probes package caches
+   * and `plugin list` subprocesses). `null` = not installed / not detectable;
+   * an unset hook degrades to the same `null`, so the doctor note builder is
+   * the single place that formats every outcome.
+   */
+  detectPluginVersion?(request: { target: string; scope: string }): string | null;
 }
 
 export interface InvocationContext {

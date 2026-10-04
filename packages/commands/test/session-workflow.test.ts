@@ -130,10 +130,10 @@ describe("session and workflow command families", () => {
     expect(recovery.input.parse(input)).not.toHaveProperty("sessionId");
 
     const result = await recovery.execute(input, testContext());
-    expect(result).toMatchObject({
-      status: "usage",
-      message: "recovery requires the main conversation session identity",
-    });
+    expect(result).toMatchObject({ status: "usage" });
+    expect(String(result.message)).toContain("recovery requires the main conversation session identity");
+    expect(String(result.message)).toContain("--session-id");
+    expect(String(result.message)).toContain("sessionId");
   });
 
 

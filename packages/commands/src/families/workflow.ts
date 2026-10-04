@@ -11,6 +11,7 @@ import {
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { IDENTITY_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
@@ -23,21 +24,21 @@ function usage(id: string, message: string): CommandEnvelope<never> { return { v
 const IDENTITY_RECOVERY =
   "launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`";
 
-function activeRegistrationRefusal(
-  id: string,
-  missing: readonly string[],
-  hasSessionIdentity: boolean,
-): CommandEnvelope<never> {
-  const details = missing.join(", ");
+/**
+ * The ACTIVE registration refusal: `expect` and `operation` are required (the
+ * store's root token and the caller's replay id). Session identity is NOT —
+ * it is creator attribution; an unset identity registers a NULL creator that
+ * the first coordinator bind adopts.
+ */
+function activeRegistrationRefusal(id: string, missing: readonly string[]): CommandEnvelope<never> {
   const recovery = [
-    "CLI: pass --session-id or set MSTAR_HOST_SESSION_ID.",
-    "MCP: the host must pass sessionId per call.",
     "For workflow.register and iteration.register, expect is the store's root execution token from mstar status validate; for workflow.evidence, use the addressed workflow's token from its workflows[] entry in mstar status validate; for other workflow-scoped writes, use that addressed scope's own token.",
     "operation is your own replay id.",
+    "Session identity is optional at registration: supply it when the transport has one " +
+      `(${IDENTITY_SUPPLIES}); an unset identity registers a NULL creator that the first coordinator bind adopts.`,
     ...(missing.includes("sessionRef") ? ["sessionRef is the active session reference returned by the plan bind receipt; pass it as --session-ref on the CLI or sessionRef in MCP input."] : []),
-    ...(!hasSessionIdentity ? [`An acquired coordinator identity is required: ${IDENTITY_RECOVERY}.`] : []),
   ].join(" ");
-  return usage(id, `Active registration is missing ${details}. ${recovery}`);
+  return usage(id, `Active registration is missing ${missing.join(", ")}. ${recovery}`);
 }
 
 class WorkflowInputError extends Error {}
@@ -148,19 +149,20 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const workflow: CatalogExecutionWorkflow = { kind: "plan", workflowId: input.workflow!, options: { harnessDir, plan: { id: input.planId!, title: input.planTitle!, file: input.planFile! }, deliveryKind: input.deliveryKind as never, ...(input.project === undefined ? {} : { project: input.project }), ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
         setArtifactStore(createFsStore(harnessDir));
         if (input.expect !== undefined || input.operation !== undefined) {
-          if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) {
+          if (input.expect === undefined || input.operation === undefined) {
             return activeRegistrationRefusal("workflow.register", [
-              ...(context.sessionId === undefined ? ["session identity"] : []),
               ...(input.expect === undefined ? ["expect"] : []),
               ...(input.operation === undefined ? ["operation"] : []),
-            ], context.sessionId !== undefined);
+            ]);
           }
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow!, role: "coordinator", planId: null };
+          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow!, role: "coordinator", planId: null };
           const { catalogRevision } = await readCatalogRevisions({ harnessDir });
           const canonicalPlanAbs = path.isAbsolute(input.planFile!) ? path.resolve(input.planFile!) : path.join(harnessDir, input.planFile!);
           const plansRelative = path.relative(resolvePlanDir(harnessDir), canonicalPlanAbs);
           const relativePath = plansRelative === ".." || plansRelative.startsWith(`..${path.sep}`) || path.isAbsolute(plansRelative) ? input.planFile! : plansRelative;
-          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
+          // Creator attribution is optional: an unset session id registers a
+          // NULL creator that the first coordinator bind adopts.
+          return ok("workflow.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }), { operationId: input.operation, actor: "mcp:workflow-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "plan", id: input.planId!, title: input.planTitle!, rootKind: "plans", relativePath }], binding: { catalogKind: "plan", catalogId: input.planId! } }, expected: input.expect as never }));
         }
         await assertLegacyRoute(harnessDir, "workflow register");
         return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));
@@ -186,7 +188,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const evidence = JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) as Record<string, unknown>;
         const active = (await resolveExecutionReadRoute({ harnessDir: root })) === "execution";
         if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined || active) {
-          if (context.sessionId === undefined) return usage("workflow.evidence", `active evidence requires an acquired coordinator identity: ${IDENTITY_RECOVERY}`);
+          if (context.sessionId === undefined) return usage("workflow.evidence", `active evidence requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).`);
           if (input.at !== undefined || input.session !== undefined) return usage("workflow.evidence", "active evidence cannot use legacy session or at fields");
           if (input.expect !== undefined && typeof input.expect !== "string") return usage("workflow.evidence", "active evidence requires a full workflow execution token");
           const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
@@ -225,7 +227,12 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
       try {
         if (input.session === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return usage("workflow.recover-coordinator", "session, operationId, reason, authorizationRef and stopped are required");
-        if (context.sessionId === undefined || context.sessionId.trim() === "") return usage("workflow.recover-coordinator", "recovery requires the main conversation session identity");
+        if (context.sessionId === undefined || context.sessionId.trim() === "") {
+          return usage(
+            "workflow.recover-coordinator",
+            `recovery requires the main conversation session identity (${IDENTITY_SUPPLIES}).`,
+          );
+        }
         const priorSessionPath = absolute(input.session, "session");
         const prior = readSessionEnvelope(priorSessionPath);
         setArtifactStore(createFsStore(prior.harness_root));
@@ -247,7 +254,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     const id = `workflow.${transition.name}`;
     defs.push(makeDefinition(id, `Apply the existing active workflow ${transition.name} transition under coordinator scope.`, transition.effect, ["workflow", "sessionRef", "expect", "operation", "harness", "phase", "compass", "status", "reason", "file", "path"], async (input, context) => {
       try {
-        if (context.sessionId === undefined) return usage(id, `active workflow transition requires an acquired coordinator identity: ${IDENTITY_RECOVERY}`);
+        if (context.sessionId === undefined) return usage(id, `active workflow transition requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).`);
         const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
         const acquired = context.executionIdentity;
         const workflowId = input.workflow ?? acquired?.workflowId ?? ref?.workflowId;
@@ -304,16 +311,17 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       const workflow: CatalogExecutionWorkflow = { kind: "iteration", workflowId: input.workflow, options: { harnessDir, compassRef, branch: { base: input.branchBase, integration: input.branchIntegration, target: input.branchTargetIteration }, rows: rows as never[], ...(input.project === undefined ? {} : { project: input.project }), ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }) } };
       setArtifactStore(createFsStore(harnessDir));
       if (input.expect !== undefined || input.operation !== undefined) {
-        if (input.expect === undefined || input.operation === undefined || context.sessionId === undefined) {
+        if (input.expect === undefined || input.operation === undefined) {
           return activeRegistrationRefusal("iteration.register", [
-            ...(context.sessionId === undefined ? ["session identity"] : []),
             ...(input.expect === undefined ? ["expect"] : []),
             ...(input.operation === undefined ? ["operation"] : []),
-          ], context.sessionId !== undefined);
+          ]);
         }
-        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator", planId: null };
+        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow, role: "coordinator", planId: null };
         const { catalogRevision } = await readCatalogRevisions({ harnessDir });
-        return ok("iteration.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity), { operationId: input.operation, actor: "mcp:iteration-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "iteration", id: input.workflow, title: input.workflow, rootKind: "iterations", relativePath: input.workflow }], binding: { catalogKind: "iteration", catalogId: input.workflow } }, expected: input.expect as never }));
+        // Creator attribution is optional: an unset session id registers a
+        // NULL creator that the first coordinator bind adopts.
+        return ok("iteration.register", await commitExecutionRegistration(executionContextFor({ harnessDir }, identity, { allowUnsetSessionId: true }), { operationId: input.operation, actor: "mcp:iteration-register", expectedCatalogRevision: catalogRevision, workflow, delta: { entities: [{ kind: "iteration", id: input.workflow, title: input.workflow, rootKind: "iterations", relativePath: input.workflow }], binding: { catalogKind: "iteration", catalogId: input.workflow } }, expected: input.expect as never }));
       }
       await assertLegacyRoute(harnessDir, "iteration register");
       return ok("iteration.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:iteration-register", workflow }));

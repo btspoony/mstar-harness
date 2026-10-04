@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { isNonEmptyString } from "./coordination-write.js";
 import { ExecutionError, readExecutionSession, readOwnExecutionSession, serializeExecutionValue, type ExecutionCaller, type ExecutionContext, type ExecutionRead, type ExecutionSessionRef } from "./execution-store.js";
 import { withExecutionReadGuard, type StoreContext } from "./store-db.js";
-import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity, type ExecutionIdentityScope } from "./session-identity.js";
+import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity, type ExecutionIdentityOptions, type ExecutionIdentityScope } from "./session-identity.js";
 
 const SESSION_WIRE_PREFIX = "exec-session-v1:";
 const SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -61,17 +62,24 @@ export function createLocalExecutionIdentity(scope: SessionScope): ExecutionIden
 }
 
 /** Convert an acquired adapter identity into the trusted domain caller context. */
-export function executionContextFor(context: StoreContext, identity: ExecutionIdentity): ExecutionContext {
-  validateExecutionIdentity(identity, scopeOf(identity));
-  assertSafeSessionId(identity.sessionId);
+export function executionContextFor(
+  context: StoreContext,
+  identity: ExecutionIdentity,
+  options: ExecutionIdentityOptions = {},
+): ExecutionContext {
+  const caller = {
+    // An unset id normalizes to the empty string: the one spelling the create
+    // path records as a NULL creator and every session-scoped gate refuses.
+    sessionId: isNonEmptyString(identity.sessionId) ? identity.sessionId : "",
+    workflowId: identity.workflowId,
+    role: identity.role,
+    planId: identity.planId,
+  };
+  validateExecutionIdentity({ ...identity, sessionId: caller.sessionId }, scopeOf(identity), options);
+  if (caller.sessionId !== "") assertSafeSessionId(caller.sessionId);
   return {
     ...context,
-    caller: {
-      sessionId: identity.sessionId,
-      workflowId: identity.workflowId,
-      role: identity.role,
-      planId: identity.planId,
-    },
+    caller,
   };
 }
 

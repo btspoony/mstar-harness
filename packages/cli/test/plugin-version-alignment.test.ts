@@ -19,6 +19,7 @@ import {
   detectDshPluginVersion,
   detectInstalledPluginVersion,
   detectKimiPluginVersion,
+  detectOmpPluginVersion,
   detectOpencodePluginVersion,
   detectZcodePluginVersion,
   formatPluginVersionDoctorNote,
@@ -447,6 +448,41 @@ describe("findInstalledPlugin + ompEntryVersion", () => {
     // listInstalledPlugins must keep this constant wired (a stalled omp must
     // degrade to the catch's empty listing, never block doctor).
     expect(OMP_LIST_TIMEOUT_MS).toBe(10_000);
+  });
+
+  test("detectOmpPluginVersion selects the requested scope's install, not the first listing entry", () => {
+    // Greptile P2: project-scoped installs live under `<project>/.omp/plugins/`;
+    // an older GLOBAL entry must not drive the note while the project plugin
+    // is current (and the reverse for a global-scope doctor).
+    withDir((projectRoot) => {
+      const globalEntry = {
+        name: "@mstar-harness/omp",
+        version: "3.0.0",
+        path: join(tmpdir(), "pva-omp-global", ".omp", "plugins", "@mstar-harness", "omp"),
+      };
+      const projectEntry = {
+        name: "@mstar-harness/omp",
+        version: "3.11.2",
+        path: join(projectRoot, ".omp", "plugins", "@mstar-harness", "omp"),
+      };
+      // Project scope reads the project install even when the global one is listed first.
+      expect(detectOmpPluginVersion("project", [globalEntry, projectEntry], projectRoot)).toBe("3.11.2");
+      // Global scope skips the project install.
+      expect(detectOmpPluginVersion("global", [globalEntry, projectEntry], projectRoot)).toBe("3.0.0");
+    });
+  });
+
+  test("detectOmpPluginVersion keeps the first-match fallback when no scoped entry exists", () => {
+    withDir((projectRoot) => {
+      const globalEntry = {
+        name: "@mstar-harness/omp",
+        version: "3.0.0",
+        path: join(tmpdir(), "pva-omp-global-only", ".omp", "plugins", "@mstar-harness", "omp"),
+      };
+      expect(detectOmpPluginVersion("project", [globalEntry], projectRoot)).toBe("3.0.0");
+      // An entry with no usable path cannot be scoped; it stays a fallback candidate.
+      expect(detectOmpPluginVersion("project", [{ name: "@mstar-harness/omp", version: "3.1.0" }], projectRoot)).toBe("3.1.0");
+    });
   });
 });
 

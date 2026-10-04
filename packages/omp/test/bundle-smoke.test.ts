@@ -303,6 +303,8 @@ console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(report));
 
 const PHASE2_EXTENSION_BUNDLE = join(DIST, "extensions", "phase2-orchestration.js");
 const PHASE2_EXTENSION_MIRROR = join(ROOT, "extensions", "phase2-orchestration.js");
+/** Root discovery mirror of the issue #383 mcp-identity extension bundle. */
+const MCP_IDENTITY_EXTENSION_MIRROR = join(ROOT, "extensions", "mcp-identity.js");
 const PHASE2_EXTENSION_SUFFIX = "/extensions/phase2-orchestration.js";
 const PHASE2_TOOL = "mstar_phase2";
 /** Native settings keys the manifest publishes for Phase-2 orchestration. */
@@ -567,6 +569,7 @@ describe("@mstar-harness/omp bundle smoke", () => {
     expect(existsSync(join(ROOT, "tools"))).toBe(false);
     expect(existsSync(EXTENSION_MIRROR)).toBe(true);
     expect(existsSync(PHASE2_EXTENSION_MIRROR)).toBe(true);
+    expect(existsSync(MCP_IDENTITY_EXTENSION_MIRROR)).toBe(true);
   });
 });
 
@@ -583,7 +586,7 @@ describe("@mstar-harness/omp packed artifact", () => {
         // Hook and extension bundles at both layouts (dist/ canonical, root discovery).
         expect(existsSync(join(pkgRoot, "dist", "hooks", "pre", "mstar-gates.js"))).toBe(true);
         expect(existsSync(join(pkgRoot, "hooks", "pre", "mstar-gates.js"))).toBe(true);
-        for (const extension of ["model-handoff.js", "phase2-orchestration.js"]) {
+        for (const extension of ["model-handoff.js", "phase2-orchestration.js", "mcp-identity.js"]) {
           expect(existsSync(join(pkgRoot, "dist", "extensions", extension))).toBe(true);
           expect(existsSync(join(pkgRoot, "extensions", extension))).toBe(true);
         }

@@ -453,6 +453,33 @@ describe("execution-registration", () => {
     expect(await listPendingCatalogRegistrations(fixture.context)).toEqual([]);
   });
 
+  test("execution-registration-registers-with-an-unset-session-identity-as-a-null-creator", async () => {
+    // A transport that supplies no session identity (the omp MCP surface
+    // without host injection) registers anyway: creator attribution is unset,
+    // the catalog delta still publishes, and the first coordinator bind adopts
+    // the unowned workflow.
+    const fixture = await activeFixture("unset-creator");
+    const before = await footprint(fixture.context);
+    const receipt = await commitExecutionRegistration(
+      { ...fixture.context, caller: { ...fixture.caller, sessionId: "" } },
+      { ...planRequest({ context: fixture.context, operationId: "op-register-unset" }), expected: fixture.rootToken },
+    );
+    expect(receipt).toEqual({ operationId: "op-register-unset", workflowId: WORKFLOW_ID, catalogRevision: 1, recovered: false });
+    expect(
+      await one<{ creator_session_id: string | null }>(
+        fixture.context,
+        "select creator_session_id from execution_workflows where workflow_id = ?",
+        WORKFLOW_ID,
+      ),
+    ).toEqual({ creator_session_id: null });
+    expect((await footprint(fixture.context)).workflows).toBe((before.workflows as number) + 1);
+    // The published catalog half is identical to an attributed registration:
+    // the entity exists at its reviewed location and the workflow is bound.
+    expect(
+      await one<{ n: number }>(fixture.context, "select count(*) as n from execution_operations where operation_id = ?", "op-register-unset"),
+    ).toEqual({ n: 1 });
+  });
+
   test("execution-registration-advances-the-shared-store-revision-once-for-the-whole-transaction", async () => {
     const fixture = await activeFixture("store-revision");
     const before = await footprint(fixture.context);
