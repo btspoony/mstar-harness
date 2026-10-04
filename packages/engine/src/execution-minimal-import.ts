@@ -15,6 +15,7 @@ export type MinimalImportResult = {
   verdict: "upgraded";
   imported: number;
   skipped: Array<{ path: string; reason: string }>;
+  dispositions: string[];
   sourceDigest: string;
 };
 export type MinimalStoreUpgradeResult = MinimalImportResult & { schemaVersion: number; authorityState: "active" };
@@ -255,13 +256,15 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
       }
       const existing = new Set((tx.db.prepare("select workflow_id from execution_workflows").all() as Array<{ workflow_id: string }>).map(({ workflow_id }) => workflow_id));
       let imported = 0;
-      let importedHeldLease = false;
+      const dispositions: string[] = [];
       for (const row of source.rows) {
         if (existing.has(row.id)) continue;
         writeImportedExecutionWorkflow(tx, row);
         existing.add(row.id);
         imported++;
-        importedHeldLease ||= row.plans.some((plan) => plan.lease !== null);
+        for (const plan of row.plans) {
+          if (plan.lease !== null) dispositions.push(`workflow ${row.id} plan ${plan.id}: stale held lease released on import; re-acquire via plan bind`);
+        }
       }
       const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
       if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {
@@ -278,21 +281,13 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
         if (Number(execution.changes) !== 1) throw new ExecutionError("execution.stale-token", "execution revision changed during import; rerun \`store upgrade\` to enumerate current files.");
       }
       if (storeAuthority.authority_state === "staged") {
-        const store = tx.db.prepare("update store_meta set authority_state = 'active', authority_epoch = authority_epoch + 1, revision = revision + 1, activated_at = ? where id = 1 and authority_state = 'staged' and authority_epoch = ?")
+        const store = tx.db.prepare("update store_meta set authority_state = 'active', revision = revision + 1, activated_at = ? where id = 1 and authority_state = 'staged' and authority_epoch = ?")
           .run(now, tx.epoch) as { changes?: unknown };
-        if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun \`store upgrade\` against the current store.");
-      } else if (tx.execution.authorityState !== "active") {
-        const store = tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1 where id = 1 and authority_epoch = ?")
-          .run(tx.epoch) as { changes?: unknown };
-        if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun \`store upgrade\` against the current store.");
-      } else if (importedHeldLease) {
-        const store = tx.db.prepare("update store_meta set authority_epoch = authority_epoch + 1, revision = revision + 1 where id = 1 and authority_epoch = ?")
-          .run(tx.epoch) as { changes?: unknown };
         if (Number(store.changes) !== 1) throw new ExecutionError("store.stale-epoch", "store epoch changed during import; rerun `store upgrade` against the current store.");
       } else if (imported > 0) {
         tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
       }
-      const result: MinimalImportResult = { verdict: "upgraded", imported, skipped: source.skipped, sourceDigest: source.sourceDigest };
+      const result: MinimalImportResult = { verdict: "upgraded", imported, skipped: source.skipped, dispositions, sourceDigest: source.sourceDigest };
       tx.db.prepare("insert into store_operations(operation_id, request_hash, result_json, committed_at) values (?, ?, ?, ?)").run(operationId, requestHash, JSON.stringify(result), new Date().toISOString());
       return result;
     });

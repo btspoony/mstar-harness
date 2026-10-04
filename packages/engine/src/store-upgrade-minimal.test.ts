@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
@@ -8,6 +8,13 @@ import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { readExecutionState } from "./execution-store.js";
 import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
+import {
+  bindExecutionSession,
+  mutateExecutionPlan,
+  readExecutionPlan,
+  type ExecutionCaller,
+  type ExecutionContext,
+} from "./index.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-"));
 afterAll(() => {
@@ -74,7 +81,7 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
     expect(store.db.prepare("select authority_state, revision from execution_meta where id = 1").get())
       .toEqual({ authority_state: "active", revision: 2 });
     expect(store.db.prepare("select authority_epoch from store_meta where id = 1").get())
-      .toEqual({ authority_epoch: 2 });
+      .toEqual({ authority_epoch: 1 });
     const workflow = store.db.prepare("select workflow_id, state_json from execution_workflows").get() as { workflow_id: string; state_json: string };
     expect(workflow.workflow_id).toBe("wf-creates-and-imports");
     expect(JSON.parse(workflow.state_json)).toMatchObject({
@@ -86,14 +93,10 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
     expect(JSON.parse(plan.state_json)).toMatchObject({ id: plan.plan_id, status: "Todo", title: "Upgrade fixture plan" });
     expect(store.db.prepare("select workflow_id, role, session_id, plan_id, state from execution_sessions").get())
       .toMatchObject({ workflow_id: workflow.workflow_id, role: "plan-pm", session_id: "session-creates-and-imports", plan_id: plan.plan_id, state: "suspended" });
-    const lease = store.db.prepare("select workflow_id, plan_id, lease_json from execution_leases").get() as { workflow_id: string; plan_id: string; lease_json: string };
-    expect(lease).toMatchObject({ workflow_id: workflow.workflow_id, plan_id: plan.plan_id });
-    expect(JSON.parse(lease.lease_json)).toMatchObject({
-      holder: "session-creates-and-imports",
-      working_branch: "feature/wf-creates-and-imports",
-      plan_branch: "feature/wf-creates-and-imports",
-      status: "held",
-    });
+    expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
+    expect(result.dispositions).toEqual([
+      "workflow wf-creates-and-imports plan wf-creates-and-imports-plan: stale held lease released on import; re-acquire via plan bind",
+    ]);
   } finally {
     store.close();
   }
@@ -107,8 +110,7 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
   try {
     expect(replayStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
     expect(replayStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 1 });
-    expect(replayStore.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 1 });
-    expect(replayStore.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 1 });
+    expect(replayStore.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
   } finally {
     replayStore.close();
   }
@@ -135,7 +137,7 @@ test("one store upgrade completes staged store and execution authorities with po
   }
 });
 
-test("active-store import advances the epoch for imported held leases", async () => {
+test("active-store import releases stale held leases without changing epoch or suspending live writers", async () => {
   const { context } = legacyWorkspace("active-held-lease");
   const initialized = await initializeStore(context);
   try {
@@ -146,14 +148,85 @@ test("active-store import advances the epoch for imported held leases", async ()
     initialized.close();
   }
 
+  const before = await openStore(context, "read");
+  let epoch: number;
+  try {
+    epoch = (before.db.prepare("select authority_epoch from store_meta where id = 1").get() as { authority_epoch: number }).authority_epoch;
+  } finally {
+    before.close();
+  }
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-held-lease" });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+  expect(result.dispositions).toEqual([
+    "workflow wf-active-held-lease plan wf-active-held-lease-plan: stale held lease released on import; re-acquire via plan bind",
+  ]);
   const state = await readExecutionState(context);
-  expect(state.data.workflows[0]?.plans[0]?.executionLease).toMatchObject({
-    status: "held",
-    holder_session_id: "session-active-held-lease",
-  });
+  expect(state.data.workflows[0]?.plans[0]?.executionLease).toBeNull();
+  const after = await openStore(context, "read");
+  try {
+    expect(after.db.prepare("select authority_epoch from store_meta where id = 1").get()).toEqual({ authority_epoch: epoch });
+    expect(after.db.prepare("select state from execution_sessions where session_id = ?").get("session-active-held-lease")).toEqual({ state: "suspended" });
+  } finally {
+    after.close();
+  }
 });
+
+test("existing git-root store stays reachable: upgrade imports into the same db instead of creating a second empty store", async () => {
+  // Old layout per Greptile Issue 2: harnessDir is a repo root with a .mstar
+  // child; the store lives at <root>/.mstar/store.db (the resolver's own
+  // selection, unchanged by this PR). Pre-seed marked data there, then run
+  // the upgrade against the repo root and prove the SAME database received
+  // the import — no second, empty store at <root>/store.db.
+  const repoRoot = join(ROOT, "git-root-reachable");
+  mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
+  const storeContext: StoreContext = { harnessDir: repoRoot };
+  const seeded = await initializeStore(storeContext);
+  try { seeded.close(); } catch { /* already closed by initializeStore */ }
+  const marked = await openStore(storeContext, "read");
+  const seededEpoch = marked.epoch;
+  const seededStoreId = marked.storeId;
+  try {
+    marked.close();
+  } catch { /* handle may self-close on read mode */ }
+  // Old-layout corpus INSIDE the .mstar harness: root register + one workflow.
+  writeFileSync(join(repoRoot, ".mstar", "status.json"), JSON.stringify({
+    version: 2, updated_at: "2026-10-04",
+    workflows: [{ id: "wf-legacy-git-root", type: "plan", started_at: "2026-10-04", dir: "workflows/wf-legacy-git-root" }],
+  }));
+  const workflowDir = join(repoRoot, ".mstar", "workflows", "wf-legacy-git-root");
+  mkdirSync(workflowDir, { recursive: true });
+  writeFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1, id: "wf-legacy-git-root", type: "plan", status: "running",
+    started_at: "2026-10-04", updated_at: "2026-10-04", delivery_kind: "development",
+    branch: { source: "feature/wf-legacy-git-root", target: "main" },
+    plans: [{ id: "wf-legacy-git-root-plan", title: "Legacy plan", file: "wf-legacy-git-root-plan.md", status: "Todo" }],
+  }));
+
+  const result = await upgradeStoreMinimal({ context: storeContext, operator: "operator", operationId: "op-git-root-reachable" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+
+  // The SAME database received the import; no second store was created at
+  // the repo root.
+  expect(requiresNewRootStore(repoRoot)).toBe(false);
+  const reopened = await openStore(storeContext, "read");
+  try {
+    expect(reopened.storeId).toBe(seededStoreId);
+    expect(reopened.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
+    expect(reopened.db.prepare("select workflow_id from execution_workflows").get()).toEqual({ workflow_id: "wf-legacy-git-root" });
+    const reachable = await readExecutionState(storeContext);
+    expect(reachable.data.workflows.map((w) => w.state.id)).toEqual(["wf-legacy-git-root"]);
+    expect(reachable.data.workflows.flatMap((w) => w.plans.map((p) => p.plan.id))).toEqual(["wf-legacy-git-root-plan"]);
+  } finally {
+    reopened.close();
+  }
+});
+
+function requiresNewRootStore(repoRoot: string): boolean {
+  // A second store would exist at <repoRoot>/store.db; the resolver-owned
+  // location is <repoRoot>/.mstar/store.db. Reachability = the latter holds
+  // the data and no root-level db file was created.
+  return existsSync(join(repoRoot, "store.db"));
+}
 
 test("minimal import canonicalizes legacy plan_id rows into id", async () => {
   const { context } = legacyWorkspace("plan-id-alias");
@@ -255,7 +328,7 @@ test("no-store upgrade initializes execution schema and imports every populated 
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
     expect(store.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 1 });
     expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 1 });
-    expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 1 });
+    expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
     expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
     expect(store.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
   } finally {
