@@ -10,8 +10,12 @@ export const IDENTITY_SUPPLIES =
  * Where a caller reads each execution token kind a CLI `--expect` may need, in
  * the JSON paths the `status validate` ACTIVE emitter actually prints
  * (envelope `token`, flattened `workflows[].token`, `authority.workflows[]`
- * planTokens). Help lines and refusal recovery pointers interpolate these
- * verbatim, so the kind → read-path fact cannot drift between the two.
+ * planTokens). Help lines interpolate these constants directly. The engine's
+ * own wrong-kind refusal (`tokenKindReadPointer`, execution-store.ts) states
+ * the same paths in parallel literals it cannot import from here — the two
+ * sides are pinned together by contract tests (help-disclosure.test.ts and
+ * the execution-store wrong-kind test); when a read path changes, co-edit
+ * that refusal text in the same change set.
  */
 export const TOKEN_SUPPLIES = {
   root: "the store's root execution token: read `mstar status validate` output field data.token",

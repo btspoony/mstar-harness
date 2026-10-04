@@ -119,7 +119,7 @@ describe("#324 fixture discovery walkthrough", () => {
     const bound = envelope(bindOut.stdout);
     expect(bound.status).toBe("ok");
     const ref = bound.data.data as Record<string, unknown>;
-    expect(Object.keys(ref).sort()).toEqual(["epoch", "planId", "roleId" in ref ? "roleId" : "role", "sessionId", "storeId", "workflowId"].sort());
+    expect(Object.keys(ref).sort()).toEqual(["epoch", "planId", "role", "sessionId", "storeId", "workflowId"].sort());
     const wire = encodeExecutionSessionRef(ref as never);
     expect(wire.startsWith("exec-session-v1:")).toBe(true);
     expect(decodeExecutionSessionRef(wire)).toEqual(ref);
@@ -163,13 +163,13 @@ describe("#324 fixture discovery walkthrough", () => {
   }, 60000);
 
   test("a wrong-kind --expect refusal names where the expected token is read", () => {
-    // A fresh fixture keeps this refusal independent of the walkthrough state.
     const wrongFixture = mkdtempSync(path.join(tmpdir(), "mstar-324-wrongkind-"));
     const wrongHarness = path.join(wrongFixture, ".mstar");
+    const wrongScratch = mkdtempSync(path.join(tmpdir(), "mstar-324-s2-"));
     mkdirSync(path.join(wrongHarness, "plans"), { recursive: true });
     writeFileSync(path.join(wrongHarness, "plans", "p-walk.md"), "# Walk plan\n\n**plan_id:** p-walk\n\nbody\n");
     try {
-      expect(envelope(cli(["store", "upgrade", "--harness", wrongHarness, "--operator", "walkthrough"], mkdtempSync(path.join(tmpdir(), "mstar-324-s2-"))).stdout).status).toBe("ok");
+      expect(envelope(cli(["store", "upgrade", "--harness", wrongHarness, "--operator", "walkthrough"], wrongScratch).stdout).status).toBe("ok");
       const read = envelope(cli(["status", "validate"], wrongFixture).stdout);
       const rootToken = read.data.token as string;
       expect(
@@ -207,10 +207,14 @@ describe("#324 fixture discovery walkthrough", () => {
       expect(wrongKind.message).toContain("Read the current workflow token with `mstar status validate`");
       expect(wrongKind.message).toContain('data.workflows[] entry for workflow "wf-wrong"');
     } finally {
+      rmSync(wrongScratch, { recursive: true, force: true });
       rmSync(wrongFixture, { recursive: true, force: true });
     }
   }, 60000);
 
+  // Precondition: runs against test 1's fixture state (the ACTIVE store and
+  // registered wf-walk it leaves behind). Selecting this test alone with
+  // `bun test -t` lacks that state — run the file (or test 1 first).
   test("the legacy bind refusal on an ACTIVE store names the --execution route", () => {
     const legacy = cli([
       "plan", "bind",
