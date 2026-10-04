@@ -2304,7 +2304,12 @@ export async function recoverExecutionPlanSession(
           code: "plan-owner.target-binding-conflict",
           currentFacts: [`the caller identity is recorded for plan ${String(conflictingTarget.ref.planId)} as ${conflictingTarget.state}`],
           needed: "Do not move or reactivate an identity across plans.",
-          availableWork: ["Continue using this identity only for its recorded plan through its own route.", "Keep the addressed plan with its existing owner; resolve the conflict through an independently authorized session/coordination path without copying a session reference."],
+          availableWork: [
+            "Finish the already recovered plan through its ordinary reviewed handoff, coordinator acceptance, and completion; releasing its claim alone does not free this identity's immutable plan binding.",
+            "Have the operator confirm that this exact coordinator session is stopped, then obtain a genuinely new native coordinator session; this session cannot declare itself new or become stopped by label.",
+            "From that new session, run session recover --workflow <workflow-id> --prior-session <previous-coordinator-session> --reason <reason> --attestation <exact-stop-attestation-file> --expect <current-workflow-token> --operation <operation-id>.",
+            "Then run session recover --workflow <workflow-id> --plan <second-plan-id> --prior-session <stopped-plan-owner-session> --reason <reason> --attestation <exact-stop-attestation-file> --expect <current-plan-token> --operation <operation-id>.",
+          ],
         },
       );
     }

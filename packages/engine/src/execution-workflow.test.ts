@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  createLocalExecutionIdentity,
   recoverExecutionPlanSession as publishedRecoverExecutionPlanSession,
   type WorkflowExecutionOperation,
 } from "../src/index.js";
@@ -1927,6 +1928,92 @@ describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
     const replay = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, input));
     expect(replay.code).toBe("execution.session-unavailable");
     expect(workflowOwnershipSnapshot(fixture.context)).toEqual(beforeReplay);
+  });
+
+  test("recovers a second stopped plan through genuine coordinator replacement after ordinary completion", async () => {
+    const secondPlan = "p-second";
+    const fixture = await preparedPlanFixture("sequential-stopped-owners", [secondPlan]);
+    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
+    const state = (await readExecutionState(fixture.context)).data.workflows[0]!.state;
+    const integrationPath = state.integration_worktree_path!;
+    const repoRoot = dirname(fixture.harnessRoot);
+    const worktree = join(fixture.harnessRoot, "worktrees", PLAN_ID);
+    mkdirSync(dirname(worktree), { recursive: true });
+    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, worktree], repoRoot);
+    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
+    writeText(join(worktree, "sequential.txt"), "first reviewed plan\n");
+    runGit(["add", "sequential.txt"], worktree);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fixture first plan"], worktree);
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
+    const report = join(fixture.harnessRoot, "sdd", PLAN_ID, "review", "sequential.md");
+    writeText(report, "# Fixture review\nDecision: Approve\nQA: pass\n");
+    const first = await publishedRecoverExecutionPlanSession(coordinatorContext, {
+      planId: PLAN_ID, expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
+      operationId: "seq-recover-first", priorSessionId: PLAN_PM_ID,
+      reason: "the first owner is operator-confirmed stopped", attestation: attestation([PLAN_PM_ID]),
+    });
+    const firstContext = domainContext(fixture.context, trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID));
+    const handed = await mutateExecutionPlan(firstContext, {
+      operationId: "seq-first-handoff", session: first.data, planId: PLAN_ID,
+      operation: { kind: "handoff", evidence: {
+        source_sha: head, review_base: base, review_head: head,
+        qc: { decision: "Approve", reports: [report], consolidated: report },
+        qa: { gate: "mandatory", decision: "pass", report },
+      } },
+    });
+    const handoffId = handed.data.coordination!.handoff!.id;
+    for (const kind of ["accept", "integration-start"] as const) {
+      await mutateExecutionPlan(coordinatorContext, {
+        operationId: `seq-first-${kind}`, session: fixture.coordinator, planId: PLAN_ID,
+        operation: { kind, handoffId },
+      });
+    }
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", head, "-m", "merge first reviewed plan"], integrationPath);
+    for (const kind of ["integration-accept", "complete"] as const) {
+      await mutateExecutionPlan(coordinatorContext, {
+        operationId: `seq-first-${kind}`, session: fixture.coordinator, planId: PLAN_ID,
+        operation: { kind, handoffId },
+      });
+    }
+    const completed = await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID);
+    expect(completed.data.plan.status).toBe("Done");
+    expect(completed.data.executionLease!.status).toBe("released");
+    expect(completed.data.coordination!.handoff!.state).toBe("completed");
+    const firstOwners = workflowOwnershipSnapshot(fixture.context);
+    const secondOwner = `host-plan-pm-${secondPlan}`;
+    const secondToken = (await readExecutionPlan(coordinatorContext, fixture.coordinator, secondPlan)).token;
+    const blocked = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, {
+      planId: secondPlan, expected: secondToken,
+      operationId: "seq-direct-second", priorSessionId: secondOwner,
+      reason: "the second owner is operator-confirmed stopped", attestation: attestation([secondOwner]),
+    }));
+    expect(blocked.code).toBe("coordination.session-mismatch");
+    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(firstOwners);
+    const nextIdentity = createLocalExecutionIdentity({ workflowId: WORKFLOW_ID, role: "coordinator", planId: null });
+    const nextCaller = trustedCaller(nextIdentity.sessionId, "coordinator", null);
+    const nextContext = domainContext(fixture.context, nextCaller);
+    const next = await recoverExecutionCoordinator(nextContext, {
+      expected: workflowTokenOfRow(fixture.context), operationId: "seq-replace-coordinator",
+      priorSessionId: COORDINATOR_ID, reason: "operator stopped the previous coordinator after first completion",
+      attestation: attestation([COORDINATOR_ID]),
+    });
+    const second = await publishedRecoverExecutionPlanSession(nextContext, {
+      planId: secondPlan, expected: (await readExecutionPlan(nextContext, next.data, secondPlan)).token,
+      operationId: "seq-recover-second", priorSessionId: secondOwner,
+      reason: "the second owner is operator-confirmed stopped", attestation: attestation([secondOwner]),
+    });
+    expect(second.data.sessionId).toBe(nextIdentity.sessionId);
+    expect(second.data.planId).toBe(secondPlan);
+    const restored = await readExecutionPlan(nextContext, next.data, secondPlan);
+    expect(restored.data.executionLease).toMatchObject({ status: "held", holder_role: "plan-pm", holder_session_id: nextIdentity.sessionId });
+    const firstAfter = await readExecutionPlan(nextContext, next.data, PLAN_ID);
+    expect(firstAfter.data.plan).toEqual(completed.data.plan);
+    expect(firstAfter.data.coordination!.handoff).toEqual(completed.data.coordination!.handoff);
+    expect(firstAfter.data.executionLease).toEqual(completed.data.executionLease);
+    const afterBindings = workflowOwnershipSnapshot(fixture.context).sessions as Array<Record<string, unknown>>;
+    expect(afterBindings.find((row) => row.role === "plan-pm" && row.session_id === COORDINATOR_ID)).toEqual(
+      (firstOwners.sessions as Array<Record<string, unknown>>).find((row) => row.role === "plan-pm" && row.session_id === COORDINATOR_ID),
+    );
   });
 
   test("uses handoff-specific public routes and permits a returned handoff without rewriting it", async () => {
