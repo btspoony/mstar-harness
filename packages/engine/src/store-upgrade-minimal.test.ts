@@ -10,10 +10,6 @@ import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCat
 import { createFsStore, setArtifactStore } from "./store.js";
 import {
   bindExecutionSession,
-  mutateExecutionPlan,
-  readExecutionPlan,
-  type ExecutionCaller,
-  type ExecutionContext,
 } from "./index.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-"));
