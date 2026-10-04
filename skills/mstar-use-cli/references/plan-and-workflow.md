@@ -51,16 +51,22 @@ For example: `mstar issue link --id <issue-id> --actor project-manager --operati
 - Continue: `mstar plan release` under its own bound plan scope → explicit same-holder `mstar plan bind --execution --workflow <id> --plan <id>` **before** restoring content → restore the reviewed Assignment → coordinator `plan prepare` / holder `plan progress`. Release retains history and never writes Done; no new workflow or routine token copying is required.
 - Stop truthfully: own `plan release` → coordinator `mstar workflow lifecycle --workflow <id> --status stopped --reason <text>`. Stopped is not successful delivery. A foreign held claim cannot be released; an accepted handoff uses its valid coordinator return/completion path, and `plan release` never releases an integration claim.
 
-## Recovery (active coordinator replacement)
+## Recovery (active coordinator or named plan-owner replacement)
 
-While the execution authority is active, an abandoned or unreachable coordinator is replaced by exactly one verb, under an independently acquired coordinator identity:
+While execution authority is active, recover through `mstar session recover` under the current, independently acquired coordinator identity. Without `--plan`, this retains coordinator replacement; with `--plan`, it replaces only that plan's stopped plan-PM owner:
 
 ```sh
-mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reason <text> \
-  --attestation <absolute-json> --expect <full-execution-token> --operation <id> [--harness <absolute-path>] [--json]
+mstar session recover --workflow <id> [--plan <plan-id>] \
+  (--prior-session <stopped-holder> | --unowned) --reason <text> \
+  --attestation <absolute-json> --expect <full-scope-token> --operation <id> \
+  [--harness <absolute-path>] [--json]
 ```
 
-- The prior holder is **named** — or `--unowned` when the workflow records none; the two are mutually exclusive and neither is guessed. The stop attestation must name that holder stopped/reloaded, the workflow's **exact** execution token is the CAS, and the operation id is the replay key.
+- `--plan <plan-id>` selects exact plan-owner recovery and requires `--prior-session` naming the actual stopped owner. `--unowned` is coordinator-only; a plan owner is never inferred.
+- Without `--plan`, `--prior-session` names the prior coordinator, or `--unowned` explicitly declares that no coordinator holder is recorded. These choices are mutually exclusive.
+- The stop attestation must name the holder stopped/reloaded. `--expect` is the exact workflow token for coordinator recovery or the exact addressed plan token for plan recovery; `--operation` is the replay key.
+- Plan recovery creates a plan-PM reference for the current coordinator's own independently acquired session identity and transfers only that plan's held claim. It does not borrow the stopped identity, resume a session, adopt integration ownership, or change another plan. Continue with the ordinary plan-owner flow; a genuine reviewed handoff still goes through `plan handoff` → coordinator `plan accept` → `plan complete`.
+- If a valid handoff is already submitted or accepted, continue its normal accept/completion route instead of resetting ownership through recovery.
 - Recovery is active DB only. Pre-activation Prepare recovery is retired; do not use file/JSON snapshot forms.
 - `authorizationRef` is an audit reference, not an authorization source: it MUST identify a real external authorization event (explicit user/operator instruction or confirmation). An agent MUST NOT synthesize it from its own task or assignment.
 
