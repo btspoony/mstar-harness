@@ -53,7 +53,6 @@ describe("store safe-upgrade refusal diagnostics", () => {
     ["store.upgrade-staged-inventory-mismatch", "retry inventory /somewhere does not match the staged manifest scope", "reviewed inventory", "rerun `store safe-upgrade`"],
     ["store.upgrade-staged-manifest-missing", "staged execution authority without its matching recorded manifest", "no matching recorded migration manifest", "mstar store backup --out <backup-file>"],
     ["store.upgrade-state-changed", "store safe-upgrade is blocked: changed precondition", "changed store readiness preconditions", "mstar store safe-upgrade"],
-    ["store.upgrade-state-changed", "unreachable store safe-upgrade state", "changed store readiness preconditions", "mstar store safe-upgrade"],
   ])("%s maps a producer refusal to a cause-specific action", (code, producerMessage, cause, recovery) => {
     const result = storeUpgradeFailure("store.safe-upgrade", Object.assign(new Error(producerMessage), { code }));
     expect(result.code).toBe(code);

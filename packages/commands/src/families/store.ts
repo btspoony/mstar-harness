@@ -378,13 +378,6 @@ async function runStoreUpgrade(
     });
     return ok(id, { verdict: "upgraded", schemaVersion: state.schemaVersion, authorityState: "active", sourcesRetired: receipt.phase === "retired" });
   }
-  if (state.verdict === "blocked") {
-    throw new StoreError(
-      "store.upgrade-state-changed",
-      `store safe-upgrade is blocked: ${state.reasons.join(", ") || "store is unavailable"}. ` +
-        "Correct the readiness condition and retry `mstar store safe-upgrade`; if the store is missing, initialize it first with `mstar store init`.",
-    );
-  }
 
   if (!hasLegacyExecutionFiles(context.harnessDir)) {
     const upgraded = await upgradeStoreWithRecoveryPoint(context, randomUUID());
