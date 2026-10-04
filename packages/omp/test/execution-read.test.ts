@@ -5,8 +5,8 @@
  * Run with
  * `bun test packages/omp/test/execution-read.test.ts --test-name-pattern 'execution-omp-read'`.
  *
- * Every case runs the REAL tool modules and the REAL readiness contract against
- * a REAL `node:sqlite` store in a per-test temporary Git workspace: the engine's
+ * Every case runs the REAL readiness contract and extension modules against a
+ * REAL `node:sqlite` store in a per-test temporary Git workspace: the engine's
  * own producers (`initializeStore` → `initializeExecutionAuthority` →
  * `registerCatalogEntity` → `createExecutionWorkflow`) build the authority, and
  * the fixtures then plant LEFTOVER root/snapshot JSON at the exact paths the
@@ -14,19 +14,6 @@
  * surface that answered from the file route could not produce the assertions
  * below, because the file and the authority disagree on every field asserted:
  *
- * - `mstar_lease_verify` reports the authority's own plan row (the leftover
- *   snapshot names a different plan and carries a lease), and the authority's
- *   absent merge lease (the leftover snapshot claims one).
- * - `mstar_status_validate` answers the default target from the authority's own
- *   register (the leftover `status.json` is a valid document with zero
- *   workflows) and refuses an explicitly named retired status/snapshot path.
- * - the snapshot-DOCUMENT gates (`mstar_iteration_gate`, `mstar_worktree_check`
- *   kind=l1) refuse `execution.consumer-not-ready` although the snapshot and the
- *   compass exist on disk — the plan session bindings they would need are a
- *   deferred credential consumer (§5), so the honest answer is not-ready and not
- *   a synthesized snapshot.
- * - `mstar_worktree_check` kind=l2 stays a pure parameter check: no state, no
- *   route.
  * - the phase2 observation (2b) adopts the DB coordinator binding when the
  *   authority is ACTIVE — no envelope or snapshot is opened on that route — and
  *   keeps the file route pre-activation, where it adopts the workflow's OWN
@@ -41,12 +28,9 @@
  *   arms from the adopted active binding) for the very workflow the retired
  *   register names, and neither the register nor the leftover snapshot is
  *   consulted for that decision.
- * - an unusable authority (corrupt `store.db`) refuses with the store's own
- *   code for every one of them instead of an empty success or a file fallback.
- * - a harness with NO store keeps the unchanged pre-activation file route.
  *
- * No OMP installation, no host launch, no GUI: the tool modules are driven
- * directly through their own `CustomToolAPI` surface.
+ * No OMP installation, no host launch, no GUI: the surfaces are driven directly
+ * through their real modules.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -54,7 +38,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zod } from "@oh-my-pi/pi-coding-agent";
-import type { CustomTool, CustomToolAPI, ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -75,10 +59,6 @@ import {
   default as phase2Orchestration,
   derivePhase2State,
 } from "../src/extensions/phase2-orchestration";
-import mstarIterationGate from "../src/tools/mstar_iteration_gate/index";
-import mstarLeaseVerify from "../src/tools/mstar_lease_verify/index";
-import mstarStatusValidate from "../src/tools/mstar_status_validate/index";
-import mstarWorktreeCheck from "../src/tools/mstar_worktree_check/index";
 
 const WORKFLOW_ID = "wf-omp-read";
 const PLAN_ID = "20260000-omp-plan-a1";
@@ -207,11 +187,9 @@ function plantLeftoverEvidence(fixture: Fixture, status: string = LEFTOVER_STATU
  * path is proved to answer from the DB rather than from the retired register.
  */
 function seedActiveAuthority(fixture: Fixture, lifecycleType?: "plan" | "iteration"): Promise<ExecutionSessionRef>;
-function seedActiveAuthority(fixture: Fixture, lifecycleType: "plan" | "iteration", bindCoordinator: false): Promise<null>;
 async function seedActiveAuthority(
   fixture: Fixture,
   lifecycleType: "plan" | "iteration" = "plan",
-  bindCoordinator = true,
 ): Promise<ExecutionSessionRef | null> {
   const handle = await initializeStore({ harnessDir: fixture.harness });
   handle.close();
@@ -250,7 +228,6 @@ async function seedActiveAuthority(
     expected: initialized.token,
     operationId: `create-${WORKFLOW_ID}`,
   });
-  if (!bindCoordinator) return null;
   const workflowToken = (await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).token;
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
@@ -261,256 +238,6 @@ async function seedActiveAuthority(
   });
   return bound.data;
 }
-
-/** Unusable authority through the REAL engine channel: a directory where the
- * database file belongs (`openStore` refuses `store.corrupt`). */
-function corruptStore(fixture: Fixture): void {
-  for (const suffix of ["", "-wal", "-shm"]) rmSync(`${fixture.storeDb}${suffix}`, { force: true });
-  mkdirSync(fixture.storeDb, { recursive: true });
-}
-
-/* ------------------------------------------------------------------------ *
- * Tool driving (the omp `CustomToolAPI` surface, no host launch)
- * ------------------------------------------------------------------------ */
-
-function mockPi(cwd: string): CustomToolAPI {
-  return {
-    cwd,
-    zod,
-    exec: async () => {
-      throw new Error("exec is not used by this spec");
-    },
-    ui: {} as CustomToolAPI["ui"],
-    hasUI: false,
-    logger: {
-      warn: () => undefined,
-      error: () => undefined,
-      info: () => undefined,
-      debug: () => undefined,
-    } as CustomToolAPI["logger"],
-    typebox: {} as CustomToolAPI["typebox"],
-    arktype: {} as CustomToolAPI["arktype"],
-    pi: {} as CustomToolAPI["pi"],
-    pushPendingAction: () => undefined,
-  };
-}
-
-interface ToolResult {
-  content: Array<{ type: string; text: string }>;
-  details?: unknown;
-  isError?: boolean;
-}
-
-async function runTool(
-  factory: (pi: CustomToolAPI) => CustomTool,
-  cwd: string,
-  params: Record<string, unknown> = {},
-): Promise<ToolResult> {
-  const tool = factory(mockPi(cwd));
-  return (await tool.execute("call-1", params, undefined, undefined as never, undefined)) as ToolResult;
-}
-
-function textOf(result: ToolResult): string {
-  return result.content.map((part) => part.text).join("\n");
-}
-
-/* ------------------------------------------------------------------------ *
- * execution-omp-read — the validator surfaces
- * ------------------------------------------------------------------------ */
-
-describe("execution-omp-read — the validator surfaces answer the authority, never the retired files (S3)", () => {
-  test("mstar_lease_verify answers the authority's OWN plan row, not the leftover snapshot", async () => {
-    const fixture = makeFixture("lease-plan");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-
-    const result = await runTool(mstarLeaseVerify, fixture.main, {
-      kind: "execution",
-      workflowId: WORKFLOW_ID,
-      planId: PLAN_ID,
-    });
-
-    // The authority holds this plan row and NO lease for it. A file answer could
-    // not say either thing: the leftover snapshot names only `plan-leftover` and
-    // gives it a lease, so the file route would report the plan as missing.
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain(PLAN_ID);
-    expect(textOf(result)).toContain("lease.verify.missing");
-    expect(textOf(result)).not.toContain("plan-leftover");
-    expect(textOf(result)).not.toContain("not found");
-  });
-
-  test("mstar_lease_verify answers the authority's merge lease (unclaimed), not the leftover one", async () => {
-    const fixture = makeFixture("lease-integration");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-
-    const result = await runTool(mstarLeaseVerify, fixture.main, {
-      kind: "integration",
-      workflowId: WORKFLOW_ID,
-    });
-
-    // The authority holds no integration_merge_lease; the leftover snapshot does.
-    expect(result.isError).not.toBe(true);
-    expect(textOf(result)).toContain("unclaimed");
-    expect(textOf(result)).toContain("execution authority");
-    expect(textOf(result)).not.toContain("leftover-holder");
-  });
-
-  test("mstar_status_validate answers the DEFAULT register from the authority (the leftover file says zero)", async () => {
-    const fixture = makeFixture("status-default");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-
-    const result = await runTool(mstarStatusValidate, fixture.main);
-
-    expect(result.isError).not.toBe(true);
-    expect(textOf(result)).toContain("execution authority");
-    // The authority's own register holds one lifecycle; the leftover
-    // document-valid `status.json` declares none.
-    expect(textOf(result)).toContain("1 active workflow");
-    expect(textOf(result)).not.toContain("0 active workflows");
-  });
-
-  test("mstar_status_validate refuses an explicitly named retired status.json / snapshot.json", async () => {
-    const fixture = makeFixture("status-explicit");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-
-    for (const path of [join(fixture.harness, "status.json"), fixture.snapshotPath]) {
-      const result = await runTool(mstarStatusValidate, fixture.main, { path });
-      expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("execution.consumer-not-ready");
-      // Never a verdict on the retired bytes, and never the store route either:
-      // this is the retired-document refusal, not an unusable authority.
-      expect(textOf(result)).not.toContain("status.json valid");
-      expect(textOf(result)).not.toContain("snapshot valid");
-    }
-  });
-
-  test("mstar_status_validate keeps the project register on its own issue-domain route", async () => {
-    const fixture = makeFixture("status-register");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-    const register = join(fixture.harness, "projects", "_default", "residuals.json");
-    writeFileSync(register, JSON.stringify({ entries: {} }));
-
-    const result = await runTool(mstarStatusValidate, fixture.main, { path: register });
-
-    // The register is an issue/catalog authority document: its route is
-    // unchanged by the execution authority, so the code is the register's own.
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("project.register.retired");
-    expect(textOf(result)).not.toContain("execution.consumer-not-ready");
-  });
-
-  test("mstar_iteration_gate refuses not-ready although the snapshot and compass exist", async () => {
-    const fixture = makeFixture("iteration-gate");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-
-    const result = await runTool(mstarIterationGate, fixture.main, {
-      phase: "phase-3-close",
-      workflowId: WORKFLOW_ID,
-      compassPath: "delivery-compass.md",
-    });
-
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("execution.consumer-not-ready");
-    // The refusal is the authority's, not a missing-input error: both inputs are
-    // on disk and would have been read.
-    expect(textOf(result)).not.toContain("not found");
-    expect(textOf(result)).not.toContain("gate ok");
-  });
-
-  test("mstar_worktree_check kind=l1 serves ACTIVE graph-derived L1 violations", async () => {
-    const fixture = makeFixture("worktree-l1");
-    await seedActiveAuthority(fixture, "plan", false);
-
-    const result = await runTool(mstarWorktreeCheck, fixture.main, { kind: "l1", workflowId: WORKFLOW_ID });
-
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("worktree.main.expected-branch-missing");
-    expect(textOf(result)).toContain("worktree.l1.lease-missing");
-    expect(textOf(result)).toContain("worktree.l1.lease-branch-missing");
-    expect(textOf(result)).not.toContain("execution.consumer-not-ready");
-    expect(textOf(result)).toContain("main worktree:");
-    expect(textOf(result)).not.toContain("snapshot not found");
-  });
-
-  test("mstar_worktree_check kind=l2 stays a pure parameter check (no state, no route)", async () => {
-    const fixture = makeFixture("worktree-l2");
-    await seedActiveAuthority(fixture);
-    plantLeftoverEvidence(fixture);
-    // Real linked checkouts: the L2 gate probes each track's own checkout.
-    const wtA = join(fixture.root, "wt-a");
-    const wtB = join(fixture.root, "wt-b");
-    git(["worktree", "add", "-q", "-b", "feature/a", wtA], fixture.main);
-    git(["worktree", "add", "-q", "-b", "feature/b", wtB], fixture.main);
-
-    const result = await runTool(mstarWorktreeCheck, fixture.main, {
-      kind: "l2",
-      tracks: [
-        { worktreePath: wtA, workingBranch: "feature/a" },
-        { worktreePath: wtB, workingBranch: "feature/b" },
-      ],
-    });
-
-    expect(result.isError).not.toBe(true);
-    expect(textOf(result)).toContain("l2 pre-dispatch check OK");
-  });
-
-  test("an unusable authority refuses with the store's own code for every surface", async () => {
-    const fixture = makeFixture("corrupt");
-    corruptStore(fixture);
-    plantLeftoverEvidence(fixture);
-    writeFileSync(fixture.compassPath, COMPASS);
-
-    const lease = await runTool(mstarLeaseVerify, fixture.main, { kind: "execution", workflowId: WORKFLOW_ID });
-    expect(lease.isError).toBe(true);
-    expect(textOf(lease)).toContain("store.corrupt");
-
-    const status = await runTool(mstarStatusValidate, fixture.main);
-    expect(status.isError).toBe(true);
-    expect(textOf(status)).toContain("store.authority-unavailable");
-    expect(textOf(status)).toContain("store.corrupt");
-
-    const gate = await runTool(mstarIterationGate, fixture.main, {
-      phase: "phase-3-close",
-      workflowId: WORKFLOW_ID,
-      compassPath: "delivery-compass.md",
-    });
-    expect(gate.isError).toBe(true);
-    expect(textOf(gate)).toContain("store.corrupt");
-
-    const worktree = await runTool(mstarWorktreeCheck, fixture.main, { kind: "l1", workflowId: WORKFLOW_ID });
-    expect(worktree.isError).toBe(true);
-    expect(textOf(worktree)).toContain("store.corrupt");
-  });
-
-  test("a harness with NO store keeps the unchanged pre-activation file route", async () => {
-    const fixture = makeFixture("legacy");
-    plantLeftoverEvidence(fixture);
-    // The leftover snapshot is a valid snapshot document: the file route's own
-    // validator answers it, and no store is ever created.
-    const status = await runTool(mstarStatusValidate, fixture.main);
-    expect(status.isError).not.toBe(true);
-    expect(textOf(status)).toContain("status.json valid");
-    expect(textOf(status)).not.toContain("execution authority");
-
-    const lease = await runTool(mstarLeaseVerify, fixture.main, { kind: "execution", workflowId: WORKFLOW_ID });
-    expect(textOf(lease)).toContain("plan-leftover");
-
-    const worktree = await runTool(mstarWorktreeCheck, fixture.main, { kind: "l1", workflowId: WORKFLOW_ID });
-    // The file route answered: the L1 gate ran on the leftover snapshot's own
-    // plan row (the observed-main line and its violation codes are the file
-    // route's), and no authority refusal appears.
-    expect(textOf(worktree)).toContain("main worktree:");
-    expect(textOf(worktree)).toContain("worktree.l1.");
-    expect(textOf(worktree)).not.toContain("execution.consumer-not-ready");
-    expect(textOf(worktree)).not.toContain("execution authority");
-  });
-});
 
 /* ------------------------------------------------------------------------ *
  * execution-omp-readiness — the credential-dependent consumers

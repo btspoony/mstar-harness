@@ -1,46 +1,26 @@
 /**
- * Committed tools v2 smoke + hook Gate 1 regression. *
- * Covers the five rewired `tools/mstar_*` (module load + one execution per
- * tool against the rebuilt engine dist) AND the omp `hooks/pre/mstar-gates`
- * Gate 1 degrade/hard paths. Fixture: a committed minimal v2
- * harness tree (`test/fixtures/tools-v2-smoke/`) copied into a temp git
- * repo with a real linked worktree, so `l1PreDispatchCheck`'s existence +
- * branch probes pass.
+ * omp hook Gate 1 / Gate 2 smoke + regression. The standalone validator tools
+ * moved to the CLI MCP server; their arms in this file were deleted together
+ * with `packages/omp/src/tools/`. Covers the omp `hooks/pre/mstar-gates`
+ * Gate 1 hard paths and the Gate 2 caller-scoped anti-recursion contract.
+ * Fixture: a committed minimal v2 harness tree (`test/fixtures/tools-v2-smoke/`)
+ * copied into temp git repos (default `plans/` root, `.mstar/` root,
+ * double-harness, `.mstarc` custom layout), so the gate's harness-root
+ * resolution runs against real layouts.
  *
  * Regression anchors bundled here (fix wave 1):
- * - W-A: `mstar_worktree_check` workflowId traversal guard parity.
- * - W-B: hooks/tools lazy-load the P1-only engine exports — REMOVED for the
- *   omp hook (cross-host hooks contract D1): the Gate-1 core
- *   moved into the engine `gates` module and the engine is inlined into the
- *   bundle at build, so a stale engine dist fails the omp build instead of
- *   degrading; the degrade-path seam tests were deleted with the seams and
- *   the parity matrix (`packages/omp/test/gate-parity.test.ts`) pins the
- *   replaced behavior. The omp TOOLS' `workflowDirResolverLoader` seams
- *   remain (below).
- * - W-C: `mstar_status_validate` classifies by harness-relative layout
- *   (Gate 1 parity), rejecting non-canonical snapshot paths.
- * - S-b: `mstar_iteration_gate` takes `workflowId` (CLI parity).
+ * - W-REV-2: default `.mstar` root layout — the Gate-1 classifier must gate
+ *   through the `.mstar` root, not the nested `plans/` rung.
+ * - W-REV-3: a nested sparse harness under a full-marker outer root stays gated.
+ * - Phase-5 F1: `.mstarc` custom `workflow_dir` / `project_dir` layouts stay gated.
  * - S-d: omp hook 2MB size guard extended to the on-disk edit path.
+ * - Gate 2 (#156): caller-scoped anti-recursion on task dispatches.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { zod } from "@oh-my-pi/pi-coding-agent";
-import type { CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
-import mstarDispatchValidate from "../../omp/src/tools/mstar_dispatch_validate/index";
-import mstarIterationGate, {
-  workflowDirResolverLoader as iterationGateDirResolverLoader,
-} from "../../omp/src/tools/mstar_iteration_gate/index";
-import mstarLeaseVerify, {
-  workflowDirResolverLoader as leaseVerifyDirResolverLoader,
-} from "../../omp/src/tools/mstar_lease_verify/index";
-import mstarPathResolve from "../../omp/src/tools/mstar_path_resolve/index";
-import mstarStatusValidate from "../../omp/src/tools/mstar_status_validate/index";
-import mstarWorktreeCheck, {
-  workflowDirResolverLoader as worktreeCheckDirResolverLoader,
-} from "../../omp/src/tools/mstar_worktree_check/index";
 import mstarGates from "../../omp/src/hooks/pre/mstar-gates";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "tools-v2-smoke", "repo");
@@ -313,63 +293,6 @@ function readFile(file: string): string {
   return readFileSync(file, "utf8");
 }
 
-/** Minimal mock of the omp CustomToolAPI (tools only touch cwd + zod). */
-function mockPi(cwd: string): CustomToolAPI {
-  return {
-    cwd,
-    zod,
-    exec: async () => {
-      throw new Error("exec is not used by the smoke");
-    },
-    ui: {} as CustomToolAPI["ui"],
-    hasUI: false,
-    logger: {
-      warn: () => undefined,
-      error: () => undefined,
-      info: () => undefined,
-      debug: () => undefined,
-    } as CustomToolAPI["logger"],
-    typebox: {} as CustomToolAPI["typebox"],
-    arktype: {} as CustomToolAPI["arktype"],
-    pi: {} as CustomToolAPI["pi"],
-    pushPendingAction: () => undefined,
-  };
-}
-
-interface ToolResult {
-  content: Array<{ type: string; text: string }>;
-  isError?: boolean;
-  details?: unknown;
-}
-
-function toolDetails(result: ToolResult): Record<string, unknown> {
-  if (result.details === null || typeof result.details !== "object" || Array.isArray(result.details)) {
-    throw new Error(`expected structured tool details, received ${JSON.stringify(result.details)}`);
-  }
-  return result.details as Record<string, unknown>;
-}
-
-function violationCodes(result: ToolResult): string[] {
-  const violations = toolDetails(result).violations;
-  if (!Array.isArray(violations)) return [];
-  return violations.flatMap((violation) =>
-    typeof violation === "object" && violation !== null && "code" in violation && typeof violation.code === "string"
-      ? [violation.code]
-      : [],
-  );
-}
-
-
-async function runTool(
-  factory: (pi: CustomToolAPI) => CustomTool,
-  cwd: string,
-  params: Record<string, unknown>,
-): Promise<ToolResult> {
-  const tool = factory(mockPi(cwd));
-  const result = await tool.execute("call-1", params, undefined, undefined as never, undefined);
-  return result as ToolResult;
-}
-
 let repo: SmokeRepo | undefined;
 
 beforeAll(() => {
@@ -378,128 +301,6 @@ beforeAll(() => {
 
 afterAll(() => {
   if (repo) rmSync(repo.root, { recursive: true, force: true });
-});
-
-describe("tools v2 smoke (S-g)", () => {
-  test("mstar_status_validate: v2 root + workflow snapshot valid, non-canonical layout rejected (W-C)", async () => {
-    const root = repo!.root;
-    const harness = repo!.harness;
-    // Root (default path discovery) — v2 root validates.
-    const rootRes = await runTool(mstarStatusValidate, root, {});
-    expect(rootRes.isError).not.toBe(true);
-    expect(rootRes.content[0]!.text).toContain("status.json valid");
-
-    // Canonical snapshot path — snapshot validator.
-    const snapRes = await runTool(mstarStatusValidate, root, { path: join("plans", "workflows", "wf-smoke", "snapshot.json") });
-    expect(snapRes.isError).not.toBe(true);
-    expect(snapRes.content[0]!.text).toContain("snapshot valid");
-    expect(snapRes.content[0]!.text).toContain("1 plans");
-
-    // Canonical register path — register validator (Gate 1 kind parity).
-    const regRes = await runTool(mstarStatusValidate, root, { path: join("plans", "projects", "_default", "residuals.json") });
-    expect(regRes.isError).not.toBe(true);
-    expect(regRes.content[0]!.text).toContain("register valid");
-
-    // Non-canonical snapshot layout (basename matches but not under
-    // {HARNESS_DIR}/workflows/<id>/) — explicit error, never validated.
-    const evil = join(root, "tmp-outside", "snapshot.json");
-    mkdirSync(join(root, "tmp-outside"), { recursive: true });
-    writeFileSync(evil, JSON.stringify({ schema_version: 1 }));
-    const evilRes = await runTool(mstarStatusValidate, root, { path: evil });
-    expect(evilRes.isError).toBe(true);
-    expect(evilRes.content[0]!.text).toContain("not a canonical");
-    // Same for a snapshot.json outside the harness entirely.
-    const strayRoot = mkdtempSync(join(tmpdir(), "tools-smoke-stray-"));
-    const stray = join(strayRoot, "snapshot.json");
-    writeFileSync(stray, "{}");
-    const strayRes = await runTool(mstarStatusValidate, root, { path: stray });
-    expect(strayRes.isError).toBe(true);
-    expect(strayRes.content[0]!.text).toContain("not a canonical");
-    rmSync(strayRoot, { recursive: true, force: true });
-
-    expect(existsSync(join(harness, "workflows", "wf-smoke", "snapshot.json"))).toBe(true);
-  });
-
-  test("mstar_lease_verify: execution + integration on the snapshot; traversal guard parity", async () => {
-    const root = repo!.root;
-    const execRes = await runTool(mstarLeaseVerify, root, { workflowId: "wf-smoke", kind: "execution", planId: "plan-a" });
-    expect(execRes.isError).not.toBe(true);
-    expect(execRes.content[0]!.text).toContain("execution lease OK");
-
-    const intRes = await runTool(mstarLeaseVerify, root, { workflowId: "wf-smoke", kind: "integration" });
-    expect(intRes.isError).not.toBe(true);
-    expect(intRes.content[0]!.text).toContain("integration merge lease OK");
-
-    const evil = await runTool(mstarLeaseVerify, root, { workflowId: "../evil", kind: "execution", planId: "plan-a" });
-    expect(evil.isError).toBe(true);
-    expect(evil.content[0]!.text).toContain("invalid workflowId");
-  });
-
-  test("mstar_worktree_check: L1 passes on snapshot inputs; workflowId traversal guard parity (W-A)", async () => {
-    const root = repo!.root;
-    const l1 = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
-    expect(l1.isError).not.toBe(true);
-    expect(l1.content[0]!.text).toContain("l1 pre-dispatch check OK");
-
-    for (const bad of ["../evil", ".", "..", "a/b"]) {
-      const res = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: bad });
-      expect(res.isError).toBe(true);
-      expect(res.content[0]!.text).toContain("invalid workflowId");
-    }
-    // Empty string is a missing-required error, not a traversal case.
-    const empty = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "" });
-    expect(empty.isError).toBe(true);
-    expect(empty.content[0]!.text).toContain("requires workflowId");
-  });
-
-  test("mstar_iteration_gate: workflowId param resolves the snapshot (S-b)", async () => {
-    const root = repo!.root;
-    const res = await runTool(mstarIterationGate, root, {
-      phase: "phase-2-execute",
-      workflowId: "wf-smoke",
-      compassPath: join("plans", "iterations", "iter-smoke", "delivery-compass.md"),
-    });
-    expect(res.isError).not.toBe(true);
-    expect(res.content[0]!.text).toContain("gate ok");
-    expect(res.content[0]!.text).toContain("phase-2-execute");
-
-    const evil = await runTool(mstarIterationGate, root, {
-      phase: "phase-2-execute",
-      workflowId: "../evil",
-      compassPath: join("plans", "iterations", "iter-smoke", "delivery-compass.md"),
-    });
-    expect(evil.isError).toBe(true);
-    expect(evil.content[0]!.text).toContain("invalid workflowId");
-  });
-
-  test("mstar_path_resolve: eight symbols resolved", async () => {
-    const root = repo!.root;
-    const res = await runTool(mstarPathResolve, root, { planId: "plan-a" });
-    expect(res.isError).not.toBe(true);
-    const text = res.content[0]!.text;
-    expect(text).toContain("harness:");
-    expect(text).toContain("workflow:");
-    expect(text).toContain("project:");
-    expect(text).toContain("sdd:");
-    expect(text.split("\n")).toHaveLength(8);
-  });
-
-  test("mstar_dispatch_validate: assignment gate executes (no status reads)", async () => {
-    const root = repo!.root;
-    const assignment = [
-      "**Execute as**: scout",
-      "**Delegation**: forbidden",
-      "**Task category**: quick",
-      "**Task budget (implement / ops rounds)**: XS — one orientation round",
-      "",
-      "# Task",
-      "",
-      "Read-only survey of the repo.",
-      "",
-    ].join("\n");
-    const res = await runTool(mstarDispatchValidate, root, { assignmentText: assignment });
-    expect(res.isError).not.toBe(true);
-  });
 });
 
 describe("omp hook Gate 2 — task dispatch (issue #156: caller-scoped anti-recursion)", () => {
@@ -711,34 +512,6 @@ describe("default .mstar root layout (W-REV-2)", () => {
     if (mstarRepo) rmSync(mstarRepo.root, { recursive: true, force: true });
   });
 
-  test("mstar_status_validate: all three coordination docs gated on the .mstar root", async () => {
-    const root = mstarRepo!.root;
-    // Explicit-path form for each canonical kind.
-    const statusRes = await runTool(mstarStatusValidate, root, { path: join(".mstar", "status.json") });
-    expect(statusRes.isError).not.toBe(true);
-    expect(statusRes.content[0]!.text).toContain("status.json valid");
-
-    const snapRes = await runTool(mstarStatusValidate, root, {
-      path: join(".mstar", "workflows", "wf-default", "snapshot.json"),
-    });
-    expect(snapRes.isError).not.toBe(true);
-    expect(snapRes.content[0]!.text).toContain("snapshot valid");
-
-    const regRes = await runTool(mstarStatusValidate, root, {
-      path: join(".mstar", "projects", "_default", "residuals.json"),
-    });
-    expect(regRes.isError).not.toBe(true);
-    expect(regRes.content[0]!.text).toContain("register valid");
-
-    // Default (cwd discovery) lands on the .mstar root — never the nested
-    // plans/ rung.
-    const rootRes = await runTool(mstarStatusValidate, root, {});
-    expect(rootRes.isError).not.toBe(true);
-    expect(rootRes.content[0]!.text).toContain("status.json valid");
-
-    expect(existsSync(join(mstarRepo!.mstar, "plans", "plan-a.md"))).toBe(true);
-  });
-
   test("omp hook Gate 1: invalid .mstar workflow snapshot hard-rejected, valid passes", async () => {
     const root = mstarRepo!.root;
     let handler: ((event: unknown) => Promise<unknown>) | undefined;
@@ -803,34 +576,6 @@ describe("pathological double harness (W-REV-3)", () => {
 
   afterAll(() => {
     if (doubleRepo) rmSync(doubleRepo.root, { recursive: true, force: true });
-  });
-
-  test("mstar_status_validate: inner sparse-harness docs gated under an outer full-marker root", async () => {
-    const root = doubleRepo!.root;
-    const snapRes = await runTool(mstarStatusValidate, root, {
-      path: join("inner", ".mstar", "workflows", "wf-inner", "snapshot.json"),
-    });
-    expect(snapRes.isError).not.toBe(true);
-    expect(snapRes.content[0]!.text).toContain("snapshot valid");
-
-    const regRes = await runTool(mstarStatusValidate, root, {
-      path: join("inner", ".mstar", "projects", "_inner", "residuals.json"),
-    });
-    expect(regRes.isError).not.toBe(true);
-    expect(regRes.content[0]!.text).toContain("register valid");
-
-    // The outer full-marker root still gates its own docs.
-    const outerRes = await runTool(mstarStatusValidate, root, { path: "status.json" });
-    expect(outerRes.isError).not.toBe(true);
-    expect(outerRes.content[0]!.text).toContain("status.json valid");
-
-    // Non-canonical layout inside the inner harness stays rejected — the
-    // fix must not over-gate.
-    const stray = join(root, "inner", ".mstar", "workflows", "snapshot.json");
-    writeFileSync(stray, "{}");
-    const strayRes = await runTool(mstarStatusValidate, root, { path: stray });
-    expect(strayRes.isError).toBe(true);
-    expect(strayRes.content[0]!.text).toContain("not a canonical");
   });
 
   test("omp hook Gate 1: inner sparse-harness docs hard-blocked under an outer full-marker root", async () => {
@@ -900,88 +645,6 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
     if (customRepo) rmSync(customRepo.root, { recursive: true, force: true });
   });
 
-  test("mstar_status_validate: snapshot + register at the DECLARED custom locations validate", async () => {
-    const root = customRepo!.root;
-    const snapRes = await runTool(mstarStatusValidate, root, {
-      path: join(".mstar", "cw-wf", "wf-custom", "snapshot.json"),
-    });
-    expect(snapRes.isError).not.toBe(true);
-    expect(snapRes.content[0]!.text).toContain("snapshot valid");
-
-    const regRes = await runTool(mstarStatusValidate, root, {
-      path: join(".mstar", "cw-pj", "_custom", "residuals.json"),
-    });
-    expect(regRes.isError).not.toBe(true);
-    expect(regRes.content[0]!.text).toContain("register valid");
-
-    // The default-named locations are NOT canonical under the custom
-    // layout (the fix must not over-gate either).
-    const wrong = join(".mstar", "workflows", "wf-custom", "snapshot.json");
-    expect(existsSync(join(root, wrong))).toBe(false);
-  });
-
-  test("mstar_lease_verify: snapshot resolved at the DECLARED custom workflow_dir", async () => {
-    const root = customRepo!.root;
-    const execRes = await runTool(mstarLeaseVerify, root, { workflowId: "wf-custom", kind: "execution", planId: "plan-a" });
-    expect(execRes.isError).not.toBe(true);
-    expect(execRes.content[0]!.text).toContain("execution lease OK");
-
-    const intRes = await runTool(mstarLeaseVerify, root, { workflowId: "wf-custom", kind: "integration" });
-    expect(intRes.isError).not.toBe(true);
-    expect(intRes.content[0]!.text).toContain("integration merge lease OK");
-
-    // The hardcoded default-layout dir is NEVER consulted.
-    expect(existsSync(join(root, ".mstar", "workflows"))).toBe(false);
-  });
-
-  test("mstar_iteration_gate: snapshot + compass resolved at the DECLARED custom locations", async () => {
-    const root = customRepo!.root;
-    const res = await runTool(mstarIterationGate, root, {
-      phase: "phase-2-execute",
-      workflowId: "wf-custom",
-      compassPath: join(".mstar", "iterations", "iter-custom", "delivery-compass.md"),
-    });
-    expect(res.isError).not.toBe(true);
-    expect(res.content[0]!.text).toContain("gate ok");
-    expect(res.content[0]!.text).toContain("phase-2-execute");
-    expect(existsSync(join(root, ".mstar", "workflows"))).toBe(false);
-  });
-
-  test("mstar_worktree_check: L1 snapshot inputs resolved at the DECLARED custom workflow_dir", async () => {
-    const root = customRepo!.root;
-    const l1 = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "wf-custom", planId: "plan-a" });
-    expect(l1.isError).not.toBe(true);
-    expect(l1.content[0]!.text).toContain("l1 pre-dispatch check OK");
-    expect(existsSync(join(root, ".mstar", "workflows"))).toBe(false);
-  });
-
-  test("stale engine (no P1 dir resolver) degrades to the default workflows name in the tools", async () => {
-    const root = customRepo!.root;
-    const seams = [
-      { loader: leaseVerifyDirResolverLoader, tool: mstarLeaseVerify, params: { workflowId: "wf-custom", kind: "execution", planId: "plan-a" } },
-      {
-        loader: iterationGateDirResolverLoader,
-        tool: mstarIterationGate,
-        params: { phase: "phase-2-execute", workflowId: "wf-custom", compassPath: join(".mstar", "iterations", "iter-custom", "delivery-compass.md") },
-      },
-      { loader: worktreeCheckDirResolverLoader, tool: mstarWorktreeCheck, params: { kind: "l1", workflowId: "wf-custom", planId: "plan-a" } },
-    ];
-    const originals = seams.map((s) => s.loader.load);
-    try {
-      for (const s of seams) s.loader.load = async () => null;
-      for (const s of seams) {
-        const res = await runTool(s.tool, root, s.params);
-        expect(res.isError).toBe(true);
-        expect(res.content[0]!.text).toContain("workflow snapshot not found");
-        expect(res.content[0]!.text).toContain(join(".mstar", "workflows", "wf-custom"));
-      }
-    } finally {
-      seams.forEach((s, i) => {
-        s.loader.load = originals[i]!;
-      });
-    }
-  });
-
   test("omp hook Gate 1: invalid custom-layout snapshot hard-blocked, valid passes", async () => {
     const root = customRepo!.root;
     let handler: ((event: unknown) => Promise<unknown>) | undefined;
@@ -1018,85 +681,5 @@ describe("custom workflow_dir/project_dir layout (Phase-5 F1)", () => {
     writeFileSync(stray, JSON.stringify({ schema_version: 99 }));
     const strayRes = await handler!({ toolName: "write", input: { path: stray, content: "{}" } });
     expect(strayRes).toBeUndefined();
-  });
-});
-
-describe("mstar_worktree_check: full L1 inputs (worktree-write model)", () => {
-  let ownedRepo: SmokeRepo | undefined;
-  let expectationRepo: SmokeRepo | undefined;
-  let siblingRepo: SmokeRepo | undefined;
-
-  beforeAll(() => {
-    // Main on a branch the GOVERNING snapshot owns (retained
-    // `metadata.working_branch`) — residency must refuse.
-    ownedRepo = setupRepo();
-    const ownedRoot = ownedRepo.root;
-    const ownedDoc = JSON.parse(readFile(ownedRepo.snapshotPath)) as Record<string, unknown>;
-    (ownedDoc.plans as Array<Record<string, unknown>>)[0]!.metadata = { working_branch: "feature/lifecycle-owned" };
-    writeFileSync(ownedRepo.snapshotPath, JSON.stringify(ownedDoc, null, 2));
-    git(["checkout", "-q", "-b", "feature/lifecycle-owned"], ownedRoot);
-
-    // No recorded residency anywhere (no branch anchors, standalone plan) —
-    // the recorded `mainBranch` param transports the expectation; without
-    // it the check refuses instead of trusting the observed branch.
-    expectationRepo = setupRepo();
-    const expectationDoc = JSON.parse(readFile(expectationRepo.snapshotPath)) as Record<string, unknown>;
-    expectationDoc.type = "plan";
-    delete expectationDoc.integration_worktree_path;
-    delete expectationDoc.branch;
-    writeFileSync(expectationRepo.snapshotPath, JSON.stringify(expectationDoc, null, 2));
-
-    // A second ACTIVE lifecycle whose snapshot is malformed — the sibling
-    // register scan refuses instead of silently skipping it.
-    siblingRepo = setupRepo();
-    const registerPath = join(siblingRepo.root, "plans", "status.json");
-    const register = JSON.parse(readFile(registerPath)) as Record<string, unknown>;
-    (register.workflows as Array<Record<string, unknown>>).push({
-      id: "wf-broken",
-      type: "plan",
-      started_at: "2026-08-19",
-      dir: "workflows/wf-broken",
-    });
-    writeFileSync(registerPath, JSON.stringify(register, null, 2));
-    mkdirSync(join(siblingRepo.root, "plans", "workflows", "wf-broken"), { recursive: true });
-    writeFileSync(join(siblingRepo.root, "plans", "workflows", "wf-broken", "snapshot.json"), "{not json");
-  });
-
-  afterAll(() => {
-    for (const repo of [ownedRepo, expectationRepo, siblingRepo]) {
-      if (repo) rmSync(repo.root, { recursive: true, force: true });
-    }
-  });
-
-  test("L1 refuses when main sits on a lifecycle-owned branch (recorded expectation + ownership)", async () => {
-    const res = await runTool(mstarWorktreeCheck, ownedRepo!.root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
-    expect(res.isError).toBe(true);
-    expect(toolDetails(res)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: false });
-    expect(violationCodes(res)).toContain("worktree.main.residency-switched");
-  });
-
-  test("L1 mainBranch param transports the recorded expectation; missing expectation refuses", async () => {
-    const root = expectationRepo!.root;
-    const mainBranch = git(["branch", "--show-current"], root);
-    const withParam = await runTool(mstarWorktreeCheck, root, {
-      kind: "l1",
-      workflowId: "wf-smoke",
-      planId: "plan-a",
-      mainBranch,
-    });
-    expect(withParam.isError).not.toBe(true);
-    expect(toolDetails(withParam)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: true, violations: [] });
-
-    const without = await runTool(mstarWorktreeCheck, root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
-    expect(without.isError).toBe(true);
-    expect(toolDetails(without)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: false });
-    expect(violationCodes(without)).toContain("worktree.main.expected-branch-missing");
-  });
-
-  test("L1 refuses on an unreadable sibling lifecycle snapshot (no silent skip)", async () => {
-    const res = await runTool(mstarWorktreeCheck, siblingRepo!.root, { kind: "l1", workflowId: "wf-smoke", planId: "plan-a" });
-    expect(res.isError).toBe(true);
-    expect(toolDetails(res)).toMatchObject({ kind: "l1", workflow_id: "wf-smoke", plan_id: "plan-a", ok: false });
-    expect(toolDetails(res).refusal).toMatchObject({ kind: "refusal", code: "worktree.l1.lifecycle-snapshot-unreadable" });
   });
 });

@@ -3,8 +3,8 @@
  * boundary: what the store cutover refuses once it is the authority, and what
  * it leaves untouched.
  *
- * What the cutover has to prove (task brief §Proof), for BOTH owned omp
- * entrypoints (the `tool_call` pre-hook and the `mstar_status_validate` tool):
+ * What the cutover has to prove (task brief §Proof), for the owned omp
+ * entrypoint (the `tool_call` pre-hook):
  *
  * 1. A retired register direct write is refused — but only once the store IS
  *    the authority. The DB-aware route is exercised against REAL stores built
@@ -34,10 +34,7 @@ import {
   registerCatalogEntity,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, StoreRuntimeInfo } from "@mstar-harness/engine";
-import { zod } from "@oh-my-pi/pi-coding-agent";
-import type { CustomTool, CustomToolAPI } from "@oh-my-pi/pi-coding-agent";
 import mstarGates, { storeRuntimeProbe as hookRuntimeProbe } from "../src/hooks/pre/mstar-gates";
-import mstarStatusValidate, { storeRuntimeProbe as toolRuntimeProbe } from "../src/tools/mstar_status_validate/index";
 
 const VALID_STATUS = JSON.stringify({ version: 2, updated_at: "2026-09-08", workflows: [] });
 const VALID_REGISTER = JSON.stringify({ entries: {} });
@@ -46,15 +43,12 @@ const BAD_JSON = "{ not json";
 /** The Bun global is not in the Node type set — one deliberate boundary read. */
 const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
 
-/** Each omp entrypoint owns its probe seam (separate module, separate bundle). */
-const runtimeProbes = [hookRuntimeProbe, toolRuntimeProbe];
-const realRuntimeProbes = runtimeProbes.map((probe) => probe.info);
+/** The omp pre-hook owns its probe seam (separate module, separate bundle). */
+const realHookProbeInfo = hookRuntimeProbe.info;
 const roots: string[] = [];
 
 afterEach(() => {
-  runtimeProbes.forEach((probe, index) => {
-    probe.info = realRuntimeProbes[index]!;
-  });
+  hookRuntimeProbe.info = realHookProbeInfo;
 });
 
 afterAll(() => {
@@ -215,42 +209,6 @@ function countStoreRoute(probe: { info: () => StoreRuntimeInfo }): () => number 
     return real();
   };
   return () => calls;
-}
-
-function mockPi(cwd: string): CustomToolAPI {
-  return {
-    cwd,
-    zod,
-    exec: async () => {
-      throw new Error("exec is not used by this spec");
-    },
-    ui: {} as CustomToolAPI["ui"],
-    hasUI: false,
-    logger: {
-      warn: () => undefined,
-      error: () => undefined,
-      info: () => undefined,
-      debug: () => undefined,
-    } as CustomToolAPI["logger"],
-    typebox: {} as CustomToolAPI["typebox"],
-    arktype: {} as CustomToolAPI["arktype"],
-    pi: {} as CustomToolAPI["pi"],
-    pushPendingAction: () => undefined,
-  };
-}
-
-interface ToolResult {
-  content: Array<{ type: string; text: string }>;
-  isError?: boolean;
-}
-
-async function runTool(cwd: string, params: Record<string, unknown>): Promise<ToolResult> {
-  const tool: CustomTool = mstarStatusValidate(mockPi(cwd));
-  return (await tool.execute("call-1", params, undefined, undefined as never, undefined)) as ToolResult;
-}
-
-function textOf(result: ToolResult): string {
-  return result.content.map((part) => part.text).join("\n");
 }
 
 describe("omp write gate — authority paths refuse, documents keep their validator (G4b)", () => {
@@ -511,108 +469,6 @@ describe("omp write gate — authority paths refuse, documents keep their valida
     // The register target is the one path that DOES consult the authority.
     await runWrite(handler, fixture.register, VALID_REGISTER);
     expect(storeRouteCalls()).toBeGreaterThan(0);
-  });
-});
-
-describe("omp mstar_status_validate — DB-aware register route (G4b)", () => {
-  test("store-backed register: refused through the DB-aware route, not shape-checked", async () => {
-    const fixture = makeHarness("tool-active", "soft");
-    await seedActiveStore(fixture.harness);
-    const reads = countStoreRoute(toolRuntimeProbe);
-
-    const result = await runTool(fixture.root, { path: fixture.register });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("project.register.retired");
-    expect(textOf(result)).not.toContain("project.register.invalid");
-    expect(reads()).toBeGreaterThan(0);
-  });
-
-  test("unreadable authority: refused with the engine refusal, never an empty verdict", async () => {
-    const fixture = makeHarness("tool-corrupt", "soft");
-    await corruptStore(fixture.harness);
-
-    const result = await runTool(fixture.root, { path: fixture.register });
-    expect(result.isError).toBe(true);
-    expect(textOf(result)).toContain("store.authority-unavailable");
-    expect(textOf(result)).toContain("store.corrupt");
-  });
-
-  test("pre-activation register: the register validator still answers (hard AND soft)", async () => {
-    const fixture = makeHarness("tool-legacy", "soft");
-    const reads = countStoreRoute(toolRuntimeProbe);
-
-    writeFileSync(fixture.register, VALID_REGISTER);
-    const valid = await runTool(fixture.root, { path: fixture.register });
-    expect(valid.isError).not.toBe(true);
-    expect(textOf(valid)).toContain("register valid");
-
-    writeFileSync(fixture.register, JSON.stringify({ entries: "not-an-array" }));
-    const invalid = await runTool(fixture.root, { path: fixture.register });
-    expect(invalid.isError).toBe(true);
-    expect(textOf(invalid)).toContain("project.register.");
-    // The route was consulted (to learn the state) but the store was never
-    // acquired into an answering read of retired data.
-    expect(reads()).toBeGreaterThan(0);
-    expect(existsSync(fixture.storeDb)).toBe(false);
-  });
-
-  test("a symlink alias that resolves into the harness answers as the authority (S-G4b-03)", async () => {
-    const fixture = makeHarness("tool-alias", "soft");
-    await seedActiveStore(fixture.harness);
-    writeFileSync(fixture.register, VALID_REGISTER);
-    const aliases = join(fixture.root, "aliases");
-    mkdirSync(aliases, { recursive: true });
-    const storeAlias = join(aliases, "cache.db");
-    symlinkSync(fixture.storeDb, storeAlias);
-    const registerAlias = join(aliases, "carry-over.json");
-    symlinkSync(fixture.register, registerAlias);
-
-    const store = await runTool(fixture.root, { path: storeAlias });
-    expect(store.isError).toBe(true);
-    expect(textOf(store)).toContain("store.direct-write-refused");
-
-    const register = await runTool(fixture.root, { path: registerAlias });
-    expect(register.isError).toBe(true);
-    expect(textOf(register)).toContain("project.register.retired");
-    expect(textOf(register)).not.toContain("project.register.invalid");
-
-    // Non-authority verdicts are unchanged (canonical status.json included).
-    const status = await runTool(fixture.root, { path: fixture.status });
-    expect(status.isError).not.toBe(true);
-    expect(textOf(status)).toContain("status.json valid");
-  });
-
-  test("store.db target is refused; status + snapshot validation is unchanged", async () => {
-    const fixture = makeHarness("tool-store-file", "soft");
-    await seedActiveStore(fixture.harness);
-
-    const storeFile = await runTool(fixture.root, { path: fixture.storeDb });
-    expect(storeFile.isError).toBe(true);
-    expect(textOf(storeFile)).toContain("store.direct-write-refused");
-
-    const status = await runTool(fixture.root, { path: fixture.status });
-    expect(status.isError).not.toBe(true);
-    expect(textOf(status)).toContain("status.json valid");
-
-    const reads = countStoreRoute(toolRuntimeProbe);
-    const snapshotPath = join(fixture.harness, "workflows", "wf-a", "snapshot.json");
-    mkdirSync(join(snapshotPath, ".."), { recursive: true });
-    writeFileSync(
-      snapshotPath,
-      JSON.stringify({
-        schema_version: 1,
-        id: "wf-a",
-        type: "plan",
-        status: "running",
-        started_at: "2026-09-01",
-        updated_at: "2026-09-08",
-        plans: [],
-      }),
-    );
-    const snapshot = await runTool(fixture.root, { path: snapshotPath });
-    expect(snapshot.isError).not.toBe(true);
-    expect(textOf(snapshot)).toContain("snapshot valid");
-    expect(reads()).toBe(0);
   });
 });
 
