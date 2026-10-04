@@ -265,6 +265,9 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
         for (const plan of row.plans) {
           if (plan.lease !== null) dispositions.push(`workflow ${row.id} plan ${plan.id}: stale held lease released on import; re-acquire via plan bind`);
         }
+        if (row.snapshot.integration_merge_lease !== undefined) {
+          dispositions.push(`workflow ${row.id}: integration lease released on import; re-claim via plan integration-start`);
+        }
       }
       const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;
       if (storeAuthority?.authority_state !== "active" && storeAuthority?.authority_state !== "staged") {

@@ -137,8 +137,12 @@ test("one store upgrade completes staged store and execution authorities with po
   }
 });
 
-test("active-store import releases stale held leases without changing epoch or suspending live writers", async () => {
+test("active-store import releases stale held leases without changing epoch", async () => {
   const { context } = legacyWorkspace("active-held-lease");
+  const snapshotPath = join(context.harnessDir, "workflows", "wf-active-held-lease", WORKFLOW_SNAPSHOT_FILE);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<Record<string, unknown>> };
+  snapshot.plans[0]!.status = "InProgress";
+  writeFileSync(snapshotPath, JSON.stringify(snapshot));
   const initialized = await initializeStore(context);
   try {
     const now = "2026-10-04T00:00:00Z";
@@ -161,13 +165,55 @@ test("active-store import releases stale held leases without changing epoch or s
     "workflow wf-active-held-lease plan wf-active-held-lease-plan: stale held lease released on import; re-acquire via plan bind",
   ]);
   const state = await readExecutionState(context);
-  expect(state.data.workflows[0]?.plans[0]?.executionLease).toBeNull();
+  const importedPlan = state.data.workflows[0]?.plans[0];
+  expect(importedPlan?.plan.status).toBe("Blocked");
+  expect(importedPlan?.executionLease).toBeNull();
   const after = await openStore(context, "read");
   try {
     expect(after.db.prepare("select authority_epoch from store_meta where id = 1").get()).toEqual({ authority_epoch: epoch });
     expect(after.db.prepare("select state from execution_sessions where session_id = ?").get("session-active-held-lease")).toEqual({ state: "suspended" });
   } finally {
     after.close();
+  }
+});
+
+test("import records that stale integration leases must be reclaimed", async () => {
+  const { context } = legacyWorkspace("integration-lease-disposition");
+  const workflowId = "wf-integration-lease-disposition";
+  const workflowDir = join(context.harnessDir, "workflows", workflowId);
+  const coordinatorId = "session-coordinator-integration-lease";
+  const coordinatorPath = join(workflowDir, "sessions", "coordinator.json");
+  writeFileSync(coordinatorPath, JSON.stringify({
+    schema_version: 1,
+    role: "coordinator",
+    session_id: coordinatorId,
+    workflow_id: workflowId,
+    harness_root: context.harnessDir,
+  }));
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  snapshot.coordination = {
+    coordinator: { session_id: coordinatorId, session_file: coordinatorPath, bound_at: "2026-10-04T00:00:00Z" },
+  };
+  snapshot.integration_merge_lease = {
+    holder: coordinatorId,
+    plan_id: "wf-integration-lease-disposition-plan",
+    claimed_at: "2026-10-04T00:00:00Z",
+    source_branch: "feature/source",
+    target_branch: "main",
+  };
+  writeFileSync(snapshotPath, JSON.stringify(snapshot));
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-integration-lease-disposition" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 1 });
+  expect(result.dispositions).toContain(
+    `workflow ${workflowId}: integration lease released on import; re-claim via plan integration-start`,
+  );
+  const store = await openStore(context, "read");
+  try {
+    expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
   }
 });
 
@@ -227,6 +273,53 @@ function requiresNewRootStore(repoRoot: string): boolean {
   // the data and no root-level db file was created.
   return existsSync(join(repoRoot, "store.db"));
 }
+
+test("minimal import keeps a prepared InProgress plan recoverable through public plan bind", async () => {
+  const name = "prepared-inprogress";
+  const { context } = legacyWorkspace(name);
+  const workflowId = `wf-${name}`;
+  const planId = `${workflowId}-plan`;
+  const sessionId = `session-${name}`;
+  const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
+    plans: Array<{ status: string; coordination: Record<string, unknown> }>;
+  };
+  snapshot.plans[0]!.status = "InProgress";
+  snapshot.plans[0]!.metadata = {
+    worktree_path: join(ROOT, `worktree-${name}`),
+    working_branch: `feature/${workflowId}`,
+  };
+  snapshot.plans[0]!.coordination.prepared = {
+    assignment_path: join(context.harnessDir, `${planId}.assignment.md`),
+    assignment_sha256: "a".repeat(64),
+    plan_sha256: "b".repeat(64),
+    qa_gate: "mandatory",
+    findings_cleanup: "allow-residual",
+    prepared_by: "pm-fixture",
+    prepared_at: "2026-10-04T00:00:00Z",
+  };
+  writeFileSync(snapshotPath, JSON.stringify(snapshot));
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-prepared-inprogress-import" });
+  expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
+
+  // Imported sessions are suspended historical facts. Reachability = a NEW
+  // public plan-pm identity binds cleanly (no lease row blocks the fresh
+  // claim) and takes over the InProgress plan.
+  const caller = { sessionId: `${sessionId}-rebind`, role: "plan-pm", workflowId, planId };
+  const st = await readExecutionState(context);
+  const planToken = st.data.workflows[0]!.planTokens[planId]!;
+  const rebound = await bindExecutionSession(
+    { harnessDir: context.harnessDir, caller },
+    { workflowId, planId, role: "plan-pm", expected: planToken, operationId: "op-prepared-inprogress-bind" },
+  );
+  expect(rebound.data.sessionId).toBe(`${sessionId}-rebind`);
+  const stAfter = await readExecutionState(context);
+  expect(stAfter.data.workflows[0]!.plans[0]!.executionLease).toMatchObject({
+    status: "held",
+    holder_session_id: `${sessionId}-rebind`,
+  });
+});
 
 test("minimal import canonicalizes legacy plan_id rows into id", async () => {
   const { context } = legacyWorkspace("plan-id-alias");

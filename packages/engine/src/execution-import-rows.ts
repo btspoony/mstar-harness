@@ -26,6 +26,10 @@ function conflict(message: string): never {
 }
 
 function insertSession(tx: ExecutionTransaction, workflowId: string, role: "coordinator" | "plan-pm", planId: string | null, value: ImportedSessionBinding): void {
+  // §2.2 stopped-workspace import: imported sessions are HISTORICAL facts —
+  // a snapshot proves past binding, never current liveness — so they import
+  // suspended. Continuation goes through public `plan bind` with a fresh
+  // identity (no lease row is imported, so nothing blocks the fresh claim).
   tx.db.prepare("insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) values (?, ?, ?, ?, ?, 1, 'suspended', ?)")
     .run(workflowId, role, value.session_id, planId, tx.epoch, value.bound_at);
 }
@@ -54,10 +58,10 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
   const routeSnapshot = { ...(snapshot as unknown as WorkflowSnapshot), plans: plans.map((plan) => ({ id: plan.id })) } as WorkflowSnapshot;
   plans.forEach(({ id: planId, row, session, lease, pin }, ordinal) => {
     const state: Record<string, unknown> = { ...row, id: planId };
+    if (lease !== null && state.status === "InProgress") state.status = "Blocked";
     delete state.coordination;
     delete state.execution_lease;
     const stateGate = validatePlanRow(state);
-    if (!stateGate.ok) conflict(`plan ${planId} of workflow ${id} is invalid (${stateGate.violations.map((v) => v.code).join(", ")}).`);
     const block: Record<string, unknown> = isPlainObject(row.coordination) ? { ...row.coordination } : {};
     delete block.revision;
     delete block.session;
