@@ -11,7 +11,7 @@ PM 在新迭代启动时执行。
 3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
 4. 如果有未完成的 roadmap 残余（上一迭代标记为 `next` 的 plan），纳入本次迭代范围候选
 
-**非 command 触发**（如直接 skill 加载）时，Phase 1 方向锁定仍须 interactive（grill-me 在 command 层）。
+**Direct skill entry** uses interactive direction lock by default; explicit caller opt-in may select autonomous mode without a command. Command-only helpers are not runtime dependencies.
 
 ## 1.2 定义迭代范围
 
@@ -40,12 +40,12 @@ compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标�
 
 **宿主 Plan UX（interactive）**：若宿主提供 Plan 会话（先写 session plan、后点 Build 才执行 todos）：
 
-- 允许 **先 scaffold 空白 Phase 1 文档/todos**，再以 **用户反馈驱动** 收敛：Agent 探索并写入推荐，**原地更新同一份** session plan；用户提方向/意见，**不以**例行问卷为主路径。
+- Where the host permits it, scaffold only the session-plan outline and todos, then update that same session plan from user feedback. Do not author the formal compass, guides, plans or specs before §1.2.5; an empty outline is not design approval.
 - Branch policy：在 plan 中写推荐值 + rationale（不得静默 `main`/`master`）；用户可用反馈改正；仅在用户明确结束反馈后仍缺字段时再追问。
 - 访谈式收敛 **仅**在反馈结束后仍有阻塞缺口时可选发起。
 - **禁止**为更新内容再开第二份 session plan。
 
-**非** Plan 会话仍按「收敛后再写 compass/plans 初稿」的默认顺序。此条 **不**改变 autonomous 路径，也 **不**要求非 Plan 宿主先写空文件。
+The prototype checkpoint in §1.2.5 applies with or without a Plan session. Obey the active host's Plan-mode write and approval limits: if the package path is not yet writable, prepare the preview in the permitted session-plan surface, obtain the host-required transition, then persist it in the package before formal authoring. Do not use another writer or a second session plan to bypass that restriction. User design confirmation is not authorization to implement or to enter Build.
 
 **禁止**：在未显式 opt-in 时自行切换到 `autonomous`（例如仅因读了本 reference 或存在 roadmap next）。
 
@@ -58,9 +58,30 @@ compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标�
 >
 > 本 anchor 在**方向已锁定**（interactive：与用户收敛 / autonomous：方向 rationale 落盘）之后、**compass 与 plans 初稿落盘之前**执行。此时 workflow 尚未登记、compass 尚不存在，属预期状态 —— anchor 动作由 active host reference 的声明决定；登记（§1.5）发生在本步之后。
 
-## 1.3 创建迭代 package + compass
+### 1.2.5 Prototype checkpoint — before formal authoring
 
-创建 `{ITERATION_DIR}/<iteration-id>/`，写入 **`delivery-compass.md`**（canonical；**禁止**新写根目录 `<id>-delivery-compass.md`）。**必须**使用 `references/iteration-compass-template.md` 完整结构（YAML frontmatter + `## Roadmap Position` + close 占位节）。`end_date` 仅在 iteration-close 填入；禁止用正文 completion prose 替代 frontmatter `status`。按需创建 `guides/`、`specs/` 与 package `README.md`。
+Use the collected opinions and preliminary direction from §1.1–§1.2 to make the design understandable before turning it into formal documents. The `direction-lock` hook above remains before any compass/plans draft. Create or reuse `{ITERATION_DIR}/<iteration-id>/` early and retain the design material under `prototypes/` (path authority → `mstar-conventions/references/artifact-storage-paths.md`).
+
+**Interactive path**
+
+1. Create a human-readable **HTML prototype** in the package. Explain the problem, proposed outcome, scope/non-goals and important trade-offs in plain language, with visuals that expose the design: screens/interactions for UI work, or flows, states, relationships and before/after views for non-UI work. Choose what helps this user decide; neither production code nor a fixed UI template is required.
+2. Present the current HTML through a host-supported preview or accessible file link and explain the decisions it illustrates. Ask for feedback on this design, not routine approval of a document-writing task.
+3. For each feedback round: discuss the meaning and trade-offs, update the **same prototype**, record the changes and unresolved decisions, then **present the updated HTML again**. Feedback, silence, approval of an older revision or “continue discussing” is not approval of the current design.
+4. Continue until the user explicitly confirms the **current revision**. Retain its path, revision identifier, feedback/decision summary and the user's confirmation as the drafting baseline in the prototype or an adjacent record under `prototypes/`. Preserve enough history to distinguish the confirmed baseline from later changes; do not overwrite its approval evidence with a new design.
+
+**Autonomous path (explicit opt-in only)**: retain a prototype under the same package path before §1.3, choosing **HTML, Markdown or JSON** to fit the work. Record the format rationale, design choices, assumptions and an **autonomous disposition**, not a fabricated user approval. Apply the ranking, branch and STOP rules in `autonomous-direction-lock.md`; do not solicit routine human confirmation or force HTML. Keep the direction-lock record separate from this design material.
+
+PM may involve **product-manager** and/or **architect** to clarify product flows or technical feasibility while making/revising the prototype. This is optional, not a new mandatory role chain or permission for PM to perform specialist implementation in-thread. Give contributors the current prototype, feedback and decision context; shared-file edits are sequential. Reuse their contributions during formal authoring and role selection (§1.6), rather than repeating settled work.
+
+**Checkpoint exit**: retained current design + explicit current-revision confirmation (interactive) or truthful autonomous rationale/disposition + resolved blocking design questions. Only then author the compass, guides, plans and specs (§1.3). Pass the prototype path/revision, confirmation or disposition, decisions and remaining owned questions to subsequent roles. A material design change during authoring or Review & Edit returns here: revise and re-present/reconfirm the interactive prototype (or record a revised autonomous disposition), then realign the affected formal documents. If the direction itself changes, reopen §1.2's decisions and semantically re-lock the direction before resuming drafts.
+
+**Semantic re-lock is not a new host start**: within the same iteration/workflow, retain the already-executed `direction-lock` action and current binding. Do not repeat a host's one-shot start/arm or rebind merely because feedback changed the direction; follow the active host's recorded action/result and lifecycle rules. This changes neither the initial hook's position/obligation nor model-selection semantics, and never waives prototype confirmation or Prepare gates. If a genuinely new iteration/workflow is needed, resolve the current binding/ownership through the active host's documented lifecycle/recovery route before a new identity's initial hook is permitted. Do not invent manual state repair, preference changes or implicit authorization to clear/re-arm a binding.
+
+The prototype is **design context**, not a frozen spec, code/API implementation, runnable acceptance evidence or a Prepare-gate waiver. Formal documents must translate the baseline into real acceptance criteria, constraints and interfaces; per-plan `specify → clarify → plan` and host execution authorization remain required.
+
+## 1.3 Author the iteration package + compass
+
+After §1.2.5, write **`delivery-compass.md`** into the existing `{ITERATION_DIR}/<iteration-id>/` package (canonical; never a new flat `<id>-delivery-compass.md`). Use the full `references/iteration-compass-template.md` structure (YAML frontmatter, `## Roadmap Position`, close sections). Fill `end_date` only at iteration-close; prose completion does not replace frontmatter `status`. Create `guides/`, `specs/` and an optional package `README.md` as needed. Link the retained prototype baseline from compass and affected plans; use existing `metadata.iteration_refs` through the normal producer path, not a new field or `primary_spec`/`spec_refs` for a prototype.
 
 ```markdown
 ---
@@ -88,6 +109,10 @@ plans: []
 | # | Question | Owner | Blocking? |
 |---|----------|-------|-----------|
 | Q1 | <未决事项> | product-manager / architect / writing-specialist / PM | Yes / No |
+
+## Prototype baseline
+- Retained prototype: <`prototypes/` path and revision>
+- Disposition: <current-revision user confirmation or autonomous rationale; evidence link>
 
 ## Plans
 
@@ -125,9 +150,9 @@ plans: []
 
 PM 的初稿是**上下文载体**：被派发角色看不到 PM 的会话，只从磁盘读（`delivery-compass.md` + plans + `<iteration-id>/` package）。所以初稿按 **「骨架 + 完整上下文」** 交付，深度边界如下。
 
-**(i) 初稿必须携带**：锁定方向；已决事项（→ compass `## Decisions`）；带 owner 的未决事项（→ `## Open Questions`）；**非目标及其理由**；约束来源（用户指令 / 既有 spec / knowledge / roadmap）；acceptance seed（可长成 `## Acceptance Criteria` 的条目）；branch policy。
+**(i) Draft inputs**: the locked direction; retained prototype path/revision and its confirmation or autonomous disposition; settled decisions (compass `## Decisions`); remaining owned questions (`## Open Questions`); non-goals and rationale; constraint sources (user instructions / existing specs / knowledge / roadmap); acceptance seed; branch policy; and the §1.6 role-selection rationale. Carry forward prototype-stage product/architecture contributions so the next role need not reconstruct them.
 
-**(ii) 初稿可以合法留粗**：候选方案分析、模块/接口细节、per-task 分解、plan 级技术设计。这些**标记**为待补，**不**编造。留粗是允许的；**不加标记**则不允许 —— 未标记的空洞无人认领，等于把上下文缺口丢给一个看不到会话的承接方。
+**(ii) Details may remain coarse**: candidate analysis, module/interface detail, per-task decomposition and plan-level technical design may be marked for an actual selected owner to complete. Do not invent detail or create markers for an omitted role. A remaining product/technical gap requires reassessing §1.6 selection, not treating the prototype as a finished spec.
 
 **(iii) 标记形态（语法只在本节定义；其它文件按 path + 节号引用本处）**：
 
@@ -135,11 +160,11 @@ PM 的初稿是**上下文载体**：被派发角色看不到 PM 的会话，只
 <!-- TODO(owner: <role-id>): <what is missing and what must be decided> -->
 ```
 
-owner 取值仅限 Phase 1 链：`product-manager` / `architect` / `writing-specialist` / `PM`（需回到用户决策时）。**无 owner 的 `TBD` / `...` / `etc.` 在任何阶段都仍然禁止** —— 没有 owner，就没有清除它的地方。
+Allowed owners are `product-manager`, `architect`, `writing-specialist` or `PM` (a decision requiring user involvement). Specialist-owned markers/questions must belong to a selected §1.6 role; do not manufacture work for an omitted role. Unowned `TBD` / `...` / `etc.` remain prohibited at every stage.
 
-**(iv) 清除期限**：compass `status: locked` 是终线。lock 前，owner 属于链条三角色的 marker **必须**全部清除；无法清除的，在 lock 前**显式重新归属给 `PM`** 并上报用户（`PM` 归属项是 lock 之后唯一允许存在的 marker 形态）。**禁止**静默删除，也**禁止**让无 owner 的 placeholder 越过终线。各角色的清除义务与报数 → §1.6。
+**(iv) Clearance deadline**: compass `status: locked`. Before lock, clear all specialist-owned markers. A genuinely unresolved non-blocking user decision may be explicitly reassigned to `PM` with rationale and disclosed to the user; never silently delete it. Reassignment is not a way to omit necessary product/technical editing or bypass a blocking decision. Clearance/reporting duties → §1.6.
 
-**(v) `## Open Questions` 行的处置**：§1.2 落盘的每一行在终线前必须落到三者之一：收敛为已决事项（撤出该行并计入 `## Decisions`）；或转入 (iii) 的 marker 形态（行的 owner 即 marker 的 owner，随 (iv) 一同清除或重新归属给 `PM`）；或**显式重新归属给 `PM`** 并上报用户。**禁止**静默删除行 —— 与 (iv) 共用同一终线。`Blocking?` 决定该行**能否**越过终线：标记 `Yes` 的行**必须**在 lock 前收敛为已决事项，**不论**它本会重新归属给谁；不能收敛即 Prepare 未通过（`Gate decision: blocked`），compass **不得**置 `status: locked`。lock 之后 `## Open Questions` 中唯一允许存在的行，即**非阻塞**且 owner 为 `PM` 的行。行转入 marker 形态后，其清除义务与报数按 §1.6 计。
+**(v) Open Questions disposition**: resolve each row into `## Decisions`, convert it to an owned marker subject to (iv), or explicitly reassign a genuinely non-blocking user decision to `PM` and disclose it. Never silently delete a row. Any `Blocking? Yes` question must become a settled decision before lock regardless of owner or representation; otherwise `Gate decision: blocked` and compass cannot be locked. Only non-blocking `PM` rows may remain after lock. An omitted specialist's unresolved gap requires re-selection (§1.6), not a skipped round.
 
 ## 1.4 登记迭代 catalog 身份（DB 权威）
 
@@ -171,7 +196,7 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 | 树 | Phase 1（start）主责 | 说明 |
 |----|---------------------|------|
 | **`{SPECS_DIR}/`** | **Phase 3 iteration-close** specs 提升流程 | **长期**规范性产出：锁定规格、ADR、契约；plan `primary_spec` / `spec_refs` 主要挂此处 |
-| **`{ITERATION_DIR}/`** | product-manager、architect、PM | **`<iteration-id>/` package**（`delivery-compass.md` + 迭代级 specs & guides） |
+| **`{ITERATION_DIR}/`** | PM; selected product-manager / architect; mandatory writer | **`<iteration-id>/` package** (`prototypes/`, `delivery-compass.md`, iteration specs/guides) |
 | **`{KNOWLEDGE_DIR}/`** | **非** start/execute 直写；**`mstar-compound`** @ iteration-close（含 package **提升**） | 可复用实施 SSOT |
 
 **写入边界**：Phase 1（含 §1.6）的规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入；`{KNOWLEDGE_DIR}/` 由 **`mstar-compound`** @ iteration-close 写入。
@@ -184,20 +209,24 @@ Phase 1 与 §1.6 须遵守 **`references/iteration-artifact-boundaries.md`**（
 
 派发机制 → **`mstar-dispatch-gates`**（specialist review-and-edit dispatch，**顺序链**）。PM **不得**创建 integration worktree 或 push `spec_integration_branch`（Phase 1 的全部写入目标——compass / plans / `<iteration-id>/` package——均为默认 gitignored 的本地工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入并随 close commit 进入 integration 分支。因此 §1.6 完成后的 §6 仅**新建并 push** integration 分支），直到：
 
-1. **product-manager** → **architect** → **writing-specialist** 已按序 invoke 编辑 compass、plans 与 **`{ITERATION_DIR}/<iteration-id>/`** package（guides/**specs**——Phase 1 规格落在 `<iteration-id>/specs/`；全局 `{SPECS_DIR}/` 在 Phase 3 iteration-close 提升时写入）；**不得**在 start 链向 `{KNOWLEDGE_DIR}/` 新增
-2. **writing-specialist** 完成 **corpus hygiene**：仅本轮修改的 iteration package（specs/guides）与直接相关 knowledge 引用；错放迁回 **`<iteration-id>/`** package；细则 → **`iteration-corpus-hygiene.md`**、**`iteration-artifact-boundaries.md`**
-3. PM 将 compass `status` 设为 `locked`，并确认各 plan 的 Prepare gate（specify / clarify / plan）
+1. The §1.2.5 prototype checkpoint has passed and formal documents reflect its current baseline.
+2. PM has selected any needed **product-manager** and/or **architect** editing rounds and recorded include/omit rationale in compass `## Decisions`. Consider product complexity (new user journeys, priorities, ambiguous acceptance), technical complexity (cross-module/API/state/long-term contract changes), **remaining gaps after prototype contributions**, and what is already settled. Simple work with no such gaps may omit both; complexity/gaps may require one or both. Reassess at drafting and before lock whenever new questions or markers expose a missing product/technical decision.
+3. Actual selected rounds have edited the compass, plans and relevant package guides/specs, in order **product-manager (if selected) → architect (if selected) → writing-specialist (always, last)**. Shared-document edits are sequential; wait for each selected round to finish before the next. Selection rationale is not an invocation receipt, and prototype contributions do not count as a formal editing round when that role is selected. Do not create fake skip receipts. No role adds to `{KNOWLEDGE_DIR}/` in this chain; Phase 1 specs stay in `<iteration-id>/specs/`.
+4. **writing-specialist** has completed final **corpus hygiene** and marker/question closure for the current documents: only this iteration's affected package and directly related knowledge references, correcting misplacement back into the package. Details → `iteration-corpus-hygiene.md`, `iteration-artifact-boundaries.md`.
+5. PM has set compass `status: locked` and confirmed each plan's Prepare gate (`specify / clarify / plan`). Role omission never waives a gate or permits unresolved blocking questions/specialist markers.
 
-**Marker 清除义务（§1.3，每个被派发角色）**：角色在自己这一轮编辑中**必须**清除 owner 指向自己的 marker，无法清除的在完成前**重新归属给 `PM`** 并写明理由；两种情况都在 Completion Report 中报出**清除计数**（已清 N / 已重新归属 M）。**writing-specialist** 额外承担**收口核对**：除显式重新归属给 `PM` 的 marker 外，**无** marker 残留（语法的唯一 home 是 §1.3；本行不重述其形态）—— 该核对是 PM 置 `status: locked` 的前置。
+**Dispatch inputs and evidence**: for each selected role, provide draft/compass paths, the retained prototype baseline (path/revision, feedback and confirmation or autonomous disposition), prior contributors' conclusions, selection rationale, decisions, owned open questions, non-goal reasons and that role's marker list. Apply `mstar-dispatch-gates` to every actual invoke. An empty marker list is truthful; omitting a role is not permission to leave its work unowned.
 
-**顺序理由**：产品范围与优先级 → 架构与长期契约（specs）→ 行文、package 卫生与错放纠正（在 PM/architect 定稿后核对受影响文档）。本共享产物链存在真实依赖；独立文档可按 ownership 隔离并行。早期全局探索的既有结果复用，不因每次编辑重新扫全库。角色名写法（role id 提及 hygiene）→ active host reference（**`mstar-host`** → `references/<host>.md`）。
+**Marker clearance (§1.3)**: each invoked role clears its own markers, or explicitly reassigns a genuinely non-blocking user decision to `PM` with rationale; report cleared/reassigned counts in its Completion Report. The mandatory writer checks **all** markers and questions, including any accidentally left for an omitted specialist. If product/technical work is still needed, return it to PM for re-selection and the relevant editing round; the writer does not silently clear it or substitute for that specialist. After any reopened round, writer closes the revised documents again. Lock requires no specialist markers and no blocking questions, with only explicitly disclosed non-blocking `PM` items allowed.
 
-**完成证据** = 磁盘上的 compass / plans / iteration 文档修订（specs 在 `<iteration-id>/specs/`）+ iteration package 卫生（与既有 knowledge 引用核对，如有）+ catalog 登记（store.db）与 metadata 更新 + compass `status: locked`。**不**要求单独的迭代审查报告——迭代审查的 SSOT 是被编辑的文档本身，无 per-plan QC 式审计链。
+**Ordering rationale**: selected product scope/priority edits precede selected architecture/contract edits; writing, placement and consistency close the resulting corpus. Reuse early exploration and prototype-stage contributions; do not re-scan the repository for each round. Role mention hygiene → active `mstar-host` reference.
+
+**Completion evidence**: retained prototype baseline and its genuine confirmation/disposition; edited compass/plans/package specs/guides; include/omit decisions for optional roles; completion evidence for the actual ordered rounds ending in writer; package hygiene, catalog registration/metadata and compass `status: locked`. The edited documents are the review SSOT; no separate per-plan-QC-style iteration report is required.
 
 Before compass lock, review the **local ignored per-edit attribution record** against the edits in the specialist chain: actual ISO time, editor seat, observable model or `unknown`, iteration identity and scope. Correct an omission now with the actual correction time and an explicit note that the earlier edit was unobserved; never backdate or infer a child model. Canonical fields and tracked-example prohibition → `mstar-artifacts/references/plan-files-and-reports.md` § Edit attribution. This is a review obligation, not a machine gate.
 
-**Uncommitted-docs exception（bounded — Phase 1 only）**：Review & Edit 链的文档编辑（compass / plans / `<iteration-id>/` package）以**未提交**状态留在主 checkout（control root = 主 worktree）——这是 worktree 默认在 Phase 1 的唯一例外，主 checkout 分支**不**切换、不产生 feature commit。Phase 1 的全部写入目标均为默认 gitignored 的 `{HARNESS_DIR}` 本地工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入并随 close commit 进入 integration 分支。§6 的 integration-worktree 步骤（**`phase-2-worktree-lease.md` §2.3 checklist step 7**）新建并 push `spec_integration_branch` 分支本身；**禁止**把主 checkout 上的任何文档或既有用户改动带进 integration worktree。
+**Uncommitted-docs exception (bounded — Phase 1 only)**: prototype preparation and Review & Edit documents (`prototypes/`, compass, plans and the package) remain uncommitted local artifacts in the primary checkout/control root; its branch is not switched and no feature commit is created. This does not bypass host Plan-mode write limits. Global `{SPECS_DIR}` is written only by the Phase 3 promotion/close commit. The integration-worktree step (`phase-2-worktree-lease.md` §2.3 step 7) creates and pushes the integration branch itself; never carry primary-checkout documents or existing user changes into it.
 
-**反模式**：PM 线程代替三角色完成全部编辑而不 invoke；或将本链三角色并行派发 —— 见 **`mstar-roles/references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」。
+**Anti-patterns**: authoring formal documents before the prototype checkpoint; treating an old approval as approval of changed design; using autonomous mode without opt-in; omitting a required specialist despite a remaining gap; fabricating skip receipts; PM replacing selected specialist edits/the mandatory writer without invoke; or parallelizing shared-document rounds.
 
 **Phase 1 完成 anchor（`phase-1-lock`）不在本文件触发**：compass `status: locked` 只是它的前置之一 —— 它只在 integration worktree 已建立（并记录 `integration_worktree_path`）、新建的 `spec_integration_branch` 已 push（branch push；Phase 1 的写入目标均为 gitignored 本地工件，全局 `{SPECS_DIR}` 在 Phase 3 提升时写入）之后才执行，因此其 marker 由 **`phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载（Phase 1 路线经 `iteration-start` §6 走到该 checklist）。

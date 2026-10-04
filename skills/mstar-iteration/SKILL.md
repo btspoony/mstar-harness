@@ -56,7 +56,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 | 当前动作 | 必读 detail（按需加载，勿通读） |
 |---------|--------------------------------|
 | **scoped primary**（`/iteration-drive` 带 `--assignment` / `--workflow --plan` / `--resume`） | **`references/plan-scoped-pm.md`**（scoped boot → plan-local drive → handoff finish → coordinator 序列；**先于**整迭代 todo / last-plan 逻辑） |
-| **start**（启动迭代 / 重开方向锁定） | **`references/phase-1-prepare.md`**（§1.1–§1.6：上下文、范围与 direction lock、compass、索引、v2 状态面、产物边界、§1.6 Review & Edit 链） |
+| **start** (new iteration / reopen direction lock) | **`references/phase-1-prepare.md`** (§1.1–§1.6: context → direction lock/hook → §1.2.5 retained prototype and feedback loop → formal compass/plans/specs → registration → selected Review & Edit rounds with mandatory final writer). Interactive requires current-design HTML confirmation before authoring; explicit autonomous opt-in retains an appropriate prototype without routine human approval. |
 | **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch 细则、control root + integration worktree + lease 全文） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |
 | **PR / merge-ready**（开 PR、推进合并就绪 loop） | **`references/phase-4-5-pr-delivery.md`**（§4–§5.2：开 PR、§5.1a push cadence、loop、exit checklist） |
@@ -75,7 +75,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 | **→ Phase 5** | Phase 4 PR 已创建 | 打印 `## Phase 5: PR merge-ready`；执行 §5 loop 至 §5.5 exit（含 §5.1a push cadence） | 开 PR 后停止；跳过 review resolve / CI loop；**CI/AI review 仍在跑时 push** |
 | **→ Phase 6** | PR **已 merge**（verified merged；mergeable ≠ merged，由 PM 核实） | 打印 `## Phase 6: post-merge close`；按 §6.1→§6.4 执行（`references/phase-6-post-merge-close.md`）；todo `phase-6-post-merge-close` 保持 open 直至 §6.4 | mergeable 即视为 merged；未核实 merge 就调用 close；§6.1–§6.3 之间夹带 tracked commit |
 | **→ 迭代交付完成** | Phase 6 §6.1–§6.4 完成（`references/phase-6-post-merge-close.md`） | snapshot `completed` + `ended_at`；根 `status.json` 条目注销（`mstar status workflow-close --workflow <id>` exit 0）；投影一致 | §5.5 exit 或 PR merge 即宣称交付完成；为 close 释放 lease 或伪造 Done/关闭 residual |
-| **start → integration branch** | §1.6 Review & Edit chain（`references/phase-1-prepare.md`） | 三角色按序 invoke；**specs** 为主产出；**禁止** start 链向 `{KNOWLEDGE_DIR}/` 新增；writing-specialist corpus hygiene + compass `status: locked` | PM 代做专业编辑；并行三角色；product/architect 写 knowledge；临时笔记进 specs |
+| **start → integration branch** | §1.2.5 prototype checkpoint + §1.6 Review & Edit (`references/phase-1-prepare.md`) | Retained confirmed interactive HTML or reasoned autonomous prototype; formal documents aligned to that baseline; PM records product/architect include/omit rationale; actual selected roles edit sequentially, mandatory writer last; package specs/hygiene, marker closure, per-plan Prepare gates and compass `status: locked` | Formal authoring before prototype disposition; stale design approval; fake skip receipts; unresolved gaps hidden by omission; PM replacing specialist edits/writer; parallel shared-document editing; new knowledge or prototype-as-spec/acceptance evidence |
 
 > **Engine check (when available):** run `mstar iteration gate --workflow <id> --compass <delivery-compass.md> --branch "$(git branch --show-current)" --integration <spec_integration_branch> --target <target_branch>` (or `import { evaluatePhaseGate } from "@mstar-harness/engine"` with the `currentBranch` / `specIntegrationBranch` / `prBaseBranch` probe inputs in a host hook) to evaluate the transition gate above against the workflow snapshot — the branch probes cover §3.5 exit item 5 (`EXIT_BRANCH_MISMATCH` when the commit checkout is not on `spec_integration_branch`; verify **before** the §3.5 close commit, not after). On `fail` (gate-blocking violations) -> do not proceed; fix and re-run. Note: during the Phase-3 window (`transition: phase-3-close`) the gate exits 1 until the §3.4 close items (`status: completed` + `end_date`) are written — that exit-1 is the expected "close work pending" signal (the exit checklist gates Phase 4, not the Phase-3 entry), so proceed with Phase 3 per the table below. Skill text below remains authoritative when the runtime is absent.
 
@@ -87,7 +87,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 
 ## 产物存储位置
 
-**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。迭代 package → `{ITERATION_DIR}/<iteration-id>/`（含 `delivery-compass.md`、`guides/`、`specs/`）；根索引 → `{ITERATION_DIR}/README.md`。Legacy flat `{ITERATION_DIR}/<id>-delivery-compass.md` 仅兼容读。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`. Iteration package → `{ITERATION_DIR}/<iteration-id>/`: `prototypes/` is retained design context created before formal `delivery-compass.md`, `guides/` and `specs/`; optional package/root README prose. Legacy flat `{ITERATION_DIR}/<id>-delivery-compass.md` is read-only compatibility.
 
 ## 2.6 Continuous execution + push 纪律（Phase 2–5 通用 SSOT）
 

@@ -633,6 +633,15 @@ describe("E2 phase 1 readiness", () => {
     expect(after).toBe(sha256(report));
   });
 
+  test("selected reviewer subsets ending with writing-specialist are ready", async () => {
+    const f = await buildFixture();
+    const [product, architect, writer] = f.input.reviews;
+    for (const reviews of [[writer], [product, writer], [architect, writer], [product, architect, writer]]) {
+      const readiness = await inspectPhase1Readiness(f.binding, { ...f.input, reviews });
+      expect(readiness.ready).toBe(true);
+    }
+  });
+
   test("missing review or prepare proof refuses", async () => {
     const f = await buildFixture({ planIds: ["fixture-plan-a", "fixture-plan-b"] });
     const [pm, architect, writer] = f.input.reviews;
@@ -650,6 +659,20 @@ describe("E2 phase 1 readiness", () => {
     // Out-of-order return.
     const reordered = { ...f.input, reviews: [architect, pm, writer] } as unknown as Phase1CompletionInput;
     expect(codesOf(await inspect(reordered))).toContain("review-evidence-missing");
+    expect(codesOf(await inspect({ ...f.input, reviews: [pm, architect] } as unknown as Phase1CompletionInput))).toContain(
+      "review-evidence-missing",
+    );
+    expect(
+      codesOf(await inspect({ ...f.input, reviews: [pm, { ...pm }, writer] } as unknown as Phase1CompletionInput)),
+    ).toContain("review-evidence-missing");
+    expect(
+      codesOf(
+        await inspect({
+          ...f.input,
+          reviews: [pm, { ...writer, role: "code-reviewer" }],
+        } as unknown as Phase1CompletionInput),
+      ),
+    ).toContain("review-evidence-missing");
 
     // A return belonging to another workflow.
     const wrongWorkflow = { ...f.input, workflowId: f.siblingId } as Phase1CompletionInput;
@@ -1591,6 +1614,14 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
     expect(readiness.binding.executionBinding?.session.sessionId).toBe(f.sessionId);
     // The envelope path is not part of an ACTIVE checkpoint's input at all.
     expect(f.input.coordinatorSessionPath).toBeUndefined();
+    const [, architect, writer] = f.input.reviews;
+    for (const reviews of [[writer], [architect, writer]]) {
+      const selected = await inspectPhase1Readiness(f.binding, { ...f.input, reviews });
+      expect(selected.ready).toBe(true);
+      if (!selected.ready) throw new Error(`unexpected refusal: ${selected.codes.join(", ")}`);
+      expect(selected.receipt.input.reviews).toEqual(reviews);
+      expect(selected.binding.executionBinding?.session.sessionId).toBe(f.sessionId);
+    }
   }, 120_000);
 
   test("the plan's registered pointer is the DB plan view's own, and a receipt naming another file refuses", async () => {
@@ -1647,10 +1678,10 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
     expect(codesOf(unpushed)).toContain("push-unverified");
   }, 120_000);
 
-  test("a missing ordered specialist return refuses review-evidence-missing", async () => {
+  test("a missing writing-specialist return refuses review-evidence-missing", async () => {
     const f = await buildActiveFixture();
-    const missing: Phase1CompletionInput = { ...f.input, reviews: f.input.reviews.slice(1) as never };
-    const readiness = await inspectPhase1Readiness(f.binding, missing);
+    const missingWriter: Phase1CompletionInput = { ...f.input, reviews: f.input.reviews.slice(0, -1) as never };
+    const readiness = await inspectPhase1Readiness(f.binding, missingWriter);
     expect(readiness.ready).toBe(false);
     expect(codesOf(readiness)).toContain("review-evidence-missing");
   }, 120_000);

@@ -29,7 +29,7 @@ Host plan approval (`ExitPlanMode`) is **not** Morning Star **Done** (gate → c
 
 ## `mstar-iteration` Phase 1
 
-When iteration Phase 1 runs in Plan mode, the shared gate (single plan session, feedback-driven in-place edits, no Review & Edit / integration branch until approval) → core. After approval: reload `mstar-harness-core` + **`kimi.md`**; resume as `project-manager` orchestration.
+For iteration Phase 1, the shared core overrides early formal dual-write: one session carrier → §1.2.5 package prototype feedback/current-design approval → §1.3 drafts → selected product/architect Review & Edit → mandatory writer last. Design approval is not `ExitPlanMode` implementation permission. If Plan mode disallows package writes or needed invoke, retain pending steps in the carrier and use normal **`ExitPlanMode`** / Plan exit to resume **prototype preparation only**, not product implementation or approval of an unseen design. Reload `mstar-harness-core` + **`kimi.md`** and resume PM orchestration on the same paths; formal Review / integration still obey host approval. Autonomous opt-in retains a prototype without routine human sign-off.
 
 ## Enforcement
 

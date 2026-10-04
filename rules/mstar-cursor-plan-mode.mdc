@@ -38,10 +38,10 @@ Do **not** mark an implement todo complete until:
 
 When Plan mode is used to **start a new iteration**:
 
-- **CreatePlan once** for a blank Phase 1 scaffold (Build-bound todos). Record that plan file path.
-- **Feedback loop**: user gives direction/opinions only; agent explores, recommends, and **edits the same plan file in place** (dual-write SSOT drafts). Do **not** run a questionnaire loop as the main path.
-- After user signals feedback-close: optional **minimal** deferred interview **only if** blocking gaps remain — still edit the **same** file. Never open a second CreatePlan.
-- If a duplicate plan file appears: merge into the original and delete the duplicate.
+- **CreatePlan once** as a blank session carrier with pending preparation / Build-bound todos; record its path. The Phase 1 bridge overrides early formal dual-write/bootstrap until the prototype checkpoint passes.
+- **Feedback loop**: update the same session carrier and, when host writes permit, the iteration-package prototype. No formal compass/guides/plans/specs before approval of the presented **current prototype**. Do not turn feedback into a mandatory questionnaire.
+- Feedback-close permits minimal deferred clarification for blocking gaps; it is not design approval. Prototype feedback/revision/re-presentation and restricted-write recovery follow **`mstar-host`** → `references/cursor-plan-mode-bridge.md` (no alternate tool/child bypass).
+- Never open a second CreatePlan. Consolidate an accidental duplicate into the original and remove it only when host permissions permit.
 - **Do not** dispatch Review & Edit, commit, or create the integration branch until the user clicks **Build**.
 - Detail: **`mstar-host`** → `references/cursor-plan-mode-bridge.md` § `mstar-iteration` Phase 1 in Plan mode.
 
@@ -54,7 +54,7 @@ When the user clicks **Build** or Cursor switches from Plan mode to Agent mode:
 - If the plan belongs to Morning Star, default to `project-manager` orchestration: plan/status upkeep is allowed; implementation, tests, review, and ops execution must be dispatched.
 - Do not start an implement/code todo until the SSOT plan exists, `status.json` contains the `plan_id`, and the task has a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
 - If any field is missing, report **Blocked** and restore the harness state before implementation.
-- For Phase 1 Build: finalize compass/plans from the **same** CreatePlan body the user has open, then run the Review & Edit chain and integration branch — **do not** replay the Plan-session feedback or interview.
+- For Phase 1 Build: resume the **same** open CreatePlan carrier. Do not replay approved feedback; if the current prototype is unconfirmed, finish its checkpoint **before** formal authoring. Then follow the bridge's selected Review & Edit (mandatory writer last), PM lock and integration sequence. **Design approval is not implementation authorization; Build cannot substitute for current-prototype approval.**
 
 ## Detail
 

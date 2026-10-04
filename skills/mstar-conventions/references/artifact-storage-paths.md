@@ -21,7 +21,8 @@
 | **project roadmap transport/history** | `{PROJECT_DIR}/<id>/roadmap.md`（legacy 文件或 reviewed import / export 候选；**不**是 live 内容权威；文件可不存在） | `mstar-project-governance`（唯一读写/校验规则）；`mstar-iteration`（close 时导出独立候选） |
 | **project register** | `.mstar/projects/<id>/residuals.json`（gitignored；open residual SSOT：`entries[<plan-id>]` 数组；项目缺失用 `_default`） | `mstar-artifacts`、`mstar-review-qc` |
 | **project references（研究语料）** | `.mstar/projects/<id>/references/`（gitignored；主题化 surveys / epic 备注 / 第三方 notes，与项目绑定；与 `{SPECS_DIR}` / `{KNOWLEDGE_DIR}` / `{ITERATION_DIR}` 不同） | `mstar-project-governance`、`mstar-artifacts` |
-| **迭代 package** | `.mstar/iterations/<iteration-id>/`（gitignored；`delivery-compass.md`、`guides/`、`specs/`、可选 `README.md`） | `mstar-iteration`（读写）；close 时 `mstar-compound`（提升读；默认排除 compass） |
+| **Iteration package** | `{ITERATION_DIR}/<iteration-id>/` (gitignored; early `prototypes/`, autonomous `direction-lock.md`, then formal `delivery-compass.md`, `guides/`, `specs/`, optional `README.md`) | `mstar-iteration` (read/write); `mstar-compound` consumes eligible material at close |
+| **Iteration prototype** | `{ITERATION_DIR}/<iteration-id>/prototypes/` (gitignored; retained design preview/revisions, feedback and confirmation or autonomous disposition; HTML interactive, HTML/Markdown/JSON autonomous) | `mstar-iteration` Phase 1 §1.2.5; design context linked with existing `iteration_refs`, not specs or runnable acceptance evidence |
 | **迭代 README（散文）** | `.mstar/iterations/README.md`（gitignored；可选导览散文，**不是**登记索引 — 见下） | `mstar-iteration`（散文指向；**不再**维护「一行 = 一次迭代」） |
 | **issue/catalog/roadmap store** | `.mstar/store.db`（进程/control harness 根；gitignored；issue、catalog 与 `project_roadmaps` 正文权威；roadmap 规则 → `mstar-project-governance`） | `mstar issue …` / `mstar catalog …` / `mstar roadmap …`（各域 API） |
 | **规格** | `{HARNESS_DIR}/specs/`（默认 tracked；解析见 `mstar-conventions`） | `mstar-artifacts` |
@@ -48,7 +49,7 @@
 | 路径 | 说明 |
 |------|------|
 | `docs/` | 人类文档（安装、贡献指南等），知识产物不放此处 |
-| `{ITERATION_DIR}/` | 迭代 package（compass + guides/specs）；知识文档不放此处 |
+| `{ITERATION_DIR}/` | Iteration package (prototypes + compass + guides/specs); not a knowledge-document output tree |
 | `{SPECS_DIR}/` | 仅限冻结规格/ADR，运行时知识不放此处 |
 
 ## `<category>` 取值

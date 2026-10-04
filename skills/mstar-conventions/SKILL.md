@@ -98,7 +98,7 @@ enforcement=hard
 |------|------|
 | `docs/` | 人类文档：安装、贡献 |
 | `{SPECS_DIR}` | 冻结规格 / ADR |
-| `{ITERATION_DIR}` | 迭代 package（compass + guides/specs） |
+| `{ITERATION_DIR}` | Iteration package: retained `prototypes/` design context first, then formal compass + guides/specs; prototype path/disposition → `mstar-iteration` Phase 1 §1.2.5 |
 | `{KNOWLEDGE_DIR}` | 实现 SSOT、可复用设计 |
 | `{PLAN_DIR}/` | 主 plan、durable gate summaries、可选 residual prose |
 

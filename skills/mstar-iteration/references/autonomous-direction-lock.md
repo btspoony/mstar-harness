@@ -21,11 +21,11 @@ Document trade-offs for **each** shortlisted candidate (2–4), then lock **one*
 
 ## Lock outputs（must land on disk）
 
-Persistence is **two-staged**: the lock record lands on disk before the `direction-lock` anchor; the compass draft is written from it afterwards（§1.3, after that anchor）.
+Persistence has three ordered steps; none invents human approval:
 
-**1 — Lock time（before the anchor, before the draft）**: the five fields below land on disk as a **direction-lock record** — the fixed-name file `direction-lock.md` at the root of the iteration package directory（`{ITERATION_DIR}/<iteration-id>/`）。The package directory itself is created here, at lock time, ahead of the compass, so this record is the package's **first artifact**（§1.3 then writes the compass into the package that already exists）。This record — not the compass — is what satisfies the `direction-lock` anchor precondition **rationale recorded on disk**; the compass deliberately does not exist yet at that moment, so its absence is expected, not a missing input. **Lifecycle**: once the §1.3 draft has carried its five fields across（stage 2）, the record **stays in the package** as the durable lock-time record — it is **not** deleted after being incorporated into the compass.
-
-**2 — Compass draft（§1.3）**: the draft incorporates the record's five fields into the compass sections they populate today（`## Scope`, `## Decisions` rationale, `## Acceptance Criteria`, `## Non-Goals`; scale budget as the resulting plan-count cap）and into plan Scope as needed. Carry the recorded text across — do not re-derive or re-word the lock at draft time.
+1. **Lock time — before the hook/drafts**: create the iteration package and retain the five fields below in its root **`direction-lock.md`**. This lock-time record, not the still-absent compass, satisfies the `direction-lock` hook's on-disk rationale precondition. Keep it after incorporation into formal documents.
+2. **Prototype — after the hook, before §1.3**: follow `phase-1-prepare.md` §1.2.5. Retain an appropriate **HTML, Markdown or JSON** design prototype under `prototypes/`, with format rationale, choices, assumptions and a truthful autonomous disposition. Do not require HTML or routine human confirmation. Revise this disposition when the design materially changes; if the direction changes, reopen ranking/decisions and semantically re-lock before drafts resume. Reuse the same iteration's already-executed hook/current binding; §1.2.5 distinguishes this from a new host start and owns the supported lifecycle/recovery boundary.
+3. **Compass/plans draft — §1.3**: incorporate the direction-lock record's five fields into their existing sections (`## Scope`, `## Decisions`, `## Acceptance Criteria`, `## Non-Goals`, scale cap) without re-deriving the lock. Link the retained prototype path/revision and autonomous rationale as the design baseline. Translate it into formal criteria/constraints/interfaces; it is not a spec or runnable acceptance evidence. Role selection and mandatory writer closure still apply (§1.6).
 
 | Field | Content |
 |-------|---------|
@@ -52,7 +52,7 @@ Count only **business delivery plans** registered in compass / workflow snapshot
 
 | Exclude from scale count | Examples |
 |--------------------------|----------|
-| Phase 1 process | Research, direction lock, Review & Edit chain, compass/index/`status.json` bootstrap |
+| Phase 1 process | Research, direction lock, retained prototype, Review & Edit, compass/catalog/`status.json` bootstrap |
 | Phase 2 process | Per-task SDD briefs/reviews, plan QC tri, QA gate, branch merge-back |
 | Phase 3–5 process | Compound / package promotion, iteration-close, Create PR, merge-ready / CI babysit |
 | Meta “plans” | “run QC”, “do compound”, “open PR”, “setup harness”, “write compass only” |
@@ -89,6 +89,7 @@ Resolve `iteration_base_branch` and `target_branch` in order（first hit wins pe
 - Locking without reading roadmap / status / STRATEGY when those files exist
 - Silent default to `main` / `master` for base or PR target
 - Skipping written rationale because “it was obvious”
+- Skipping the retained prototype, calling its autonomous disposition user approval, or using it as a Prepare-gate substitute
 - Forcing S/M/L plan caps on interactive starts that did not request a scale budget
 - Counting harness process (Review chain / QC / QA / compound / close / PR) toward the scale budget
 - Creating process-only plans to fill or absorb S/M/L slots

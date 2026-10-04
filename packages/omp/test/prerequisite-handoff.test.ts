@@ -590,10 +590,10 @@ describe("prerequisite handoff — readiness integration", () => {
     const unpushed = await inspectPhase1Readiness(fixture.binding, fixture.input);
     expect(codesOf(unpushed)).toContain("push-unverified");
 
-    // A missing ordered specialist return.
+    // A missing required writer remains a review-evidence refusal.
     const missingReview = await inspectPhase1Readiness(fixture.binding, {
       ...fixture.input,
-      reviews: fixture.input.reviews.slice(1),
+      reviews: fixture.input.reviews.slice(0, -1),
     } as Phase1CompletionInput);
     expect(codesOf(missingReview)).toContain("review-evidence-missing");
 
