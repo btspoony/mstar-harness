@@ -31,19 +31,22 @@ export function parseOmpPluginList(raw: string): Array<Record<string, unknown>> 
   return [];
 }
 
+/** Whether one `omp plugin list` entry is a Morning Star plugin record. */
+export function isMorningStarPluginEntry(entry: Record<string, unknown>): boolean {
+  const name = typeof entry.name === "string" ? entry.name : "";
+  const pathValue = typeof entry.path === "string" ? entry.path : "";
+  const manifest = entry.manifest && typeof entry.manifest === "object"
+    ? entry.manifest as Record<string, unknown>
+    : null;
+  const manifestName = typeof manifest?.name === "string" ? manifest.name : "";
+  if (Object.hasOwn(PACKAGE_NAMES, name) || Object.hasOwn(PACKAGE_NAMES, manifestName)) return true;
+  if (name.includes("morning-star") || manifestName.includes("morning-star")) return true;
+  return pathValue.includes("mstar-harness") || pathValue.includes(`${path.sep}morning-star`);
+}
+
 /** Find the installed Morning Star plugin in an omp plugin-list response. */
 export function findInstalledPlugin(plugins: Array<Record<string, unknown>>) {
-  return plugins.find((entry) => {
-    const name = typeof entry.name === "string" ? entry.name : "";
-    const pathValue = typeof entry.path === "string" ? entry.path : "";
-    const manifest = entry.manifest && typeof entry.manifest === "object"
-      ? entry.manifest as Record<string, unknown>
-      : null;
-    const manifestName = typeof manifest?.name === "string" ? manifest.name : "";
-    if (Object.hasOwn(PACKAGE_NAMES, name) || Object.hasOwn(PACKAGE_NAMES, manifestName)) return true;
-    if (name.includes("morning-star") || manifestName.includes("morning-star")) return true;
-    return pathValue.includes("mstar-harness") || pathValue.includes(`${path.sep}morning-star`);
-  });
+  return plugins.find(isMorningStarPluginEntry);
 }
 
 function validatePluginTree(pluginRoot: string): string[] {
