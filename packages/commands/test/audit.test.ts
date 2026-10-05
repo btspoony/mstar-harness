@@ -92,7 +92,9 @@ describe("audit command family", () => {
     writeFileSync(path.join(root, ".github", "workflows", "ci.yml"), "on: pull_request_target\njobs:\n  test:\n    steps:\n      - uses: actions/checkout@main\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n");
     const result = await command("audit.supply-chain").execute({ path: root }, context(root));
     expect(result.status).toBe("refused");
-    expect(result).toMatchObject({ code: "audit.supply-chain.findings", exitCode: 1, message: expect.stringMatching(/^\d+ supply-chain findings$/) });
+    expect(result).toMatchObject({ code: "audit.supply-chain.findings", exitCode: 1 });
+    expect(result.message.split("\n")[0]).toMatch(/^\d+ supply-chain findings$/);
+    expect(result.details).toMatchObject({ helpRoute: "mstar audit supply-chain --help", recovery: expect.any(String) });
     expect(result.details).toMatchObject({ findings: expect.arrayContaining([
       expect.objectContaining({ kind: "lockfile-duplicate" }), expect.objectContaining({ kind: "action-unpinned", file: ".github/workflows/ci.yml" }), expect.objectContaining({ kind: "pull_request_target-head", file: ".github/workflows/ci.yml" }),
     ]) });
