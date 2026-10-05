@@ -22,6 +22,25 @@ import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
 
+const ASSIGNMENT_RECOVERY_COMMAND = "mstar plan recover-assignment --decision re-review|restore";
+
+export function surfaceAssignmentRecovery(
+  commandId: string,
+  envelope: CommandEnvelope,
+): CommandEnvelope {
+  if (commandId !== "plan.bind" || envelope.status !== "refused" ||
+    envelope.code !== "coordination.assignment-stale") {
+    return envelope;
+  }
+  const needed = typeof envelope.details?.needed === "string" ? envelope.details.needed : undefined;
+  const recovery = `${ASSIGNMENT_RECOVERY_COMMAND}${needed === undefined ? "" : `. ${needed}`}`;
+  return {
+    ...envelope,
+    message: `${envelope.message}\nRecovery: ${recovery}`,
+    details: { ...envelope.details, recoveryCommand: ASSIGNMENT_RECOVERY_COMMAND },
+  };
+}
+
 export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
   const diagnostics = Array.isArray(details?.diagnostics) ? details.diagnostics as Array<Record<string, unknown> & { path?: string; code: string; message: string; helpRoute?: string }> : [];
   const rootCommand = command === "mstar";
@@ -742,7 +761,7 @@ export function registerCliCommands(
           signal: controller.signal,
           effects: cliEffects(services),
         });
-        writeEnvelope(envelope, received);
+        writeEnvelope(surfaceAssignmentRecovery(definition.id, envelope), received);
         if (definition.effects.includes("service") && envelope.status === "ok") await waitForStop();
       } finally {
         process.removeListener("SIGINT", onSigint);
