@@ -25,7 +25,7 @@ type DashboardSlot = {
 };
 const dashboards = new WeakMap<CommandEffects, Map<string, DashboardSlot>>();
 
-function failure(code: string, error: unknown): CommandEnvelope<never> {
+export function failure(code: string, error: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id,
     status: "refused",

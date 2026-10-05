@@ -37,7 +37,7 @@ const payloads: Partial<Record<(typeof verbs)[number], CommandDefinition["payloa
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function failed(id: string, error: unknown): CommandEnvelope<never> {
+export function failed(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SddScriptError && error.exitCode === 2) {
     return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message });

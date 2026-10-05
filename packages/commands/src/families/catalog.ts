@@ -77,7 +77,7 @@ const cliFlags: Record<keyof Input, string> = {
 function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function failure(id: string, error: unknown): CommandEnvelope<never> {
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]

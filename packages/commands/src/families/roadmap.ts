@@ -109,7 +109,7 @@ function readReviewFile(value: string): unknown {
 function success(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function failure(id: string, error: unknown): CommandEnvelope<never> {
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof UsageError) {
     return refusalEnvelope({

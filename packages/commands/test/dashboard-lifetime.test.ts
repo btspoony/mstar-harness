@@ -11,6 +11,7 @@ import {
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
+import { failure } from "../src/families/dashboard.js";
 import { startDashboard, type RunningDashboard } from "../src/dashboard/server.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { readDashboardView } from "../src/dashboard/store-read.js";
@@ -56,6 +57,14 @@ function serviceEffects(handles: RunningDashboard[], onOpen?: (url: string) => P
     },
   };
 }
+
+  test("dashboard refusal preserves engine code and verbatim first line", () => {
+    const result = failure("dashboard.engine-refused", Object.assign(new Error("engine dashboard refusal detail"), { code: "dashboard.engine-refused" }));
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("dashboard.engine-refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine dashboard refusal detail");
+    expect(result.details).toHaveProperty("helpRoute");
+  });
 
 describe("dashboard ACTIVE projection views", () => {
   test("all projection-backed views read seeded ACTIVE-authority data", async () => {

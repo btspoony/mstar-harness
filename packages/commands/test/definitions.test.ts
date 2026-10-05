@@ -8,6 +8,7 @@ import {
   getPayloadSchema,
   validateCommandDefinitions,
 } from "../src/index.js";
+import { CommandSchemaSelectionError, failure as schemaFailure } from "../src/families/schema.js";
 import type { CommandDefinition } from "../src/types.js";
 
 function definition(id: string, cliPath: string[]): CommandDefinition<{ name: string }, { greeting: string }> {
@@ -25,6 +26,14 @@ function definition(id: string, cliPath: string[]): CommandDefinition<{ name: st
 }
 
 describe("command definitions", () => {
+  test("schema selector refusal preserves code and verbatim message", () => {
+    const result = schemaFailure("schema", new CommandSchemaSelectionError("engine schema selection refusal", ["command", "family"]));
+    expect(result.status).toBe("usage");
+    expect(result.code).toBe("command.invalid-input");
+    expect(result.message.split("\n", 1)[0]).toBe("engine schema selection refusal");
+    expect(result.details).toHaveProperty("helpRoute");
+  });
+
 
   test("rejects MCP name collisions after command ID normalization", () => {
     expect(() => validateCommandDefinitions([

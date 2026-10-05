@@ -3,7 +3,7 @@ import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { IssuePayloadName, PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema, getCommandDefinitions } from "../definitions.js";
-import type { CommandDefinition, CommandEffect, CommandRequirement } from "../types.js";
+import type { CommandDefinition, CommandEffect, CommandEnvelope, CommandRequirement } from "../types.js";
 
 export type PayloadSchemaQuery = { type: string; fields: ({ name: string } & PayloadFieldSchema)[] };
 
@@ -40,6 +40,16 @@ export class CommandSchemaSelectionError extends RangeError {
     this.name = "CommandSchemaSelectionError";
     this.selectorKeys = selectorKeys;
   }
+}
+export function failure(id: string, error: CommandSchemaSelectionError): CommandEnvelope<never> {
+  return refusalEnvelope({
+    command: id,
+    status: "usage",
+    code: "command.invalid-input",
+    exitCode: 2,
+    message: error.message,
+    details: { selectors: error.selectorKeys },
+  });
 }
 
 export type CommandSchemaSelector = Readonly<{
@@ -245,14 +255,7 @@ export function getSchemaCommandDefinitions(): readonly CommandDefinition<Schema
         return { version: 1, command: id, status: "ok", code: "schema.ok", exitCode: 0, data };
       } catch (error) {
         if (!(error instanceof CommandSchemaSelectionError)) throw error;
-        return refusalEnvelope({
-          command: id,
-          status: "usage",
-          code: "command.invalid-input",
-          exitCode: 2,
-          message: error.message,
-          details: { selectors: error.selectorKeys },
-        });
+        return failure(id, error);
       }
     },
   };

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "../../cli/src/sdd-evidence.js";
 import { resolveSddExecutionContext } from "@mstar-harness/engine";
 import { getSddCommandDefinitions } from "../src/index.js";
+import { failed } from "../src/families/sdd.js";
 import type { InvocationContext } from "../src/types.js";
 
 function tempDir(prefix: string): string {
@@ -104,6 +105,14 @@ function evidenceRunId(result: unknown): string | null {
 }
 
 describe("SDD command family", () => {
+  test("SDD refusal preserves engine code and verbatim first line", () => {
+    const result = failed("sdd.check-context", Object.assign(new Error("engine SDD refusal detail"), { code: "sdd.engine-refused" }));
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("sdd.engine-refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine SDD refusal detail");
+    expect(result.details).toHaveProperty("helpRoute");
+  });
+
   test("registers six identities and excludes sdd exec", () => {
     const definitions = getSddCommandDefinitions();
     expect(definitions.map(({ id }) => id)).toEqual([
