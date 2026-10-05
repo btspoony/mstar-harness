@@ -53,10 +53,9 @@ describe("executeCommand input diagnostics", () => {
     const envelope = await executeCommand("workflow.register", { deliveryKind: "pr" }, context());
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message).toContain("--delivery-kind");
-    expect(envelope.message).toContain("development");
-    expect(envelope.message).toContain("verification/report-only");
-    expect(envelope.message).toContain("pr");
+    expect(envelope.message.split("\n")[0]).toBe(
+      "Rejected --delivery-kind: expected development | verification/report-only; received pr",
+    );
     expect(envelope.details).toMatchObject({ diagnostics: [{ path: "deliveryKind", code: "invalid_value" }] });
   });
 

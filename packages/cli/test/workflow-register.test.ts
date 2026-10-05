@@ -138,11 +138,14 @@ describe("mstar workflow register", () => {
         code: "workflow.register.title-constraint",
         exitCode: 1,
       });
-      expect(envelope.message).toBe(
+      expect(String(envelope.message)).toContain(
         `derivePlanRegistration: plan "20260916-plan-cli-example" was declared with title "Contradictory title", but the selected document ${realpathSync(join(harness, "plans/20260916-plan-cli-example.md"))} states "CLI example plan" - the selected plan document is the registration authority (R1/section 4), so a supplied title is a constraint against it, never an override`,
       );
-      expect(envelope.helpRoute).toBe("mstar workflow register --help");
-      expect(envelope.recovery).toContain("selected plan document's H1");
+      expect(String(envelope.message)).toContain("Use the title in the selected plan document's H1");
+      expect(String(envelope.message)).toContain("Help: mstar workflow register --help");
+      expect(String(envelope.message)).toContain(
+        "Recovery: Use the title in the selected plan document's H1, or correct that document before registering.",
+      );
     });
   });
   test("registers a standalone development plan: root entry + snapshot on disk, both validate (exit 0)", async () => {
@@ -316,7 +319,9 @@ describe("mstar workflow register", () => {
     await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--delivery-kind", "stealth"]));
       expect(commandOutput(result).status).toBe("usage");
-      expect(commandMessage(result)).toContain("deliveryKind");
+      expect(commandMessage(result)).toContain("--delivery-kind");
+      expect(commandMessage(result)).toContain("development | verification/report-only");
+      expect(commandMessage(result)).toContain("stealth");
     });
   });
 
