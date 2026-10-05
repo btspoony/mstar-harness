@@ -75,6 +75,16 @@ describe("store and execution command surface", () => {
       "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
     ]);
   });
+  test("execution restore-preview preserves usage code, status, and authored message", async () => {
+    const root = fixture("execution-usage");
+    const result = await invoke(definition("store.execution.restore-preview"), { harness: join(root, ".mstar") }, root);
+    expect(result).toMatchObject({
+      status: "usage",
+      code: "usage",
+      exitCode: 2,
+      message: "--backup is required",
+    });
+  });
 
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
     const root = fixture("store-lifecycle");
