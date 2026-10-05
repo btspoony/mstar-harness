@@ -279,7 +279,7 @@ function catalogRoots(context: StoreContext): Record<CatalogRootKind, string> {
 function pathRefused(message: string): CatalogError {
   return new CatalogError(
     "catalog.path-refused",
-    `${message} — no catalog write was made. Correct the --path value to a root-relative, non-traversing, non-empty path (the user corrects the input value; no hidden-state repair needed).`,
+    `${message} — no catalog write was made. Correct the --path value to a root-relative, non-traversing, non-empty path with no symlink escape (the user corrects the input value; no hidden-state repair needed).`,
   );
 }
 

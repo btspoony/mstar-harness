@@ -414,7 +414,7 @@ describe("catalog path authority", () => {
       ).rejects.toMatchObject({
         code: "catalog.path-refused",
         message: expect.stringContaining(
-          "Correct the --path value to a root-relative, non-traversing, non-empty path (the user corrects the input value; no hidden-state repair needed).",
+          "Correct the --path value to a root-relative, non-traversing, non-empty path with no symlink escape (the user corrects the input value; no hidden-state repair needed).",
         ),
       });
     }
