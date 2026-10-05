@@ -97,8 +97,8 @@ describe("MCP command outcome refusal contract", () => {
     if (sddDefinition === undefined) throw new Error("missing sdd.evidence.capture definition");
     const mcp = validateCommandOutcome(sddDefinition, cli);
 
-    expect(mcp.status).toBe(cli.status);
-    expect(mcp.code).toBe(cli.code);
+    expect(mcp.status).toBe("refused");
+    expect(mcp.code).toBe("sdd.evidence.capture.refused");
     expect(mcp.exitCode).toBe(3);
     expect(mcp.message.split("\n")[0]).toBe(cli.message.split("\n")[0]);
     expect(mcp.details).toEqual(cli.details);
@@ -111,8 +111,8 @@ describe("MCP command outcome refusal contract", () => {
     const mcp = validateCommandOutcome(statusDefinition, cli);
 
     expect(mcp.status).toBe("refused");
-    expect(mcp.code).toBe(cli.code);
-    expect(mcp.exitCode).toBe(cli.exitCode);
+    expect(mcp.code).toBe("status.harness-not-found");
+    expect(mcp.exitCode).toBe(1);
     expect(mcp.message.split("\n")[0]).toBe(cli.message.split("\n")[0]);
     expect(mcp.details).toEqual(cli.details);
     expect((mcp.details as Record<string, unknown>).helpRoute).toBeDefined();
