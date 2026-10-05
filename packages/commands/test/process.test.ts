@@ -194,7 +194,10 @@ describe("process command family", () => {
   test("review setup rejects ambiguous, missing, and unresolved modes", async () => {
     const { ctx } = setupRepo();
     const execute = definition("pr-review.worktree-setup").execute;
-    expect(await execute({}, ctx)).toMatchObject({ status: "usage", exitCode: 2 });
+    expect(await execute({}, ctx)).toMatchObject({
+      status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "usage: pr-review worktree-setup requires exactly one of --pr, --branch, --diff, --working-tree, or --commit",
+    });
     expect(await execute({ pr: "42", branch: "feature/topic" }, ctx)).toMatchObject({ status: "usage", exitCode: 2 });
     expect(await execute({ branch: "missing/topic" }, ctx)).toMatchObject({ status: "error", code: "prreview.preflight.refs-unresolved", exitCode: 1 });
   });

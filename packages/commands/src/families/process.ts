@@ -5,6 +5,7 @@ import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangese
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import { refusalEnvelope } from "../envelope.js";
 
 type Input = { context?: string; argv?: string[]; workflow?: string; harness?: string; apply?: boolean; remote?: boolean; allWorkflows?: boolean; worktree?: string[]; verbose?: boolean; ignoreUnreadableSnapshots?: boolean; pr?: string; branch?: string; diff?: boolean; workingTree?: boolean; commit?: string; targetPath?: string };
 const execArgvSchema = z.array(z.string()).min(1);
@@ -16,13 +17,17 @@ const setupInput = z.object({ pr: z.string().optional(), branch: z.string().opti
 function ok(id: string, data: unknown): CommandEnvelope { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof SddScriptError && error.exitCode === 2) return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
-  if (error instanceof SddScriptError) return { version: 1, command: id, status: "error", code: `${id}.refused`, exitCode: error.exitCode, message };
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  if (error instanceof SddScriptError && error.exitCode === 2) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(details === undefined ? {} : { details }) });
+  if (error instanceof SddScriptError) return { version: 1, command: id, status: "error", code: `${id}.refused`, exitCode: error.exitCode, message, ...(details === undefined ? {} : { details }) };
   if (error !== null && typeof error === "object" && "exitCode" in error && typeof error.exitCode === "number") {
-    return { version: 1, command: id, status: "error", code: "command.child-failed", exitCode: error.exitCode, message };
+    return { version: 1, command: id, status: "error", code: "command.child-failed", exitCode: error.exitCode, message, ...(details === undefined ? {} : { details }) };
   }
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: error instanceof SddScriptError ? error.exitCode : 1, message };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 
 function definitions(): readonly CommandDefinition[] {
