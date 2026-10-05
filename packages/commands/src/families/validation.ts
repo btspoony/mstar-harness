@@ -43,6 +43,7 @@ import {
   resolveProcessHarnessDir,
   type ExecutionState,
 } from "@mstar-harness/engine";
+import { refusalEnvelope } from "../envelope.js";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
@@ -93,13 +94,13 @@ const schemas: Record<(typeof verbs)[number], z.ZodType<Input>> = {
 };
 function ok(id: string, data: unknown): CommandEnvelope { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 function refusal(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 function failed(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SddScriptError && error.exitCode === 2) return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message };
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message });
 }
 function required(value: string | undefined, message: string): string { if (value === undefined || value.trim() === "") throw new SddScriptError(message, 2); return value; }
 function rejected(id: string, result: GateResult, fallback: string): CommandEnvelope<never> {
