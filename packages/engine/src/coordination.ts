@@ -1773,15 +1773,15 @@ function rowFrameRefusal(
     sourcesTried: [
       `${input.scope.snapshotPath} as this call reads it under its own write lock`,
       `the ${input.kind} operation's own admission rules for the facts it depends on`,
-      ...(partialOutside ? ["the issue authority this mutation had already committed in"] : []),
+      ...(partialOutside ? ["the external effects this mutation had already committed"] : []),
     ],
     currentFacts: [
       `plan ${input.scope.planId} is at row revision ${input.context.revision} (status ${rowStatusOf(input.context.row) || "none"})`,
       `the refusal reports: ${message}`,
       ...(partialOutside
         ? [
-            `before refusing, the ${input.kind} had already committed ${appliedOutside.length} component(s) in the issue authority: ${appliedOutside.join("; ")}`,
-            "the components after the failing one were not attempted, and the failing component's own commit boundary is unknown \u2014 a retry must reconcile them",
+            `before refusing, the ${input.kind} had already committed ${appliedOutside.length} component(s) outside the row: ${appliedOutside.join("; ")}`,
+            "later components were not attempted; the snapshot commit boundary requires reconciliation",
           ]
         : []),
     ],
@@ -1790,16 +1790,14 @@ function rowFrameRefusal(
       ? `the ${input.kind} operation: a prerequisite it genuinely needs could not be read, so plan ${input.scope.planId}, its ` +
         "coordination block and every revision are exactly as they were"
       : partialOutside
-        ? `the rest of the ${input.kind} operation: ${appliedOutside.length} component(s) had already committed in the issue ` +
-          "authority when the call refused and they are not rolled back, so plan " +
-          `${input.scope.planId}'s snapshot is not the whole story`
+        ? `the rest of the ${input.kind} operation: ${appliedOutside.length} external component(s) had already committed and are not rolled back, ` +
+          `so plan ${input.scope.planId}'s snapshot is not the whole story`
         : `the ${input.kind} operation and its whole transaction: plan ${input.scope.planId}, its coordination block and every ` +
           "revision are exactly as they were",
     availableWork: [
       `read plan ${input.scope.planId} and its current row state`,
       partialOutside
-        ? `retry the ${input.kind} operation exactly as it was requested: every component it already committed is ` +
-          "operation-id idempotent, so the repeat settles those components and completes the remainder"
+        ? `reconcile the ${input.kind} operation's already committed external components (${appliedOutside.join("; ")}) before retrying`
         : `retry the ${input.kind} operation once the conflicting fact is resolved`,
       "independent operations on other rows, plans and workflows continue",
     ],
@@ -1951,7 +1949,17 @@ async function withRowCommit(
     for (const key of commit.dropTopLevel ?? []) {
       delete (nextSnapshot as Record<string, unknown>)[key];
     }
-    await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
+    try {
+      await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
+    } catch (error) {
+      throw rowFrameRefusal(error, {
+        scope,
+        kind: opts.kind,
+        context,
+        warnings,
+        appliedOutside: committedOutside,
+      });
+    }
     return { snapshot: nextSnapshot, row: commit.row, satisfied: null, applied: true, warnings };
   });
   return {
