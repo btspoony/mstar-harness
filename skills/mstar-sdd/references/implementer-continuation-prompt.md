@@ -48,7 +48,7 @@ Dispatch:
     ## Your job
 
     1. Implement exactly what this brief specifies (prior tasks are done)
-    2. Before creating or keeping tests, apply `mstar-coding-behavior` § Evidence: test product behavior or meaningful invariants/fails-first regressions; delete incidental tests rather than re-pin them
+    2. Before creating or keeping tests, apply `mstar-coding-behavior` § Evidence: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names.
     3. Run only assigned affected unit tests or applicable scoped-check evidence; use file-handoffs.md § Verification evidence and retain unaffected prior evidence. When this task's Assignment names a PM-fixed capture request, capture the authorized check once with `mstar sdd evidence capture --request <absolute-task-request.json> -- <executable> [args...]` and cite the retained run's record/raw logs
     4. Commit on Working branch
     5. Write report file with actual evidence; return short summary only
