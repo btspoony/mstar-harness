@@ -1222,11 +1222,22 @@ async function publishUnderRootLock(
       );
     }
     if (onDisk.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, onDisk.snapshot, plan.identity)) {
-      throw conflictError(
-        `the execution registration at ${plan.snapshotPath} changed after this operation wrote it; ` +
-          "the catalog delta describes the reviewed request, not those bytes" +
-          " -- Re-run with a FRESH `--workflow` id and a fresh operation id, or reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.",
-      );
+      // In reconcile mode the operation's own bytes were overwritten by a
+      // different writer: replaying this operation re-reads those foreign bytes
+      // and reaches this same refusal, and a fresh workflow id registers a
+      // different workflow. The only real recovery is a new review of the
+      // current catalog revision whose delta matches the bytes on disk.
+      throw mode === "reconcile"
+        ? conflictError(
+          `the execution registration at ${plan.snapshotPath} no longer matches the bytes this operation wrote; ` +
+            "the pending delta cannot be published over foreign bytes" +
+            " -- re-derive the catalog delta from a new review against the current revision and retry publication.",
+        )
+        : conflictError(
+          `the execution registration at ${plan.snapshotPath} changed after this operation wrote it; ` +
+            "the catalog delta describes the reviewed request, not those bytes" +
+            " -- Re-run with a FRESH `--workflow` id and a fresh operation id, or reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.",
+        );
     }
 
     const state = await withJournalWrite(context, (db) => ({

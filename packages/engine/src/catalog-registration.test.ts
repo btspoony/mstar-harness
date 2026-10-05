@@ -1270,6 +1270,41 @@ describe("catalog execution registration \u2014 recovery segments at the raising
     });
   });
 
+  test("reconcile at publish advises a new review, not a replay that cannot succeed", async () => {
+    const { harnessDir, context } = await fixture("recovery-reconcile-divergence-");
+    await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-reconcile-diverge-0", expectedCatalogRevision: 0 }));
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+
+    // The pending shape a crash between the execution write and the commit
+    // leaves: the operation's own bytes are on disk, the journal row is rewound
+    // to `execution-written`, and the root entry is gone so reconcile re-writes
+    // it — the exact window in which a foreign writer can take the path.
+    const handle = await openStore(context, "write");
+    handle.db.prepare("update catalog_operations set phase = 'execution-written', result_json = null where operation_id = ?").run("op-reconcile-diverge-0");
+    handle.close();
+    writeFileSync(join(harnessDir, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-18", workflows: [] }, null, 2));
+
+    const base = createFsStore(harnessDir);
+    let mutated = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!mutated && doc.kind === "status") {
+          mutated = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "another-project";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+
+    await expect(reconcileCatalogExecution(context, "op-reconcile-diverge-0")).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("re-derive the catalog delta from a new review against the current revision and retry publication."),
+    });
+  });
+
   test("the reviewed-expectation refusal names the fresh operation id and the reconcile route", async () => {
     const { harnessDir, context } = await fixture("recovery-revision-");
     await expect(
