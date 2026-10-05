@@ -33,15 +33,16 @@ export function validateCommandOutcome(
     if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
   }
   const { diagnostics, helpRoute: _helpRoute, recovery: _recovery, ...extraDetails } = details;
-  return refusalEnvelope({
+  const refusal = {
     command: outcome.command,
-    status: outcome.status,
     code: outcome.code,
-    exitCode: outcome.exitCode as 1 | 2,
     message,
     helpRoute,
     ...(recovery === undefined ? {} : { recovery }),
     ...(Array.isArray(diagnostics) ? { diagnostics: diagnostics as RefusalDiagnostic[] } : {}),
     ...(Object.keys(extraDetails).length === 0 ? {} : { details: extraDetails }),
-  });
+  };
+  return outcome.status === "usage"
+    ? refusalEnvelope({ ...refusal, status: "usage", exitCode: 2 })
+    : refusalEnvelope({ ...refusal, status: "refused", exitCode: 1 });
 }
