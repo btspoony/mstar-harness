@@ -101,7 +101,8 @@ const CONDITIONAL_EXPECT_TOKEN_KINDS: Readonly<Record<string, readonly CommandRe
 };
 
 function commandRequirements(definition: CommandDefinition): readonly CommandRequirement[] {
-  const tokenKind = definition.cli.options.some((option) => option.key === "expect")
+  const conditionalTokenRequirements = CONDITIONAL_EXPECT_TOKEN_KINDS[definition.id];
+  const tokenKind = conditionalTokenRequirements === undefined && definition.cli.options.some((option) => option.key === "expect")
     ? EXPECT_TOKEN_KINDS[definition.id]
       ?? (definition.id.startsWith("plan.") ? "plan" : definition.id.startsWith("workflow.") ? "workflow" : "none")
     : undefined;
@@ -118,7 +119,7 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
   const requirements: CommandRequirement[] = [
     ...explicit,
     ...hinted,
-    ...(CONDITIONAL_EXPECT_TOKEN_KINDS[definition.id] ?? []),
+    ...(conditionalTokenRequirements ?? []),
   ];
   // Route-verified session facts from the adapters: CLI collects the session
   // selector from argv (with its environment fallback); MCP reads it from the

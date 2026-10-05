@@ -148,13 +148,16 @@ describe("command discovery", () => {
     const definitions = getCommandDefinitions();
     for (const [id, tokenKind] of [
       ["workflow.register", "root"],
-      ["plan.bind", "plan"],
       ["plan.prepare", "plan"],
-      ["session.recover", "workflow"],
     ] as const) {
       const descriptor = selectCommandSchema({ command: id }, definitions);
       if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
       expect(descriptor.descriptor.requirements.find((entry) => entry.name === "expect")?.tokenKind).toBe(tokenKind);
+    }
+    for (const id of ["plan.bind", "session.recover"]) {
+      const descriptor = selectCommandSchema({ command: id }, definitions);
+      if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
+      expect(descriptor.descriptor.requirements.filter((entry) => entry.name === "expect")).toEqual([]);
     }
     const bind = selectCommandSchema({ command: "plan.bind" }, definitions);
     if (bind.kind !== "command") throw new Error("expected plan.bind command descriptor");
