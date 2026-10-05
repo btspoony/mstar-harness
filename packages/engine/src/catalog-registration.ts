@@ -1939,7 +1939,16 @@ export type PurgeCatalogRegistrationReceipt = {
 /** Purge only the exact producer-written bytes recorded at the identity refusal. */
 export async function purgeCatalogRegistration(
   context: StoreContext,
-  input: { workflowId: string; operationId: string; expectedCatalogRevision: number; actor: string },
+  input: {
+    workflowId: string;
+    operationId: string;
+    expectedCatalogRevision: number;
+    actor: string;
+    testHooks?: {
+      afterEligibility?: () => Promise<void>;
+      beforeRootAbsentSnapshotLock?: () => void;
+    };
+  },
 ): Promise<PurgeCatalogRegistrationReceipt> {
   const workflowId = requireText(input.workflowId, "workflowId");
   const operationId = requireText(input.operationId, "operationId");
@@ -2010,6 +2019,7 @@ export async function purgeCatalogRegistration(
           );
         }
       }
+      await input.testHooks?.afterEligibility?.();
       await removeRoot();
       rmSync(recorded.snapshotPath, { force: true });
       const receipt: PurgeCatalogRegistrationReceipt = {
@@ -2022,5 +2032,6 @@ export async function purgeCatalogRegistration(
         .run(JSON.stringify(receipt), timestamp, operationId);
       return receipt;
     }),
+    { beforeRootAbsentSnapshotLock: input.testHooks?.beforeRootAbsentSnapshotLock },
   );
 }

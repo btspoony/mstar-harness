@@ -1030,6 +1030,7 @@ export async function withWorkflowPurgeLocks<T>(
   id: string,
   expectedSnapshotPath: string,
   fn: (snapshot: Record<string, unknown> | undefined, rootPresent: boolean, removeRoot: () => Promise<void>) => Promise<T>,
+  testHooks?: { beforeRootAbsentSnapshotLock?: () => void },
 ): Promise<T> {
   const statusPath = resolve(root);
   const harnessDir = dirname(statusPath);
@@ -1061,10 +1062,8 @@ export async function withWorkflowPurgeLocks<T>(
         return fn(snapshot, true, removeRoot);
       });
     }
-    if (existsSync(expectedSnapshotPath)) {
-      return withStatusWriteLock(expectedSnapshotPath, () => fn(readRegisteredSnapshot(expectedSnapshotPath), false, removeRoot));
-    }
-    return fn(undefined, false, removeRoot);
+    testHooks?.beforeRootAbsentSnapshotLock?.();
+    return withStatusWriteLock(expectedSnapshotPath, () => fn(readRegisteredSnapshot(expectedSnapshotPath), false, removeRoot));
   });
 }
 

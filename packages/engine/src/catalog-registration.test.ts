@@ -1488,6 +1488,69 @@ describe("catalog execution registration \u2014 recovery segments at the raising
     expect((handle.db.prepare("select phase from catalog_operations where operation_id = ?").get("op-purge-revision-race") as { phase: string }).phase).toBe("prepared");
     handle.close();
   });
+  test("a catalog writer attempted after eligibility cannot commit before purge releases its transaction", async () => {
+    const { harnessDir, context } = await fixture("purge-eligibility-race-");
+    const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let changed = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!changed && doc.kind === "status") {
+          changed = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "producer-divergence";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+    await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-eligibility-race", expectedCatalogRevision: 0 })))
+      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+    setArtifactStore(base);
+
+    const { promise: eligible, resolve: signalEligible } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: releaseEligibility } = Promise.withResolvers<void>();
+    const purge = purgeCatalogRegistration(context, {
+      workflowId: "wf-plan-1",
+      operationId: "op-purge-eligibility-race",
+      expectedCatalogRevision: 0,
+      actor: "project-manager",
+      testHooks: { afterEligibility: async () => { signalEligible(); await gate; } },
+    });
+    await eligible;
+    const writer = () => registerCatalogEntity(
+      context,
+      { kind: "project", id: "after-purge", title: "After purge", rootKind: "projects", relativePath: "after-purge" },
+      { operationId: "seed-after-purge", actor: "project-manager" },
+    );
+    const previousRunner = process.env.MSTAR_STORE_TEST_RUNNER;
+    const previousTimeout = process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+    process.env.MSTAR_STORE_TEST_RUNNER = "1";
+    process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = "100";
+    const blockedAttempt = await writer().then(
+      () => ({ committed: true, error: undefined }),
+      (error: unknown) => ({ committed: false, error }),
+    ).finally(() => {
+      if (previousRunner === undefined) delete process.env.MSTAR_STORE_TEST_RUNNER;
+      else process.env.MSTAR_STORE_TEST_RUNNER = previousRunner;
+      if (previousTimeout === undefined) delete process.env.MSTAR_STORE_BUSY_TIMEOUT_MS;
+      else process.env.MSTAR_STORE_BUSY_TIMEOUT_MS = previousTimeout;
+    });
+    expect(blockedAttempt.committed).toBe(false);
+    expect(blockedAttempt.error).toMatchObject({ code: "store.busy" });
+    releaseEligibility();
+    await purge;
+    await writer();
+
+    expect(existsSync(snapshotPath)).toBe(false);
+    expect((await readCatalogRevisions(context)).catalogRevision).toBe(1);
+    const handle = await openStore(context, "read");
+    const row: unknown = handle.db.prepare("select phase from catalog_operations where operation_id = ?")
+      .get("op-purge-eligibility-race");
+    handle.close();
+    expect(row && typeof row === "object" && "phase" in row ? row.phase : undefined).toBe("aborted");
+  });
   test("a concurrent purge waits through root removal, byte deletion, and journal abort", async () => {
     const { harnessDir, context } = await fixture("purge-lock-window-");
     const base = createFsStore(harnessDir);
@@ -1526,11 +1589,24 @@ describe("catalog execution registration \u2014 recovery segments at the raising
     const first = purgeCatalogRegistration(context, input);
     await rootPutEntered;
     let competingWriterAcquired = false;
+    let observedDeletedAndCommitted = false;
+    const replacementBytes = "replacement snapshot written after purge\n";
     const competingWriter = withWorkflowPurgeLocks(
       join(harnessDir, "status.json"),
       "wf-plan-1",
       snapshotPath,
-      async () => { competingWriterAcquired = true; },
+      async () => {
+        competingWriterAcquired = true;
+        const handle = await openStore(context, "read");
+        const journalRow: unknown = handle.db.prepare("select phase from catalog_operations where operation_id = ?")
+          .get("op-purge-lock-window");
+        handle.close();
+        const phase = journalRow && typeof journalRow === "object" && "phase" in journalRow
+          ? journalRow.phase
+          : undefined;
+        observedDeletedAndCommitted = !existsSync(snapshotPath) && phase === "aborted";
+        writeFileSync(snapshotPath, replacementBytes);
+      },
     );
     // Lock contention retries through the platform timer, so a brief real wait
     // observes that the competing writer remains blocked while purge holds the root lock.
@@ -1540,7 +1616,8 @@ describe("catalog execution registration \u2014 recovery segments at the raising
     releaseRootPut();
     await Promise.all([first, competingWriter]);
     expect(competingWriterAcquired).toBe(true);
-    expect(existsSync(snapshotPath)).toBe(false);
+    expect(observedDeletedAndCommitted).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(replacementBytes);
   });
 
   test("purging one failed registration preserves a different valid workflow", async () => {
@@ -1626,6 +1703,49 @@ describe("catalog execution registration \u2014 recovery segments at the raising
     const handle = await openStore(context, "read");
     expect((handle.db.prepare("select phase from catalog_operations where operation_id = ?").get("op-purge-replay") as { phase: string }).phase).toBe("aborted");
     handle.close();
+  });
+  test("root-absent replay locks before observing bytes that appear at the snapshot path", async () => {
+    const { harnessDir, context } = await fixture("purge-replay-appearing-snapshot-");
+    const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let changed = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!changed && doc.kind === "status") {
+          changed = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "producer-divergence";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+    await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-appearing-snapshot", expectedCatalogRevision: 0 })))
+      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+    setArtifactStore(base);
+
+    const rootPath = join(harnessDir, "status.json");
+    const root = JSON.parse(readFileSync(rootPath, "utf8")) as { workflows: Array<{ id: string }> };
+    root.workflows = root.workflows.filter(({ id }) => id !== "wf-plan-1");
+    writeFileSync(rootPath, `${JSON.stringify(root, null, 2)}\n`);
+    rmSync(snapshotPath);
+    let observedAtLock = false;
+    const replacementBytes = "bytes appeared before the snapshot lock\n";
+    await expect(purgeCatalogRegistration(context, {
+      workflowId: "wf-plan-1",
+      operationId: "op-purge-appearing-snapshot",
+      expectedCatalogRevision: 0,
+      actor: "project-manager",
+      testHooks: {
+        beforeRootAbsentSnapshotLock: () => {
+          observedAtLock = true;
+          writeFileSync(snapshotPath, replacementBytes);
+        },
+      },
+    })).rejects.toMatchObject({ code: "catalog.purge-identity-mismatch" });
+    expect(observedAtLock).toBe(true);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(replacementBytes);
   });
   test("purge removes only digest-matched failed registration and records receipt", async () => {
     const { harnessDir, context } = await fixture("purge-success-");
