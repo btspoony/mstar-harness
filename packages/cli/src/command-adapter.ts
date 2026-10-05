@@ -24,12 +24,16 @@ import type { Scope, Target } from "./types";
 
 export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
   const diagnostics = Array.isArray(details?.diagnostics) ? details.diagnostics as Array<Record<string, unknown> & { path?: string; code: string; message: string; helpRoute?: string }> : [];
-  const route = diagnostics.find((entry) => entry.helpRoute !== undefined)?.helpRoute ?? `mstar ${command.replaceAll(".", " ")} --help`;
+  const rootCommand = command === "mstar";
+  const route = diagnostics.find((entry) => entry.helpRoute !== undefined)?.helpRoute ??
+    (rootCommand ? "mstar --help" : `mstar ${command.replaceAll(".", " ")} --help`);
   const diagnostic = diagnostics.find((entry) => entry.usage !== undefined);
   const recoveryUsage = typeof diagnostic?.usage === "string" ? ` Correct usage: ${diagnostic.usage}.` : "";
+  const rejected = diagnostics.find((entry) => entry.path !== undefined && entry.expected !== undefined && entry.received !== undefined);
   return refusalEnvelope({
     command, status: "usage", code: "command.invalid-input", exitCode: 2, message,
     helpRoute: route, recovery: `Review ${route} and correct the reported input.${recoveryUsage}`, diagnostics,
+    ...(rejected === undefined ? {} : { rejected: { path: String(rejected.path), expected: String(rejected.expected), received: String(rejected.received) } }),
     ...(details === undefined ? {} : { details }),
   });
 }
@@ -54,7 +58,8 @@ export function commandIdFromArgv(argv: readonly string[]): string {
 
 export function mapParserError(error: unknown, argv: readonly string[]): CommandEnvelope | null {
   if (!(error instanceof CommanderError) || error.exitCode === 0) return null;
-  return usageEnvelope(commandIdFromArgv(argv), error.message, { diagnostics: [parserDiagnostic(error, argv)] });
+  const command = commandIdFromArgv(argv);
+  return usageEnvelope(command, error.message, { diagnostics: [parserDiagnostic(error, argv)] });
 }
 
 /**
@@ -62,14 +67,27 @@ export function mapParserError(error: unknown, argv: readonly string[]): Command
  * rejected option from the command's own definition.
  */
 function parserDiagnostic(error: CommanderError, argv: readonly string[]): Record<string, unknown> {
-  const definition = getCommandDefinitions().find((entry) => entry.id === commandIdFromArgv(argv));
+  const command = commandIdFromArgv(argv);
+  const definition = getCommandDefinitions().find((entry) => entry.id === command);
   const field = parserField(error, argv, definition);
   const helpRoute = cliHelpRoute(argv);
   const usage = error.code === "commander.excessArguments" && definition !== undefined
     ? renderCliUsage(definition)
     : undefined;
+  const option = field === undefined || definition === undefined
+    ? undefined
+    : definition.cli.options.find((candidate) => candidate.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === field));
+  const expected = option === undefined ? undefined :
+    hasType(optionJsonSchema(definition!, option.key), "boolean") ? "boolean flag" : "option value";
+  const rawArgs = argv.slice(2);
+  const rejectedValue = field === undefined ? undefined :
+    rawArgs.find((token) => option?.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === token));
   return {
-    ...(field === undefined ? {} : { path: field }),
+    ...(field === undefined ? {} : {
+      path: field,
+      ...(expected === undefined ? {} : { expected }),
+      ...(rejectedValue === undefined ? {} : { received: rejectedValue }),
+    }),
     code: error.code,
     message: error.message,
     ...(usage === undefined ? {} : { usage }),
@@ -115,8 +133,10 @@ function renderCliUsage(definition: CommandDefinition): string {
 
 
 function cliHelpRoute(argv: readonly string[]): string | undefined {
-  const definition = getCommandDefinitions().find((entry) => entry.id === commandIdFromArgv(argv));
-  return definition === undefined ? undefined : `mstar ${definition.cli.path.join(" ")} --help`;
+  const command = commandIdFromArgv(argv);
+  if (command === "mstar") return "mstar --help";
+  const definition = getCommandDefinitions().find((entry) => entry.id === command);
+  return definition === undefined ? "mstar --help" : `mstar ${definition.cli.path.join(" ")} --help`;
 }
 
 function optionKey(flags: string): string {

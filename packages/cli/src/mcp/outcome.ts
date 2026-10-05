@@ -44,5 +44,5 @@ export function validateCommandOutcome(
   };
   return outcome.status === "usage"
     ? refusalEnvelope({ ...refusal, status: "usage", exitCode: 2 })
-    : refusalEnvelope({ ...refusal, status: "refused", exitCode: 1 });
+    : refusalEnvelope({ ...refusal, status: "refused", exitCode: outcome.exitCode });
 }
