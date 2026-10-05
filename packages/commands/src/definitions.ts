@@ -213,21 +213,28 @@ function submittedScalars(input: unknown): string[] {
  * themselves, so the message keeps its diagnostic value while a custom token
  * the pattern-based redactor does not recognize is never echoed to the caller.
  */
-function sanitizeIssueMessage(message: string, input: unknown): string {
-  let text = redactSecrets(message).text;
+function issueMessageSanitizer(input: unknown): (message: string) => string {
+  const replacements: Record<string, string> = {};
   for (const scalar of submittedScalars(input)) {
     const redacted = redactInputScalar(scalar);
-    if (redacted !== scalar) text = text.replaceAll(scalar, redacted);
+    if (redacted !== scalar && replacements[scalar] === undefined) replacements[scalar] = redacted;
   }
-  return text;
+  const scalars = Object.keys(replacements);
+  const pattern = scalars.length === 0 ? undefined : new RegExp(scalars.map((scalar) =>
+    scalar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  ).join("|"), "g");
+  return (message) => {
+    const text = redactSecrets(message).text;
+    return pattern === undefined ? text : text.replace(pattern, (scalar) => replacements[scalar] ?? scalar);
+  };
 }
 
-function inputDiagnostic(issue: z.ZodError["issues"][number], input: unknown): RefusalDiagnostic {
+function inputDiagnostic(issue: z.ZodError["issues"][number], sanitize: (message: string) => string): RefusalDiagnostic {
   const path = issue.path.reduce((path: string, part: string | number | symbol) =>
     typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
   "");
   const index = issue.path.find((part) => typeof part === "number");
-  const message = sanitizeIssueMessage(issue.message, input);
+  const message = sanitize(issue.message);
   return {
     path,
     code: issue.code,
@@ -235,6 +242,7 @@ function inputDiagnostic(issue: z.ZodError["issues"][number], input: unknown): R
     ...(typeof index === "number" ? { index } : {}),
   };
 }
+
 
 function inputValueAtPath(input: unknown, path: readonly (string | number | symbol)[]): unknown {
   return path.reduce<unknown>((value, part) =>
@@ -288,19 +296,23 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   }
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
-    const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, input));
+    const sanitize = issueMessageSanitizer(input);
+    const totalIssues = parsed.error.issues.length;
+    const diagnostics = parsed.error.issues.slice(0, 50).map((issue) => inputDiagnostic(issue, sanitize));
+    const joinedMessage = parsed.error.issues.map((entry) => entry.message).join("; ");
+    const moreIssues = totalIssues > diagnostics.length ? `; …and ${totalIssues - diagnostics.length} more issues` : "";
     const issue = parsed.error.issues[0];
     const facts = rejectionFacts(issue, input);
     const optionKey = issue.path.map(String).join(".");
     const option = definition.cli.options.find((entry) => entry.key === optionKey);
-    const rejected = facts.path === "" ? undefined : {
+    const rejected = facts.path === "" || moreIssues !== "" ? undefined : {
       path: option?.flags.split(/[ <]/)[0] ?? facts.path,
       expected: facts.expected,
       received: facts.received,
     };
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: sanitizeIssueMessage(parsed.error.issues.map((entry) => entry.message).join("; "), input),
+      message: `${sanitize(joinedMessage)}${moreIssues}`,
       diagnostics,
       ...(rejected === undefined ? {} : { rejected }),
     });

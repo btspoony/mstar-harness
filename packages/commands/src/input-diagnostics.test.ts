@@ -139,6 +139,13 @@ describe("executeCommand input diagnostics", () => {
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
     expect(envelope.message).toContain('Unrecognized key: "bogus"');
   });
+  test("diagnostics are capped at 50 and report the omitted issue count", async () => {
+    const envelope = await executeCommand("worktree.qc-alignment", { files: Array(51).fill(42) }, context());
+    const diagnostics = usageDiagnostics(envelope);
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).toContain("…and 1 more issues");
+  });
 
 });
 
