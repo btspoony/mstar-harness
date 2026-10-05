@@ -23,11 +23,13 @@ import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
 
 export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
-  const diagnostics = Array.isArray(details?.diagnostics) ? details.diagnostics as Array<{ path?: string; code: string; message: string; helpRoute?: string }> : [];
+  const diagnostics = Array.isArray(details?.diagnostics) ? details.diagnostics as Array<Record<string, unknown> & { path?: string; code: string; message: string; helpRoute?: string }> : [];
   const route = diagnostics.find((entry) => entry.helpRoute !== undefined)?.helpRoute ?? `mstar ${command.replaceAll(".", " ")} --help`;
+  const diagnostic = diagnostics.find((entry) => entry.usage !== undefined);
+  const recoveryUsage = typeof diagnostic?.usage === "string" ? ` Correct usage: ${diagnostic.usage}.` : "";
   return refusalEnvelope({
     command, status: "usage", code: "command.invalid-input", exitCode: 2, message,
-    helpRoute: route, recovery: `Review ${route} and correct the reported input.`, diagnostics,
+    helpRoute: route, recovery: `Review ${route} and correct the reported input.${recoveryUsage}`, diagnostics,
     ...(details === undefined ? {} : { details }),
   });
 }
@@ -56,30 +58,59 @@ export function mapParserError(error: unknown, argv: readonly string[]): Command
 }
 
 /**
- * Deterministic field identity for Commander missing argument/option errors and
- * the leaf help route when argv resolves to a known command; any other parser
- * failure keeps the honest diagnostic (stable code + original message) without
- * a guessed field.
+ * Resolve parser failures to stable fields only when argv identifies the
+ * rejected option from the command's own definition.
  */
 function parserDiagnostic(error: CommanderError, argv: readonly string[]): Record<string, unknown> {
-  const field = parserField(error);
+  const definition = getCommandDefinitions().find((entry) => entry.id === commandIdFromArgv(argv));
+  const field = parserField(error, argv, definition);
   const helpRoute = cliHelpRoute(argv);
+  const usage = error.code === "commander.excessArguments" && definition !== undefined
+    ? renderCliUsage(definition)
+    : undefined;
   return {
     ...(field === undefined ? {} : { path: field }),
     code: error.code,
     message: error.message,
+    ...(usage === undefined ? {} : { usage }),
     ...(helpRoute === undefined ? {} : { helpRoute }),
   };
 }
 
-function parserField(error: CommanderError): string | undefined {
+function parserField(
+  error: CommanderError,
+  argv: readonly string[],
+  definition?: CommandDefinition,
+): string | undefined {
   const quoted = /'([^']+)'/.exec(error.message)?.[1];
+  if (error.code === "commander.excessArguments" && definition !== undefined) {
+    const args = argv.slice(2);
+    const options = definition.cli.options;
+    for (let index = 0; index < args.length; index++) {
+      const token = args[index]!;
+      const option = options.find((candidate) => candidate.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === token));
+      if (option !== undefined && !hasType(optionJsonSchema(definition, option.key), "boolean") &&
+        args[index + 1] !== undefined && options.some((candidate) =>
+          candidate.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === args[index + 1]))) {
+        return token;
+      }
+    }
+  }
   if (quoted === undefined) return undefined;
   if (error.code === "commander.missingArgument") return quoted;
   if (error.code === "commander.missingMandatoryOptionValue") return optionKey(quoted);
   if (error.code === "commander.optionMissingArgument") return optionKey(quoted);
   return undefined;
 }
+
+function renderCliUsage(definition: CommandDefinition): string {
+  const options = definition.cli.options.map((option) => cliOptionFlags(definition, option)).join(" ");
+  const args = definition.cli.arguments.map((argument) =>
+    argument.required ? `<${argument.name}>` : `[${argument.name}]`,
+  ).join(" ");
+  return `Usage: mstar ${definition.cli.path.join(" ")}${options === "" ? "" : ` ${options}`}${args === "" ? "" : ` ${args}`}`;
+}
+
 
 function cliHelpRoute(argv: readonly string[]): string | undefined {
   const definition = getCommandDefinitions().find((entry) => entry.id === commandIdFromArgv(argv));

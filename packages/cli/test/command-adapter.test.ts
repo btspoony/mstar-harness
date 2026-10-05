@@ -72,6 +72,32 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("plan bind reports the valued option when a flag is mistaken for a value", async () => {
+    const result = await run(["plan", "bind", "--plan", "--workflow", "w"]);
+    const body = JSON.parse(result.stdout) as {
+      message: string;
+      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string };
+    };
+    const diagnostic = body.details?.diagnostics?.[0];
+    expect(body.message).toContain("too many arguments");
+    expect(diagnostic?.path).toBe("--plan");
+    expect(diagnostic?.usage).toContain("--plan <value>");
+    expect(diagnostic?.usage).toContain("--execution");
+    expect(body.details?.recovery).toContain("Correct usage:");
+  });
+
+  test("issue show positional parse errors retain their diagnostic shape", () => {
+    const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
+    const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
+    const details = envelope?.details;
+    expect(details).toMatchObject({
+      diagnostics: [{ code: "commander.excessArguments", message: error.message, helpRoute: "mstar issue show --help" }],
+    });
+    if (details !== undefined && "diagnostics" in details && Array.isArray(details.diagnostics)) {
+      expect(details.diagnostics[0]).not.toHaveProperty("path");
+    }
+  });
+
   test("MCP tool schemas publish the domain-owned payload contract instead of an opaque field", () => {
     const definitions = getCommandDefinitions();
     const definition = (id: string): CommandDefinition => {
