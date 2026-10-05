@@ -182,15 +182,52 @@ function redactInputScalar(value: string): string {
     .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
 }
 
+/**
+ * Every scalar submitted anywhere in the input. An issue message can quote a
+ * value that is NOT the one at the issue path — an `unrecognized_keys` issue
+ * names the unknown key, a refinement quotes its own input — so sanitizing only
+ * the value at the path leaves those copies in the emitted message. Object keys
+ * are collected too: a strict object reports the offending key by name.
+ */
+function submittedScalars(input: unknown): string[] {
+  const scalars: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      scalars.push(String(value));
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        scalars.push(key);
+        visit(item);
+      }
+    }
+  };
+  visit(input);
+  return scalars;
+}
+
+/**
+ * A schema issue message with every submitted secret-shaped scalar replaced by
+ * its redacted form. Benign scalars (numbers, ordinary words) redact to
+ * themselves, so the message keeps its diagnostic value while a custom token
+ * the pattern-based redactor does not recognize is never echoed to the caller.
+ */
+function sanitizeIssueMessage(message: string, input: unknown): string {
+  let text = redactSecrets(message).text;
+  for (const scalar of submittedScalars(input)) {
+    const redacted = redactInputScalar(scalar);
+    if (redacted !== scalar) text = text.replaceAll(scalar, redacted);
+  }
+  return text;
+}
+
 function inputDiagnostic(issue: z.ZodError["issues"][number], input: unknown): RefusalDiagnostic {
   const path = issue.path.reduce((path: string, part: string | number | symbol) =>
     typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
   "");
   const index = issue.path.find((part) => typeof part === "number");
-  const value = inputValueAtPath(input, issue.path);
-  const message = typeof value === "string"
-    ? redactSecrets(issue.message).text.replaceAll(value, redactInputScalar(value))
-    : redactSecrets(issue.message).text;
+  const message = sanitizeIssueMessage(issue.message, input);
   return {
     path,
     code: issue.code,
@@ -263,7 +300,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     };
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: parsed.error.issues.map((entry) => entry.message).join("; "),
+      message: sanitizeIssueMessage(parsed.error.issues.map((entry) => entry.message).join("; "), input),
       diagnostics,
       ...(rejected === undefined ? {} : { rejected }),
     });

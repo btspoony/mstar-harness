@@ -117,6 +117,29 @@ describe("executeCommand input diagnostics", () => {
     expect(envelope.message).toContain("received 42");
   });
 
+  test("a secret-shaped scalar quoted outside the issue path is redacted from message and diagnostics", async () => {
+    // A strict object reports the offending KEY by name, and the issue path is
+    // the object root — sanitizing only the value at the path left the key's
+    // copy of the submitted secret in both the message and the diagnostic.
+    const secret = "sk-live-test-123";
+    const envelope = await executeCommand("report", { [secret]: "x" }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(JSON.stringify(envelope)).not.toContain(secret);
+    expect(envelope.message).toContain("[REDACTED]");
+    const diagnostics = usageDiagnostics(envelope);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ code: "unrecognized_keys" });
+    expect(diagnostics[0]?.message).not.toContain(secret);
+  });
+
+  test("a benign unrecognized key stays fully rendered", async () => {
+    const envelope = await executeCommand("report", { bogus: 1 }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).toContain('Unrecognized key: "bogus"');
+  });
+
 });
 
 describe("session selector admission", () => {
