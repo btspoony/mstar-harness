@@ -299,7 +299,7 @@ function bindCoordinator(fixture: Fixture): string {
     ],
     fixture.root,
   );
-  expect(bound.exitCode).toBe(0);
+  expect(bound.exitCode, `${bound.stdout}${bound.stderr}`).toBe(0);
   const payload = jsonOf(bound);
   expect(payload.ok).toBe(true);
   expect(payload.role).toBe("coordinator");
@@ -1718,6 +1718,59 @@ function transition(fixture: Fixture, verb: string, coordinator: string, handoff
     fixture.root,
   );
 }
+
+function recoverAssignment(fixture: Fixture, coordinator: string, decision: "re-review" | "restore"): RunResult {
+  return runCli(
+    [
+      "plan",
+      "recover-assignment",
+      "--session",
+      coordinator,
+      "--plan",
+      PLAN_ID,
+      "--decision",
+      decision,
+      "--expect",
+      String(rowRevision(fixture, coordinator, PLAN_ID)),
+      "--json",
+    ],
+    fixture.root,
+  );
+}
+
+describe("assignment stale recovery transport", () => {
+  for (const decision of ["re-review", "restore"] as const) {
+    test(`stale bind refusal names recover-assignment; ${decision} then bind succeeds within three calls`, () => {
+      const fixture = makeFixture();
+      const coordinator = bindCoordinator(fixture);
+      preparePlan(fixture, coordinator, PLAN_ID);
+      const prepared = readText(fixture.assignmentPath);
+      writeText(fixture.assignmentPath, prepared.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
+
+      const refusal = runCli(
+        ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", `stale-${decision}`, "--json"],
+        fixture.root,
+      );
+      expect(refusal.exitCode).toBe(1);
+      const refused = jsonOf(refusal);
+      expect(refused.code).toBe("coordination.assignment-stale");
+      expect(String(refused.message)).toContain("recover-assignment");
+      expect(JSON.stringify(refused.details)).toContain("recover-assignment");
+
+      const recovered = recoverAssignment(fixture, coordinator, decision);
+      expect(recovered.exitCode).toBe(0);
+      expect(jsonOf(recovered).outcome).toBe("assignment-recovered");
+      if (decision === "restore") expect(readText(fixture.assignmentPath)).toBe(prepared);
+
+      const bound = runCli(
+        ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", `recovered-${decision}`, "--json"],
+        fixture.root,
+      );
+      expect(bound.exitCode).toBe(0);
+      expect(jsonOf(bound).outcome).toBe("claimed");
+    }, RECOVERY_TIMEOUT);
+  }
+});
 
 /** The operator's merge — the CLI never runs one. */
 function mergePlanA(fixture: IntegrationFixture): void {
