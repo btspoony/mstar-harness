@@ -210,6 +210,7 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
   test("nonexistent assignment file → exit 1 with file error", () => {
     const result = runCli(["review", "seats", "/no/such/assignment.md"]);
     expect(result.exitCode).toBe(1);
-    expect(jsonOf(result).message).toBe("assignment file not found: /no/such/assignment.md");
+    expect(jsonOf(result).message.split("\n")[0]).toBe("assignment file not found: /no/such/assignment.md");
+    expect(jsonOf(result).details?.helpRoute).toBeDefined();
   });
 });
