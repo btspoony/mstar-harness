@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
-import { readExecutionCleanupState } from "./execution-read.js";
+import { readExecutionAuthority, readExecutionCleanupState } from "./execution-read.js";
 import { createExecutionWorkflow, initializeExecutionAuthority, readExecutionState } from "./execution-store.js";
 import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import type { WorkflowEntry } from "./status.js";
@@ -70,7 +70,17 @@ describe("execution-cleanup-read", () => {
 
   test("unknown address refuses instead of selecting a remaining workflow", async () => {
     const context = await fixture("unknown");
-    await expect(readExecutionCleanupState(context, "wf-not-recorded")).rejects.toMatchObject({ code: "coordination.workflow-not-found" });
+    await expect(readExecutionCleanupState(context, "wf-not-recorded")).rejects.toMatchObject({
+      code: "coordination.workflow-not-found",
+      message: expect.stringContaining("List registered workflow ids via mstar status validate (data.workflows[].id), then re-run mstar worktree cleanup --workflow <listedId>; if no registered workflow remains, there is nothing to clean."),
+    });
+  });
+  test("missing plan refusal includes status and execution-bind recovery", async () => {
+    const context = await fixture("missing-plan");
+    await expect(readExecutionAuthority(context, { workflowId: "wf-missing-plan", planId: "plan-not-recorded" })).rejects.toMatchObject({
+      code: "coordination.plan-not-found",
+      message: expect.stringContaining("List valid plan ids via mstar status validate (data.authority.workflows[].planTokens); re-run mstar plan bind --execution"),
+    });
   });
 
   test("unreadable retained protective state refuses instead of omitting a sibling", async () => {
