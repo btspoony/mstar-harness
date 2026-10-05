@@ -5,13 +5,15 @@
  * derived strictly from recorded events, unknown dates, and the authority
  * split between the catalog and the execution projection with its honest
  * stale/unavailable disclosure, plus the roadmap's store-authoritative
- * milestone grouping and freshness — are asserted against real DTO shapes.
+ * milestone grouping, its catalog-driven project entry, and its freshness —
+ * are asserted against real DTO shapes.
  * Rendering is exercised by the actual local browser smoke; the only render
  * assertions here walk the real Preact vnode tree the view produces.
  */
 import { describe, expect, test } from "bun:test";
 import type {
   CatalogIdentityDTO,
+  DashboardViewData,
   IssueDetail,
   IssueFlow,
   IterationDTO,
@@ -45,9 +47,11 @@ import { chartModel, chartSummary, flowNotes, flowPanelState, originLabel, yAxis
 import { compassState, iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
 import {
   MilestoneCard,
+  ProjectListPanel,
   milestoneCountsLine,
   milestoneGroups,
   milestoneTargetText,
+  projectListState,
   projectionStateLine,
   roadmapPanel,
   roadmapProject,
@@ -810,7 +814,15 @@ describe("catalog and projection authority", () => {
 const HOSTILE_NAME = '<img src=x onerror="alert(1)">';
 
 /** The part of a Preact vnode these assertions walk: the template's own props. */
-type VNodeLike = { type?: unknown; props: { children?: unknown; dangerouslySetInnerHTML?: unknown } };
+type VNodeLike = {
+  type?: unknown;
+  props: {
+    children?: unknown;
+    dangerouslySetInnerHTML?: unknown;
+    href?: unknown;
+    "aria-label"?: unknown;
+  };
+};
 
 function isVNode(node: unknown): node is VNodeLike {
   return node !== null && typeof node === "object" && "props" in node;
@@ -1029,5 +1041,155 @@ describe("milestone freshness disclosure", () => {
     expect(projectionStateLine({ ...noTimes, generation: null, freshness: "unavailable" })).toContain(
       "no valid generation is published",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The roadmap entry: the catalog's project list before a project is selected
+// ---------------------------------------------------------------------------
+
+const PROJECT_LIST_HINT = "Choose a project to view its stored roadmap. This list is read-only; make changes with the CLI.";
+const EMPTY_CATALOG_COPY =
+  "No projects are registered in the catalog. Use the CLI to register a project; this dashboard cannot create one.";
+
+/** The engine publishes the projects DTO through `DashboardViewData`, not individually. */
+type ProjectListDTO = DashboardViewData["projects"];
+type ProjectListItem = ProjectListDTO["items"][number];
+
+function projectItem(id: string, overrides: Partial<CatalogIdentityDTO> = {}, openIssues = 0): ProjectListItem {
+  return {
+    project: catalogIdentity({
+      kind: "project",
+      id,
+      title: `Project ${id}`,
+      rootKind: "projects",
+      relativePath: id,
+      ...overrides,
+    }),
+    openIssues,
+  };
+}
+
+function projectListLoad(
+  data: ProjectListDTO,
+  projection: ReadProjection = CURRENT_PROJECTION,
+): LoadState<ProjectListDTO> {
+  return { status: "ready", envelope: envelope(data, projection), message: null };
+}
+
+/** Every href the tree links to, walking the real Preact vnode output. */
+function renderedHrefs(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(renderedHrefs);
+  if (!isVNode(node)) return [];
+  const own = typeof node.props.href === "string" ? [node.props.href] : [];
+  const body = typeof node.type === "function" ? node.type(node.props) : node.props.children;
+  return [...own, ...renderedHrefs(body)];
+}
+
+/** Every accessible name the tree publishes, same walk. */
+function renderedAriaLabels(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(renderedAriaLabels);
+  if (!isVNode(node)) return [];
+  const own = typeof node.props["aria-label"] === "string" ? [node.props["aria-label"]] : [];
+  const body = typeof node.type === "function" ? node.type(node.props) : node.props.children;
+  return [...own, ...renderedAriaLabels(body)];
+}
+
+describe("roadmap project entry", () => {
+  test("project list state is empty only for a zero total, and listed carries the complete total", () => {
+    expect(projectListState(envelope<ProjectListDTO>({ items: [], total: 0 })).content).toEqual({ kind: "empty" });
+    const listed = projectListState(envelope<ProjectListDTO>({ items: [projectItem("a"), projectItem("b")], total: 2 }));
+    expect(listed.content).toEqual({ kind: "listed", total: 2 });
+    // A catalog read carries no projection disclosure of its own.
+    expect(listed).not.toHaveProperty("disclosure");
+  });
+
+  test("the no-project panel state is unchanged and never becomes a read", () => {
+    expect(roadmapPanel(null, { status: "loading", envelope: null, message: null })).toEqual({ kind: "no-project" });
+    expect(roadmapPanel(null, { status: "error", envelope: null, message: "x" })).toEqual({ kind: "no-project" });
+  });
+
+  test("the listed entry renders every project with its roadmap link, identity and counts", () => {
+    const load = projectListLoad({
+      items: [
+        projectItem("omp-integration", { title: "OMP integration", lifecycle: "active" }, 3),
+        projectItem("engine", { title: "Engine", lifecycle: "archived" }, 0),
+      ],
+      total: 2,
+    });
+    const tree = ProjectListPanel({ load });
+    const text = renderedText(tree).join("\n");
+
+    expect(text).toContain(PROJECT_LIST_HINT);
+    expect(text).toContain("OMP integration");
+    expect(text).toContain("omp-integration");
+    expect(text).toContain("Engine");
+    expect(text).toContain("Catalog lifecycle");
+    expect(text).toContain("archived");
+    expect(text).toContain("Open issues");
+    expect(text).toContain("3");
+    expect(text).toContain("0");
+    expect(text).toContain("2 projects. Choose one to view its roadmap.");
+
+    // Each row links into that project's own roadmap, with a title-based
+    // accessible name, and nothing is a control.
+    expect(renderedHrefs(tree)).toEqual(["/?project=omp-integration#roadmap", "/?project=engine#roadmap"]);
+    expect(renderedAriaLabels(tree)).toEqual(["View roadmap for OMP integration", "View roadmap for Engine"]);
+    expect(text).not.toMatch(/\b(create|edit|archive|register)\b/i);
+
+    // The removed copy is gone, and the selected-project hint is not reused.
+    expect(text).not.toContain("No project selected.");
+    expect(text).not.toContain("Add the project to the dashboard URL");
+    expect(text).not.toContain("/?project=engine#roadmap — then reload");
+
+    expect(markupSinks(tree)).toEqual([]);
+  });
+
+  test("the announced count is singular for one project", () => {
+    const text = renderedText(ProjectListPanel({ load: projectListLoad({ items: [projectItem("engine")], total: 1 }) })).join(
+      "\n",
+    );
+    expect(text).toContain("1 project. Choose it to view its roadmap.");
+    expect(text).not.toContain("1 projects.");
+  });
+
+  test("an empty catalog names the situation and the real next action, and is not a refusal or a zero announcement", () => {
+    const text = renderedText(ProjectListPanel({ load: projectListLoad({ items: [], total: 0 }) })).join("\n");
+    expect(text).toContain(EMPTY_CATALOG_COPY);
+    expect(text).toContain("No projects are registered in the catalog.");
+    expect(text).not.toContain("0 projects. Choose one");
+    expect(text).not.toContain("No project selected.");
+    expect(text).not.toContain(PROJECT_LIST_HINT);
+  });
+
+  test("loading says so and never claims the catalog is empty", () => {
+    const text = renderedText(
+      ProjectListPanel({ load: { status: "loading", envelope: null, message: null } }),
+    ).join("\n");
+    expect(text).toContain("Loading projects…");
+    expect(text).not.toContain(EMPTY_CATALOG_COPY);
+    expect(text).not.toContain(PROJECT_LIST_HINT);
+  });
+
+  test("a refused read stays a notice with its own message, never an empty list", () => {
+    const refusal = "store.not-initialized: no store — initialize the issue store with the CLI, then reload.";
+    const text = renderedText(
+      ProjectListPanel({ load: { status: "error", envelope: null, message: refusal } }),
+    ).join("\n");
+    expect(text).toContain(refusal);
+    expect(text).not.toContain(EMPTY_CATALOG_COPY);
+    expect(text).not.toContain(PROJECT_LIST_HINT);
+    expect(text).not.toContain("No project selected.");
+  });
+
+  test("a stale projection never empties the catalog list", () => {
+    const items = [projectItem("engine", { title: "Engine" })];
+    expect(projectListState(envelope({ items, total: 1 }, UNAVAILABLE_PROJECTION)).content).toEqual({
+      kind: "listed",
+      total: 1,
+    });
+    const text = renderedText(ProjectListPanel({ load: projectListLoad({ items, total: 1 }, STALE_PROJECTION) })).join("\n");
+    expect(text).toContain(PROJECT_LIST_HINT);
+    expect(text).toContain("Engine");
   });
 });

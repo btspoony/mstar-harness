@@ -3,6 +3,12 @@
  * source text, and the structured milestone grouping this project's issues are
  * actually grouped by (read-envelope contract §6, plan §4).
  *
+ * With no project in the address bar the view is the catalog's project list:
+ * registered projects, each linking into that project's own roadmap. That entry
+ * is a catalog read (`needsProjection: false`), so it never depends on a
+ * published projection generation, and it is read-only — no create, edit or
+ * archive control.
+ *
  * Two store-owned authorities meet here and stay separately labelled: the
  * migration-6 content authority owns Direction and the stored source text, and
  * the milestone tables own grouping, target, status, counts and issue
@@ -13,6 +19,7 @@
  * unavailable execution data never invalidates them.
  */
 import type {
+  DashboardViewData,
   MilestoneIssueDTO,
   MilestoneRead,
   ProjectMilestoneDTO,
@@ -31,10 +38,19 @@ import {
   LiveRegion,
   Notice,
   ProjectionNotice,
+  catalogLifecycleTone,
   projectionDisclosure,
   useEnvelope,
 } from "../components";
 import { dispositionTone } from "../format";
+
+/**
+ * The catalog's project list, named here instead of declared a second time: the
+ * engine publishes this DTO through `DashboardViewData`, not individually
+ * (the `IssueProvenance` derivation in `format.ts` is the precedent).
+ */
+type ProjectListDTO = DashboardViewData["projects"];
+type ProjectListItem = ProjectListDTO["items"][number];
 
 /** The project the address bar selects; absent and blank both mean "none". */
 export function roadmapProject(search: string): string | null {
@@ -195,6 +211,96 @@ export function roadmapPanel(project: string | null, load: LoadState<RoadmapDTO 
 }
 
 // ---------------------------------------------------------------------------
+// Project entry (no project selected): the catalog's registered projects
+// ---------------------------------------------------------------------------
+
+/** The project list's content state, mirroring `iterationListState`. */
+export type ProjectListState = { content: { kind: "empty" } | { kind: "listed"; total: number } };
+
+/**
+ * The project list is a catalog read (`needsProjection: false`), so it carries
+ * no projection disclosure: the envelope's always-present projection health
+ * block is not part of this list state, and a stale projection never empties
+ * the catalog. The read is unpaged and complete, so `total` is the rendered
+ * row count.
+ */
+export function projectListState(envelope: Envelope<ProjectListDTO>): ProjectListState {
+  return { content: envelope.data.total === 0 ? { kind: "empty" } : { kind: "listed", total: envelope.data.total } };
+}
+
+/** The row's own link into that project's roadmap: the address-bar selection. */
+function projectRoadmapHref(id: string): string {
+  return `/?project=${encodeURIComponent(id)}#roadmap`;
+}
+
+/** The count-and-choice announcement; singular when there is exactly one. */
+function projectListAnnouncement(total: number): string {
+  return total === 1 ? "1 project. Choose it to view its roadmap." : `${total} projects. Choose one to view its roadmap.`;
+}
+
+const PROJECT_LIST_HINT = "Choose a project to view its stored roadmap. This list is read-only; make changes with the CLI.";
+const EMPTY_CATALOG_COPY =
+  "No projects are registered in the catalog. Use the CLI to register a project; this dashboard cannot create one.";
+
+/** One project row: catalog identity plus the open-issue count, all read-only. */
+function ProjectRow(props: { item: ProjectListItem }) {
+  const item = props.item;
+  const project = item.project;
+  return html`<li class="history-item">
+    <p class="history-head">
+      <a href=${projectRoadmapHref(project.id)} aria-label=${`View roadmap for ${project.title}`}>${project.title}</a>
+      <span class="mono">${project.id}</span>
+    </p>
+    <dl class="facts">
+      <${Field} label="Catalog lifecycle"
+        ><${Badge} tone=${catalogLifecycleTone(project.lifecycle)}>${project.lifecycle}</${Badge}></${Field}
+      >
+      <${Field} label="Open issues">${item.openIssues}</${Field}>
+    </dl>
+  </li>`;
+}
+
+/**
+ * The no-project panel's whole render, hook-free so the copy contract and the
+ * rendered rows are checkable from a `LoadState` alone (the `MilestoneCard`
+ * precedent); `ProjectEntry` is only the read that feeds it.
+ *
+ * A refusal is never an empty catalog, and the loading state never borrows the
+ * empty-catalog sentence.
+ */
+export function ProjectListPanel(props: { load: LoadState<ProjectListDTO> }) {
+  const load = props.load;
+  const state = load.status === "ready" ? projectListState(load.envelope) : null;
+  const items = load.status === "ready" ? load.envelope.data.items : [];
+  const announcement =
+    load.status === "error"
+      ? load.message
+      : load.status === "loading"
+        ? "Loading projects."
+        : state?.content.kind === "empty"
+          ? "No projects are registered in the catalog."
+          : projectListAnnouncement(state?.content.kind === "listed" ? state.content.total : 0);
+
+  return html`<${LiveRegion} message=${announcement} />
+    ${load.status === "loading" ? html`<p class="hint">Loading projects…</p>` : null}
+    ${load.status === "error" ? html`<${Notice} tone="error">${load.message}</${Notice}>` : null}
+    ${state?.content.kind === "empty"
+      ? html`<${EmptyState}><p class="prose">${EMPTY_CATALOG_COPY}</p></${EmptyState}>`
+      : null}
+    ${state?.content.kind !== "listed"
+      ? null
+      : html`<p class="hint">${PROJECT_LIST_HINT}</p>
+          <ul class="history">
+            ${items.map((item) => html`<${ProjectRow} key=${item.project.id} item=${item} />`)}
+          </ul>`}`;
+}
+
+/** The no-project entry: one catalog read (`needsProjection: false`). */
+function ProjectEntry() {
+  return html`<${ProjectListPanel} load=${useEnvelope<ProjectListDTO>("/api/projects")} />`;
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -243,15 +349,7 @@ export function RoadmapView() {
   const heading = html`<h1 class="heading-28" id="roadmap-heading" tabindex="-1">Roadmap</h1>`;
 
   if (panel.kind === "no-project") {
-    return html`${heading}
-      <p class="hint">The roadmap view reads one project's retained Direction and the milestone grouping its issues are grouped by. Both are shown read-only.</p>
-      <${LiveRegion} message="No project selected." />
-      <${EmptyState}>
-        <p class="prose">
-          No project is selected. Add the project to the dashboard URL — for example
-          <span class="mono">/?project=engine#roadmap</span> — then reload.
-        </p>
-      </${EmptyState}>`;
+    return html`${heading}<${ProjectEntry} />`;
   }
 
   const state = panel.kind === "ready" ? panel.state : null;
