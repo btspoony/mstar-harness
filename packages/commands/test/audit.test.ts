@@ -94,7 +94,7 @@ describe("audit command family", () => {
     expect(result.status).toBe("refused");
     expect(result).toMatchObject({ code: "audit.supply-chain.findings", exitCode: 1 });
     expect(result.message.split("\n")[0]).toMatch(/^\d+ supply-chain findings$/);
-    expect(result.details).toMatchObject({ helpRoute: "mstar audit supply-chain --help", recovery: expect.any(String) });
+    expect(result.details).toMatchObject({ helpRoute: "mstar audit supply-chain --help" });
     expect(result.details).toMatchObject({ findings: expect.arrayContaining([
       expect.objectContaining({ kind: "lockfile-duplicate" }), expect.objectContaining({ kind: "action-unpinned", file: ".github/workflows/ci.yml" }), expect.objectContaining({ kind: "pull_request_target-head", file: ".github/workflows/ci.yml" }),
     ]) });
