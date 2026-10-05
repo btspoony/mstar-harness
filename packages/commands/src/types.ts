@@ -5,8 +5,8 @@ export type CommandStatus = "ok" | "refused" | "usage" | "error";
 
 export type CommandEnvelope<T = unknown> =
   | { version: 1; command: string; status: "ok"; code: string; exitCode: 0; data: T; details?: Record<string, unknown> }
-  | { version: 1; command: string; status: "refused" | "error"; code: string; exitCode: number; message: string; details?: Record<string, unknown> }
-  | { version: 1; command: string; status: "usage"; code: string; exitCode: 2; message: string; details?: Record<string, unknown> };
+  | { version: 1; command: string; status: "refused" | "error"; code: string; exitCode: number; message: string; details?: Record<string, unknown>; helpRoute?: string; recovery?: string }
+  | { version: 1; command: string; status: "usage"; code: string; exitCode: 2; message: string; details?: Record<string, unknown>; helpRoute?: string; recovery?: string };
 
 export type IndexedDiagnostic = RecoveryProblem & Readonly<{ index: number }>;
 
@@ -20,6 +20,8 @@ export type PayloadDescriptor = Readonly<{
 }>;
 
 export type CommandRequirementOwnership = "caller" | "derivable" | "unknown";
+
+export type CommandTokenKind = "root" | "workflow" | "plan" | "none";
 
 export type CommandRequirementRoute = "cli" | "mcp";
 
@@ -36,6 +38,8 @@ export type CommandRequirement = Readonly<{
   ownership: CommandRequirementOwnership;
   route: CommandRequirementRoute;
   help?: string;
+  tokenKind?: CommandTokenKind;
+  constraint?: string;
 }>;
 
 export type CommandEffect = "read" | "validate" | "write" | "stdin" | "process" | "service" | "browser";

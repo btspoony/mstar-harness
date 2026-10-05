@@ -1,3 +1,4 @@
+import { refusalEnvelope } from "../envelope.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -36,13 +37,19 @@ const payloads: Partial<Record<(typeof verbs)[number], CommandDefinition["payloa
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function failed(id: string, error: unknown): CommandEnvelope<never> {
+export function failed(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof SddScriptError && error.exitCode === 2) {
-    return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message };
+    return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message });
   }
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: error instanceof SddScriptError ? error.exitCode : 1, message };
+  return refusalEnvelope({
+    command: id,
+    status: "refused",
+    code,
+    exitCode: error instanceof SddScriptError ? error.exitCode : 1,
+    message,
+  });
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);

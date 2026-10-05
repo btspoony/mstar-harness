@@ -5,6 +5,7 @@ import { createFsStore, initializeStore, scaffoldHarness, setArtifactStore } fro
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getAuditCommandDefinitions, getCommandDefinitions } from "../src/index.js";
+import { failure } from "../src/families/audit.js";
 import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -44,6 +45,7 @@ function gitInit(root: string): void {
 describe("audit command family", () => {
 
   test("scaffold creates plan artifacts only in the declared output directory", async () => {
+
     const root = tempRoot();
     const findings = path.join(root, "findings.json");
     const outDir = path.join(root, "audit-2026-09-27");
@@ -53,6 +55,23 @@ describe("audit command family", () => {
     expect(readFileSync(path.join(outDir, "001-leaked-credential.md"), "utf8")).toContain("Credential is exposed");
     expect(readFileSync(path.join(outDir, "README.md"), "utf8")).toContain("| 001 | Leaked credential |");
     expect(existsSync(path.join(root, "unrelated"))).toBe(false);
+  });
+  test("engine refusal mapper preserves the engine message and adds help routing", () => {
+    const error = Object.assign(new Error("engine refused this operation"), { code: "execution.consumer-not-ready" });
+    const result = failure("audit.promote", error);
+    expect(result.status).toBe("refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine refused this operation");
+    expect(result.details).toHaveProperty("helpRoute");
+    const recoveryGuidance = [
+      ["FRESH `--workflow` id; reconcile cannot adopt foreign bytes.", "catalog.registration-conflict"],
+      ["there is no CLI verb to remove or repair the stale root entry.", "catalog.registration-conflict"],
+      ["reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.", "catalog.registration-conflict"],
+      ["nothing was registered. Re-run with a fresh operation id", "catalog.revision-conflict"],
+    ] as const;
+    for (const [segment, code] of recoveryGuidance) {
+      const refusal = failure("audit.promote", Object.assign(new Error(`engine refusal — ${segment}`), { code }));
+      expect(refusal.message).toContain(segment);
+    }
   });
 
   test("secret scan reports the actual engine finding for a tracked fixture without disclosing its value", async () => {
@@ -73,6 +92,9 @@ describe("audit command family", () => {
     writeFileSync(path.join(root, ".github", "workflows", "ci.yml"), "on: pull_request_target\njobs:\n  test:\n    steps:\n      - uses: actions/checkout@main\n        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n");
     const result = await command("audit.supply-chain").execute({ path: root }, context(root));
     expect(result.status).toBe("refused");
+    expect(result).toMatchObject({ code: "audit.supply-chain.findings", exitCode: 1 });
+    expect(result.message.split("\n")[0]).toMatch(/^\d+ supply-chain findings$/);
+    expect(result.details).toMatchObject({ helpRoute: "mstar audit supply-chain --help" });
     expect(result.details).toMatchObject({ findings: expect.arrayContaining([
       expect.objectContaining({ kind: "lockfile-duplicate" }), expect.objectContaining({ kind: "action-unpinned", file: ".github/workflows/ci.yml" }), expect.objectContaining({ kind: "pull_request_target-head", file: ".github/workflows/ci.yml" }),
     ]) });

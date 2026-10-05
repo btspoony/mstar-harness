@@ -13,6 +13,7 @@ import {
   type ActivationAttestation,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -26,14 +27,11 @@ const SESSION_RECOVER_EXPECT_HELP =
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function refused(id: string, error: unknown): CommandEnvelope<never> {
+function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) };
-}
-function usage(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) });
 }
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
@@ -49,11 +47,9 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       input: runInput, output: commandEnvelopeSchema, effects: ["process"],
       description: "Launch argv under a freshly minted local execution identity; this is a launch, not a binding \u2014 it writes no session row or lease, and the child binds through the public `plan bind --execution --workflow <id> --coordinator|--plan <id>` route, whose creator/ownerless/foreign-holder conditions still apply.",
       async execute(raw, context) {
-        const parsed = runInput.safeParse(raw);
-        if (!parsed.success) return usage("session.run", parsed.error.message);
-        const { workflow, role, plan, argv = [], harness } = parsed.data;
+        const { workflow, role, plan, argv = [], harness } = raw as z.infer<typeof runInput>;
         if (role === undefined || (role === "plan-pm" && plan === undefined) || (role === "coordinator" && plan !== undefined) || argv.length === 0 || argv[0]!.trim() === "") {
-          return usage("session.run", "session run requires --workflow, --role, a compatible --plan, and a child argv");
+          return refusalEnvelope({ command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session run requires --workflow, --role, a compatible --plan, and a child argv" });
         }
         const root = resolveProcessHarnessDir(context.cwd, harness);
         const identity = createLocalExecutionIdentity({ workflowId: workflow, role, planId: plan ?? null });
@@ -83,7 +79,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
             details: launched,
           };
         } catch (error) {
-          return refused("session.run", error);
+          return engineRefusal("session.run", error);
         }
       },
     }),
@@ -100,15 +96,15 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       description: "Recover a stopped workflow coordinator, or an explicitly named stopped plan owner, through active DB authority. Recovery never resumes a session.",
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
-        if (!parsed.success) return usage("session.recover", parsed.error.message);
+        if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message });
         const { workflow, plan, priorSession, unowned, reason, attestation, expect, operation, harness } = parsed.data;
         if ((priorSession === undefined) === (unowned !== true) || (plan !== undefined && (priorSession === undefined || unowned === true)) || reason === undefined || attestation === undefined || expect === undefined || operation === undefined) {
-          return usage("session.recover", "session recover requires exactly one priorSession or coordinator-only unowned, plus reason, attestation, expect and operation; plan recovery requires a named prior owner");
+          return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session recover requires exactly one priorSession or coordinator-only unowned, plus reason, attestation, expect and operation; plan recovery requires a named prior owner" });
         }
-        if (context.sessionId === undefined) return usage("session.recover", "active recovery requires the main conversation session identity");
+        if (context.sessionId === undefined) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active recovery requires the main conversation session identity" });
         try {
           const root = resolveProcessHarnessDir(context.cwd, harness);
-          if (root === null) return usage("session.recover", "no control harness resolved; supply an absolute harness");
+          if (root === null) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
           const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator", planId: null };
           const parsedAttestation = JSON.parse(readFileSync(attestation, "utf8")) as ActivationAttestation;
           const contextForCaller = executionContextFor({ harnessDir: root }, identity);
@@ -123,7 +119,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
             });
           return ok("session.recover", receipt);
         } catch (error) {
-          return refused("session.recover", error);
+          return engineRefusal("session.recover", error);
         }
       },
     }),

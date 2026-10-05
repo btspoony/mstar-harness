@@ -364,6 +364,7 @@ describe("coordination checks command family", () => {
       context(cwd),
     );
     expect(result).toMatchObject({ status: "refused", code: "lease.verify.plan-not-found", exitCode: 1 });
+    expect(result.message?.split("\n")[0]).toBe("no plan row with id/plan_id plan-b");
   });
 
   test("migration refusal leaves the source tree untouched", async () => {

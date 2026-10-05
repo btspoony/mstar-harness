@@ -25,6 +25,7 @@ import {
   type MigratePlan,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 function leaseRow(view: ExecutionPlanView): Record<string, unknown> {
@@ -35,19 +36,19 @@ function leaseRow(view: ExecutionPlanView): Record<string, unknown> {
 function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: `${command}.ok`, exitCode: 0, data };
 }
-function refused(command: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return { version: 1, command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) };
-}
-function usage(command: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+function engineFailure(command: string, error: unknown, fallback: string): CommandEnvelope<never> {
+  if (error instanceof z.ZodError) return refusalEnvelope({ command, status: "usage", code: "command.invalid-input", exitCode: 2, message: error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; ") });
+  const code = errorCode(error, fallback);
+  const message = messageOf(error);
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function errorCode(error: unknown, fallback: string): string {
   return error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : fallback;
-}
-function engineFailure(command: string, error: unknown, fallback: string): CommandEnvelope<never> {
-  if (error instanceof z.ZodError) return usage(command, error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; "));
-  return refused(command, errorCode(error, fallback), messageOf(error));
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> { return definition; }
 function harnessDir(context: InvocationContext, override?: string): string {
@@ -106,8 +107,8 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }),
           });
           if (plan.alreadyMigrated) return ok(id, { root, dryRun: plan.dryRun, alreadyMigrated: true, applied: false, message: plan.message, steps: plan.steps, migrationNotes: plan.migrationNotes });
-          if (plan.deliveryKindAmbiguous.length > 0) return usage(id, `a single delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts (${plan.deliveryKindAmbiguous.join(", ")}) — migrate them in batches of one declared plan`);
-          if (plan.deliveryKindRequired.length > 0) return usage(id, `${plan.deliveryKindRequired.length} active standalone plan snapshot(s) would be lifted without a declared delivery kind (${plan.deliveryKindRequired.join(", ")}) — pass deliveryKind with its evidence (development: branchSource/branchTarget; verification/report-only: completionPolicy)`);
+          if (plan.deliveryKindAmbiguous.length > 0) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `a single delivery declaration cannot describe ${plan.deliveryKindAmbiguous.length} active standalone plan lifts (${plan.deliveryKindAmbiguous.join(", ")}) — migrate them in batches of one declared plan` });
+          if (plan.deliveryKindRequired.length > 0) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `${plan.deliveryKindRequired.length} active standalone plan snapshot(s) would be lifted without a declared delivery kind (${plan.deliveryKindRequired.join(", ")}) — pass deliveryKind with its evidence (development: branchSource/branchTarget; verification/report-only: completionPolicy)` });
           if (plan.dryRun) return ok(id, { root, dryRun: true, alreadyMigrated: false, applied: false, message: `dry-run: ${plan.steps.length} steps planned, zero writes`, steps: plan.steps, migrationNotes: plan.migrationNotes, roadmapCandidate: plan.roadmap, validationWarnings: validatePlanDocs(plan) });
           try {
             const result = await applyMigratePlan(plan);
@@ -136,17 +137,17 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
               : [leaseRow(served.read.data as ExecutionPlanView)];
           } else {
             const file = snapshotPath(context, input.workflow, input.harness);
-            if (!existsSync(file)) return refused(id, "lease.verify.snapshot-not-found", `workflow snapshot not found: ${file}`);
+            if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}` });
             const doc = readJson(file);
             rows = Array.isArray(doc.plans) ? doc.plans as Array<Record<string, unknown>> : [];
           }
           const matches = input.plan === undefined ? [solePlan(rows, `lease verify ${input.workflow}`)] : rows.filter((row) => row.id === input.plan || row.plan_id === input.plan);
-          if (input.plan !== undefined && matches.length === 0) return refused(id, "lease.verify.plan-not-found", `no plan row with id/plan_id ${input.plan}`);
-          if (input.plan !== undefined && matches.length > 1) return refused(id, "lease.verify.ambiguous", "multiple plan rows match (id and plan_id both present)");
+          if (input.plan !== undefined && matches.length === 0) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.plan-not-found", exitCode: 1, message: `no plan row with id/plan_id ${input.plan}` });
+          if (input.plan !== undefined && matches.length > 1) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.ambiguous", exitCode: 1, message: "multiple plan rows match (id and plan_id both present)" });
           const row = matches[0]!;
           const planId = input.plan ?? String(row.plan_id ?? row.id ?? "");
           const result = verifyPlanExecutionLease(row, planId);
-          return result.ok ? ok(id, { workflow: input.workflow, plan: planId, lease: result.lease }) : refused(id, result.violations[0]?.code ?? "lease.verify.invalid", result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), { violations: result.violations });
+          return result.ok ? ok(id, { workflow: input.workflow, plan: planId, lease: result.lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.verify.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations } });
         } catch (error) { return engineFailure(id, error, "lease.verify.refused"); }
       },
     }),
@@ -163,12 +164,12 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           if (served.route === "execution") lease = (served.read.data as { workflows?: Array<{ integrationLease?: unknown }> }).workflows?.[0]?.integrationLease ?? undefined;
           else {
             const file = snapshotPath(context, input.workflow, input.harness);
-            if (!existsSync(file)) return refused(id, "lease.verify.snapshot-not-found", `workflow snapshot not found: ${file}`);
+            if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}` });
             lease = readJson(file).integration_merge_lease;
           }
           if (lease === undefined) return ok(id, { workflow: input.workflow, claimed: false });
           const result = validateIntegrationMergeLease(lease);
-          return result.ok ? ok(id, { workflow: input.workflow, claimed: true, lease }) : refused(id, result.violations[0]?.code ?? "lease.merge-lease.invalid", result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), { violations: result.violations });
+          return result.ok ? ok(id, { workflow: input.workflow, claimed: true, lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.merge-lease.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations } });
         } catch (error) { return engineFailure(id, error, "lease.verify-integration.refused"); }
       },
     }),
@@ -180,8 +181,8 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
         const id = "iteration.gate";
         try {
           const phase6 = input.phase !== undefined && Number(input.phase) === 6;
-          if (input.phase !== undefined && !phase6) return usage(id, `usage: iteration gate --phase only supports 6 (got ${JSON.stringify(input.phase)})`);
-          if (!phase6 && (!input.compass || input.compass.trim() === "")) return usage(id, "usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)");
+          if (input.phase !== undefined && !phase6) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `usage: iteration gate --phase only supports 6 (got ${JSON.stringify(input.phase)})` });
+          if (!phase6 && (!input.compass || input.compass.trim() === "")) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "usage: iteration gate requires --compass <path> (or --phase 6 for the post-merge close form)" });
           const root = harnessDir(context, input.harness);
           const executionRoute = await resolveExecutionReadRoute({ harnessDir: root });
           if (executionRoute === "execution") {
@@ -192,15 +193,15 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
               const gate = await evaluatePostMergeCloseFromExecutionAuthority({ harnessDir: root }, input.workflow);
               return gate.ok
                 ? ok(id, { phase: 6, gate })
-                : refused(id, gate.violations[0]?.code ?? "iteration.gate.blocked", "phase 6 post-merge close gate is blocked", { gate });
+                : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate } });
             }
 
             const compassPath = path.resolve(context.cwd, input.compass!);
-            if (!existsSync(compassPath)) return refused(id, "iteration.gate.compass-not-found", `compass file not found: ${compassPath}`);
+            if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}` });
             const { readRegisteredWorkflowFromExecutionAuthority } = await import("@mstar-harness/engine");
             const snapshot = await readRegisteredWorkflowFromExecutionAuthority({ harnessDir: root }, input.workflow);
             if (snapshot === null) {
-              return refused(id, "iteration.gate.workflow-not-found", `workflow '${input.workflow}' not found in the registered execution authority`);
+              return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.workflow-not-found", exitCode: 1, message: `workflow '${input.workflow}' not found in the registered execution authority` });
             }
             const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
               currentBranch: input.branch,
@@ -209,22 +210,22 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             });
             return gate.ok
               ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit })
-              : refused(id, gate.violations[0]?.code ?? "iteration.gate.blocked", "iteration phase gate is blocked", { gate });
+              : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate } });
           }
           const file = snapshotPath(context, input.workflow, input.harness);
-          if (!existsSync(file)) return refused(id, "iteration.gate.snapshot-not-found", `workflow snapshot not found: ${file}`);
+          if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}` });
           const snapshot = readJson(file);
           if (phase6) {
             const root = harnessDir(context, input.harness);
             let rootDoc: unknown;
             try { const rootFile = path.join(root, "status.json"); if (existsSync(rootFile)) rootDoc = readJson(rootFile); } catch { rootDoc = undefined; }
             const gate = evaluatePostMergeClose(snapshot, rootDoc);
-            return gate.ok ? ok(id, { phase: 6, gate }) : refused(id, gate.violations[0]?.code ?? "iteration.gate.blocked", "phase 6 post-merge close gate is blocked", { gate });
+            return gate.ok ? ok(id, { phase: 6, gate }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate } });
           }
           const compassPath = path.resolve(context.cwd, input.compass!);
-          if (!existsSync(compassPath)) return refused(id, "iteration.gate.compass-not-found", `compass file not found: ${compassPath}`);
+          if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}` });
           const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), { currentBranch: input.branch, specIntegrationBranch: input.integration, prBaseBranch: input.target });
-          return gate.ok ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit }) : refused(id, gate.violations[0]?.code ?? "iteration.gate.blocked", "iteration phase gate is blocked", { gate });
+          return gate.ok ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate } });
         } catch (error) { return engineFailure(id, error, "iteration.gate.refused"); }
       },
     }),
@@ -235,7 +236,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
       async execute(input) {
         const id = "iteration.push-cadence";
         const gate = pushCadenceProbe(input.ciRunning === true, input.reviewWave === true);
-        return gate.ok ? ok(id, { allowed: true, violations: [] }) : refused(id, gate.violations[0]?.code ?? "iteration.push-cadence.blocked", "push blocked by active CI or review wave", { violations: gate.violations });
+        return gate.ok ? ok(id, { allowed: true, violations: [] }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.push-cadence.blocked", exitCode: 1, message: "push blocked by active CI or review wave", details: { violations: gate.violations } });
       },
     }),
   ];

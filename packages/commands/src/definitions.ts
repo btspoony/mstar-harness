@@ -1,3 +1,5 @@
+import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
+import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
@@ -36,7 +38,10 @@ const failureEnvelopeSchema = z.object({
 }).passthrough();
 
 export function usageEnvelope(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+  return refusalEnvelope({
+    command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message,
+    diagnostics: [{ code: "command.invalid-input", message }],
+  });
 }
 
 export const commandEnvelopeSchema = z.discriminatedUnion("status", [
@@ -171,17 +176,103 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
  * diagnostic shape: field path, stable issue code, message and the first array
  * index where relevant. Never carries submitted values.
  */
-function inputDiagnostic(issue: z.ZodError["issues"][number]): Record<string, unknown> {
+function redactInputScalar(value: string): string {
+  return redactSecrets(value).text
+    .replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
+}
+
+/**
+ * Every scalar submitted anywhere in the input. An issue message can quote a
+ * value that is NOT the one at the issue path — an `unrecognized_keys` issue
+ * names the unknown key, a refinement quotes its own input — so sanitizing only
+ * the value at the path leaves those copies in the emitted message. Object keys
+ * are collected too: a strict object reports the offending key by name.
+ */
+function submittedScalars(input: unknown): string[] {
+  const scalars: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      scalars.push(String(value));
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        scalars.push(key);
+        visit(item);
+      }
+    }
+  };
+  visit(input);
+  return scalars;
+}
+
+/**
+ * A schema issue message with every submitted secret-shaped scalar replaced by
+ * its redacted form. Benign scalars (numbers, ordinary words) redact to
+ * themselves, so the message keeps its diagnostic value while a custom token
+ * the pattern-based redactor does not recognize is never echoed to the caller.
+ */
+function issueMessageSanitizer(input: unknown): (message: string) => string {
+  const replacements: Record<string, string> = {};
+  for (const scalar of submittedScalars(input)) {
+    const redacted = redactInputScalar(scalar);
+    if (redacted !== scalar && replacements[scalar] === undefined) replacements[scalar] = redacted;
+  }
+  const scalars = Object.keys(replacements);
+  const pattern = scalars.length === 0 ? undefined : new RegExp(scalars.map((scalar) =>
+    scalar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  ).join("|"), "g");
+  return (message) => {
+    const text = redactSecrets(message).text;
+    return pattern === undefined ? text : text.replace(pattern, (scalar) => replacements[scalar] ?? scalar);
+  };
+}
+
+function inputDiagnostic(issue: z.ZodError["issues"][number], sanitize: (message: string) => string): RefusalDiagnostic {
   const path = issue.path.reduce((path: string, part: string | number | symbol) =>
     typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
   "");
   const index = issue.path.find((part) => typeof part === "number");
+  const message = sanitize(issue.message);
   return {
     path,
     code: issue.code,
-    message: issue.message,
+    message,
     ...(typeof index === "number" ? { index } : {}),
   };
+}
+
+
+function inputValueAtPath(input: unknown, path: readonly (string | number | symbol)[]): unknown {
+  return path.reduce<unknown>((value, part) =>
+    value !== null && typeof value === "object" ? (value as Record<PropertyKey, unknown>)[part] : undefined,
+  input);
+}
+
+function inputPath(issue: z.ZodError["issues"][number]): string {
+  return issue.path.reduce((path: string, part: string | number | symbol) =>
+    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
+  "");
+}
+
+function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { path: string; expected: string; received: string } {
+  const expected = issue.code === "invalid_type"
+    ? issue.expected
+    : issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values)
+      ? issue.values.map(String).join(" | ")
+      : issue.code === "too_small" && "minimum" in issue
+        ? `${issue.origin} ${issue.inclusive ? ">=" : ">"} ${String(issue.minimum)}`
+        : issue.code === "too_big" && "maximum" in issue
+          ? `${issue.origin} ${issue.inclusive ? "<=" : "<"} ${String(issue.maximum)}`
+          : issue.code === "unrecognized_keys"
+            ? "recognized keys"
+            : "valid value";
+  const value = inputValueAtPath(input, issue.path);
+  const received = value === undefined ? "undefined" : value === null ? "null" :
+    typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
+      redactInputScalar(String(value));
+  return { path: inputPath(issue), expected, received };
 }
 
 export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
@@ -193,26 +284,36 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   const selector = definition.cli.options.find((option) => option.context === "sessionId");
   const selectorValue = selector === undefined ? undefined : rawInput[selector.key];
   if (selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "")) {
-    return {
-      version: 1,
-      command: id,
-      status: "usage",
-      code: "command.invalid-input",
-      exitCode: 2,
+    return refusalEnvelope({
+      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
       message: `${selector?.flags.split(/[ <]/)[0] ?? selector?.key} must be a non-empty string`,
-    };
+      rejected: {
+        path: selector?.flags.split(/[ <]/)[0] ?? selector?.key ?? "session",
+        expected: "non-empty string",
+        received: typeof selectorValue === "string" ? JSON.stringify(selectorValue) : typeof selectorValue,
+      },
+    });
   }
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
-    return {
-      version: 1,
-      command: id,
-      status: "usage",
-      code: "command.invalid-input",
-      exitCode: 2,
-      message: parsed.error.issues.map((issue) => issue.message).join("; "),
-      details: { diagnostics: parsed.error.issues.map(inputDiagnostic) },
+    const sanitize = issueMessageSanitizer(input);
+    const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, sanitize));
+    const joinedMessage = parsed.error.issues.map((entry) => entry.message).join("; ");
+    const issue = parsed.error.issues[0];
+    const facts = rejectionFacts(issue, input);
+    const optionKey = issue.path.map(String).join(".");
+    const option = definition.cli.options.find((entry) => entry.key === optionKey);
+    const rejected = facts.path === "" ? undefined : {
+      path: option?.flags.split(/[ <]/)[0] ?? facts.path,
+      expected: facts.expected,
+      received: facts.received,
     };
+    return refusalEnvelope({
+      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: sanitize(joinedMessage),
+      diagnostics,
+      ...(rejected === undefined ? {} : { rejected }),
+    });
   }
   const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;
   try {

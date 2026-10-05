@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEffects, CommandEnvelope, InvocationContext } from "../types.js";
 import type { RunningDashboard } from "../dashboard/server.js";
-
 const id = "dashboard";
 const inputSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(0),
@@ -25,15 +25,15 @@ type DashboardSlot = {
 };
 const dashboards = new WeakMap<CommandEffects, Map<string, DashboardSlot>>();
 
-function failure(code: string, error: unknown, status: "refused" | "error" = "refused"): CommandEnvelope<never> {
-  return {
-    version: 1,
+export function failure(code: string, error: unknown): CommandEnvelope<never> {
+  return refusalEnvelope({
     command: id,
-    status,
+    status: "refused",
     code,
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
-  };
+    details: { operation: id },
+  });
 }
 
 function serviceFor(context: InvocationContext, harnessDir: string, port: number, projectId?: string): { slot: DashboardSlot; reused: boolean } {
@@ -71,14 +71,13 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
-    return {
-      version: 1,
+    return refusalEnvelope({
       command: id,
       status: "usage",
       code: "command.invalid-input",
       exitCode: 2,
       message: parsed.error.message,
-    };
+    });
   }
   const harnessDir = context.controlRoot;
   if (harnessDir === null) {
@@ -120,7 +119,7 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
     } catch (error) {
       forget(context, harnessDir, parsed.data.port, parsed.data.project);
       await server.close();
-      return failure("capability.browser.unavailable", error, "error");
+      return { version: 1, command: id, status: "error", code: "capability.browser.unavailable", exitCode: 1, message: error instanceof Error ? error.message : String(error) };
     }
   }
 

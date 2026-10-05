@@ -23,6 +23,7 @@ import {
 import type { PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 
 const inputSchema = z.object({
@@ -61,7 +62,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message, ...(paths.length > 0 ? { details: { paths } } : {}) };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(paths.length > 0 ? { details: { paths } } : {}) });
 }
 function storeContext(input: IssueInput, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);

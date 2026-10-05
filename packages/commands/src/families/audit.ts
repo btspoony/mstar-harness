@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
@@ -53,11 +54,15 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
 };
 function idFor(verb: Verb): string { return `audit.${verb}`; }
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
-function failure(id: string, error: unknown): CommandEnvelope<never> {
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof SddScriptError && error.exitCode === 2) return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+  if (error instanceof SddScriptError && error.exitCode === 2) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message };
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 function required(value: string | undefined, label: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${label} is required`, 2);
@@ -213,11 +218,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const files = listed.stdout.split("\0").filter(Boolean).map((file) => path.join(root, file));
       const result = scanSecrets(files);
       return result.unreadableFiles > 0 || result.findings.length > 0
-        ? { version: 1, command: id, status: "refused", code: result.unreadableFiles > 0 ? "audit.secret-scan.incomplete" : "audit.secret-scan.findings", exitCode: 1, message: result.unreadableFiles > 0 ? `failed to read ${result.unreadableFiles} tracked files; refusing to report clean` : `${result.findings.length} secret findings`, details: { findings: result.findings, unreadableFiles: result.unreadableFiles } }
+        ? refusalEnvelope({ command: id, status: "refused", code: result.unreadableFiles > 0 ? "audit.secret-scan.incomplete" : "audit.secret-scan.findings", exitCode: 1, message: result.unreadableFiles > 0 ? `failed to read ${result.unreadableFiles} tracked files; refusing to report clean` : `${result.findings.length} secret findings`, details: { findings: result.findings, unreadableFiles: result.unreadableFiles } })
         : ok(id, { findings: [], unreadableFiles: 0, filesScanned: files.length });
     }
     const result = supplyChainChecks(root);
-    return result.ok ? ok(id, result) : { version: 1, command: id, status: "refused", code: "audit.supply-chain.findings", exitCode: 1, message: `${result.findings.length} supply-chain findings`, details: { findings: result.findings, violations: result.violations } };
+    return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: "audit.supply-chain.findings", exitCode: 1, message: `${result.findings.length} supply-chain findings`, details: { findings: result.findings, violations: result.violations } });
   } catch (error) { return failure(id, error); }
 }
 function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
@@ -229,7 +234,7 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
     id,
     cli: { path: ["audit", verb], aliases: [], arguments: contract.args, options: contract.options },
     input, output: commandEnvelopeSchema, effects: contract.effects, description: contract.description,
-    async execute(raw, context) { const parsed = input.safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message }; },
+    async execute(raw, context) { const parsed = input.safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message }); },
   };
 }
 

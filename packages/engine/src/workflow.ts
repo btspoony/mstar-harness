@@ -2061,11 +2061,7 @@ export function derivePlanRegistration(input: {
   // refuses. A document with no heading states no title to contradict, so there
   // the declaration stands (the same reason it is not refused when derived).
   if (declaredTitle !== undefined && documentTitle !== undefined && declaredTitle.trim() !== documentTitle) {
-    throw new Error(
-      `derivePlanRegistration: plan ${JSON.stringify(planId)} was declared with title ${JSON.stringify(declaredTitle)}, but the ` +
-        `selected document ${resolved.planPath} states ${JSON.stringify(documentTitle)} - the selected plan document is the ` +
-        "registration authority (R1/section 4), so a supplied title is a constraint against it, never an override",
-    );
+    throw Object.assign(new Error(`derivePlanRegistration: plan ${JSON.stringify(planId)} was declared with title ${JSON.stringify(declaredTitle)}, but the ` + `selected document ${resolved.planPath} states ${JSON.stringify(documentTitle)} - the selected plan document is the ` + "registration authority (R1/section 4), so a supplied title is a constraint against it, never an override"), { code: "workflow.register.title-constraint" });
   }
   const title = documentTitle ?? declaredTitle ?? planId;
   // The catalog entity location is plans-root-relative while the row keeps the

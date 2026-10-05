@@ -1,4 +1,6 @@
 export * from "./types.js";
+export { refusalEnvelope } from "./envelope.js";
+export type { RefusalDiagnostic, RefusalInput } from "./envelope.js";
 export {
   CommandDefinitionError,
   commandEnvelopeSchema,
@@ -14,7 +16,7 @@ export { getCatalogCommandDefinitions } from "./families/catalog.js";
 export { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 export { getStoreCommandDefinitions } from "./families/store.js";
 export { getExecutionCommandDefinitions } from "./families/execution.js";
-export { getSddCommandDefinitions } from "./families/sdd.js";
+export { getSddCommandDefinitions, failed as sddFailed } from "./families/sdd.js";
 export { getCommandSchemas, getPayloadSchema, getSchemaCommandDefinitions } from "./families/schema.js";
 export { getValidationCommandDefinitions } from "./families/validation.js";
 export { getAuditCommandDefinitions } from "./families/audit.js";

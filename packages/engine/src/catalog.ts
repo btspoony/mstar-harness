@@ -277,7 +277,10 @@ function catalogRoots(context: StoreContext): Record<CatalogRootKind, string> {
 }
 
 function pathRefused(message: string): CatalogError {
-  return new CatalogError("catalog.path-refused", `${message} \u2014 no catalog write was made`);
+  return new CatalogError(
+    "catalog.path-refused",
+    `${message} -- no catalog write was made. Correct the --path value to a root-relative, non-traversing, non-empty path with no symlink escape (the user corrects the input value; no hidden-state repair needed).`,
+  );
 }
 
 /**
@@ -714,7 +717,7 @@ export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
     .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
     .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
   if (!row || typeof row.authority_state !== "string" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations");
+    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
   }
   return { storeRevision: row.revision, catalogRevision: row.catalog_revision, authorityState: row.authority_state };
 }
@@ -724,7 +727,7 @@ function assertCatalogActive(db: StoreDb): void {
   if (versions.authorityState !== "active") {
     throw new CatalogError(
       "store.not-active",
-      `The catalog store is ${versions.authorityState}; catalog mutations require an active store (\u00a72 issues contract: a staged store is read-only to ordinary domain verbs).`,
+      `The catalog store is ${versions.authorityState}; catalog mutations require an active store (\u00a72 issues contract: a staged store is read-only to ordinary domain verbs). Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.`,
     );
   }
 }
@@ -871,7 +874,7 @@ export function registerCatalogEntityOn(
       throw new CatalogError(
         "catalog.duplicate",
         `${record.kind} ${record.id} is already registered at ${existing.root_kind}/${existing.relative_path}; ` +
-          `existing IDs are preserved \u2014 updateCatalogEntity is the only verb that relocates one.`,
+          `existing IDs are preserved -- updateCatalogEntity is the only verb that relocates one. Discover the current revision with mstar catalog show <kind> <id>, then relocate it with mstar catalog update <kind> <id> --path <new> [--root-kind <k>] --expect <revision> --operation-id <id> --actor <role>.`,
       );
     }
     return commitOperation(

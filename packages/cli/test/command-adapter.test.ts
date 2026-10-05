@@ -10,7 +10,7 @@ import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { serializeExecutionValue } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mcpToolInputSchema, registerMcpCommands } from "../src/mcp/register";
-import { mapParserError, registerCliCommands, renderCommandContract, usageEnvelope } from "../src/command-adapter";
+import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
 
@@ -72,6 +72,48 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("plan bind reports the valued option when a flag is mistaken for a value", async () => {
+    const result = await run(["plan", "bind", "--plan", "--workflow", "w"]);
+    const body = JSON.parse(result.stdout) as {
+      message: string;
+      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string; helpRoute?: string };
+    };
+    const diagnostic = body.details?.diagnostics?.[0];
+    // The primary surface must carry the identified option facts, not just the
+    // metadata: the first line names the option, its expected arity and the
+    // received token.
+    const firstLine = body.message.split("\n")[0] ?? "";
+    expect(firstLine).toBe("Rejected --plan: expected option value; received --plan");
+    expect(diagnostic?.path).toBe("--plan");
+    expect(diagnostic?.usage).toContain("--plan <value>");
+    expect(diagnostic?.usage).toContain("--execution");
+    expect(body.details?.recovery).toContain("Correct usage:");
+    expect(body.details?.helpRoute).toBe("mstar plan bind --help");
+  });
+  test("plan bind does not attribute option-like positionals after the terminator", async () => {
+    const result = await run(["plan", "bind", "--", "--plan", "--workflow", "w"]);
+    const body = JSON.parse(result.stdout) as {
+      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string };
+    };
+    const diagnostic = body.details?.diagnostics?.[0];
+    expect(diagnostic).not.toHaveProperty("path");
+    expect(diagnostic?.usage).toContain("--plan <value>");
+    expect(body.details?.recovery).toContain("Correct usage:");
+  });
+
+
+  test("issue show positional parse errors retain their diagnostic shape", () => {
+    const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
+    const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
+    const details = envelope?.details;
+    expect(details).toMatchObject({
+      diagnostics: [{ code: "commander.excessArguments", message: error.message, helpRoute: "mstar issue show --help" }],
+    });
+    if (details !== undefined && "diagnostics" in details && Array.isArray(details.diagnostics)) {
+      expect(details.diagnostics[0]).not.toHaveProperty("path");
+    }
+  });
+
   test("MCP tool schemas publish the domain-owned payload contract instead of an opaque field", () => {
     const definitions = getCommandDefinitions();
     const definition = (id: string): CommandDefinition => {
@@ -291,7 +333,47 @@ describe("generated CLI adapter", () => {
   test("unknown options map to a usage envelope and exit 2", async () => {
     const result = await run(["schema", "CaptureInput", "--nope"]);
     expect(result.status).toBe(2);
-    expect(JSON.parse(result.stdout)).toMatchObject(usageEnvelope("schema", JSON.parse(result.stdout).message));
+    const envelope = JSON.parse(result.stdout) as {
+      status: string;
+      code: string;
+      exitCode: number;
+      details?: { helpRoute?: string; diagnostics?: Array<{ code: string; path?: string }> };
+    };
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.details?.helpRoute).toBe("mstar schema --help");
+    // The unknown flag is not a determinable input field: no path is invented.
+    expect(envelope.details?.diagnostics?.[0]?.code).toBe("commander.unknownOption");
+    expect(envelope.details?.diagnostics?.[0]).not.toHaveProperty("path");
+  });
+
+  test("a root unknown option routes recovery to the root help, never a doubled command", async () => {
+    const result = await run(["--bogus"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout) as {
+      status: string;
+      code: string;
+      exitCode: number;
+      details?: { helpRoute?: string; recovery?: string };
+    };
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.details?.helpRoute).toBe("mstar --help");
+    expect(envelope.details?.recovery).toContain("mstar --help");
+    expect(JSON.stringify(envelope)).not.toContain("mstar mstar --help");
+  });
+
+  test("an unknown command routes recovery to the root help, never an invented leaf route", async () => {
+    const result = await run(["definitely-not-a-command"]);
+    expect(result.status).toBe(2);
+    const envelope = JSON.parse(result.stdout) as {
+      status: string;
+      code: string;
+      exitCode: number;
+      details?: { helpRoute?: string; recovery?: string };
+    };
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(envelope.details?.helpRoute).toBe("mstar --help");
+    expect(envelope.details?.recovery).toContain("mstar --help");
+    expect(JSON.stringify(envelope)).not.toContain("mstar definitely-not-a-command --help");
   });
 });
 

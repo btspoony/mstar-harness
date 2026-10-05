@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { captureIssue, openStore } from "@mstar-harness/engine";
@@ -74,6 +74,16 @@ describe("store and execution command surface", () => {
     expect(getExecutionCommandDefinitions().map(({ id }) => id)).toEqual([
       "store.execution.restore-preview", "store.execution.restore", "store.execution.export",
     ]);
+  });
+  test("execution restore-preview preserves usage code, status, and authored message", async () => {
+    const root = fixture("execution-usage");
+    const result = await invoke(definition("store.execution.restore-preview"), { harness: join(root, ".mstar") }, root);
+    expect(result).toMatchObject({
+      status: "usage",
+      code: "usage",
+      exitCode: 2,
+      message: "--backup is required",
+    });
   });
 
   test("initializes despite symlinked project residuals, previews migration, upgrades and backs up an explicitly named fixture store", async () => {
@@ -207,6 +217,10 @@ describe("store and execution command surface", () => {
       authorization: "fixture-audit-reference",
     }, root);
     expect(rejected.status).toBe("refused");
+    expect(rejected.message.split("\n", 1)[0]).toBe(
+      `[store.activation-stale] no recovery point exists at ${join(realpathSync(harness), "absent-point.db")}. Select an existing recovery point or create one with store backup --out <path> inside ${realpathSync(harness)}; run store execution restore-preview against that point before retrying restore.`,
+    );
+    expect(rejected.details).toHaveProperty("helpRoute");
     if (rejected.status === "refused") expect(rejected.code).toBe("store.activation-stale");
     expect(await storeSnapshot(harness)).toEqual(before);
   });

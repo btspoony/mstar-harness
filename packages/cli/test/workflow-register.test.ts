@@ -126,6 +126,28 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
 }
 
 describe("mstar workflow register", () => {
+  test("mismatched declared title returns the typed constraint refusal verbatim", async () => {
+    await setupHarness((harness) => {
+      const args = registerArgs(harness);
+      args[args.indexOf("--plan-title") + 1] = "Contradictory title";
+      const result = runCli([...args, "--json"]);
+      expect(result.exitCode).toBe(1);
+      const envelope = commandOutput(result);
+      expect(envelope).toMatchObject({
+        status: "refused",
+        code: "workflow.register.title-constraint",
+        exitCode: 1,
+      });
+      expect(String(envelope.message)).toContain(
+        `derivePlanRegistration: plan "20260916-plan-cli-example" was declared with title "Contradictory title", but the selected document ${realpathSync(join(harness, "plans/20260916-plan-cli-example.md"))} states "CLI example plan" - the selected plan document is the registration authority (R1/section 4), so a supplied title is a constraint against it, never an override`,
+      );
+      expect(String(envelope.message)).toContain("Use the title in the selected plan document's H1");
+      expect(String(envelope.message)).toContain("Help: mstar workflow register --help");
+      expect(String(envelope.message)).toContain(
+        "Recovery: Use the title in the selected plan document's H1, or correct that document before registering.",
+      );
+    });
+  });
   test("registers a standalone development plan: root entry + snapshot on disk, both validate (exit 0)", async () => {
     await setupHarness((harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));
@@ -297,7 +319,9 @@ describe("mstar workflow register", () => {
     await setupHarness((harness) => {
       const result = runCli(registerArgs(harness, ["--delivery-kind", "stealth"]));
       expect(commandOutput(result).status).toBe("usage");
-      expect(commandMessage(result)).toContain("deliveryKind");
+      expect(commandMessage(result)).toContain("--delivery-kind");
+      expect(commandMessage(result)).toContain("development | verification/report-only");
+      expect(commandMessage(result)).toContain("stealth");
     });
   });
 

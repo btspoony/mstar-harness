@@ -34,7 +34,7 @@ describe("mstar host detect — tool-shape host matrix", () => {
   test("empty --signals → usage, exit 2", () => {
     const result = runCli(["host", "detect", "--signals", ""]);
     expect(result.exitCode).toBe(2);
-    expect(cliEnvelope(result).message).toBe("Too small: expected string to have >=1 characters");
+    expect(cliEnvelope(result).message).toBe("Rejected --signals: expected string >= 1; received ");
   });
 
   test("missing --signals → usage, exit 2", () => {
@@ -91,7 +91,7 @@ describe("mstar host skill-root — loaded skill-root resolution (audit-004)", (
   test("empty --skill value is a usage error (exit 2)", () => {
     const result = runCli(["host", "skill-root", "--host", "opencode", "--skill="]);
     expect(result.exitCode).toBe(2);
-    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toContain("characters");
+    expect(cliEnvelope(result, "usage", "command.invalid-input").message).toBe("Rejected --skill: expected string >= 1; received ");
   });
 
   test("unknown host is a usage error (exit 2)", () => {

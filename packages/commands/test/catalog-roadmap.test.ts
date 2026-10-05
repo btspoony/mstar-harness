@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { getCatalogCommandDefinitions, getRoadmapCommandDefinitions } from "../src/index.js";
+import { failure as catalogFailure } from "../src/families/catalog.js";
+import { failure as roadmapFailure } from "../src/families/roadmap.js";
+
 import type { InvocationContext } from "../src/types.js";
 
 const root = mkdtempSync(join(tmpdir(), "commands-catalog-roadmap-"));
@@ -40,6 +43,23 @@ async function activeFixture(name: string): Promise<{ cwd: string; harness: stri
 }
 
 describe("catalog and roadmap command families", () => {
+  test("catalog refusal preserves engine code and verbatim first line", () => {
+    const result = catalogFailure("catalog.update", Object.assign(new Error("engine catalog refusal detail"), { code: "catalog.engine-refused" }));
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("catalog.engine-refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine catalog refusal detail");
+    expect(result.details).toHaveProperty("helpRoute");
+  });
+
+  test("roadmap refusal preserves engine code and verbatim first line", () => {
+    const result = roadmapFailure("roadmap.replace", Object.assign(new Error("engine roadmap refusal detail"), { code: "roadmap.engine-refused" }));
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("roadmap.engine-refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine roadmap refusal detail");
+    expect(result.details).toHaveProperty("helpRoute");
+  });
+
+
   test("registers exactly the assigned thirteen catalog and roadmap identities", () => {
     expect([...Object.keys(catalog), ...Object.keys(roadmap)]).toEqual([
       "catalog.discover", "catalog.import", "catalog.register", "catalog.update", "catalog.link", "catalog.list", "catalog.show", "catalog.export", "catalog.reconcile",
@@ -54,6 +74,24 @@ describe("catalog and roadmap command families", () => {
     expect(result.status).toBe("refused");
     expect(result.code).toMatch(/^store\.(not-initialized|not-active)$/);
   });
+  test("inactive catalog mutation exposes the store activation recovery", async () => {
+    const cwd = join(root, "inactive-mutation");
+    const harness = join(cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    store.close();
+    const result = await catalog["catalog.register"]!.execute({
+      harness, kind: "document", id: "doc", title: "Doc", rootKind: "specs", path: "doc.md",
+      operationId: "inactive-register", actor: "test",
+    }, invocation(cwd));
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("store.not-active");
+    expect(result.message).toContain("store upgrade --operator <name>");
+    expect(result.message).toContain("store activate --manifest <migration.json> --attestation <file.json>");
+    expect(result.message).toContain("then retry");
+  });
+
 
   test("catalog mutations preserve execution workflow state", async () => {
     const { cwd, harness } = await activeFixture("snapshot-immutability");

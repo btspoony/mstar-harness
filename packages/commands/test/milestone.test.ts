@@ -5,11 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions } from "../src/index.js";
+import { failure } from "../src/families/milestone.js";
 import type { InvocationContext } from "../src/types.js";
 
 const root = mkdtempSync(join(tmpdir(), "commands-milestone-"));
 afterAll(() => rmSync(root,{recursive:true,force:true}));
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
+test("milestone refusal preserves engine code and verbatim first line", () => {
+ const result=failure("milestone.update",Object.assign(new Error("engine milestone refusal detail"),{code:"milestone.engine-refused"}));
+ expect(result.status).toBe("refused");
+ expect(result.code).toBe("milestone.engine-refused");
+ expect(result.message.split("\n",1)[0]).toBe("engine milestone refusal detail");
+ expect(result.details).toHaveProperty("helpRoute");
+});
 test("milestone commands register and use store revision CAS with replay", async () => {
  const commands=getCommandDefinitions().filter(item=>item.id.startsWith("milestone."));
  expect(commands.map(item=>item.id)).toEqual(["milestone.add","milestone.update","milestone.assign","milestone.list","milestone.status"]);

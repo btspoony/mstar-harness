@@ -248,15 +248,15 @@ describe("#324 fixture discovery walkthrough", () => {
         cli(["plan", "bind", "--coordinator", "--workflow", "wf-legacy", "--session-id", "legacy-coord", "--harness", legacyHarness]).stdout,
       );
       expect(coordinatorForm.status).toBe("refused");
-      expect(coordinatorForm.code).toBe("coordination.workflow-not-found");
-      expect(coordinatorForm.message).toContain("--execution route");
+      expect(coordinatorForm.code).toBe("execution.consumer-not-ready");
+      expect(coordinatorForm.message).toContain("Re-run with `--execution`");
       // Legacy pair form: --workflow + --plan, no --execution.
       const pairForm = envelope(
         cli(["plan", "bind", "--workflow", "wf-legacy", "--plan", "p-legacy", "--session-id", "legacy-pm", "--harness", legacyHarness]).stdout,
       );
       expect(pairForm.status).toBe("refused");
-      expect(pairForm.code).toBe("coordination.workflow-not-found");
-      expect(pairForm.message).toContain("--execution route");
+      expect(pairForm.code).toBe("execution.consumer-not-ready");
+      expect(pairForm.message).toContain("Re-run with `--execution`");
     } finally {
       rmSync(legacyScratch, { recursive: true, force: true });
       rmSync(legacyFixture, { recursive: true, force: true });

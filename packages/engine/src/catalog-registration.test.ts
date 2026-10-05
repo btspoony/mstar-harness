@@ -14,7 +14,7 @@
  * the producer suites use when they erase the root entry to simulate a lost
  * write).
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -44,6 +44,7 @@ afterEach(() => {
   // The injected stores are per-test; the producers must never keep writing
   // through a previous test's fixture.
   setArtifactStore(undefined);
+  process.chdir(ROOT);
 });
 
 /**
@@ -56,6 +57,7 @@ async function fixture(name: string): Promise<{ workspace: string; harnessDir: s
   const workspace = mkdtempSync(join(ROOT, name));
   mkdirSync(join(workspace, ".mstar"), { recursive: true });
   const harnessDir = workspace;
+  process.chdir(workspace);
   const context: StoreContext = { harnessDir };
   const handle = await initializeStore(context);
   handle.close();
@@ -1178,5 +1180,226 @@ describe("catalog execution registration \u2014 registered-plan path preflight (
     ).rejects.toMatchObject({ code: "plan-path.identity-mismatch" });
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     expect(existsSync(join(harnessDir, "status.json"))).toBe(false);
+  });
+});
+
+/**
+ * The recovery segments are bound at the RAISING site: each assertion drives a
+ * real producer refusal and reads the text the producer itself throws (never a
+ * string the test plants). Deleting or weakening a producer's recovery sentence
+ * fails the corresponding assertion.
+ */
+describe("catalog execution registration \u2014 recovery segments at the raising site", () => {
+  test("identity mismatch names the FRESH --workflow re-run", async () => {
+    const { harnessDir, context } = await fixture("recovery-identity-");
+    const dir = join(harnessDir, "workflows", "wf-plan-1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+      schema_version: 1,
+      id: "wf-plan-1",
+      type: "plan",
+      status: "running",
+      started_at: "2026-09-01T00:00:00.000Z",
+      updated_at: "2026-09-01",
+      plans: [{ id: "foreign-plan", title: "Foreign plan", file: "foreign.md", status: "Todo" }],
+      delivery_kind: "verification/report-only",
+      completion_policy: "foreign",
+    }, null, 2));
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-identity", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({
+      code: "catalog.registration-conflict",
+      message: expect.stringContaining("Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes."),
+    });
+  });
+
+  test("a stale root entry names the FRESH --workflow re-run and the absent repair verb", async () => {
+    const { harnessDir, context } = await fixture("recovery-stale-root-");
+    writeFileSync(join(harnessDir, "status.json"), JSON.stringify({
+      version: 2,
+      updated_at: "2026-09-18",
+      workflows: [{ id: "wf-plan-1", type: "plan", started_at: "2026-09-18T00:00:00.000Z", dir: "workflows/wf-plan-1" }],
+    }, null, 2));
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-stale-root", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({
+      code: "catalog.registration-conflict",
+      message: expect.stringContaining("Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry."),
+    });
+  });
+
+  test("a diverged execution registration at publish names the fresh ids and the reconcile route", async () => {
+    const { harnessDir, context } = await fixture("recovery-divergence-");
+    await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-diverge-0", expectedCatalogRevision: 0 }));
+    // Recreate the orphan shape: the operation's own writes are on disk while
+    // the journal and catalog are empty again.
+    const handle = await openStore(context, "write");
+    handle.db.prepare("delete from catalog_operations").run();
+    handle.db.prepare("delete from catalog_links").run();
+    handle.db.prepare("delete from catalog_execution_bindings").run();
+    handle.db.prepare("delete from catalog_entities").run();
+    handle.db.prepare("update store_meta set catalog_revision = 0 where id = 1").run();
+    handle.close();
+    writeFileSync(join(harnessDir, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-18", workflows: [] }, null, 2));
+
+    // The root write is the last step before publish; mutate the snapshot under
+    // it so the verified bytes no longer match the reviewed identity.
+    const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let mutated = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!mutated && doc.kind === "status") {
+          mutated = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "another-project";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-diverge-1", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({
+      code: "catalog.registration-conflict",
+      message: expect.stringContaining("Re-run with a FRESH `--workflow` id and a fresh operation id, or reconcile your own operation with `mstar catalog reconcile --operation-id <own>`."),
+    });
+  });
+
+  test("reconcile at publish advises a new review, not a replay that cannot succeed", async () => {
+    const { harnessDir, context } = await fixture("recovery-reconcile-divergence-");
+    await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-reconcile-diverge-0", expectedCatalogRevision: 0 }));
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+
+    // The pending shape a crash between the execution write and the commit
+    // leaves: the operation's own bytes are on disk, the journal row is rewound
+    // to `execution-written`, and the root entry is gone so reconcile re-writes
+    // it — the exact window in which a foreign writer can take the path.
+    const handle = await openStore(context, "write");
+    handle.db.prepare("update catalog_operations set phase = 'execution-written', result_json = null where operation_id = ?").run("op-reconcile-diverge-0");
+    handle.close();
+    writeFileSync(join(harnessDir, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-18", workflows: [] }, null, 2));
+
+    const base = createFsStore(harnessDir);
+    let mutated = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!mutated && doc.kind === "status") {
+          mutated = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "another-project";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+
+    await expect(reconcileCatalogExecution(context, "op-reconcile-diverge-0")).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("re-derive the catalog delta from a new review against the current revision and retry publication."),
+    });
+  });
+
+  test("the reviewed-expectation refusal names the fresh operation id and the reconcile route", async () => {
+    const { harnessDir, context } = await fixture("recovery-revision-");
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-revision", expectedCatalogRevision: 99 })),
+    ).rejects.toMatchObject({
+      code: "catalog.revision-conflict",
+      message: expect.stringContaining("nothing was registered. Re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with `mstar catalog reconcile --operation-id <op>`."),
+    });
+  });
+  test("the publish-time reviewed-revision refusal says nothing was published", async () => {
+    const { harnessDir, context } = await fixture("recovery-publish-revision-");
+    const base = createFsStore(harnessDir);
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (doc.kind === "status") {
+          const handle = await openStore(context, "write");
+          handle.db.prepare("update store_meta set catalog_revision = 1 where id = 1").run();
+          handle.close();
+        }
+      },
+    });
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-publish-revision", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({
+      code: "catalog.revision-conflict",
+      message: expect.stringContaining("nothing was published. Re-run with a fresh operation id"),
+    });
+  });
+
+  test("reconcile at publish requires a current review", async () => {
+    const { harnessDir, context } = await fixture("recovery-reconcile-publish-revision-");
+    setArtifactStore(failingStore(harnessDir, "status"));
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-reconcile-publish", expectedCatalogRevision: 0 })),
+    ).rejects.toThrow(/injected status write failure/);
+
+    const base = createFsStore(harnessDir);
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (doc.kind === "status") {
+          const handle = await openStore(context, "write");
+          handle.db.prepare("update store_meta set catalog_revision = 1 where id = 1").run();
+          handle.close();
+        }
+      },
+    });
+
+    await expect(reconcileCatalogExecution(context, "op-recovery-reconcile-publish")).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("this reviewed delta is stale. Re-derive it against the current catalog revision in a new review, then retry."),
+    });
+  });
+
+
+  test("a missing snapshot after the producer reports success names verify, re-drive and record steps", async () => {
+    const { harnessDir, context } = await fixture("recovery-missing-snapshot-");
+    const base = createFsStore(harnessDir);
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        // The producer's own writes land, then the snapshot disappears before
+        // the post-write verification reads it back.
+        if (doc.kind === "status") rmSync(join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE), { force: true });
+      },
+    });
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-missing-snapshot", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({
+      code: "catalog.registration-invalid",
+      message: expect.stringContaining("Verify via mstar status validate <snapshotPath>; re-drive via mstar catalog reconcile --list and mstar catalog reconcile --operation-id <op>; record via mstar issue add."),
+    });
+  });
+
+  test("an operation that does not own the binding names the owner discovery and replay", async () => {
+    const { harnessDir, context } = await fixture("recovery-binding-owner-");
+    await registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-owner-a", expectedCatalogRevision: 0 }));
+    // The binding stays while its committed journal row is gone: the shape the
+    // producer comment names (a binding owned by another operation remains).
+    const handle = await openStore(context, "write");
+    handle.db.prepare("delete from catalog_operations").run();
+    handle.close();
+    writeFileSync(join(harnessDir, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-18", workflows: [] }, null, 2));
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-owner-b", expectedCatalogRevision: 1 })),
+    ).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("Discover the owning operation via mstar catalog reconcile --list, then replay it idempotently with mstar catalog reconcile --operation-id <owner>."),
+    });
   });
 });

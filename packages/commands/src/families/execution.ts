@@ -10,6 +10,7 @@ import {
   type StoreContext,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 
@@ -27,13 +28,6 @@ const writeVerbs: Record<string, true> = { restore: true };
 
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
-}
-function refused(id: string, error: unknown): CommandEnvelope<never> {
-  const message = error instanceof Error ? error.message : String(error);
-  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`;
-  return error instanceof SddScriptError
-    ? { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message }
-    : { version: 1, command: id, status: "refused", code, exitCode: 1, message };
 }
 function required(value: string | undefined, flag: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
@@ -104,8 +98,18 @@ async function execute(id: string, input: ExecutionInput, invocation: Invocation
       if (out !== undefined) writeFileSync(out, artifact.canonicalJson.endsWith("\n") ? artifact.canonicalJson : `${artifact.canonicalJson}\n`);
       return ok(id, { format: artifact.format, sha256: artifact.sha256, out: out ?? null, canonicalJson: artifact.canonicalJson });
     }
-    throw new Error(`unsupported store execution command ${id}`);
-  } catch (error) { return refused(id, error); }
+    return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message: `Unknown store execution verb: ${verb}` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`;
+    const details = error !== null && typeof error === "object" && "details" in error
+      && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+      ? error.details as Record<string, unknown>
+      : undefined;
+    return error instanceof SddScriptError
+      ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...(details === undefined ? {} : { details }) })
+      : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+  }
 }
 
 function cliDefinition(id: string): CommandDefinition<ExecutionInput, unknown> {

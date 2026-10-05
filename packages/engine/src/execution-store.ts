@@ -1363,7 +1363,8 @@ export async function readExecutionCleanupSnapshots(
     if (selected === undefined) {
       throw new CoordinationError(
         "coordination.workflow-not-found",
-        `the execution authority holds no workflow ${JSON.stringify(workflowId)}.`,
+        `the execution authority holds no workflow ${JSON.stringify(workflowId)}. ` +
+          `List registered workflow ids via mstar status validate (data.workflows[].id), then re-run mstar worktree cleanup --workflow <listedId>; if no registered workflow remains, there is nothing to clean.`,
         { workflow_id: workflowId },
       );
     }

@@ -14,6 +14,7 @@ type JudgmentCliResult = Readonly<{
   code?: string;
 }>;
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const id = "judgment.review-advice";
@@ -42,9 +43,6 @@ async function lazyJudgmentProvider({ invocation, signal, readInput }: Parameter
   });
 }
 
-function usage(message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
-}
 
 function error(code: string, message: string, boundary?: string): CommandEnvelope<never> {
   return {
@@ -61,7 +59,7 @@ function error(code: string, message: string, boundary?: string): CommandEnvelop
 async function execute(input: Input, context: InvocationContext, provider: JudgmentProvider): Promise<CommandEnvelope> {
   const hasFile = input.file !== undefined;
   const hasStdin = input.stdin === true;
-  if (hasFile === hasStdin) return usage("exactly one of file or stdin is required");
+  if (hasFile === hasStdin) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "exactly one of file or stdin is required" });
 
   const invocation: JudgmentInvocation = Object.freeze({
     cwd: context.cwd,
@@ -77,7 +75,7 @@ async function execute(input: Input, context: InvocationContext, provider: Judgm
     return error("judgment.provider-failed", "Judgment provider invocation failed", cause instanceof Error ? cause.message : String(cause));
   }
 
-  if (result.status === "invalid") return usage("Judgment input was rejected");
+  if (result.status === "invalid") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "Judgment input was rejected" });
   if (result.status === "cancelled") {
     return { version: 1, command: id, status: "error", code: "judgment.cancelled", exitCode: 130, message: "Judgment review was cancelled", details: { boundary: result.code ?? "review-cancelled" } };
   }
@@ -105,9 +103,7 @@ export function getJudgmentCommandDefinitions(provider: JudgmentProvider = lazyJ
     effects: ["read", "stdin", "service"],
     description: "The historical judgment submit command is not in the current registry; use judgment review-advice --file <pack.json> --pilot <pilot.json> (or --stdin) for explicitly enabled, bounded advice.",
     async execute(raw, context) {
-      const parsed = inputSchema.safeParse(raw);
-      if (!parsed.success) return usage(parsed.error.message);
-      return execute(parsed.data, context, provider);
+      return execute(raw as Input, context, provider);
     },
   };
   return [definition];

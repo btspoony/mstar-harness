@@ -49,6 +49,16 @@ describe("executeCommand input diagnostics", () => {
   // `report.versionOverrides` and `worktree.qc-alignment.files` are rejected by
   // definition.input.safeParse itself, so these cases prove the canonical
   // admission envelope — not a handler's own recovery path.
+  test("enum schema rejection names the CLI flag, accepted values, and received value", async () => {
+    const envelope = await executeCommand("workflow.register", { deliveryKind: "pr" }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe(
+      "Rejected --delivery-kind: expected development | verification/report-only; received pr",
+    );
+    expect(envelope.details).toMatchObject({ diagnostics: [{ path: "deliveryKind", code: "invalid_value" }] });
+  });
+
   test("two identical violations at different object paths keep distinct safe paths in one grouped response", async () => {
     const envelope = await executeCommand("report", { versionOverrides: { cli: 1, engine: 2 } }, context());
     const diagnostics = usageDiagnostics(envelope);
@@ -69,6 +79,13 @@ describe("executeCommand input diagnostics", () => {
     }
   });
 
+  test("invalid array item rejection includes formatter-generated expected and received facts", async () => {
+    const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe("Rejected files[0]: expected string; received 42");
+  });
+
   test("numeric array indices are reported for the offending array item", async () => {
     const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
     const diagnostics = usageDiagnostics(envelope);
@@ -83,6 +100,85 @@ describe("executeCommand input diagnostics", () => {
     expect(JSON.stringify(envelope)).not.toContain(secret);
     // The offending member is still identified by its safe path.
     expect(diagnostics.map((entry) => entry.path)).toContain("files[0]");
+  });
+  test("secret-shaped scalar received values are redacted from the usage message", async () => {
+    const secret = "sk-live-test-123";
+    const envelope = await executeCommand("worktree.qc-alignment", { files: secret }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).not.toContain(secret);
+    expect(envelope.message).toContain("[REDACTED]");
+  });
+
+  test("non-secret scalar received values remain fully rendered", async () => {
+    const envelope = await executeCommand("worktree.qc-alignment", { files: 42 }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).toContain("received 42");
+  });
+
+  test("a secret-shaped scalar quoted outside the issue path is redacted from message and diagnostics", async () => {
+    // A strict object reports the offending KEY by name, and the issue path is
+    // the object root — sanitizing only the value at the path left the key's
+    // copy of the submitted secret in both the message and the diagnostic.
+    const secret = "sk-live-test-123";
+    const envelope = await executeCommand("report", { [secret]: "x" }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(JSON.stringify(envelope)).not.toContain(secret);
+    expect(envelope.message).toContain("[REDACTED]");
+    const diagnostics = usageDiagnostics(envelope);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({ code: "unrecognized_keys" });
+    expect(diagnostics[0]?.message).not.toContain(secret);
+  });
+
+  test("a benign unrecognized key stays fully rendered", async () => {
+    const envelope = await executeCommand("report", { bogus: 1 }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).toContain('Unrecognized key: "bogus"');
+  });
+  test("all diagnostics are rendered without an omission note", async () => {
+    const issueCount = 5000;
+    const envelope = await executeCommand("worktree.qc-alignment", { files: Array(issueCount).fill(42) }, context());
+    const diagnostics = usageDiagnostics(envelope);
+    expect(diagnostics).toHaveLength(issueCount);
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).not.toContain("…and");
+  });
+
+});
+
+describe("session selector admission", () => {
+  // The central selector rejection is a consumer-visible admission point: it
+  // must carry the same factory metadata as every other usage refusal, with the
+  // code and exit unchanged.
+  test("an empty session selector is rejected with the shared usage shape", async () => {
+    const envelope = await executeCommand("plan.bind", { sessionId: "" }, context());
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received ""');
+    expect(envelope.details).toMatchObject({
+      helpRoute: "mstar plan bind --help",
+      recovery: "Run mstar plan bind --help and correct the flagged input.",
+    });
+  });
+
+  test("a whitespace session selector is rejected the same way", async () => {
+    const envelope = await executeCommand("plan.bind", { sessionId: "   " }, context());
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received "   "');
+  });
+
+  test("a non-string session selector names the received type", async () => {
+    const envelope = await executeCommand("plan.bind", { sessionId: 42 }, context());
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe("Rejected --session-id: expected non-empty string; received number");
+    expect(envelope.details).toMatchObject({ helpRoute: "mstar plan bind --help" });
   });
 });
 

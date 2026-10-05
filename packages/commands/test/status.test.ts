@@ -139,4 +139,32 @@ describe("status command family", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("a status usage refusal carries the shared factory metadata", async () => {
+    const result = await statusDefinition("status.workflow-close").execute({}, context(process.cwd()));
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (result.status !== "usage") throw new Error("expected usage envelope");
+    expect(result.message.split("\n")[0]).toBe("workflow selector or acquired workflow identity is required");
+    expect(result.details).toMatchObject({
+      helpRoute: "mstar status workflow-close --help",
+      recovery: "Run mstar status workflow-close --help and correct the flagged input.",
+    });
+  });
+
+  test("a status engine refusal appends help and recovery without rewriting the engine line", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "status-refusal-shape-"));
+    try {
+      const workflowDir = path.join(dir, "workflows", "closed-flow");
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: "closed-flow", type: "plan", status: "invalid", started_at: "2026-01-01", updated_at: "2026-01-01", plans: [] }));
+      const result = await statusDefinition("status.workflow-close").execute({ workflow: "closed-flow", harness: dir }, context(dir));
+      expect(result).toMatchObject({ status: "refused", code: "workflow.snapshot.invalid-status", exitCode: 1 });
+      if (result.status === "ok") throw new Error("expected a refusal");
+      expect(result.message.split("\n")[0]).not.toContain("Help:");
+      expect(result.message).toContain("Help: mstar status workflow-close --help");
+      expect(result.details).toMatchObject({ helpRoute: "mstar status workflow-close --help" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

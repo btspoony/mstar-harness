@@ -3155,9 +3155,15 @@ describe("registerPlanWorkflow — the selected plan document is the registratio
 
     // A title the document does not state is a constraint violation, never an
     // override: the selected document is the registration authority (R1/§4).
-    expect(() =>
-      derivePlanRegistration({ harnessDir: root, plan: { id: planId, title: "A declared title", file: pointer } }),
-    ).toThrow(/states "The document's stated title"/);
+    let refusal: unknown;
+    try {
+      derivePlanRegistration({ harnessDir: root, plan: { id: planId, title: "A declared title", file: pointer } });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toMatchObject({ code: "workflow.register.title-constraint" });
+    expect(refusal).toBeInstanceOf(Error);
+    expect((refusal as Error).message).toContain(`states "The document's stated title"`);
 
     // An id that names a different registered plan is refused by the §4 resolver
     // itself: the pointer no longer resolves to the plan it claims to be.

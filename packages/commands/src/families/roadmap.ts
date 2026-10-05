@@ -1,3 +1,4 @@
+import { refusalEnvelope } from "../envelope.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -108,14 +109,21 @@ function readReviewFile(value: string): unknown {
 function success(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function failure(id: string, error: unknown): CommandEnvelope<never> {
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof UsageError) {
-    return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id, paths: error.paths } };
+    return refusalEnvelope({
+      command: id,
+      status: "usage",
+      code: "usage",
+      exitCode: 2,
+      message,
+      details: { operation: id, paths: error.paths },
+    });
   }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details: { operation: id } });
 }
 function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");

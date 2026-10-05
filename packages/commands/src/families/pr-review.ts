@@ -8,6 +8,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
@@ -38,9 +39,11 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
 };
 const idFor = (verb: Verb) => `pr-review.${verb}`;
 const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data });
-const failure = (id: string, error: unknown): CommandEnvelope<never> => error instanceof UsageError
-  ? { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: error.message }
-  : { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+const failure = (id: string, error: unknown): CommandEnvelope<never> => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
+  return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+};
 class UsageError extends Error {}
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };
@@ -105,7 +108,7 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const file = abs(context.cwd, need(input.reportFile, "report file"));
       if (!existsSync(file)) throw new Error(`report file not found: ${file}`);
       const result = validatePrReviewReport(readFileSync(file, "utf8"));
-      return result.ok ? ok(id, result) : { version: 1, command: id, status: "refused", code: `${id}.invalid`, exitCode: 1, message: "PR-review report validation failed", details: { violations: result.violations } };
+      return result.ok ? ok(id, result) : refusalEnvelope({ command: id, status: "refused", code: `${id}.invalid`, exitCode: 1, message: "PR-review report validation failed", details: { violations: result.violations } });
     }
     if (verb === "post") {
       if (!/^\d+$/.test(need(input.pr, "--pr")) || Number(input.pr) < 1) throw new UsageError("--pr requires a positive integer");
@@ -123,11 +126,11 @@ async function execute(verb: Verb, input: Input, context: InvocationContext): Pr
       const viewResult = await spawn(context, ["gh", "pr", "view", String(Number(input.pr)), "--json", "url,headRefOid"]);
 
       if (viewResult.exitCode !== 0 || viewResult.signal !== null) {
-        return { version: 1, command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" };
+        return refusalEnvelope({ command: id, status: "refused", code: `${id}.unauthorized`, exitCode: 1, message: viewResult.stderr || "GitHub authentication/target lookup failed" });
       }
       const plan = planReviewPost(JSON.parse(viewResult.stdout), { body, comments });
       if (plan.pr !== Number(input.pr)) {
-        return { version: 1, command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` };
+        return refusalEnvelope({ command: id, status: "refused", code: `${id}.wrong-target`, exitCode: 1, message: `resolved PR ${plan.pr} does not match requested PR ${input.pr}` });
       }
       const apiPath = `repos/${plan.ownerRepo}/pulls/${plan.pr}/reviews`;
       const payload = (kept: ReviewPostPlan["inlineComments"], dropped: ReviewPostPlan["inlineComments"]): string => JSON.stringify({ commit_id: plan.commitId, event: plan.event, body: dropped.length ? foldComments(plan.body, dropped) : plan.body, ...(kept.length ? { comments: kept.map(({ path: filePath, line, side, body: commentBody }) => ({ path: filePath, line, side, body: commentBody })) } : {}) });

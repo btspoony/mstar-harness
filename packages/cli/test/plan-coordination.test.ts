@@ -1038,7 +1038,7 @@ describe("mstar plan — strict-input", () => {
       ],
       fixture.root,
     );
-    expect(JSON.parse(result.stdout).message).toBe("Invalid option: expected one of \"resolved\"|\"waived\"|\"duplicate\"|\"superseded\"");
+    expect(JSON.parse(result.stdout).message).toBe("Rejected --disposition: expected resolved | waived | duplicate | superseded; received open");
   });
 
   test("failures use the command envelope and preserve refusal-versus-usage exit codes", () => {

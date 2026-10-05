@@ -149,6 +149,44 @@ describe("plan command family", () => {
     expect(await Bun.file(snapshot).text()).toBe(before);
   });
 
+  test("legacy plan bind refuses before snapshot lookup when workflow is in active DB authority", async () => {
+    const data = activeFixture();
+    const storeContext = { harnessDir: data.root };
+    (await initializeStore(storeContext)).close();
+    const initialized = await initializeExecutionAuthority(storeContext);
+    const identity = {
+      source: "local" as const,
+      sessionId: "coordinator-a",
+      workflowId: data.workflow,
+      role: "coordinator" as const,
+      planId: null,
+    };
+    await createExecutionWorkflow(executionContextFor(storeContext, identity), {
+      entry: { id: data.workflow, type: "iteration", status: "running", started_at: "2026-09-26T00:00:00Z", dir: `workflows/${data.workflow}` } as never,
+      snapshot: {
+        schema_version: 1,
+        id: data.workflow,
+        type: "iteration",
+        status: "running",
+        started_at: "2026-09-26T00:00:00Z",
+        updated_at: "2026-09-26T00:00:00Z",
+        branch: { base: "main" },
+        plans: [{ id: data.plan, plan_id: data.plan, title: "Plan A", file: `.mstar/plans/${data.plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+      } as never,
+      expected: initialized.token,
+      operationId: "create-plan-workflow",
+    });
+
+    const result = await definition("plan.bind").execute(
+      { coordinator: true, workflow: data.workflow, harness: data.harness } as never,
+      context(data.root, "coordinator-a"),
+    );
+    expect(result).toMatchObject({ status: "refused", code: "execution.consumer-not-ready", exitCode: 1 });
+    expect(result.message).toContain("registered in the active DB execution authority");
+    expect(result.message).toContain("Re-run with `--execution`");
+    expect(result.message).not.toContain("coordination.workflow-not-found");
+  });
+
   test("stale active execution tokens are rejected by the engine", async () => {
     const data = activeFixture();
     const storeContext = { harnessDir: data.root };

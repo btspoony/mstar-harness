@@ -1,3 +1,4 @@
+import { refusalEnvelope } from "../envelope.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -76,16 +77,18 @@ const cliFlags: Record<keyof Input, string> = {
 function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function failure(id: string, error: unknown): CommandEnvelope<never> {
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  const details: Record<string, unknown> = { operation: id, ...(paths.length === 0 ? {} : { paths }) };
-  if (error instanceof SddScriptError) return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message, details };
+  const details = { operation: id, ...(paths.length === 0 ? {} : { paths }) };
+  if (error instanceof SddScriptError) {
+    return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details });
+  }
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message, details };
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details });
 }
 function storeContext(input: Input, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);

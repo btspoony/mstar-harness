@@ -58,7 +58,7 @@ async function usageMessage(envelope: CommandEnvelope): Promise<string> {
 }
 
 type SchemaCommandData =
-  | { kind: "command"; descriptor: { id: string; description: string; effects: readonly string[]; requirements: readonly { name: string; ownership: string; route: string; help?: string }[]; payloadSchemas: Record<string, unknown> } }
+  | { kind: "command"; descriptor: { id: string; description: string; effects: readonly string[]; requirements: readonly { name: string; ownership: string; route: string; help?: string; tokenKind?: "root" | "workflow" | "plan" | "none" }[]; payloadSchemas: Record<string, unknown> } }
   | { kind: "family"; family: string; members: readonly { id: string; description: string }[] };
 
 describe("command discovery", () => {
@@ -144,6 +144,48 @@ describe("command discovery", () => {
     expect(overridden.input.safeParse({}).success).toBe(false);
     expect(overridden.input.safeParse({ name: "x" }).success).toBe(true);
   });
+  test("execution token kinds are published in command requirement metadata", () => {
+    const definitions = getCommandDefinitions();
+    for (const [id, tokenKind] of [
+      ["workflow.register", "root"],
+      ["plan.prepare", "plan"],
+    ] as const) {
+      const descriptor = selectCommandSchema({ command: id }, definitions);
+      if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
+      expect(descriptor.descriptor.requirements.find((entry) => entry.name === "expect")?.tokenKind).toBe(tokenKind);
+    }
+    for (const id of ["plan.bind", "session.recover"]) {
+      const descriptor = selectCommandSchema({ command: id }, definitions);
+      if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
+      expect(descriptor.descriptor.requirements.filter((entry) => entry.name === "expect")).toEqual([]);
+    }
+    const bind = selectCommandSchema({ command: "plan.bind" }, definitions);
+    if (bind.kind !== "command") throw new Error("expected plan.bind command descriptor");
+    expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--coordinator)", tokenKind: "workflow",
+    }));
+    expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--plan)", tokenKind: "plan",
+    }));
+    const recover = selectCommandSchema({ command: "session.recover" }, definitions);
+    if (recover.kind !== "command") throw new Error("expected session.recover command descriptor");
+    expect(recover.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--coordinator)", tokenKind: "workflow",
+    }));
+    expect(recover.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--plan)", tokenKind: "plan",
+    }));
+  });
+  test("workflow register schema publishes the selected-document title constraint", () => {
+    const selection = selectCommandSchema({ command: "workflow.register" }, getCommandDefinitions());
+    if (selection.kind !== "command") throw new Error("expected workflow.register command descriptor");
+    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "planTitle",
+      ownership: "caller",
+      route: "cli",
+      constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
+    }));
+  });
 
   test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
@@ -204,10 +246,21 @@ describe("command discovery", () => {
     expect(message).toContain("CaptureInput");
   });
 
-  test("selector collisions and empty selectors surface usage envelopes at the engine gate", async () => {
-    const collision = await usageMessage(await executeCommand("schema", { command: "schema", family: "schema" }, context()));
-    expect(collision).toContain("exactly one");
-    const empty = await usageMessage(await executeCommand("schema", {}, context()));
-    expect(empty).toContain("exactly one");
+  test("selector collisions and empty selectors preserve root-union guidance at execution", async () => {
+    for (const input of [
+      { command: "schema", family: "schema" },
+      {},
+    ]) {
+      const envelope = await executeCommand("schema", input, context());
+      expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      if (envelope.status !== "usage") throw new Error("expected usage envelope");
+      const firstLine = envelope.message.split("\n")[0] ?? "";
+      expect(firstLine).toContain("supply exactly one");
+      expect(firstLine).toContain("command");
+      expect(firstLine).toContain("family");
+      expect(firstLine).toContain("type");
+      expect(firstLine).not.toMatch(/Rejected\s*:/);
+      expect(envelope.message).not.toContain("expected valid value");
+    }
   });
 });

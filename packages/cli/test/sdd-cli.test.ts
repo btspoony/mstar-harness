@@ -536,7 +536,7 @@ describe("mstar sdd check-context — gate one action seam (spec A3)", () => {
 
       const badKind = runCli(["sdd", "check-context", "--context", f.ctxFile, "--kind", "rename"], { cwd: f.control });
       expect(badKind.exitCode).toBe(2);
-      expectEnvelopeMessage(badKind, 'expected one of "source"|"artifact"|"launch"');
+      expectEnvelopeMessage(badKind, 'Rejected --kind: expected source | artifact | launch; received rename');
 
       const relativeCtx = runCli(["sdd", "check-context", "--context", "relative/context.json", "--kind", "launch"], { cwd: f.control });
       expect(relativeCtx.exitCode).toBe(2);
