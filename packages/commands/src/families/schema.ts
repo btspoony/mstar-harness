@@ -76,6 +76,17 @@ const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"
   "status.workflow-close": "workflow",
   "plan.bind": "plan",
   "plan.prepare": "plan",
+  "session.recover": "workflow",
+};
+const CONDITIONAL_EXPECT_TOKEN_KINDS: Readonly<Record<string, readonly CommandRequirement[]>> = {
+  "plan.bind": [
+    { name: "expect (--coordinator)", ownership: "caller", route: "cli", tokenKind: "workflow", help: "when --coordinator is selected" },
+    { name: "expect (--plan)", ownership: "caller", route: "cli", tokenKind: "plan", help: "when --plan is selected" },
+  ],
+  "session.recover": [
+    { name: "expect (--coordinator)", ownership: "caller", route: "cli", tokenKind: "workflow", help: "for coordinator recovery" },
+    { name: "expect (--plan)", ownership: "caller", route: "cli", tokenKind: "plan", help: "when --plan is selected" },
+  ],
 };
 
 function commandRequirements(definition: CommandDefinition): readonly CommandRequirement[] {
@@ -93,13 +104,11 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
       route: "cli" as const,
       ...(entry.key === "expect" && tokenKind !== undefined ? { tokenKind } : {}),
     }));
-  const requirements: CommandRequirement[] = [...explicit, ...hinted];
-  if (definition.id === "plan.bind") {
-    requirements.push(
-      { name: "expect (--coordinator)", ownership: "caller", route: "cli", tokenKind: "workflow", help: "when --coordinator is selected" },
-      { name: "expect (--plan)", ownership: "caller", route: "cli", tokenKind: "plan", help: "when --plan is selected" },
-    );
-  }
+  const requirements: CommandRequirement[] = [
+    ...explicit,
+    ...hinted,
+    ...(CONDITIONAL_EXPECT_TOKEN_KINDS[definition.id] ?? []),
+  ];
   // Route-verified session facts from the adapters: CLI collects the session
   // selector from argv (with its environment fallback); MCP reads it from the
   // per-call input, while its context resolver supplies nothing.

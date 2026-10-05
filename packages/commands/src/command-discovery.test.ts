@@ -150,6 +150,7 @@ describe("command discovery", () => {
       ["workflow.register", "root"],
       ["plan.bind", "plan"],
       ["plan.prepare", "plan"],
+      ["session.recover", "workflow"],
     ] as const) {
       const descriptor = selectCommandSchema({ command: id }, definitions);
       if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
@@ -161,6 +162,14 @@ describe("command discovery", () => {
       name: "expect (--coordinator)", tokenKind: "workflow",
     }));
     expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--plan)", tokenKind: "plan",
+    }));
+    const recover = selectCommandSchema({ command: "session.recover" }, definitions);
+    if (recover.kind !== "command") throw new Error("expected session.recover command descriptor");
+    expect(recover.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--coordinator)", tokenKind: "workflow",
+    }));
+    expect(recover.descriptor.requirements).toContainEqual(expect.objectContaining({
       name: "expect (--plan)", tokenKind: "plan",
     }));
   });
@@ -224,10 +233,21 @@ describe("command discovery", () => {
     expect(message).toContain("CaptureInput");
   });
 
-  test("selector collisions and empty selectors surface usage envelopes at the engine gate", async () => {
-    const collision = await usageMessage(await executeCommand("schema", { command: "schema", family: "schema" }, context()));
-    expect(collision).toContain("exactly one");
-    const empty = await usageMessage(await executeCommand("schema", {}, context()));
-    expect(empty).toContain("exactly one");
+  test("selector collisions and empty selectors preserve root-union guidance at execution", async () => {
+    for (const input of [
+      { command: "schema", family: "schema" },
+      {},
+    ]) {
+      const envelope = await executeCommand("schema", input, context());
+      expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+      if (envelope.status !== "usage") throw new Error("expected usage envelope");
+      const firstLine = envelope.message.split("\n")[0] ?? "";
+      expect(firstLine).toContain("supply exactly one");
+      expect(firstLine).toContain("command");
+      expect(firstLine).toContain("family");
+      expect(firstLine).toContain("type");
+      expect(firstLine).not.toMatch(/Rejected\s*:/);
+      expect(envelope.message).not.toContain("expected valid value");
+    }
   });
 });

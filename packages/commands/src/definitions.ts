@@ -248,16 +248,17 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     const optionKey = issue.path.map(String).join(".");
     const option = definition.cli.options.find((entry) => entry.key === optionKey);
     const helpRoute = `mstar ${definition.cli.path.join(" ")} --help`;
+    const rejected = facts.path === "" ? undefined : {
+      path: option?.flags.split(/[ <]/)[0] ?? facts.path,
+      expected: facts.expected,
+      received: facts.received,
+    };
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
       message: parsed.error.issues.map((entry) => entry.message).join("; "),
       helpRoute, recovery: `Review ${helpRoute} and correct the reported input.`,
       diagnostics,
-      rejected: {
-        path: option?.flags.split(/[ <]/)[0] ?? facts.path,
-        expected: facts.expected,
-        received: facts.received,
-      },
+      ...(rejected === undefined ? {} : { rejected }),
     });
   }
   const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;

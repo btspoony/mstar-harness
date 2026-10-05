@@ -118,6 +118,13 @@ describe("#324 help disclosure", () => {
     expect(refHelp).toContain("plan bind --execution");
   });
 
+  test("session recover help publishes workflow and plan token kinds without none", () => {
+    const { stdout } = runHelp(["session", "recover"]);
+    const help = optionHelp(stdout, "--expect <token>");
+    expect(help).toContain("token kind: workflow");
+    expect(help).toContain("token kind: plan");
+    expect(help).not.toContain("token kind: none");
+  });
   test("session recover names the required CAS token per recovery form", () => {
     const { stdout } = runHelp(["session", "recover"]);
     const help = optionHelp(stdout, "--expect <token>");

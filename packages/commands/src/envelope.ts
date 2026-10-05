@@ -27,7 +27,7 @@ export type RefusalInput = RefusalInputFields & (
 /** Build the shared refusal shape without rewriting engine-authored messages. */
 export function refusalEnvelope(input: RefusalInput): CommandEnvelope<never> {
   const { diagnostics, helpRoute, recovery, details, rejected } = input;
-  const message = rejected === undefined
+  const message = rejected === undefined || rejected.path.trim() === ""
     ? input.message
     : `Rejected ${rejected.path}: expected ${rejected.expected}; received ${rejected.received}`;
   const envelopeDetails = { ...details, diagnostics, helpRoute, recovery };
