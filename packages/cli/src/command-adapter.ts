@@ -22,7 +22,8 @@ import { captureSddEvidenceFromFile, verifySddEvidence } from "./sdd-evidence.js
 import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
 
-const ASSIGNMENT_RECOVERY_COMMAND = "mstar plan recover-assignment --decision re-review|restore";
+const ASSIGNMENT_RECOVERY_COMMAND = "mstar plan recover-assignment --decision re-review";
+const ASSIGNMENT_RECOVERY_RESTORE_COMMAND = "mstar plan recover-assignment --decision restore";
 
 export function surfaceAssignmentRecovery(
   commandId: string,
@@ -33,11 +34,15 @@ export function surfaceAssignmentRecovery(
     return envelope;
   }
   const needed = typeof envelope.details?.needed === "string" ? envelope.details.needed : undefined;
-  const recovery = `${ASSIGNMENT_RECOVERY_COMMAND}${needed === undefined ? "" : `. ${needed}`}`;
+  const recovery = `${ASSIGNMENT_RECOVERY_COMMAND} or ${ASSIGNMENT_RECOVERY_RESTORE_COMMAND}${needed === undefined ? "" : `. ${needed}`}`;
   return {
     ...envelope,
     message: `${envelope.message}\nRecovery: ${recovery}`,
-    details: { ...envelope.details, recoveryCommand: ASSIGNMENT_RECOVERY_COMMAND },
+    details: {
+      ...envelope.details,
+      recoveryCommand: ASSIGNMENT_RECOVERY_COMMAND,
+      recoveryDecisions: ["re-review", "restore"],
+    },
   };
 }
 

@@ -448,7 +448,6 @@ const payloadFieldsByVerb: Partial<Record<(typeof commandNames)[number], readonl
   "issue-add": ["entries"],
   "issue-close": ["evidence"],
   handoff: ["evidence"],
-  "recover-assignment": ["decision"],
 };
 /**
  * Per-verb supply disclosure for the shared `--expect` / `--session-ref`

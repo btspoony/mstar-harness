@@ -1731,7 +1731,7 @@ function recoverAssignment(fixture: Fixture, coordinator: string, decision: "re-
       "--plan",
       PLAN_ID,
       "--decision",
-      JSON.stringify(decision),
+      decision,
       "--expect",
       String(revision),
       "--json",
@@ -1756,10 +1756,12 @@ describe("assignment stale recovery transport", () => {
       expect(refusal.exitCode).toBe(1);
       const refused = jsonOf(refusal);
       expect(refused.code).toBe("coordination.assignment-stale");
-      expect(String(refused.message)).toContain("--decision re-review|restore");
+      expect(String(refused.message)).toContain("mstar plan recover-assignment --decision re-review");
+      expect(String(refused.message)).toContain("mstar plan recover-assignment --decision restore");
       expect((refused.details as Record<string, unknown>).recoveryCommand).toBe(
-        "mstar plan recover-assignment --decision re-review|restore",
+        "mstar plan recover-assignment --decision re-review",
       );
+      expect((refused.details as Record<string, unknown>).recoveryDecisions).toEqual(["re-review", "restore"]);
       expect(JSON.stringify(refused.details)).toContain("recover-assignment");
 
       const recovered = recoverAssignment(fixture, coordinator, decision, revision);
@@ -1777,7 +1779,8 @@ describe("assignment stale recovery transport", () => {
   }
 });
 
-test("MCP refusal exposes assignment recovery and re-review then bind succeeds in three calls", async () => {
+for (const decision of ["re-review", "restore"] as const) {
+test(`MCP refusal exposes assignment recovery and ${decision} then bind succeeds in three calls`, async () => {
   const fixture = makeFixture();
   const coordinator = bindCoordinator(fixture);
   const revision = preparePlan(fixture, coordinator, PLAN_ID);
@@ -1814,13 +1817,15 @@ test("MCP refusal exposes assignment recovery and re-review then bind succeeds i
     workflow: WORKFLOW_ID, plan: PLAN_ID, harness: fixture.harness, sessionId: "mcp-stale",
   });
   expect(refused.structuredContent.code).toBe("coordination.assignment-stale");
-  expect(String(refused.structuredContent.message)).toContain("mstar plan recover-assignment --decision re-review|restore");
+  expect(String(refused.structuredContent.message)).toContain("mstar plan recover-assignment --decision re-review");
+  expect(String(refused.structuredContent.message)).toContain("mstar plan recover-assignment --decision restore");
 
   const recovered = await call("mstar_plan_recover_assignment", {
-    session: coordinator, plan: PLAN_ID, decision: "re-review", expect: revision, sessionId: FIXTURE_COORDINATOR_ID,
+    session: coordinator, plan: PLAN_ID, decision, expect: revision, sessionId: FIXTURE_COORDINATOR_ID,
   });
   expect(recovered.structuredContent.status).toBe("ok");
   expect(JSON.stringify(recovered.structuredContent)).toContain("assignment-recovered");
+  if (decision === "restore") expect(readText(fixture.assignmentPath)).toBe(prepared);
 
   const bound = await call("mstar_plan_bind", {
     workflow: WORKFLOW_ID, plan: PLAN_ID, harness: fixture.harness, sessionId: "mcp-recovered",
@@ -1828,6 +1833,7 @@ test("MCP refusal exposes assignment recovery and re-review then bind succeeds i
   expect(bound.structuredContent.status).toBe("ok");
   expect(JSON.stringify(bound.structuredContent)).toContain("claimed");
 }, RECOVERY_TIMEOUT);
+}
 
 /** The operator's merge — the CLI never runs one. */
 function mergePlanA(fixture: IntegrationFixture): void {
