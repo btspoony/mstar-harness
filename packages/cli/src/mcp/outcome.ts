@@ -1,4 +1,4 @@
-import { commandEnvelopeSchema, type CommandDefinition, type CommandEnvelope } from "@mstar-harness/commands";
+import { commandEnvelopeSchema, refusalEnvelope, type CommandDefinition, type CommandEnvelope, type RefusalDiagnostic } from "@mstar-harness/commands";
 
 export function validateCommandOutcome(
   definition: CommandDefinition,
@@ -19,5 +19,29 @@ export function validateCommandOutcome(
   if (!failure.success || failure.data.status === "ok") {
     throw new Error(`Command ${definition.id} returned an invalid failure envelope: ${failure.success ? "expected a non-success status" : failure.error.message}`);
   }
-  return failure.data;
+  const outcome = failure.data;
+  if (outcome.status === "error") return outcome;
+
+  const details = outcome.details ?? {};
+  const helpRoute = typeof details.helpRoute === "string"
+    ? details.helpRoute
+    : `mstar ${definition.id.replaceAll(".", " ")} --help`;
+  const recovery = typeof details.recovery === "string" ? details.recovery : undefined;
+  let message = outcome.message;
+  if (outcome.status === "refused") {
+    const suffix = `\nHelp: ${helpRoute}${recovery === undefined ? "" : `\nRecovery: ${recovery}`}`;
+    if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
+  }
+  const { diagnostics, helpRoute: _helpRoute, recovery: _recovery, ...extraDetails } = details;
+  return refusalEnvelope({
+    command: outcome.command,
+    status: outcome.status,
+    code: outcome.code,
+    exitCode: outcome.exitCode as 1 | 2,
+    message,
+    helpRoute,
+    ...(recovery === undefined ? {} : { recovery }),
+    ...(Array.isArray(diagnostics) ? { diagnostics: diagnostics as RefusalDiagnostic[] } : {}),
+    ...(Object.keys(extraDetails).length === 0 ? {} : { details: extraDetails }),
+  });
 }
