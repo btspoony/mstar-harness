@@ -1120,7 +1120,8 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
     if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
       throw conflictError(
         `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
-          "whose identity is NOT this reviewed request",
+          "whose identity is NOT this reviewed request" +
+          " — Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
       );
     }
     if (rootEntry === undefined) {
@@ -1139,7 +1140,8 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
   if (rootEntry !== undefined) {
     throw conflictError(
       `the root register shows workflow ${JSON.stringify(plan.workflowId)} but its snapshot ${plan.snapshotPath} is missing; ` +
-        "a stale root entry is never repaired or re-pointed",
+        "a stale root entry is never repaired or re-pointed" +
+        " — Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
     );
   }
 
@@ -1152,7 +1154,10 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
     );
   }
   if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
-    throw conflictError(`the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity`);
+    throw conflictError(
+      `the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity` +
+        " — This is an internal post-write invariant/race with no CLI or engine recovery action; report the failure for investigation.",
+    );
   }
   if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
     // The producer writes the root entry itself; reaching here means it was
@@ -1222,7 +1227,8 @@ async function publishUnderRootLock(
     if (onDisk.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, onDisk.snapshot, plan.identity)) {
       throw conflictError(
         `the execution registration at ${plan.snapshotPath} changed after this operation wrote it; ` +
-          "the catalog delta describes the reviewed request, not those bytes",
+          "the catalog delta describes the reviewed request, not those bytes" +
+          " — Re-run with a FRESH `--workflow` id and a fresh operation id, or reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.",
       );
     }
 
@@ -1235,9 +1241,14 @@ async function publishUnderRootLock(
     if (!state.published && state.versions.catalogRevision !== plan.request.expectedCatalogRevision) {
       const detail =
         `the reviewed delta expected catalog revision ${plan.request.expectedCatalogRevision}, but the store is at ` +
-        `${state.versions.catalogRevision} \u2014 the catalog moved since this delta was reviewed`;
-      if (mode === "reconcile") failReconcile(`${detail}; publish it against a current review instead`);
-      throw new CatalogError("catalog.revision-conflict", `${detail}; nothing was published.`);
+        `${state.versions.catalogRevision} — the catalog moved since this delta was reviewed`;
+      if (mode === "reconcile") {
+        failReconcile(`${detail}; publish it against a current review instead — re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with \`mstar catalog reconcile --operation-id <op>\`.`);
+      }
+      throw new CatalogError(
+        "catalog.revision-conflict",
+        `${detail}; nothing was published. Re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with \`mstar catalog reconcile --operation-id <op>\`.`,
+      );
     }
 
     for (const [index, entity] of plan.request.delta.entities.entries()) {
@@ -1462,7 +1473,7 @@ export async function registerCatalogExecution(
       throw new CatalogError(
         "catalog.revision-conflict",
         `the reviewed delta expects catalog revision ${validated.expectedCatalogRevision}, but the store is at ` +
-          `${versions.catalogRevision}; nothing was registered.`,
+          `${versions.catalogRevision}; nothing was registered. Re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with \`mstar catalog reconcile --operation-id <op>\`.`,
       );
     }
     const inFlight = pendingRows(db).find((row) => parseJournalWorkflowId(row) === plan.workflowId);
