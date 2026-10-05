@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
@@ -55,9 +56,13 @@ function idFor(verb: Verb): string { return `audit.${verb}`; }
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof SddScriptError && error.exitCode === 2) return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+  if (error instanceof SddScriptError && error.exitCode === 2) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message };
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 function required(value: string | undefined, label: string): string {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${label} is required`, 2);
