@@ -1121,7 +1121,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
       throw conflictError(
         `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
           "whose identity is NOT this reviewed request" +
-          " — Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
+          " -- Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
       );
     }
     if (rootEntry === undefined) {
@@ -1141,7 +1141,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
     throw conflictError(
       `the root register shows workflow ${JSON.stringify(plan.workflowId)} but its snapshot ${plan.snapshotPath} is missing; ` +
         "a stale root entry is never repaired or re-pointed" +
-        " — Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
+        " -- Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
     );
   }
 
@@ -1225,7 +1225,7 @@ async function publishUnderRootLock(
       throw conflictError(
         `the execution registration at ${plan.snapshotPath} changed after this operation wrote it; ` +
           "the catalog delta describes the reviewed request, not those bytes" +
-          " — Re-run with a FRESH `--workflow` id and a fresh operation id, or reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.",
+          " -- Re-run with a FRESH `--workflow` id and a fresh operation id, or reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.",
       );
     }
 
@@ -1238,9 +1238,9 @@ async function publishUnderRootLock(
     if (!state.published && state.versions.catalogRevision !== plan.request.expectedCatalogRevision) {
       const detail =
         `the reviewed delta expected catalog revision ${plan.request.expectedCatalogRevision}, but the store is at ` +
-        `${state.versions.catalogRevision} — the catalog moved since this delta was reviewed`;
+        `${state.versions.catalogRevision} -- the catalog moved since this delta was reviewed`;
       if (mode === "reconcile") {
-        failReconcile(`${detail}; publish it against a current review instead — re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with \`mstar catalog reconcile --operation-id <op>\`.`);
+        failReconcile(`${detail}; publish it against a current review instead -- re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with \`mstar catalog reconcile --operation-id <op>\`.`);
       }
       throw new CatalogError(
         "catalog.revision-conflict",
