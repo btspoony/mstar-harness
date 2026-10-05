@@ -714,7 +714,7 @@ export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
     .prepare("select authority_state, revision, catalog_revision from store_meta where id = 1")
     .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
   if (!row || typeof row.authority_state !== "string" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations");
+    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
   }
   return { storeRevision: row.revision, catalogRevision: row.catalog_revision, authorityState: row.authority_state };
 }
@@ -724,7 +724,7 @@ function assertCatalogActive(db: StoreDb): void {
   if (versions.authorityState !== "active") {
     throw new CatalogError(
       "store.not-active",
-      `The catalog store is ${versions.authorityState}; catalog mutations require an active store (\u00a72 issues contract: a staged store is read-only to ordinary domain verbs).`,
+      `The catalog store is ${versions.authorityState}; catalog mutations require an active store (\u00a72 issues contract: a staged store is read-only to ordinary domain verbs). Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.`,
     );
   }
 }

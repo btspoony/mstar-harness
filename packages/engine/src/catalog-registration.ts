@@ -927,12 +927,12 @@ function assertStoreActive(db: StoreDb): void {
     .prepare("select authority_state from store_meta where id = 1")
     .get() as { authority_state?: unknown } | undefined;
   if (!row || typeof row.authority_state !== "string") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept an execution registration");
+    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept an execution registration. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
   }
   if (row.authority_state !== "active") {
     throw new CatalogError(
       "store.not-active",
-      `The catalog store is ${row.authority_state}; registering an execution publishes catalog rows and therefore requires an active store.`,
+      `The catalog store is ${row.authority_state}; registering an execution publishes catalog rows and therefore requires an active store. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.`,
     );
   }
 }
@@ -942,7 +942,7 @@ function readJournalVersions(db: StoreDb): { storeRevision: number; catalogRevis
     | { revision?: unknown; catalog_revision?: unknown }
     | undefined;
   if (!row || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept an execution registration");
+    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept an execution registration. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
   }
   return { storeRevision: row.revision, catalogRevision: row.catalog_revision };
 }
@@ -1150,7 +1150,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
   if (written === undefined) {
     throw new CatalogRegistrationError(
       "catalog.registration-invalid",
-      `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}`,
+      `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}. Verify via mstar status validate <snapshotPath>; re-drive via mstar catalog reconcile --list and mstar catalog reconcile --operation-id <op>; record via mstar issue add.`,
     );
   }
   if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
@@ -1339,7 +1339,7 @@ export function writeBinding(
       throw new CatalogRegistrationError(
         "catalog.reconcile-conflict",
         `workflow ${JSON.stringify(plan.workflowId)} is already bound to ${binding.catalogKind} ${JSON.stringify(binding.catalogId)} ` +
-          `by operation ${JSON.stringify(String(row.operation_id))}; this operation does not overwrite another registration's binding`,
+          `by operation ${JSON.stringify(String(row.operation_id))}; this operation does not overwrite another registration's binding. Discover the owning operation via mstar catalog reconcile --list, then replay it idempotently with mstar catalog reconcile --operation-id <owner>.`,
       );
     }
     // Idempotent replay of this operation's own binding.
