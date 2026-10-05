@@ -547,7 +547,7 @@ mstar status findings-cleanup <plan-id>       # mode gate over the plan's linked
 
 ## `{WORKFLOW_DIR}/<id>/notes.jsonl` (per-workflow notes ledger)
 
-Append-only JSON-lines log for merge closure, batch close, register refreshes, etc. Does not compete with **snapshot `plans[].status`** / the issue store's open-item SSOT.
+Append-only JSON-lines log for merge closure, batch close, register refreshes, etc. Does not compete with the plan-status authority（pre-activation: snapshot `plans[].status`; active: `execution_plans`）or the issue store's open-item SSOT.
 
 ```jsonl
 {"kind": "note", "ts": "2026-04-08", "text": "Short milestone"}
@@ -576,7 +576,7 @@ mstar status tech-debt
 
 ## Pre-merge: snapshot + store should match reality
 
-Before merge/PR, **`@project-manager`** (or delegate) should verify: snapshot `plans[].status`, `metadata.gates`, the plan's linked open issues in the store (no accidental leftovers), vs review/CI.
+Before merge/PR, **`@project-manager`** (or delegate) should verify: plan status and gates（pre-activation: snapshot `plans[].status` / `metadata.gates`; active: the store's execution rows）, the plan's linked open issues in the store (no accidental leftovers), vs review/CI.
 
 **Common gaps:**
 
