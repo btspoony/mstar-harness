@@ -80,6 +80,13 @@ describe("executeCommand input diagnostics", () => {
     }
   });
 
+  test("invalid array item rejection includes formatter-generated expected and received facts", async () => {
+    const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe("Rejected files[0]: expected string; received 42");
+  });
+
   test("numeric array indices are reported for the offending array item", async () => {
     const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
     const diagnostics = usageDiagnostics(envelope);

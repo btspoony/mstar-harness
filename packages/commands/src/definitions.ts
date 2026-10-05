@@ -190,6 +190,36 @@ function inputDiagnostic(issue: z.ZodError["issues"][number]): RefusalDiagnostic
   };
 }
 
+function inputValueAtPath(input: unknown, path: readonly (string | number | symbol)[]): unknown {
+  return path.reduce<unknown>((value, part) =>
+    value !== null && typeof value === "object" ? (value as Record<PropertyKey, unknown>)[part] : undefined,
+  input);
+}
+
+function inputPath(issue: z.ZodError["issues"][number]): string {
+  return issue.path.reduce((path: string, part: string | number | symbol) =>
+    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
+  "");
+}
+
+function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { path: string; expected: string; received: string } {
+  const expected = issue.code === "invalid_type"
+    ? issue.expected
+    : issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values)
+      ? issue.values.map(String).join(" | ")
+      : issue.code === "too_small" && "minimum" in issue
+        ? `${issue.origin} ${issue.inclusive ? ">=" : ">"} ${String(issue.minimum)}`
+        : issue.code === "too_big" && "maximum" in issue
+          ? `${issue.origin} ${issue.inclusive ? "<=" : "<"} ${String(issue.maximum)}`
+          : issue.code === "unrecognized_keys"
+            ? "recognized keys"
+            : "valid value";
+  const value = inputValueAtPath(input, issue.path);
+  const received = value === undefined ? "undefined" : value === null ? "null" :
+    typeof value === "object" ? Array.isArray(value) ? "array" : "object" : String(value);
+  return { path: inputPath(issue), expected, received };
+}
+
 export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
   const definition = canonicalDefinitions.find((entry) => entry.id === id);
   if (definition === undefined) {
@@ -211,28 +241,21 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
     const diagnostics = parsed.error.issues.map(inputDiagnostic);
-    const enumIssue = parsed.error.issues.find((issue) =>
-      issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values),
-    );
-    const path = enumIssue?.path.map(String).join(".");
-    const enumValues = enumIssue !== undefined && "values" in enumIssue && Array.isArray(enumIssue.values)
-      ? enumIssue.values
-      : undefined;
-    const option = path === undefined ? undefined : definition.cli.options.find((entry) => entry.key === path);
-    const rawValue = path === undefined ? undefined : rawInput[path];
+    const issue = parsed.error.issues[0];
+    const facts = rejectionFacts(issue, input);
+    const optionKey = issue.path.map(String).join(".");
+    const option = definition.cli.options.find((entry) => entry.key === optionKey);
     const helpRoute = `mstar ${definition.cli.path.join(" ")} --help`;
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: parsed.error.issues.map((issue) => issue.message).join("; "),
+      message: parsed.error.issues.map((entry) => entry.message).join("; "),
       helpRoute, recovery: `Review ${helpRoute} and correct the reported input.`,
       diagnostics,
-      ...(enumIssue === undefined || path === undefined || enumValues === undefined ? {} : {
-        rejected: {
-          path: option?.flags.split(/[ <]/)[0] ?? path,
-          expected: enumValues.map(String).join(" | "),
-          received: String(rawValue),
-        },
-      }),
+      rejected: {
+        path: option?.flags.split(/[ <]/)[0] ?? facts.path,
+        expected: facts.expected,
+        received: facts.received,
+      },
     });
   }
   const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;
