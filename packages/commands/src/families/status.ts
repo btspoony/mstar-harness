@@ -24,6 +24,7 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -34,18 +35,14 @@ function ok<T>(command: string, data: T): CommandEnvelope<T> {
 }
 
 function refused(command: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return { version: 1, command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) };
+  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 
 function invalid(command: string, error: z.ZodError): CommandEnvelope<never> {
-  return {
-    version: 1,
-    command,
-    status: "usage",
-    code: "command.invalid-input",
-    exitCode: 2,
+  return refusalEnvelope({
+    command, status: "usage", code: "command.invalid-input", exitCode: 2,
     message: error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; "),
-  };
+  });
 }
 
 function messageOf(error: unknown): string {
@@ -206,7 +203,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         if (!parsed.success) return invalid("status.workflow-close", parsed.error);
         const workflow = parsed.data.workflow ?? context.executionIdentity?.workflowId;
         const { harness, endedAt, session } = parsed.data;
-        if (workflow === undefined) return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector or acquired workflow identity is required" };
+        if (workflow === undefined) {
+          return refusalEnvelope({
+            command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2,
+            message: "workflow selector or acquired workflow identity is required",
+          });
+        }
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) {
           return refused("status.workflow-close", "workflow.invalid-id", `invalid workflow id ${JSON.stringify(workflow)}`);
         }
@@ -218,7 +220,10 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
           const active = (await resolveExecutionReadRoute({ harnessDir })) === "execution";
           if (activeRequested || active) {
             if (endedAt !== undefined || session !== undefined) {
-              return { version: 1, command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active execution close cannot combine --ended-at or --session with its CAS envelope" };
+              return refusalEnvelope({
+                command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2,
+                message: "active execution close cannot combine --ended-at or --session with its CAS envelope",
+              });
             }
             if (context.sessionId === undefined || context.sessionId.trim() === "") {
               return refused(

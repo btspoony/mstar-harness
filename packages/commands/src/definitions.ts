@@ -229,14 +229,15 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   const selector = definition.cli.options.find((option) => option.context === "sessionId");
   const selectorValue = selector === undefined ? undefined : rawInput[selector.key];
   if (selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "")) {
-    return {
-      version: 1,
-      command: id,
-      status: "usage",
-      code: "command.invalid-input",
-      exitCode: 2,
+    return refusalEnvelope({
+      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
       message: `${selector?.flags.split(/[ <]/)[0] ?? selector?.key} must be a non-empty string`,
-    };
+      rejected: {
+        path: selector?.flags.split(/[ <]/)[0] ?? selector?.key ?? "session",
+        expected: "non-empty string",
+        received: typeof selectorValue === "string" ? JSON.stringify(selectorValue) : typeof selectorValue,
+      },
+    });
   }
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {

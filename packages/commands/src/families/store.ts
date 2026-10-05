@@ -21,6 +21,7 @@ import {
 import { z } from "zod";
 import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 
 const inputSchema = z.object({
   harness: z.string().optional(),
@@ -42,8 +43,8 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
     ? error.code
     : `${id}.internal-error`;
   return error instanceof SddScriptError
-    ? { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message }
-    : { version: 1, command: id, status: "refused", code, exitCode: 1, message };
+    ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
+    : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message });
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {
