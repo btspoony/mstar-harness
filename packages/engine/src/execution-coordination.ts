@@ -1093,13 +1093,53 @@ export async function recoverAssignmentExecutionPlan(
         if (operation.decision === "restore" && !isNonEmptyString(existing.assignment_bytes)) {
           throw new CoordinationError("coordination.not-prepared", `plan ${witness.planId} has no retained prepared Assignment bytes`);
         }
+        if (witness.view.executionLease !== null && witness.view.executionLease.holder !== context.caller.sessionId) {
+          throw new ExecutionError(
+            "execution.lease-held",
+            `plan ${witness.planId} is held by another execution session; recover-assignment is coordinator-only after the lease is released`,
+            { plan_id: witness.planId, holder: witness.view.executionLease.holder },
+          );
+        }
         assertNoHandoffTransition(witness.view.coordination ?? undefined, witness.planId);
-        const reviewed = operation.decision === "re-review"
-          ? readPrepareInputs(context, {
-            planId: witness.planId,
-            operation: { assignmentPath: existing.assignment_path },
-          })
-          : undefined;
+        let reviewed: PreparedInputs | undefined;
+        if (operation.decision === "re-review") {
+          try {
+            reviewed = readPrepareInputs(context, {
+              planId: witness.planId,
+              operation: { assignmentPath: existing.assignment_path },
+            });
+          } catch (error) {
+            if (!existsSync(existing.assignment_path)) {
+              const problem: RecoveryProblem = {
+                component: "assignment-seal",
+                path: existing.assignment_path,
+                code: "coordination.assignment-stale",
+                sourcesTried: [existing.assignment_path, "the prepared Assignment byte pin"],
+                currentFacts: ["the prepared Assignment file is missing"],
+                needed: "choose re-review or restore with mstar plan recover-assignment",
+                withheldEffect: "the active prepared row and plan state remain unchanged",
+                availableWork: [`mstar plan recover-assignment --decision restore --plan ${witness.planId}`],
+              };
+              throw new CoordinationError("coordination.assignment-stale", problem.currentFacts[0]!, {
+                path: existing.assignment_path,
+                plan_id: witness.planId,
+                needed: problem.needed,
+                available_work: problem.availableWork,
+                recovery: unresolvedRecovery({
+                  target: { workflowId: witness.workflowId, planId: witness.planId },
+                  unresolved: [problem],
+                  resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
+                }),
+              });
+            }
+            try {
+              assertPreparedFresh(existing.assignment_path, existing);
+            } catch (stale) {
+              throw stale;
+            }
+            throw error;
+          }
+        }
         if (reviewed !== undefined && canonicalTarget(reviewed.assignment.assignmentPath) !== canonicalTarget(existing.assignment_path)) {
           throw new CoordinationError("coordination.scope-mismatch", "assignment recovery cannot change the prepared Assignment path");
         }

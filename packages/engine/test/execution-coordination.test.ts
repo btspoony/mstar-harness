@@ -56,6 +56,7 @@ import {
   type ExecutionState,
   type ExecutionToken,
 } from "../src/execution-store.js";
+import { PLAN_OPERATION_SEMANTICS } from "../src/recovery-intent.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import type { CoordinationOperation } from "../src/index.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
@@ -1025,6 +1026,22 @@ function prepareCall(
     operation: { kind: "prepare", assignmentPath },
   });
 }
+function recoverAssignmentCall(
+  fixture: LiveFixture,
+  planId: string,
+  operationId: string,
+  decision: "re-review" | "restore",
+  expected: ExecutionToken,
+) {
+  return mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+    operationId,
+    session: fixture.coordinator,
+    expected,
+    planId,
+    operation: { kind: "recover-assignment", decision },
+  });
+}
+
 
 /**
  * Everything a plan operation may touch, as one comparable value: the three
@@ -1143,6 +1160,151 @@ function registrationPhase(context: StoreContext, operationId: string): unknown 
   const [row] = rows(context, `select phase from catalog_operations where operation_id = '${operationId}'`);
   return row?.phase;
 }
+
+async function preparedActivePlan(label: string): Promise<{
+  fixture: LiveFixture;
+  document: PlanDocuments;
+  bytes: string;
+}> {
+  const fixture = await liveWorkflow(label);
+  const document = fixture.documents[OWN_PLAN]!;
+  const bytes = readFileSync(document.assignmentPath, "utf8");
+  await prepareCall(fixture, OWN_PLAN, `prepare-${label}`, fixture.planTokens[OWN_PLAN]!);
+  return { fixture, document, bytes };
+}
+
+describe("execution-assignment-recovery: coordinator recovery on active DB authority", () => {
+  test("re-review re-pins current bytes and a later edit still refuses", async () => {
+    const { fixture, document } = await preparedActivePlan("active-re-review");
+    const reviewed = readFileSync(document.assignmentPath, "utf8").replace(
+      "**QA gate**: mandatory",
+      "**QA gate**: pm-acceptance",
+    );
+    writeFileSync(document.assignmentPath, reviewed);
+    const recovered = await recoverAssignmentCall(
+      fixture, OWN_PLAN, "recover-active-rereview", "re-review", await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(recovered.replayed).toBe(false);
+    expect(recovered.data.coordination?.prepared).toMatchObject({
+      assignment_bytes: reviewed,
+      qa_gate: "pm-acceptance",
+      recovery_history: [{ actor: COORDINATOR_ID, decision: "re-review" }],
+    });
+
+    const planPm = await bindPlanPm(fixture, OWN_PLAN, "active-re-review-next-edit");
+    writeFileSync(document.assignmentPath, reviewed.replace("**QA gate**: pm-acceptance", "**QA gate**: mandatory"));
+    const staleToken = await planTokenOf(fixture, OWN_PLAN);
+    const stale = await refusalOf(() => progressExecutionPlan(
+      domainContext(fixture.context, trustedCaller(PLAN_PM_ID, "plan-pm", OWN_PLAN)),
+      {
+        operationId: "progress-after-recovery-edit",
+        session: planPm,
+        expected: staleToken,
+        planId: OWN_PLAN,
+        operation: { kind: "progress", progress: { status: "InProgress", summary: "progress", evidence_paths: [] } },
+      },
+    ));
+    expect(stale.code).toBe("coordination.assignment-stale");
+  });
+
+  test("malformed on-disk Assignment is not parsed by restore", async () => {
+    const { fixture, document, bytes } = await preparedActivePlan("active-restore-malformed");
+    writeFileSync(document.assignmentPath, "not a valid Assignment\n");
+    const restored = await recoverAssignmentCall(
+      fixture, OWN_PLAN, "recover-active-malformed", "restore", await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(restored.data.coordination?.prepared).toMatchObject({
+      assignment_bytes: bytes,
+      recovery_history: [{ actor: COORDINATOR_ID, decision: "restore" }],
+    });
+    expect(readFileSync(document.assignmentPath, "utf8")).toBe(bytes);
+  });
+
+  test("missing Assignment refuses re-review with the restore action, then restore recreates it", async () => {
+    const { fixture, document, bytes } = await preparedActivePlan("active-restore-missing");
+    rmSync(document.assignmentPath);
+    const missingToken = await planTokenOf(fixture, OWN_PLAN);
+    const stale = await refusalOf(() => recoverAssignmentCall(
+      fixture, OWN_PLAN, "recover-active-missing-rereview", "re-review", missingToken,
+    ));
+    expect(stale).toMatchObject({
+      code: "coordination.assignment-stale",
+      details: {
+        recovery: {
+          outcome: "unresolved",
+          unresolved: [expect.objectContaining({ needed: expect.stringContaining("re-review or restore") })],
+        },
+      },
+    });
+    const restored = await recoverAssignmentCall(
+      fixture, OWN_PLAN, "recover-active-missing-restore", "restore", await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(restored.replayed).toBe(false);
+    expect(readFileSync(document.assignmentPath, "utf8")).toBe(bytes);
+  });
+
+  test("recovery refuses another session's lease and a handoff-owned row", async () => {
+    const leased = await preparedActivePlan("active-recovery-held-lease");
+    await bindPlanPm(leased.fixture, OWN_PLAN, "active-recovery-held-lease");
+    const leaseToken = await planTokenOf(leased.fixture, OWN_PLAN);
+    const leaseRefusal = await refusalOf(() => recoverAssignmentCall(
+      leased.fixture, OWN_PLAN, "recover-active-held-lease", "restore", leaseToken,
+    ));
+    expect(leaseRefusal.code).toBe("execution.lease-held");
+
+    const handedOff = await preparedActivePlan("active-recovery-handoff");
+    await bindPlanPm(handedOff.fixture, OWN_PLAN, "active-recovery-handoff");
+    const planRow = rows(handedOff.fixture.context,
+      `select coordination_json from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${OWN_PLAN}'`,
+    )[0]!;
+    const coordination = parsedJson(planRow.coordination_json) as Record<string, unknown>;
+    const evidence = { path: handedOff.document.planPath, sha256: "a".repeat(64) };
+    coordination.handoff = {
+      id: "handoff-active-recovery",
+      attempt: 1,
+      state: "submitted",
+      submitted_by: PLAN_PM_ID,
+      submitted_at: TS,
+      source_branch: `feature/${OWN_PLAN}`,
+      source_sha: "a".repeat(40),
+      worktree_path: join(handedOff.fixture.harnessRoot, "worktrees", OWN_PLAN),
+      review_base: "b".repeat(40),
+      review_head: "c".repeat(40),
+      qc: { decision: "approve", reports: [evidence], consolidated: evidence },
+      qa: { gate: "mandatory", decision: "pass", report: evidence },
+    };
+    withRaw(handedOff.fixture.context, (db) => {
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?")
+        .run(JSON.stringify(coordination), WORKFLOW_ID, OWN_PLAN);
+      db.prepare("delete from execution_leases where workflow_id = ? and plan_id = ?").run(WORKFLOW_ID, OWN_PLAN);
+    });
+    const handoffToken = await planTokenOf(handedOff.fixture, OWN_PLAN);
+    const handoffRefusal = await refusalOf(() => recoverAssignmentCall(
+      handedOff.fixture, OWN_PLAN, "recover-active-handoff", "restore", handoffToken,
+    ));
+    expect(handoffRefusal.code).toBe("coordination.handoff-state");
+  });
+
+  test("restore uses the prepared plan identity, not tampered Assignment headers", async () => {
+    const { fixture, document, bytes } = await preparedActivePlan("active-restore-identity");
+    writeFileSync(document.assignmentPath, bytes
+      .replace(`**Workflow id**: ${WORKFLOW_ID}`, "**Workflow id**: other-workflow")
+      .replace(`**Plan id**: ${OWN_PLAN}`, `**Plan id**: ${PEER_PLAN}`));
+    const recovered = await recoverAssignmentCall(
+      fixture, OWN_PLAN, "recover-active-identity", "restore", await planTokenOf(fixture, OWN_PLAN),
+    );
+    expect(recovered.data.plan.id).toBe(OWN_PLAN);
+    expect(readFileSync(document.assignmentPath, "utf8")).toBe(bytes);
+  });
+
+  test("recovery decision is part of the semantic operation pin", () => {
+    expect(PLAN_OPERATION_SEMANTICS["recover-assignment"]).toEqual([
+      "planId",
+      "operation.kind",
+      "operation.decision",
+    ]);
+  });
+});
 
 describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => {
   test("prepare records the reviewed Assignment semantics and plan anchors, then replays exactly", async () => {
