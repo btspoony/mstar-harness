@@ -58,7 +58,7 @@ async function usageMessage(envelope: CommandEnvelope): Promise<string> {
 }
 
 type SchemaCommandData =
-  | { kind: "command"; descriptor: { id: string; description: string; effects: readonly string[]; requirements: readonly { name: string; ownership: string; route: string; help?: string }[]; payloadSchemas: Record<string, unknown> } }
+  | { kind: "command"; descriptor: { id: string; description: string; effects: readonly string[]; requirements: readonly { name: string; ownership: string; route: string; help?: string; tokenKind?: "root" | "workflow" | "plan" | "none" }[]; payloadSchemas: Record<string, unknown> } }
   | { kind: "family"; family: string; members: readonly { id: string; description: string }[] };
 
 describe("command discovery", () => {
@@ -143,6 +143,26 @@ describe("command discovery", () => {
     expect(hint.descriptor.input).toMatchObject({ required: ["name"] });
     expect(overridden.input.safeParse({}).success).toBe(false);
     expect(overridden.input.safeParse({ name: "x" }).success).toBe(true);
+  });
+  test("execution token kinds are published in command requirement metadata", () => {
+    const definitions = getCommandDefinitions();
+    for (const [id, tokenKind] of [
+      ["workflow.register", "root"],
+      ["plan.bind", "plan"],
+      ["plan.prepare", "plan"],
+    ] as const) {
+      const descriptor = selectCommandSchema({ command: id }, definitions);
+      if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
+      expect(descriptor.descriptor.requirements.find((entry) => entry.name === "expect")?.tokenKind).toBe(tokenKind);
+    }
+    const bind = selectCommandSchema({ command: "plan.bind" }, definitions);
+    if (bind.kind !== "command") throw new Error("expected plan.bind command descriptor");
+    expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--coordinator)", tokenKind: "workflow",
+    }));
+    expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect (--plan)", tokenKind: "plan",
+    }));
   });
 
   test("session selector publishes caller-supplied route facts", () => {

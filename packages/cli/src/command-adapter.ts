@@ -573,12 +573,18 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
       command.argument(token, argument.key);
     }
   }
+  const requirements = definition.cli.options.some((option) => option.key === "expect")
+    ? getCommandSchemas([definition])[0]?.requirements ?? []
+    : [];
   if (command.options.length === 0) {
     for (const option of definition.cli.options) {
       const flags = cliOptionFlags(definition, option);
       // The option's own help line: the declared supply disclosure when one
       // exists, else the bare key name (the previous contract).
-      const description = option.help ?? option.key;
+      const tokenKinds = requirements
+        .filter((entry) => entry.name === option.key || entry.name.startsWith(`${option.key} (`))
+        .flatMap((entry) => entry.tokenKind === undefined ? [] : [`token kind: ${entry.tokenKind}${entry.name === option.key ? "" : ` ${entry.help ?? ""}`}`]);
+      const description = [option.help ?? option.key, ...tokenKinds].join("; ");
       const appendValue = option.variadic
         ? (value: string, previous: string[] = []) => [...previous, value]
         : undefined;

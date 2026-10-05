@@ -98,6 +98,10 @@ describe("#324 help disclosure", () => {
     expect(expectHelp).toContain("data.authority.workflows[].planTokens[<planId>]");
     expect(optionHelp(stdout, "--session-ref <value>")).toContain("exec-session-v1:");
   });
+  test("plan prepare help labels the --expect token kind", () => {
+    const help = optionHelp(runHelp(["plan", "prepare"]).stdout, "--expect <value>");
+    expect(help).toContain("token kind: plan");
+  });
 
   test("plan show discloses the session-ref wire format", () => {
     const { stdout } = runHelp(["plan", "show"]);

@@ -65,13 +65,41 @@ export type CommandSchemaSelection =
  * entries override derived ones per name; anything unannotated stays unknown,
  * never all-optional.
  */
+const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"]>> = {
+  "workflow.register": "root",
+  "iteration.register": "root",
+  "workflow.evidence": "workflow",
+  "workflow.phase": "workflow",
+  "workflow.lifecycle": "workflow",
+  "workflow.execution-policy": "workflow",
+  "workflow.integration-worktree": "workflow",
+  "status.workflow-close": "workflow",
+  "plan.bind": "plan",
+  "plan.prepare": "plan",
+};
+
 function commandRequirements(definition: CommandDefinition): readonly CommandRequirement[] {
+  const tokenKind = definition.cli.options.some((option) => option.key === "expect")
+    ? EXPECT_TOKEN_KINDS[definition.id]
+      ?? (definition.id.startsWith("plan.") ? "plan" : definition.id.startsWith("workflow.") ? "workflow" : "none")
+    : undefined;
   const explicit = definition.requirements ?? [];
   const overridden = new Set(explicit.map((entry) => `${entry.route}:${entry.name}`));
   const hinted = [...definition.cli.arguments, ...definition.cli.options.filter((option) => option.defaultValue === undefined && option.context === undefined)]
     .filter((entry) => !overridden.has(`cli:${entry.key}`))
-    .map((entry) => ({ name: entry.key, ownership: "caller" as const, route: "cli" as const }));
+    .map((entry) => ({
+      name: entry.key,
+      ownership: "caller" as const,
+      route: "cli" as const,
+      ...(entry.key === "expect" && tokenKind !== undefined ? { tokenKind } : {}),
+    }));
   const requirements: CommandRequirement[] = [...explicit, ...hinted];
+  if (definition.id === "plan.bind") {
+    requirements.push(
+      { name: "expect (--coordinator)", ownership: "caller", route: "cli", tokenKind: "workflow", help: "when --coordinator is selected" },
+      { name: "expect (--plan)", ownership: "caller", route: "cli", tokenKind: "plan", help: "when --plan is selected" },
+    );
+  }
   // Route-verified session facts from the adapters: CLI collects the session
   // selector from argv (with its environment fallback); MCP reads it from the
   // per-call input, while its context resolver supplies nothing.
