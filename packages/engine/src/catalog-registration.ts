@@ -1240,7 +1240,7 @@ async function publishUnderRootLock(
         `the reviewed delta expected catalog revision ${plan.request.expectedCatalogRevision}, but the store is at ` +
         `${state.versions.catalogRevision} -- the catalog moved since this delta was reviewed`;
       if (mode === "reconcile") {
-        failReconcile(`${detail}; publish it against a current review instead -- re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with \`mstar catalog reconcile --operation-id <op>\`.`);
+        failReconcile(`${detail}; this reviewed delta is stale. Re-derive it against the current catalog revision in a new review, then retry.`);
       }
       throw new CatalogError(
         "catalog.revision-conflict",
