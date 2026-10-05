@@ -1426,6 +1426,49 @@ export async function resolvePlanScope(
   return scopeFromAssignment(assignment, cwd, { requirePrepared: true, chosenRoot: harnessRoot, preloaded: { snapshot } });
 }
 
+async function coordinatorRecoveryScope(
+  session: CoordinationSession,
+  planId: string | undefined,
+  kind: string,
+): Promise<ResolvedPlanScope> {
+  if (!isNonEmptyString(planId)) throw invalidInput(`${kind} requires the planId of the row it transitions`);
+  const snapshot = readSnapshot(dirname(snapshotPathOf(session.harness_root, session.workflow_id)));
+  return recoveryScopeFromSnapshot(session, planId, snapshot);
+}
+
+function recoveryScopeFromSnapshot(
+  session: CoordinationSession,
+  planId: string,
+  snapshot: WorkflowSnapshot,
+): ResolvedPlanScope {
+  const { row } = findPlanRow(snapshot, planId);
+  const prepared = rowCoordinationOf(row)?.prepared;
+  const intent = prepared?.assignment_intent;
+  if (
+    prepared === undefined ||
+    intent === undefined ||
+    !isNonEmptyString(prepared.assignment_path) ||
+    intent.control_harness_root !== session.harness_root ||
+    intent.workflow_id !== session.workflow_id ||
+    intent.plan_id !== planId
+  ) {
+    throw new CoordinationError("coordination.not-prepared", `plan ${planId} has no valid retained recovery scope`);
+  }
+  return {
+    harnessRoot: session.harness_root,
+    workflowId: session.workflow_id,
+    planId,
+    snapshotPath: snapshotPathOf(session.harness_root, session.workflow_id),
+    planPath: intent.plan_path,
+    assignmentPath: prepared.assignment_path,
+    worktreePath: intent.worktree_path,
+    workingBranch: intent.working_branch,
+    projectId: projectIdOf(row),
+    sddDir: intent.sdd_dir,
+  };
+}
+
+
 /* ------------------------------------------------------------------------ *
  * § Session envelopes
  * ------------------------------------------------------------------------ */
@@ -2089,8 +2132,26 @@ function assignmentByteDiff(assignmentPath: string, prepared: PreparedCoordinati
  */
 export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
   if (!existsSync(assignmentPath)) {
-    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
+    const recoveryCommand = "mstar plan recover-assignment";
+    const recorded = prepared.assignment_intent;
+    const problem: RecoveryProblem = {
+      component: "assignment-seal",
+      path: "assignment",
+      code: "coordination.assignment-stale",
+      sourcesTried: [assignmentPath, "the semantic projection sealed by prepare"],
+      currentFacts: ["the prepared Assignment file is missing"],
+      needed: `${recoveryCommand} requires an explicit re-review or restore decision`,
+      withheldEffect: "the requested row transition is withheld",
+      availableWork: [`${recoveryCommand} with re-review or restore${recorded ? ` for plan ${recorded.plan_id}` : ""}`],
+    };
+    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}; use ${recoveryCommand} with re-review or restore`, {
       path: assignmentPath,
+      needed: problem.needed,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: recorded === undefined ? {} : { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+        unresolved: [problem],
+      }),
     });
   }
   const recorded = prepared.assignment_intent;
@@ -3694,6 +3755,14 @@ async function mutateRecoverAssignment(
     expectedRevision: request.expectedRevision,
     precheck: async (context) => {
       assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      assertNoHandoffTransition(context.coordination, scope.planId);
+      const lease = context.row.execution_lease;
+      if (lease !== undefined && (!isPlainObject(lease) || lease.holder !== session.session_id)) {
+        throw new CoordinationError("coordination.duplicate-holder", `plan ${scope.planId} has an execution lease owned by another session`, {
+          plan_id: scope.planId,
+          holder: isPlainObject(lease) ? lease.holder : null,
+        });
+      }
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no prepared Assignment`);
       }
@@ -3704,9 +3773,15 @@ async function mutateRecoverAssignment(
       if (prepared === undefined || prepared.assignment_bytes === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no retained prepared Assignment bytes`);
       }
-      const bytes = request.decision === "restore"
-        ? Buffer.from(prepared.assignment_bytes, "utf8")
-        : readFileSync(prepared.assignment_path);
+      let bytes: Buffer;
+      try {
+        bytes = request.decision === "restore"
+          ? Buffer.from(prepared.assignment_bytes, "utf8")
+          : readFileSync(prepared.assignment_path);
+      } catch (error) {
+        assertPreparedFresh(prepared.assignment_path, prepared);
+        throw error;
+      }
       const assignment = parseAssignmentBytes(prepared.assignment_path, bytes);
       const recoveredScope = scopeFromAssignment(assignment, session.harness_root, {
         requirePrepared: false,
@@ -4372,7 +4447,7 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       if (operation.decision !== "re-review" && operation.decision !== "restore") {
         throw invalidInput("recover-assignment decision must be re-review or restore");
       }
-      return mutateRecoverAssignment(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+      return mutateRecoverAssignment(await coordinatorRecoveryScope(session, request.planId, kind), session, sessionAbs, {
         decision: operation.decision,
         expectedRevision,
       });
