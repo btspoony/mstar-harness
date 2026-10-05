@@ -109,7 +109,7 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
   const explicit = definition.requirements ?? [];
   const overridden = new Set(explicit.map((entry) => `${entry.route}:${entry.name}`));
   const hinted = [...definition.cli.arguments, ...definition.cli.options.filter((option) => option.defaultValue === undefined && option.context === undefined)]
-    .filter((entry) => !overridden.has(`cli:${entry.key}`))
+    .filter((entry) => !overridden.has(`cli:${entry.key}`) && !(entry.key === "expect" && conditionalTokenRequirements !== undefined))
     .map((entry) => ({
       name: entry.key,
       ownership: "caller" as const,
