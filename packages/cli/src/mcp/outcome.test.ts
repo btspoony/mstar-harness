@@ -102,6 +102,7 @@ describe("MCP command outcome refusal contract", () => {
     expect(mcp.exitCode).toBe(3);
     expect(mcp.message.split("\n")[0]).toBe(cli.message.split("\n")[0]);
     expect(mcp.details).toEqual(cli.details);
+    expect((mcp.details as Record<string, unknown>).helpRoute).toBeDefined();
   });
 
   test("status.validate missing-harness refusal reaches the MCP consumer with matching metadata (QCS1-F1)", async () => {
