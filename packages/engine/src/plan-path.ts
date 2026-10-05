@@ -239,7 +239,7 @@ export function resolveRegisteredPlanFile(input: RegisteredPlanFileInput): Regis
   if (candidate !== expected) {
     throw refusal(
       "plan-path.invalid-pointer",
-      `plan ${planId} file ${JSON.stringify(file)} resolves to ${candidate}, not the registered plan file ${expected}`,
+      `plan ${planId} file ${JSON.stringify(file)} resolves to ${candidate}, not the registered plan file ${expected}; permitted forms are ${permitted.join(" or ")}`,
       { plan_id: planId, actual: candidate },
     );
   }
