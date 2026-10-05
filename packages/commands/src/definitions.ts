@@ -297,22 +297,20 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
     const sanitize = issueMessageSanitizer(input);
-    const totalIssues = parsed.error.issues.length;
-    const diagnostics = parsed.error.issues.slice(0, 50).map((issue) => inputDiagnostic(issue, sanitize));
+    const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, sanitize));
     const joinedMessage = parsed.error.issues.map((entry) => entry.message).join("; ");
-    const moreIssues = totalIssues > diagnostics.length ? `; …and ${totalIssues - diagnostics.length} more issues` : "";
     const issue = parsed.error.issues[0];
     const facts = rejectionFacts(issue, input);
     const optionKey = issue.path.map(String).join(".");
     const option = definition.cli.options.find((entry) => entry.key === optionKey);
-    const rejected = facts.path === "" || moreIssues !== "" ? undefined : {
+    const rejected = facts.path === "" ? undefined : {
       path: option?.flags.split(/[ <]/)[0] ?? facts.path,
       expected: facts.expected,
       received: facts.received,
     };
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: `${sanitize(joinedMessage)}${moreIssues}`,
+      message: sanitize(joinedMessage),
       diagnostics,
       ...(rejected === undefined ? {} : { rejected }),
     });
