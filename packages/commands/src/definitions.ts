@@ -1,4 +1,5 @@
 import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
+import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
@@ -216,7 +217,8 @@ function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { 
             : "valid value";
   const value = inputValueAtPath(input, issue.path);
   const received = value === undefined ? "undefined" : value === null ? "null" :
-    typeof value === "object" ? Array.isArray(value) ? "array" : "object" : String(value);
+    typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
+      redactSecrets(String(value)).text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]");
   return { path: inputPath(issue), expected, received };
 }
 
