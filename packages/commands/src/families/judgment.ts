@@ -105,9 +105,7 @@ export function getJudgmentCommandDefinitions(provider: JudgmentProvider = lazyJ
     effects: ["read", "stdin", "service"],
     description: "The historical judgment submit command is not in the current registry; use judgment review-advice --file <pack.json> --pilot <pilot.json> (or --stdin) for explicitly enabled, bounded advice.",
     async execute(raw, context) {
-      const parsed = inputSchema.safeParse(raw);
-      if (!parsed.success) return usage(parsed.error.message);
-      return execute(parsed.data, context, provider);
+      return execute(raw as Input, context, provider);
     },
   };
   return [definition];

@@ -1,4 +1,6 @@
 export * from "./types.js";
+export { refusalEnvelope } from "./envelope.js";
+export type { RefusalDiagnostic, RefusalInput } from "./envelope.js";
 export {
   CommandDefinitionError,
   commandEnvelopeSchema,

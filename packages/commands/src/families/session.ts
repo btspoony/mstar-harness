@@ -49,9 +49,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       input: runInput, output: commandEnvelopeSchema, effects: ["process"],
       description: "Launch argv under a freshly minted local execution identity; this is a launch, not a binding \u2014 it writes no session row or lease, and the child binds through the public `plan bind --execution --workflow <id> --coordinator|--plan <id>` route, whose creator/ownerless/foreign-holder conditions still apply.",
       async execute(raw, context) {
-        const parsed = runInput.safeParse(raw);
-        if (!parsed.success) return usage("session.run", parsed.error.message);
-        const { workflow, role, plan, argv = [], harness } = parsed.data;
+        const { workflow, role, plan, argv = [], harness } = raw as z.infer<typeof runInput>;
         if (role === undefined || (role === "plan-pm" && plan === undefined) || (role === "coordinator" && plan !== undefined) || argv.length === 0 || argv[0]!.trim() === "") {
           return usage("session.run", "session run requires --workflow, --role, a compatible --plan, and a child argv");
         }

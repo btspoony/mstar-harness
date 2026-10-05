@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { Command, CommanderError } from "commander";
+import { refusalEnvelope } from "@mstar-harness/commands";
 import {
   executeCommand,
   getCommandDefinitions,
@@ -22,7 +23,13 @@ import { detectInstalledPluginVersion } from "./plugin-version-alignment";
 import type { Scope, Target } from "./types";
 
 export function usageEnvelope(command: string, message: string, details?: Record<string, unknown>): CommandEnvelope {
-  return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message, ...(details === undefined ? {} : { details }) };
+  const diagnostics = Array.isArray(details?.diagnostics) ? details.diagnostics as Array<{ path?: string; code: string; message: string; helpRoute?: string }> : [];
+  const route = diagnostics.find((entry) => entry.helpRoute !== undefined)?.helpRoute ?? `mstar ${command.replaceAll(".", " ")} --help`;
+  return refusalEnvelope({
+    command, status: "usage", code: "command.invalid-input", exitCode: 2, message,
+    helpRoute: route, recovery: `Review ${route} and correct the reported input.`, diagnostics,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 
 export function writeEnvelope(envelope: CommandEnvelope, signal?: NodeJS.Signals): void {

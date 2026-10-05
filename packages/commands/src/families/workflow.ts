@@ -80,7 +80,7 @@ async function assertLegacyRoute(harnessDir: string, operation: string): Promise
 function schema() {
   return z.object({
     workflow: z.string().min(1).optional(), harness: z.string().min(1).optional(), planId: z.string().min(1).optional(),
-    planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.string().min(1).optional(),
+    planTitle: z.string().min(1).optional(), planFile: z.string().min(1).optional(), deliveryKind: z.enum(WORKFLOW_DELIVERY_KINDS).optional(),
     project: z.string().min(1).optional(), branchSource: z.string().min(1).optional(), branchTarget: z.string().min(1).optional(),
     completionPolicy: z.string().min(1).optional(), startedAt: z.string().min(1).optional(), expect: z.string().min(1).optional(),
     operation: z.string().min(1).optional(), file: z.string().min(1).optional(), declareKind: z.string().min(1).optional(),
@@ -134,7 +134,7 @@ function makeDefinition(
     output: commandEnvelopeSchema,
     effects: [effect],
     description,
-    async execute(raw, context) { const parsed = input.safeParse(raw); if (!parsed.success) return usage(id, parsed.error.message); return execute(parsed.data, context); },
+    execute,
   };
 }
 

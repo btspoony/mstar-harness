@@ -1,3 +1,4 @@
+import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
@@ -36,7 +37,12 @@ const failureEnvelopeSchema = z.object({
 }).passthrough();
 
 export function usageEnvelope(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+  const helpRoute = `mstar ${id.replaceAll(".", " ")} --help`;
+  return refusalEnvelope({
+    command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message,
+    helpRoute, recovery: `Review ${helpRoute} and correct the reported input.`,
+    diagnostics: [{ code: "command.invalid-input", message }],
+  });
 }
 
 export const commandEnvelopeSchema = z.discriminatedUnion("status", [
@@ -171,7 +177,7 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
  * diagnostic shape: field path, stable issue code, message and the first array
  * index where relevant. Never carries submitted values.
  */
-function inputDiagnostic(issue: z.ZodError["issues"][number]): Record<string, unknown> {
+function inputDiagnostic(issue: z.ZodError["issues"][number]): RefusalDiagnostic {
   const path = issue.path.reduce((path: string, part: string | number | symbol) =>
     typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
   "");
@@ -204,15 +210,30 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   }
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
-    return {
-      version: 1,
-      command: id,
-      status: "usage",
-      code: "command.invalid-input",
-      exitCode: 2,
+    const diagnostics = parsed.error.issues.map(inputDiagnostic);
+    const enumIssue = parsed.error.issues.find((issue) =>
+      issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values),
+    );
+    const path = enumIssue?.path.map(String).join(".");
+    const enumValues = enumIssue !== undefined && "values" in enumIssue && Array.isArray(enumIssue.values)
+      ? enumIssue.values
+      : undefined;
+    const option = path === undefined ? undefined : definition.cli.options.find((entry) => entry.key === path);
+    const rawValue = path === undefined ? undefined : rawInput[path];
+    const helpRoute = `mstar ${definition.cli.path.join(" ")} --help`;
+    return refusalEnvelope({
+      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
       message: parsed.error.issues.map((issue) => issue.message).join("; "),
-      details: { diagnostics: parsed.error.issues.map(inputDiagnostic) },
-    };
+      helpRoute, recovery: `Review ${helpRoute} and correct the reported input.`,
+      diagnostics,
+      ...(enumIssue === undefined || path === undefined || enumValues === undefined ? {} : {
+        rejected: {
+          path: option?.flags.split(/[ <]/)[0] ?? path,
+          expected: enumValues.map(String).join(" | "),
+          received: String(rawValue),
+        },
+      }),
+    });
   }
   const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;
   try {

@@ -49,6 +49,17 @@ describe("executeCommand input diagnostics", () => {
   // `report.versionOverrides` and `worktree.qc-alignment.files` are rejected by
   // definition.input.safeParse itself, so these cases prove the canonical
   // admission envelope — not a handler's own recovery path.
+  test("enum schema rejection names the CLI flag, accepted values, and received value", async () => {
+    const envelope = await executeCommand("workflow.register", { deliveryKind: "pr" }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).toContain("--delivery-kind");
+    expect(envelope.message).toContain("development");
+    expect(envelope.message).toContain("verification/report-only");
+    expect(envelope.message).toContain("pr");
+    expect(envelope.details).toMatchObject({ diagnostics: [{ path: "deliveryKind", code: "invalid_value" }] });
+  });
+
   test("two identical violations at different object paths keep distinct safe paths in one grouped response", async () => {
     const envelope = await executeCommand("report", { versionOverrides: { cli: 1, engine: 2 } }, context());
     const diagnostics = usageDiagnostics(envelope);
