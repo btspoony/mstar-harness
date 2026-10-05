@@ -574,7 +574,7 @@ mstar status tech-debt
 
 ---
 
-## Pre-merge: snapshot + store should match reality
+## Pre-merge: plan state and the store should match reality
 
 Before merge/PR, **`@project-manager`** (or delegate) should verify: plan status and gates（pre-activation: snapshot `plans[].status` / `metadata.gates`; active: the store's execution rows）, the plan's linked open issues in the store (no accidental leftovers), vs review/CI.
 
