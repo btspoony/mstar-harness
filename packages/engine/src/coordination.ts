@@ -990,7 +990,7 @@ const ABSOLUTE_PATH_HEADERS = ["control harness root", "plan path", "worktree pa
  * second, drifting header reader.
  */
 /** Parse one already-read Assignment body (the read's own bytes, never a second read). */
-function parseAssignmentBytes(abs: string, bytes: Buffer): AssignmentHeaders {
+export function parseAssignmentBytes(abs: string, bytes: Buffer): AssignmentHeaders {
   const text = bytes.toString("utf8");
   const values = new Map<string, string>();
   let fenced = false;

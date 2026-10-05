@@ -111,6 +111,7 @@ export type ExecutionErrorCode =
   | "execution.session-unavailable"
   | "execution.canonical-value"
   | "execution.operation-conflict"
+  | "execution.partial-effect"
   | "execution.migration-conflict"
   | "store.not-active"
   | "store.stale-epoch";
