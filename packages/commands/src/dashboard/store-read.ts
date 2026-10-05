@@ -39,6 +39,7 @@ export const DASHBOARD_API_VIEWS = {
   "/api/workflows": "workflows",
   "/api/iterations": "iterations",
   "/api/roadmap": "roadmap",
+  "/api/projects": "projects",
 } as const;
 
 /** Detail resource → contract §6 view. */
@@ -58,6 +59,7 @@ const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   "iteration-detail": [],
   roadmap: ["project"],
   "issue-flow": ["project"],
+  projects: [],
 };
 
 const DISPOSITIONS: Record<string, true> = { open: true, resolved: true, waived: true, duplicate: true, superseded: true };

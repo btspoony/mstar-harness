@@ -60,12 +60,14 @@ describe("route table", () => {
       "/api/workflows": "workflows",
       "/api/iterations": "iterations",
       "/api/roadmap": "roadmap",
+      "/api/projects": "projects",
     });
     expect(resolveDashboardRoute("/api/issues")).toEqual({ view: "issues" });
     expect(resolveDashboardRoute("/api/issue-flow")).toEqual({ view: "issue-flow" });
     expect(resolveDashboardRoute("/api/workflows")).toEqual({ view: "workflows" });
     expect(resolveDashboardRoute("/api/iterations")).toEqual({ view: "iterations" });
     expect(resolveDashboardRoute("/api/roadmap")).toEqual({ view: "roadmap" });
+    expect(resolveDashboardRoute("/api/projects")).toEqual({ view: "projects" });
     expect(resolveDashboardRoute("/api/issues/I-000001")).toEqual({ view: "issue-detail", id: "I-000001" });
     expect(resolveDashboardRoute("/api/issues/I%2D1")).toEqual({ view: "issue-detail", id: "I-1" });
     expect(resolveDashboardRoute("/api/workflows/wf-read")).toEqual({ view: "workflow-detail", id: "wf-read" });
@@ -80,7 +82,7 @@ describe("route table", () => {
       "/api/issues/",
       "/api/issue-flow/I-1",
       "/api/roadmap/deep/path",
-      "/api/projects",
+      "/api/project",
       "/api/issues/../../etc/passwd",
       "//api/issues",
     ]) {
@@ -101,6 +103,10 @@ describe("query-parameter refusals", () => {
     expect(dashboardFilters("workflows", { project: "proj-a", limit: "2", offset: "0" })).toEqual({ projectId: "proj-a", limit: 2, offset: 0 });
     expect(dashboardFilters("iteration-detail", {}, "iter-read")).toEqual({ id: "iter-read" });
     expect(dashboardFilters("roadmap", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
+    expect(dashboardFilters("projects", {})).toEqual({});
+    for (const params of [{ limit: "2" }, { offset: "0" }, { project: "p" }]) {
+      expect(() => dashboardFilters("projects", params)).toThrow(/not a supported projects query parameter/);
+    }
     expect(dashboardFilters("issue-flow", {})).toEqual({});
   });
 
