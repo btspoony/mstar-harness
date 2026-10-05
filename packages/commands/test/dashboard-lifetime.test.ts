@@ -66,6 +66,18 @@ function serviceEffects(handles: RunningDashboard[], onOpen?: (url: string) => P
     expect(result.details).toHaveProperty("helpRoute");
   });
 
+  test("dashboard input validation includes refusal help and recovery details", async () => {
+    const effects = serviceEffects([]);
+    const result = await dashboardDefinition().execute({ port: -1 } as never, context(tmpdir(), effects));
+    expect(result.status).toBe("usage");
+    expect(result.code).toBe("command.invalid-input");
+    expect(result.exitCode).toBe(2);
+    expect(result.details).toMatchObject({
+      helpRoute: "mstar dashboard --help",
+      recovery: "Run mstar dashboard --help and correct the flagged input.",
+    });
+  });
+
 describe("dashboard ACTIVE projection views", () => {
   test("all projection-backed views read seeded ACTIVE-authority data", async () => {
     const harnessDir = await workspace("dashboard-active-");

@@ -71,14 +71,13 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
 
   const parsed = inputSchema.safeParse(input);
   if (!parsed.success) {
-    return {
-      version: 1,
+    return refusalEnvelope({
       command: id,
       status: "usage",
       code: "command.invalid-input",
       exitCode: 2,
       message: parsed.error.message,
-    };
+    });
   }
   const harnessDir = context.controlRoot;
   if (harnessDir === null) {
