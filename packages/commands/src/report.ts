@@ -1,3 +1,4 @@
+import { refusalEnvelope } from "./envelope.js";
 import { z } from "zod";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import type { SurfaceVersions } from "./types.js";
@@ -65,15 +66,14 @@ function failure(issues: { field: string; limit: number }[]): ReportInputTooLarg
   const fields = issues.map(({ field }) => field);
   const field = fields.length === 1 ? fields[0]! : "multiple";
   const limit = issues[0]!.limit;
-  return {
-    version: 1,
+  return refusalEnvelope({
     command: "report",
     status: "refused",
     code: "report.input-too-large",
     exitCode: 1,
     message: `input fields ${issues.map(({ field, limit }) => `${field} (${limit} bytes)`).join(", ")} exceed their UTF-8 byte limits`,
     details: { field, fields, limits: issues, limit },
-  };
+  }) as ReportInputTooLarge;
 }
  
 
