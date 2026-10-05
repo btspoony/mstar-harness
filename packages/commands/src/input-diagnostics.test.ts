@@ -101,14 +101,20 @@ describe("executeCommand input diagnostics", () => {
     // The offending member is still identified by its safe path.
     expect(diagnostics.map((entry) => entry.path)).toContain("files[0]");
   });
-  test("secret-shaped scalar received values are redacted from the first line", async () => {
-    const secret = "sk-live-9f2c4ab1-secret";
+  test("secret-shaped scalar received values are redacted from the usage message", async () => {
+    const secret = "sk-live-test-123";
     const envelope = await executeCommand("worktree.qc-alignment", { files: secret }, context());
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    const firstLine = envelope.message.split("\n")[0] ?? "";
-    expect(firstLine).not.toContain(secret);
-    expect(firstLine).toContain("[REDACTED]");
+    expect(envelope.message).not.toContain(secret);
+    expect(envelope.message).toContain("[REDACTED]");
+  });
+
+  test("non-secret scalar received values remain fully rendered", async () => {
+    const envelope = await executeCommand("worktree.qc-alignment", { files: 42 }, context());
+    expect(envelope.status).toBe("usage");
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message).toContain("received 42");
   });
 
   test("non-secret scalar received values remain fully rendered", async () => {

@@ -184,7 +184,7 @@ function inputDiagnostic(issue: z.ZodError["issues"][number]): RefusalDiagnostic
   return {
     path,
     code: issue.code,
-    message: issue.message,
+    message: redactSecrets(issue.message).text,
     ...(typeof index === "number" ? { index } : {}),
   };
 }
