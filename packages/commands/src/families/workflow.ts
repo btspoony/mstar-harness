@@ -49,7 +49,19 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
     : undefined;
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error), ...(details === undefined ? {} : { details }) };
+  return {
+    version: 1,
+    command: id,
+    status: "refused",
+    code,
+    exitCode: 1,
+    message: error instanceof Error ? error.message : String(error),
+    ...(details === undefined ? {} : { details }),
+    ...(code === "workflow.register.title-constraint" ? {
+      helpRoute: "mstar workflow register --help",
+      recovery: "Use the title in the selected plan document's H1, or correct that document before registering.",
+    } : {}),
+  };
 }
 function object(value: unknown, field: string): Record<string, unknown> {
   let parsed: unknown = value;
@@ -108,6 +120,14 @@ function makeDefinition(
   const optionNames = [...keys, ...contextOptions.map(({ key }) => key)];
   return {
     id,
+    ...(id === "workflow.register" ? {
+      requirements: [{
+        name: "planTitle",
+        ownership: "caller" as const,
+        route: "cli" as const,
+        constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
+      }],
+    } : {}),
     cli: {
       path: id.split("."),
       aliases: [],
@@ -169,7 +189,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         await assertLegacyRoute(harnessDir, "workflow register");
         return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));
       } catch (error) { return refused("workflow.register", error); }
-    }, [{ key: "sessionId", context: "sessionId" }], { expect: `CAS expectation: ${TOKEN_SUPPLIES.root}` }),
+    }, [{ key: "sessionId", context: "sessionId" }], {
+      expect: `CAS expectation: ${TOKEN_SUPPLIES.root}`,
+      planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
+    }),
     makeDefinition("workflow.evidence", "Record delivery evidence or one-time kind declaration; legacy file writes and active DB transitions stay disjoint.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
       try {
         if (input.workflow === undefined) return usage("workflow.evidence", "workflow is required");

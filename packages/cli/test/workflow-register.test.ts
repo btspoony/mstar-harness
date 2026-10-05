@@ -126,6 +126,25 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
 }
 
 describe("mstar workflow register", () => {
+  test("mismatched declared title returns the typed constraint refusal verbatim", async () => {
+    await setupHarness((harness) => {
+      const args = registerArgs(harness);
+      args[args.indexOf("--plan-title") + 1] = "Contradictory title";
+      const result = runCli([...args, "--json"]);
+      expect(result.exitCode).toBe(1);
+      const envelope = commandOutput(result);
+      expect(envelope).toMatchObject({
+        status: "refused",
+        code: "workflow.register.title-constraint",
+        exitCode: 1,
+      });
+      expect(envelope.message).toBe(
+        `derivePlanRegistration: plan "20260916-plan-cli-example" was declared with title "Contradictory title", but the selected document ${realpathSync(join(harness, "plans/20260916-plan-cli-example.md"))} states "CLI example plan" - the selected plan document is the registration authority (R1/section 4), so a supplied title is a constraint against it, never an override`,
+      );
+      expect(envelope.helpRoute).toBe("mstar workflow register --help");
+      expect(envelope.recovery).toContain("selected plan document's H1");
+    });
+  });
   test("registers a standalone development plan: root entry + snapshot on disk, both validate (exit 0)", async () => {
     await setupHarness((harness, { root, snapshot }) => {
       const result = runCli(registerArgs(harness));

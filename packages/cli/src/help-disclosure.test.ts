@@ -56,6 +56,11 @@ describe("#324 help disclosure", () => {
     expect(help).toContain("data.token");
   });
 
+  test("workflow register documents the plan-title constraint", () => {
+    const { stdout } = runHelp(["workflow", "register"]);
+    expect(optionHelp(stdout, "--plan-title <value>")).toContain("selected plan document's H1");
+    expect(optionHelp(stdout, "--plan-title <value>")).toContain("registration authority");
+  });
   test("iteration register names the root token source on --expect", () => {
     const { stdout } = runHelp(["iteration", "register"]);
     const help = optionHelp(stdout, "--expect <value>");

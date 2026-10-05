@@ -177,7 +177,12 @@ export function renderCommandContract(definition: CommandDefinition, route: "cli
   for (const [ownership, label] of [["caller", "Caller-supplied"], ["derivable", "Derived"]] as const) {
     const entries = descriptor.requirements.filter((entry) => entry.ownership === ownership && entry.route === route);
     if (entries.length === 0) continue;
-    const parts = entries.map((entry) => (entry.help === undefined ? entry.name : `${entry.name} (${entry.help})`));
+    const parts = entries.map((entry) => {
+      const description = [entry.help, entry.constraint === undefined ? undefined : `constraint: ${entry.constraint}`]
+        .filter((value): value is string => value !== undefined)
+        .join("; ");
+      return description === "" ? entry.name : `${entry.name} (${description})`;
+    });
     lines.push(`${label}: ${parts.join(", ")}`);
   }
   // Payload publication keeps the descriptor convention: only keys that are

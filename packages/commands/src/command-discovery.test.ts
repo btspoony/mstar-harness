@@ -173,6 +173,16 @@ describe("command discovery", () => {
       name: "expect (--plan)", tokenKind: "plan",
     }));
   });
+  test("workflow register schema publishes the selected-document title constraint", () => {
+    const selection = selectCommandSchema({ command: "workflow.register" }, getCommandDefinitions());
+    if (selection.kind !== "command") throw new Error("expected workflow.register command descriptor");
+    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "planTitle",
+      ownership: "caller",
+      route: "cli",
+      constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
+    }));
+  });
 
   test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
