@@ -3697,7 +3697,7 @@ async function mutateRecoverAssignment(
       if (context.coordination?.prepared === undefined) {
         throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no prepared Assignment`);
       }
-      return null;
+      return;
     },
     mutate: async (context, reportExternalCommit) => {
       const prepared = context.coordination?.prepared;
