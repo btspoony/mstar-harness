@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, mkdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureSddEvidenceFromFile, verifySddEvidence } from "../../cli/src/sdd-evidence.js";
-import { resolveSddExecutionContext } from "@mstar-harness/engine";
+import { resolveSddExecutionContext, SddScriptError } from "@mstar-harness/engine";
 import { getSddCommandDefinitions } from "../src/index.js";
 import { failed } from "../src/families/sdd.js";
 import type { InvocationContext } from "../src/types.js";
@@ -111,6 +111,26 @@ describe("SDD command family", () => {
     expect(result.code).toBe("sdd.engine-refused");
     expect(result.message.split("\n", 1)[0]).toBe("engine SDD refusal detail");
     expect(result.details).toHaveProperty("helpRoute");
+  });
+
+  test("a non-standard SDD refusal exit is preserved through the shared factory", () => {
+    const result = failed("sdd.task-brief", new SddScriptError("task 3 not found in the plan document", 3));
+    expect(result).toMatchObject({ status: "refused", code: "sdd.task-brief.refused", exitCode: 3 });
+    if (result.status === "ok") throw new Error("expected a refusal");
+    expect(result.message.split("\n")[0]).toBe("task 3 not found in the plan document");
+    expect(result.message).toContain("Help: mstar sdd task-brief --help");
+    expect(result.details).toMatchObject({ helpRoute: "mstar sdd task-brief --help" });
+  });
+
+  test("the SDD usage exit 2 stays a usage envelope with exit 2", () => {
+    const result = failed("sdd.workspace", new SddScriptError("PLAN_ID is required", 2));
+    expect(result).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    if (result.status !== "usage") throw new Error("expected usage envelope");
+    expect(result.message.split("\n")[0]).toBe("PLAN_ID is required");
+    expect(result.details).toMatchObject({
+      helpRoute: "mstar sdd workspace --help",
+      recovery: "Run mstar sdd workspace --help and correct the flagged input.",
+    });
   });
 
   test("registers six identities and excludes sdd exec", () => {

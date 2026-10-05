@@ -119,6 +119,37 @@ describe("executeCommand input diagnostics", () => {
   });
 });
 
+describe("session selector admission", () => {
+  // The central selector rejection is a consumer-visible admission point: it
+  // must carry the same factory metadata as every other usage refusal, with the
+  // code and exit unchanged.
+  test("an empty session selector is rejected with the shared usage shape", async () => {
+    const envelope = await executeCommand("plan.bind", { sessionId: "" }, context());
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received ""');
+    expect(envelope.details).toMatchObject({
+      helpRoute: "mstar plan bind --help",
+      recovery: "Run mstar plan bind --help and correct the flagged input.",
+    });
+  });
+
+  test("a whitespace session selector is rejected the same way", async () => {
+    const envelope = await executeCommand("plan.bind", { sessionId: "   " }, context());
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received "   "');
+  });
+
+  test("a non-string session selector names the received type", async () => {
+    const envelope = await executeCommand("plan.bind", { sessionId: 42 }, context());
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected usage envelope");
+    expect(envelope.message.split("\n")[0]).toBe("Rejected --session-id: expected non-empty string; received number");
+    expect(envelope.details).toMatchObject({ helpRoute: "mstar plan bind --help" });
+  });
+});
+
 describe("CLI parser diagnostics", () => {
   test("missing required argument reports the field and the leaf help route", async () => {
     // `--key` is supplied so Commander deterministically reports the missing

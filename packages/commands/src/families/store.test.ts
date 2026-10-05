@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
+import { WORKFLOW_SNAPSHOT_FILE, initializeStore } from "@mstar-harness/engine";
 import type { InvocationContext } from "../types.js";
 import { getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
@@ -72,6 +72,45 @@ test("store.upgrade names the required operator input before writing", async () 
     if (definition === undefined) throw new Error("missing store.upgrade definition");
     const result = await definition.execute(definition.input.parse({ harness: join(root, ".mstar") }), invocation(root));
     expect(result).toMatchObject({ status: "usage", message: "--operator is required" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a store usage refusal carries the shared factory metadata and keeps its code", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-usage-shape-"));
+  try {
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const result = await definition.execute(definition.input.parse({ harness: join(root, ".mstar") }), invocation(root));
+    expect(result).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    if (result.status !== "usage") throw new Error("expected usage envelope");
+    expect(result.message.split("\n")[0]).toBe("--operator is required");
+    expect(result.details).toMatchObject({
+      helpRoute: "mstar store upgrade --help",
+      recovery: "Run mstar store upgrade --help and correct the flagged input.",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a store engine refusal keeps its code, exit 1 and message through the factory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-refused-shape-"));
+  try {
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.init");
+    if (definition === undefined) throw new Error("missing store.init definition");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    // An existing store makes `store.init` refuse from the engine (exit 1).
+    const seeded = await initializeStore({ harnessDir: harness });
+    seeded.close();
+    const result = await definition.execute(definition.input.parse({ harness }), invocation(root));
+    expect(result).toMatchObject({ status: "refused", code: "store.already-exists", exitCode: 1 });
+    if (result.status === "ok" || result.status === "usage") throw new Error(`expected a refusal, got ${result.status}`);
+    expect(result.message.split("\n")[0]).not.toContain("Help:");
+    expect(result.message).toContain("Help: mstar store init --help");
+    expect(result.details).toMatchObject({ helpRoute: "mstar store init --help" });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
