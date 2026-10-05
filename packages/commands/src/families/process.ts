@@ -15,7 +15,7 @@ const cleanupInput = z.object({ workflow: z.string(), harness: z.string().option
 const setupInput = z.object({ pr: z.string().optional(), branch: z.string().optional(), diff: z.boolean().optional(), workingTree: z.boolean().optional(), commit: z.string().optional(), targetPath: z.string().optional() }) as z.ZodType<Input>;
 
 function ok(id: string, data: unknown): CommandEnvelope { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
-function failure(id: string, error: unknown): CommandEnvelope<never> {
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const details = error !== null && typeof error === "object" && "details" in error
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)

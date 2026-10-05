@@ -4,6 +4,7 @@ import { existsSync, fstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions, spawnProcess } from "../src/index.js";
+import { failure } from "../src/families/process.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -85,6 +86,13 @@ function setupRepo() {
 }
 
 describe("process command family", () => {
+  test("engine refusal mapper preserves the engine message and adds help routing", () => {
+    const error = Object.assign(new Error("engine refused process operation"), { code: "execution.consumer-not-ready" });
+    const result = failure("worktree.cleanup", error);
+    expect(result.status).toBe("refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine refused process operation");
+    expect(result.details).toHaveProperty("helpRoute");
+  });
   test("registers the three process identities once", () => {
     const ids = getCommandDefinitions().map(({ id }) => id);
     expect(ids.filter((id) => ["sdd.exec", "worktree.cleanup", "pr-review.worktree-setup"].includes(id))).toEqual([

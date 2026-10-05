@@ -5,6 +5,7 @@ import { createFsStore, initializeStore, scaffoldHarness, setArtifactStore } fro
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { getAuditCommandDefinitions, getCommandDefinitions } from "../src/index.js";
+import { failure } from "../src/families/audit.js";
 import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -44,6 +45,7 @@ function gitInit(root: string): void {
 describe("audit command family", () => {
 
   test("scaffold creates plan artifacts only in the declared output directory", async () => {
+
     const root = tempRoot();
     const findings = path.join(root, "findings.json");
     const outDir = path.join(root, "audit-2026-09-27");
@@ -53,6 +55,13 @@ describe("audit command family", () => {
     expect(readFileSync(path.join(outDir, "001-leaked-credential.md"), "utf8")).toContain("Credential is exposed");
     expect(readFileSync(path.join(outDir, "README.md"), "utf8")).toContain("| 001 | Leaked credential |");
     expect(existsSync(path.join(root, "unrelated"))).toBe(false);
+  });
+  test("engine refusal mapper preserves the engine message and adds help routing", () => {
+    const error = Object.assign(new Error("engine refused this operation"), { code: "execution.consumer-not-ready" });
+    const result = failure("audit.promote", error);
+    expect(result.status).toBe("refused");
+    expect(result.message.split("\n", 1)[0]).toBe("engine refused this operation");
+    expect(result.details).toHaveProperty("helpRoute");
   });
 
   test("secret scan reports the actual engine finding for a tracked fixture without disclosing its value", async () => {
