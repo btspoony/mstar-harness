@@ -11,7 +11,7 @@ import {
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
-import { IDENTITY_SUPPLIES } from "../identity-supplies.js";
+import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
@@ -102,6 +102,7 @@ function makeDefinition(
   keys: readonly string[],
   execute: (input: z.infer<ReturnType<typeof schema>>, context: InvocationContext) => Promise<CommandEnvelope<unknown>>,
   contextOptions: readonly { key: string; context: "sessionId" }[] = [],
+  optionHelp: Readonly<Record<string, string>> = {},
 ): CommandDefinition {
   const input = schema().pick(Object.fromEntries(keys.map((key) => [key, true])) as never);
   const optionNames = [...keys, ...contextOptions.map(({ key }) => key)];
@@ -119,6 +120,7 @@ function makeDefinition(
           flags: `--${key.replace(/[A-Z]/g, (x) => `-${x.toLowerCase()}`)} <value${variadic ? "..." : ""}>`,
           required: false,
           ...(variadic ? { variadic: true } : {}),
+          ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
           ...(contextOptions.find((option) => option.key === key) ?? {}),
         };
       }),
@@ -167,7 +169,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         await assertLegacyRoute(harnessDir, "workflow register");
         return ok("workflow.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:workflow-register", workflow }));
       } catch (error) { return refused("workflow.register", error); }
-    }, [{ key: "sessionId", context: "sessionId" }]),
+    }, [{ key: "sessionId", context: "sessionId" }], { expect: `CAS expectation: ${TOKEN_SUPPLIES.root}` }),
     makeDefinition("workflow.evidence", "Record delivery evidence or one-time kind declaration; legacy file writes and active DB transitions stay disjoint.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
       try {
         if (input.workflow === undefined) return usage("workflow.evidence", "workflow is required");
@@ -211,7 +213,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         await assertLegacyRoute(root, "workflow evidence");
         return ok("workflow.evidence", await recordWorkflowDelivery(input.workflow, workflowDir, { evidence, ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) }));
       } catch (error) { return refused("workflow.evidence", error); }
-    }, [{ key: "sessionId", context: "sessionId" }]),
+    }, [{ key: "sessionId", context: "sessionId" }], {
+      expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
+      sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
+    }),
     makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
       try { if (input.session === undefined) return usage("workflow.show-prepare", "session is required"); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return refused("workflow.show-prepare", error); }
     }),
@@ -284,7 +289,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           operation,
         }));
       } catch (error) { return refused(id, error); }
-    }, [{ key: "sessionId", context: "sessionId" }]));
+    }, [{ key: "sessionId", context: "sessionId" }], {
+      expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
+      sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
+    }));
   }
   defs.push(makeDefinition("iteration.register", "Register a create-only iteration workflow with its branch anchors and Todo rows.", "write", ["workflow", "compassRef", "branchBase", "branchIntegration", "branchTargetIteration", "row", "project", "startedAt", "harness", "expect", "operation"], async (input, context) => {
     try {
@@ -326,6 +334,6 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       await assertLegacyRoute(harnessDir, "iteration register");
       return ok("iteration.register", await registerShippedCatalogExecution({ harnessDir }, { operationId: randomUUID(), actor: "mcp:iteration-register", workflow }));
     } catch (error) { return refused("iteration.register", error); }
-  }, [{ key: "sessionId", context: "sessionId" }]));
+  }, [{ key: "sessionId", context: "sessionId" }], { expect: `CAS expectation: ${TOKEN_SUPPLIES.root}` }));
   return defs;
 }

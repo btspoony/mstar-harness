@@ -24,6 +24,7 @@ import {
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const harnessInput = z.object({ harness: z.string().min(1).optional() });
@@ -101,7 +102,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       input: z.object({ path: z.string().min(1).optional() }),
       output,
       effects: ["read", "validate"],
-      description: "Validate the v2 status register or a workflow snapshot.",
+      description: "Validate the v2 status register or a workflow snapshot. Under an ACTIVE execution authority the output carries the execution CAS tokens a caller records as --expect: the store's root token at data.token, each workflow's token at data.workflows[].token, and each plan's token at data.authority.workflows[].planTokens[<planId>].",
       async execute(input, context) {
         const parsed = z.object({ path: z.string().min(1).optional() }).safeParse(input);
         if (!parsed.success) return invalid("status.validate", parsed.error);
@@ -182,8 +183,8 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         { key: "harness", flags: "--harness <path>", required: false },
         { key: "endedAt", flags: "--ended-at <date>", required: false },
         { key: "session", flags: "--session <path>", required: false },
-        { key: "sessionRef", flags: "--session-ref <wire>", required: false },
-        { key: "expect", flags: "--expect <token>", required: false },
+        { key: "sessionRef", flags: "--session-ref <wire>", required: false, help: SESSION_REF_SUPPLIES },
+        { key: "expect", flags: "--expect <token>", required: false, help: `CAS expectation: ${TOKEN_SUPPLIES.workflow}` },
         { key: "operation", flags: "--operation <id>", required: false },
         { key: "reason", flags: "--reason <text>", required: false },
         { key: "json", flags: "--json", required: false },

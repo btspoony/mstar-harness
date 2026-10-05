@@ -536,16 +536,19 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
   if (command.options.length === 0) {
     for (const option of definition.cli.options) {
       const flags = cliOptionFlags(definition, option);
+      // The option's own help line: the declared supply disclosure when one
+      // exists, else the bare key name (the previous contract).
+      const description = option.help ?? option.key;
       const appendValue = option.variadic
         ? (value: string, previous: string[] = []) => [...previous, value]
         : undefined;
       if (option.required) {
-        if (appendValue) command.requiredOption(flags, option.key, appendValue);
-        else command.requiredOption(flags, option.key);
+        if (appendValue) command.requiredOption(flags, description, appendValue);
+        else command.requiredOption(flags, description);
       } else if (appendValue) {
-        command.option(flags, option.key, appendValue);
+        command.option(flags, description, appendValue);
       } else {
-        command.option(flags, option.key);
+        command.option(flags, description);
       }
     }
   }

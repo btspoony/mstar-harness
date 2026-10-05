@@ -14,10 +14,14 @@ import {
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const command = <I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> => definition;
 const SESSION_ROLES = ["coordinator", "plan-pm"] as const;
+/** Recovery compares the addressed scope's own CAS token: the workflow's for coordinator recovery, the named plan's with `--plan`. */
+const SESSION_RECOVER_EXPECT_HELP =
+  `required CAS token: ${TOKEN_SUPPLIES.workflow} for coordinator recovery, ${TOKEN_SUPPLIES.plan} with --plan`;
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -88,7 +92,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       cli: { path: ["session", "recover"], aliases: [], arguments: [], options: [
         { key: "workflow", flags: "--workflow <id>", required: true }, { key: "plan", flags: "--plan <id>", required: false }, { key: "priorSession", flags: "--prior-session <id>", required: false },
         { key: "unowned", flags: "--unowned", required: false }, { key: "reason", flags: "--reason <text>", required: true },
-        { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true },
+        { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true, help: SESSION_RECOVER_EXPECT_HELP },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
