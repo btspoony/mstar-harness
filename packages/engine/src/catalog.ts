@@ -277,7 +277,10 @@ function catalogRoots(context: StoreContext): Record<CatalogRootKind, string> {
 }
 
 function pathRefused(message: string): CatalogError {
-  return new CatalogError("catalog.path-refused", `${message} \u2014 no catalog write was made`);
+  return new CatalogError(
+    "catalog.path-refused",
+    `${message} — no catalog write was made. Correct the --path value to a root-relative, non-traversing, non-empty path (the user corrects the input value; no hidden-state repair needed).`,
+  );
 }
 
 /**
@@ -871,7 +874,7 @@ export function registerCatalogEntityOn(
       throw new CatalogError(
         "catalog.duplicate",
         `${record.kind} ${record.id} is already registered at ${existing.root_kind}/${existing.relative_path}; ` +
-          `existing IDs are preserved \u2014 updateCatalogEntity is the only verb that relocates one.`,
+          `existing IDs are preserved — updateCatalogEntity is the only verb that relocates one. Discover the current revision with mstar catalog show <kind> <id>, then relocate it with mstar catalog update <kind> <id> --path <new> [--root-kind <k>] --expect <revision> --operation-id <id> --actor <role>.`,
       );
     }
     return commitOperation(
