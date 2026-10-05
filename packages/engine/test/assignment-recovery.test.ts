@@ -112,8 +112,10 @@ test("file restore remains addressable after assignment plan and workflow header
   await preparePlan(fixture, PLAN_ID);
   const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
   const reviewedBytes = readFileSync(fixture.assignmentPath, "utf8");
-  writeText(fixture.assignmentPath, reviewedBytes.replace(`**Plan id**: ${PLAN_ID}`, "**Plan id**: other-plan")
-    .replace(`**Workflow id**: ${fixture.workflowId}`, "**Workflow id**: other-workflow"));
+  const retargeted = reviewedBytes.replace(/(\*\*Plan id\*\*: )[^\n]+/, "$1other-plan")
+    .replace(/(\*\*Workflow id\*\*: )[^\n]+/, "$1other-workflow");
+  expect(retargeted).not.toBe(reviewedBytes);
+  writeText(fixture.assignmentPath, retargeted);
   await expect(recoverAssignment(fixture, "restore", view.revision)).resolves.toMatchObject({
     outcome: "assignment-recovered",
   });
