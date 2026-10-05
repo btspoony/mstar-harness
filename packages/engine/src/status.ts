@@ -1021,6 +1021,54 @@ export async function unregisterWorkflowIfMatches(
 }
 
 /**
+ * Hold the root and expected snapshot locks while a purge performs its journal
+ * transaction and destructive filesystem work. The callback must call
+ * `removeRoot` inside that transaction, before deleting snapshot bytes.
+ */
+export async function withWorkflowPurgeLocks<T>(
+  root: string,
+  id: string,
+  expectedSnapshotPath: string,
+  fn: (snapshot: Record<string, unknown> | undefined, rootPresent: boolean, removeRoot: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  assertExecutionFileWriteAllowed({ harnessDir });
+  if (typeof id !== "string" || id.trim() === "") throw new Error("workflow id must be non-empty");
+  if (!isAbsolute(expectedSnapshotPath)) throw new Error("expected snapshot path must be absolute");
+  const store = getArtifactStore();
+  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
+  return withStatusWriteLock(statusPath, async () => {
+    const doc = readJson(statusPath) as StatusV2Doc;
+    if (!Array.isArray(doc.workflows)) throw new Error("status.json workflows must be an array");
+    const entry = doc.workflows.find((workflow) => workflow.id === id);
+    if (entry !== undefined && resolve(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE) !== resolve(expectedSnapshotPath)) {
+      throw Object.assign(new Error(`root entry snapshot path mismatch for workflow ${JSON.stringify(id)}`), {
+        code: "catalog.purge-root-entry-mismatch",
+      });
+    }
+    const removeRoot = async (): Promise<void> => {
+      if (entry === undefined) return;
+      doc.workflows = doc.workflows.filter((workflow) => workflow.id !== id);
+      doc.updated_at = todayString();
+      const gate = validateStatusV2(doc, { harnessDir });
+      if (!gate.ok) throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
+    };
+    if (entry !== undefined) {
+      return withRegisteredSnapshotLock(harnessDir, entry, (snapshot) => {
+        if (snapshot === undefined) throw new Error(`registered snapshot is missing for workflow ${JSON.stringify(id)}`);
+        return fn(snapshot, true, removeRoot);
+      });
+    }
+    if (existsSync(expectedSnapshotPath)) {
+      return withStatusWriteLock(expectedSnapshotPath, () => fn(readRegisteredSnapshot(expectedSnapshotPath), false, removeRoot));
+    }
+    return fn(undefined, false, removeRoot);
+  });
+}
+
+/**
  * Resolve the repo-level hard-enforcement flag from the iteration compass
  * (roadmap §8.5 C4/D2): `{ITERATION_DIR}/<id>/delivery-compass.md` files are
  * scanned; only compasses still steering the repo count — frontmatter

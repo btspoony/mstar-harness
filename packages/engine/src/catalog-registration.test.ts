@@ -35,7 +35,7 @@ import {
 } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore, type ArtifactStore } from "./store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
-import { validateStatus } from "./status.js";
+import { validateStatus, withWorkflowPurgeLocks } from "./status.js";
 import { PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, deriveLifecyclePhase, readWorkflowSnapshot, validateWorkflowSnapshot } from "./workflow.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-registration-test-"));
@@ -1433,7 +1433,10 @@ describe("catalog execution registration \u2014 recovery segments at the raising
       },
     });
     await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-mutated", expectedCatalogRevision: 0 })))
-      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+      .rejects.toMatchObject({
+        code: "catalog.registration-conflict",
+        message: expect.stringContaining("mstar catalog purge-registration"),
+      });
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
     snapshot.updated_at = "2026-10-06";
     writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
@@ -1443,6 +1446,187 @@ describe("catalog execution registration \u2014 recovery segments at the raising
     expect(existsSync(snapshotPath)).toBe(true);
   });
 
+  test("purge rechecks catalog revision while waiting for the root lock", async () => {
+    const { harnessDir, context } = await fixture("purge-revision-race-");
+    const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let changed = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!changed && doc.kind === "status") {
+          changed = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "producer-divergence";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+    await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-revision-race", expectedCatalogRevision: 0 })))
+      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+    setArtifactStore(base);
+
+    const rootLock = join(harnessDir, ".status-write.lockdir");
+    mkdirSync(rootLock);
+    const purge = purgeCatalogRegistration(context, {
+      workflowId: "wf-plan-1", operationId: "op-purge-revision-race", expectedCatalogRevision: 0, actor: "project-manager",
+    });
+    // Let purge finish its preflight transaction and reach the occupied root lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "revision-race", title: "Revision race", rootKind: "projects", relativePath: "revision-race" },
+      { operationId: "seed-purge-revision-race", actor: "project-manager" },
+    );
+    rmSync(rootLock, { recursive: true });
+    await expect(purge).rejects.toMatchObject({ code: "catalog.revision-conflict" });
+    expect(existsSync(snapshotPath)).toBe(true);
+    const rootAfter = JSON.parse(readFileSync(join(harnessDir, "status.json"), "utf8")) as { workflows: Array<{ id: string }> };
+    expect(rootAfter.workflows.some(({ id }) => id === "wf-plan-1")).toBe(true);
+    const handle = await openStore(context, "read");
+    expect((handle.db.prepare("select phase from catalog_operations where operation_id = ?").get("op-purge-revision-race") as { phase: string }).phase).toBe("prepared");
+    handle.close();
+  });
+  test("a concurrent purge waits through root removal, byte deletion, and journal abort", async () => {
+    const { harnessDir, context } = await fixture("purge-lock-window-");
+    const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let changed = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!changed && doc.kind === "status") {
+          changed = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "producer-divergence";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+    await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-lock-window", expectedCatalogRevision: 0 })))
+      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+
+    const { promise: rootPutEntered, resolve: signalRootPut } = Promise.withResolvers<void>();
+    const { promise: rootPutGate, resolve: releaseRootPut } = Promise.withResolvers<void>();
+    let paused = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        if (!paused && doc.kind === "status") {
+          paused = true;
+          signalRootPut();
+          await rootPutGate;
+        }
+        await base.put(doc);
+      },
+    });
+    const input = { workflowId: "wf-plan-1", operationId: "op-purge-lock-window", expectedCatalogRevision: 0, actor: "project-manager" };
+    const first = purgeCatalogRegistration(context, input);
+    await rootPutEntered;
+    let competingWriterAcquired = false;
+    const competingWriter = withWorkflowPurgeLocks(
+      join(harnessDir, "status.json"),
+      "wf-plan-1",
+      snapshotPath,
+      async () => { competingWriterAcquired = true; },
+    );
+    // Lock contention retries through the platform timer, so a brief real wait
+    // observes that the competing writer remains blocked while purge holds the root lock.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(competingWriterAcquired).toBe(false);
+    expect(existsSync(snapshotPath)).toBe(true);
+    releaseRootPut();
+    await Promise.all([first, competingWriter]);
+    expect(competingWriterAcquired).toBe(true);
+    expect(existsSync(snapshotPath)).toBe(false);
+  });
+
+  test("purging one failed registration preserves a different valid workflow", async () => {
+    const { harnessDir, context } = await fixture("purge-isolation-");
+    const base = createFsStore(harnessDir);
+    const failedSnapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let changed = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!changed && doc.kind === "status") {
+          changed = true;
+          const snapshot = JSON.parse(readFileSync(failedSnapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "producer-divergence";
+          writeFileSync(failedSnapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+    await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-isolation-failed", expectedCatalogRevision: 0 })))
+      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+    setArtifactStore(base);
+    const validReceipt = await registerCatalogExecution(context, planRequest({
+      harnessDir, operationId: "op-purge-isolation-valid", expectedCatalogRevision: 0,
+      workflowId: "wf-plan-valid", planId: "20261006-isolation-valid",
+    }));
+    const validSnapshotPath = join(harnessDir, "workflows", "wf-plan-valid", WORKFLOW_SNAPSHOT_FILE);
+    const validSnapshot = readFileSync(validSnapshotPath, "utf8");
+    const rootBefore = JSON.parse(readFileSync(join(harnessDir, "status.json"), "utf8")) as { workflows: Array<{ id: string; dir: string }> };
+    const validRootEntry = rootBefore.workflows.find(({ id }) => id === "wf-plan-valid");
+    const validEntity = await catalogPlan(context, "20261006-isolation-valid");
+    const bindingBeforeHandle = await openStore(context, "read");
+    const bindingBefore = bindingBeforeHandle.db.prepare("select * from catalog_execution_bindings where workflow_id = ?")
+      .get("wf-plan-valid");
+    bindingBeforeHandle.close();
+    const beforeBindings = await listCatalog(context, { kind: "plan" });
+
+    const receipt = await purgeCatalogRegistration(context, {
+      workflowId: "wf-plan-1", operationId: "op-purge-isolation-failed", expectedCatalogRevision: validReceipt.catalogRevision, actor: "project-manager",
+    });
+    expect(receipt.workflowId).toBe("wf-plan-1");
+    expect(readFileSync(validSnapshotPath, "utf8")).toBe(validSnapshot);
+    const rootAfter = JSON.parse(readFileSync(join(harnessDir, "status.json"), "utf8")) as { workflows: Array<{ id: string; dir: string }> };
+    expect(rootAfter.workflows.find(({ id }) => id === "wf-plan-valid")).toEqual(validRootEntry);
+    expect(await catalogPlan(context, "20261006-isolation-valid")).toEqual(validEntity);
+    expect(await listCatalog(context, { kind: "plan" })).toEqual(beforeBindings);
+    const bindingAfterHandle = await openStore(context, "read");
+    expect(bindingAfterHandle.db.prepare("select * from catalog_execution_bindings where workflow_id = ?").get("wf-plan-valid"))
+      .toEqual(bindingBefore);
+    bindingAfterHandle.close();
+  });
+  test("purge replay completes after root removal when the snapshot delete was interrupted", async () => {
+    const { harnessDir, context } = await fixture("purge-replay-root-removed-");
+    const base = createFsStore(harnessDir);
+    const snapshotPath = join(harnessDir, "workflows", "wf-plan-1", WORKFLOW_SNAPSHOT_FILE);
+    let changed = false;
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (!changed && doc.kind === "status") {
+          changed = true;
+          const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+          snapshot.project = "producer-divergence";
+          writeFileSync(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`);
+        }
+      },
+    });
+    await expect(registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-purge-replay", expectedCatalogRevision: 0 })))
+      .rejects.toMatchObject({ code: "catalog.registration-conflict" });
+    setArtifactStore(base);
+
+    const rootPath = join(harnessDir, "status.json");
+    const root = JSON.parse(readFileSync(rootPath, "utf8")) as { workflows: Array<{ id: string }> };
+    root.workflows = root.workflows.filter(({ id }) => id !== "wf-plan-1");
+    writeFileSync(rootPath, `${JSON.stringify(root, null, 2)}\n`);
+    const receipt = await purgeCatalogRegistration(context, {
+      workflowId: "wf-plan-1", operationId: "op-purge-replay", expectedCatalogRevision: 0, actor: "project-manager",
+    });
+
+    expect(receipt).toMatchObject({ workflowId: "wf-plan-1", actor: "project-manager" });
+    expect(existsSync(snapshotPath)).toBe(false);
+    const handle = await openStore(context, "read");
+    expect((handle.db.prepare("select phase from catalog_operations where operation_id = ?").get("op-purge-replay") as { phase: string }).phase).toBe("aborted");
+    handle.close();
+  });
   test("purge removes only digest-matched failed registration and records receipt", async () => {
     const { harnessDir, context } = await fixture("purge-success-");
     const base = createFsStore(harnessDir);
