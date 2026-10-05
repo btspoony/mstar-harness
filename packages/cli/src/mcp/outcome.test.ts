@@ -1,4 +1,4 @@
-import { commandEnvelopeSchema, executeCommand, getCommandDefinitions, getSddCommandDefinitions, refusalEnvelope, sddFailed, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
+import { commandEnvelopeSchema, executeCommand, getCommandDefinitions, getSddCommandDefinitions, getValidationCommandDefinitions, refusalEnvelope, sddFailed, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
 import { SddScriptError } from "@mstar-harness/engine";
 import { validateCommandOutcome } from "./outcome.js";
 
@@ -117,5 +117,21 @@ describe("MCP command outcome refusal contract", () => {
     expect(mcp.message.split("\n")[0]).toBe(cli.message.split("\n")[0]);
     expect(mcp.details).toEqual(cli.details);
     expect(mcp.details?.helpRoute).toBeDefined();
+  });
+
+  test("a validation-family usage refusal reaches the MCP consumer with the shared factory metadata", async () => {
+    // The family's own usage constructor returned a bare envelope, so the CLI
+    // emitted it unchanged while MCP derived help/recovery — two shapes for one
+    // refusal. This pins one factory-built envelope for both transports.
+    const cli = await executeCommand("worktree.qc-alignment", { files: [] }, context());
+    const validationDefinition = [...getCommandDefinitions(), ...getValidationCommandDefinitions()]
+      .find((entry) => entry.id === "worktree.qc-alignment");
+    if (validationDefinition === undefined) throw new Error("missing worktree.qc-alignment definition");
+    const mcp = validateCommandOutcome(validationDefinition, cli);
+
+    expect(cli).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+    expect(mcp).toEqual(cli);
+    expect(mcp.details?.helpRoute).toBe("mstar worktree qc-alignment --help");
+    expect(mcp.details?.recovery).toBe("Run mstar worktree qc-alignment --help and correct the flagged input.");
   });
 });

@@ -98,7 +98,7 @@ function refusal(id: string, code: string, message: string, details?: Record<str
 }
 function failed(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
-  if (error instanceof SddScriptError && error.exitCode === 2) return { version: 1, command: id, status: "usage", code: "usage", exitCode: 2, message };
+  if (error instanceof SddScriptError && error.exitCode === 2) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message });
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.refused`;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message });
 }

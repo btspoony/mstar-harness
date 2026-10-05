@@ -234,7 +234,7 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
     id,
     cli: { path: ["audit", verb], aliases: [], arguments: contract.args, options: contract.options },
     input, output: commandEnvelopeSchema, effects: contract.effects, description: contract.description,
-    async execute(raw, context) { const parsed = input.safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message }; },
+    async execute(raw, context) { const parsed = input.safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message }); },
   };
 }
 
