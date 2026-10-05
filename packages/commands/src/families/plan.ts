@@ -15,6 +15,7 @@ import {
   readSessionEnvelope,
   resumeExecutionSession,
   setArtifactStore,
+  StoreError,
   type BindPlanSessionInput,
   type ExecutionIdentity,
   type ExecutionToken,
@@ -277,29 +278,18 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       } else {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind requires a session, coordinator workflow, assignment, or workflow and plan" });
       }
-      // The confirmed #324 surface: this legacy file route reads a snapshot
-      // directory, and an ACTIVE execution authority keeps its workflows in
-      // the store database — so `coordination.workflow-not-found` here is the
-      // missing `--execution` route fact. The refusal itself carries it. Both
-      // legacy address forms are covered (workflow/plan pair and coordinator
-      // workflow); resume and assignment routes stay untouched.
-      try {
-        return ok(id, await bindPlanSession(bindInput));
-      } catch (error) {
-        const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
-          ? error.code
-          : undefined;
-        const pairScope = "scope" in bindInput && bindInput.scope !== null && typeof bindInput.scope === "object" && "workflowId" in bindInput.scope;
-        const coordinatorScope = "coordinator" in bindInput && bindInput.coordinator === true && "workflowId" in bindInput;
-        if (code === "coordination.workflow-not-found" && (pairScope || coordinatorScope)) {
-          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
-            message:
-              `${error instanceof Error ? error.message : String(error)} If this workflow is under the ACTIVE execution ` +
-              "authority it has no snapshot file; bind it through the --execution route (`mstar plan bind --execution --workflow <id> --coordinator` or `--plan <planId>`, with the runtime session identity).",
-          });
-        }
-        throw error;
+      const legacyWorkflowBind =
+        ("scope" in bindInput && bindInput.scope !== null && typeof bindInput.scope === "object" && "workflowId" in bindInput.scope)
+        || ("coordinator" in bindInput && bindInput.coordinator === true && "workflowId" in bindInput);
+      const root = resolveProcessHarnessDir(cwd, input.harness);
+      if (legacyWorkflowBind && root !== null && await resolveExecutionReadRoute({ harnessDir: root }) === "execution") {
+        throw new StoreError(
+          "execution.consumer-not-ready",
+          "This workflow is registered in the active DB execution authority; the legacy snapshot-file bind route is unavailable. " +
+            "Re-run with `--execution` (`mstar plan bind --execution --workflow <id> --coordinator` or `--plan <planId>`) and the runtime session identity.",
+        );
       }
+      return ok(id, await bindPlanSession(bindInput));
     }
     if (id === "plan.show") {
       if (input.session !== undefined) {
