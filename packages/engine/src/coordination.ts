@@ -1995,6 +1995,33 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
   const current = currentAssignmentIntent(assignmentPath, recorded);
   const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
   if (changed.length === 0) return;
+  const preparedBytes = prepared.assignment_bytes;
+  const currentBytes = readFileSync(assignmentPath).toString("utf8");
+  const preparedLines = preparedBytes?.split("\n") ?? [];
+  const currentLines = currentBytes.split("\n");
+  let prefix = 0;
+  while (prefix < preparedLines.length && prefix < currentLines.length && preparedLines[prefix] === currentLines[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < preparedLines.length - prefix &&
+    suffix < currentLines.length - prefix &&
+    preparedLines[preparedLines.length - 1 - suffix] === currentLines[currentLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  const byteDiff = preparedBytes === undefined
+    ? undefined
+    : [
+        ...preparedLines.slice(prefix, preparedLines.length - suffix).map((line) => `-${line}`),
+        ...currentLines.slice(prefix, currentLines.length - suffix).map((line) => `+${line}`),
+      ].join("\n");
+  const recoveryCommand = "mstar plan recover-assignment";
+  const attribution = {
+    actor: "unknown",
+    reason: "the stale refusal has no observed control-root edit-attribution record",
+  };
   const facts = changed.map(
     (field) => `${field}: recorded as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
   );
@@ -2007,12 +2034,11 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       `the semantic Assignment projection recorded at ${prepared.prepared_at}`,
     ],
     currentFacts: facts,
-    needed:
-      `restore the reviewed ${changed.join(", ")} values for plan ${recorded.plan_id}; prepared intent is not resealed`,
+    needed: `${recoveryCommand} requires an explicit re-review or restore decision; the prepared intent is not resealed by bind`,
     withheldEffect:
       "the requested row transition is withheld; no prepared digest or semantic projection is rewritten",
     availableWork: [
-      `review the current Assignment values for plan ${recorded.plan_id}`,
+      `${recoveryCommand} with re-review or restore for plan ${recorded.plan_id}`,
       "independent operations on other rows, plans and workflows continue",
     ],
   };
@@ -2026,6 +2052,15 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       changed,
       expected: changed.map((field) => recorded[field]),
       actual: changed.map((field) => current[field] ?? null),
+      needed: problem.needed,
+      ...(byteDiff === undefined ? {} : {
+        byte_diff: {
+          prepared: preparedBytes,
+          current: currentBytes,
+          diff: byteDiff,
+        },
+      }),
+      attribution,
       sources_tried: problem.sourcesTried,
       current_facts: problem.currentFacts,
       available_work: problem.availableWork,
@@ -3478,9 +3513,10 @@ async function mutatePrepare(
     mutate: async (context) => {
       // Hashes are read inside the lock so the pinned bytes are the ones the
       // revision they are stored with was committed against.
+      const assignmentBytes = readFileSync(scope.assignmentPath);
       const prepared: PreparedCoordination = {
         assignment_path: scope.assignmentPath,
-        assignment_sha256: sha256Bytes(readFileSync(scope.assignmentPath)),
+        assignment_sha256: sha256Bytes(assignmentBytes),
         plan_sha256: sha256Bytes(readFileSync(scope.planPath)),
         qa_gate: assignment.qaGate,
         findings_cleanup: assignment.findingsCleanup,
@@ -3488,6 +3524,7 @@ async function mutatePrepare(
         // projection, so every later re-authentication compares meaning: a
         // reformatted document stays fresh, a scope/approval change does not.
         assignment_intent: assignmentIntentOf(assignment),
+        assignment_bytes: assignmentBytes.toString("utf8"),
         prepared_by: session.session_id,
         prepared_at: nowIso(),
       };

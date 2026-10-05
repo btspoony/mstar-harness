@@ -2,7 +2,7 @@
 // (including the findings-gate issue-authority cases).
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, basename, join, sep } from "node:path";
 import {
@@ -230,6 +230,33 @@ describe("binding", () => {
 
     // An unprepared plan cannot be bound at all.
     expect(await errorCodeOf(() => bindPlan(fixture, PEER_PLAN_ID))).toBe("coordination.not-prepared");
+  });
+  test("assignment stale refusal carries diff basis", async () => {
+    const fixture = makeFixture();
+    await preparePlan(fixture, PLAN_ID);
+    const before = readJson(fixture.snapshotPath);
+    writeText(
+      fixture.assignmentPath,
+      readFileSync(fixture.assignmentPath, "utf8").replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"),
+    );
+    let refusal: unknown;
+    try {
+      await bindPlan(fixture, PLAN_ID);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toMatchObject({
+      code: "coordination.assignment-stale",
+      details: {
+        byte_diff: expect.objectContaining({
+          prepared: expect.stringContaining("**QA gate**: mandatory"),
+          current: expect.stringContaining("**QA gate**: pm-acceptance"),
+        }),
+        attribution: { actor: "unknown", reason: expect.any(String) },
+        needed: expect.stringContaining("plan recover"),
+      },
+    });
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
 
   test("a caller-supplied session id is adopted as the identity and the envelope name on both bind paths", async () => {
