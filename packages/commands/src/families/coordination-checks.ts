@@ -25,6 +25,7 @@ import {
   type MigratePlan,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 function leaseRow(view: ExecutionPlanView): Record<string, unknown> {
@@ -36,10 +37,10 @@ function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: `${command}.ok`, exitCode: 0, data };
 }
 function refused(command: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return { version: 1, command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) };
+  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
 }
 function usage(command: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message };
+  return refusalEnvelope({ command, status: "usage", code: "command.invalid-input", exitCode: 2, message });
 }
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function errorCode(error: unknown, fallback: string): string {
@@ -47,7 +48,13 @@ function errorCode(error: unknown, fallback: string): string {
 }
 function engineFailure(command: string, error: unknown, fallback: string): CommandEnvelope<never> {
   if (error instanceof z.ZodError) return usage(command, error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; "));
-  return refused(command, errorCode(error, fallback), messageOf(error));
+  const code = errorCode(error, fallback);
+  const message = messageOf(error);
+  const details = error !== null && typeof error === "object" && "details" in error
+    && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+    ? error.details as Record<string, unknown>
+    : undefined;
+  return refused(command, code, message, details);
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> { return definition; }
 function harnessDir(context: InvocationContext, override?: string): string {
