@@ -84,7 +84,10 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
     : undefined;
-  return { ...refusalEnvelope({ command: id, status: "refused", code: code, exitCode: 1, message: message }), ...(details !== undefined ? { details } : {}) };
+  return refusalEnvelope({
+    command: id, status: "refused", code, exitCode: 1, message,
+    ...(details === undefined ? {} : { details }),
+  });
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;

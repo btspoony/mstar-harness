@@ -29,4 +29,34 @@ describe("refusal envelope contract", () => {
     expect(envelope.details).toMatchObject({ helpRoute: "mstar workflow register --help", recovery: "Use the supported execution route." });
     expect(envelope.exitCode).toBe(1);
   });
+
+  test("derives help and recovery for usage when omitted", () => {
+    const envelope = refusalEnvelope({
+      command: "plan.bind", status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: "invalid input",
+    });
+    if (envelope.status !== "usage") throw new Error("expected usage refusal");
+    expect(envelope.details).toMatchObject({
+      helpRoute: "mstar plan bind --help",
+      recovery: "Run mstar plan bind --help and correct the flagged input.",
+    });
+  });
+
+  test("preserves structured engine details and derives help without generic recovery", () => {
+    const engineMessage = "The plan is owned by the active authority.";
+    const envelope = refusalEnvelope({
+      command: "plan.bind", status: "refused", code: "plan.owner-conflict", exitCode: 1,
+      message: engineMessage, details: { owner: "active authority" },
+    });
+    if (envelope.status !== "refused") throw new Error("expected engine refusal");
+    expect(envelope.details).toMatchObject({
+      owner: "active authority",
+      helpRoute: "mstar plan bind --help",
+    });
+    expect(envelope.details).not.toHaveProperty("recovery");
+    expect(envelope.message).toContain(engineMessage);
+    expect(envelope.message).toContain("Help: mstar plan bind --help");
+    expect(envelope.message).not.toContain("Recovery:");
+    expect(envelope.details).not.toHaveProperty("diagnostics");
+  });
 });

@@ -245,7 +245,6 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     const facts = rejectionFacts(issue, input);
     const optionKey = issue.path.map(String).join(".");
     const option = definition.cli.options.find((entry) => entry.key === optionKey);
-    const helpRoute = `mstar ${definition.cli.path.join(" ")} --help`;
     const rejected = facts.path === "" ? undefined : {
       path: option?.flags.split(/[ <]/)[0] ?? facts.path,
       expected: facts.expected,

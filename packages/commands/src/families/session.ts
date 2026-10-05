@@ -33,9 +33,6 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     : `${id}.refused`;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) });
 }
-function usage(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
-}
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
   const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), plan: z.string().min(1).optional(), argv: z.array(z.string()).optional(), harness: z.string().min(1).optional() });
