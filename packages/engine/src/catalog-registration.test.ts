@@ -44,6 +44,7 @@ afterEach(() => {
   // The injected stores are per-test; the producers must never keep writing
   // through a previous test's fixture.
   setArtifactStore(undefined);
+  process.chdir(ROOT);
 });
 
 /**
@@ -56,6 +57,7 @@ async function fixture(name: string): Promise<{ workspace: string; harnessDir: s
   const workspace = mkdtempSync(join(ROOT, name));
   mkdirSync(join(workspace, ".mstar"), { recursive: true });
   const harnessDir = workspace;
+  process.chdir(workspace);
   const context: StoreContext = { harnessDir };
   const handle = await initializeStore(context);
   handle.close();
