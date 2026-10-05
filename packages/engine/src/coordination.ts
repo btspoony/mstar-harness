@@ -1413,9 +1413,15 @@ export async function resolvePlanScope(
   // (`assignment-stale`); the scope RESOLVER used as an addressing step (the
   // file-route close, which discloses an interrupted run's scope refusal) keeps
   // the caller-addressed vocabulary (`assignment-invalid`) it pins.
-  const assignment = options.sealedRead === true
-    ? readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers
-    : parseAssignmentFile(prepared.assignment_path);
+  let assignment: AssignmentHeaders;
+  try {
+    assignment = options.sealedRead === true
+      ? readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers
+      : parseAssignmentFile(prepared.assignment_path);
+  } catch (error) {
+    if (prepared.assignment_intent !== undefined) assertPreparedFresh(prepared.assignment_path, prepared);
+    throw error;
+  }
   return scopeFromAssignment(assignment, cwd, { requirePrepared: true, chosenRoot: harnessRoot, preloaded: { snapshot } });
 }
 
@@ -1978,6 +1984,89 @@ export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentInt
   };
 }
 
+type AssignmentEditAttribution =
+  | { actor: "unknown"; reason: string }
+  | { actor: string; edited_at: string; workflow: string; scope: string };
+
+function assignmentEditAttribution(assignmentPath: string, controlRoot: string): AssignmentEditAttribution {
+  let entries: Array<{ edited_at: string; seat: string; iteration: string; scope: string }> = [];
+  try {
+    const iterationsDir = join(controlRoot, "iterations");
+    for (const iteration of readdirSync(iterationsDir, { withFileTypes: true })) {
+      if (!iteration.isDirectory()) continue;
+      const attributionPath = join(iterationsDir, iteration.name, "edit-attribution.jsonl");
+      if (!existsSync(attributionPath)) continue;
+      for (const line of readFileSync(attributionPath, "utf8").split("\n")) {
+        if (line.trim() === "") continue;
+        try {
+          const value: unknown = JSON.parse(line);
+          if (
+            value !== null &&
+            typeof value === "object" &&
+            "edited_at" in value &&
+            typeof value.edited_at === "string" &&
+            "seat" in value &&
+            typeof value.seat === "string" &&
+            "iteration" in value &&
+            typeof value.iteration === "string" &&
+            "scope" in value &&
+            typeof value.scope === "string" &&
+            resolve(value.scope) === resolve(assignmentPath)
+          ) {
+            entries.push({
+              edited_at: value.edited_at,
+              seat: value.seat,
+              iteration: value.iteration,
+              scope: value.scope,
+            });
+          }
+        } catch {
+          // Ignore malformed local records; they cannot establish attribution.
+        }
+      }
+    }
+  } catch {
+    return { actor: "unknown", reason: "no matching control-root edit-attribution record was available" };
+  }
+  entries.sort((a, b) => b.edited_at.localeCompare(a.edited_at));
+  const latest = entries[0];
+  return latest === undefined
+    ? { actor: "unknown", reason: "no matching control-root edit-attribution record was available" }
+    : { actor: latest.seat, edited_at: latest.edited_at, workflow: latest.iteration, scope: latest.scope };
+}
+
+function assignmentByteDiff(assignmentPath: string, prepared: PreparedCoordination): {
+  prepared: string;
+  current: string;
+  diff: string;
+} | undefined {
+  if (prepared.assignment_bytes === undefined) return undefined;
+  const preparedBytes = prepared.assignment_bytes;
+  const currentBytes = readFileSync(assignmentPath).toString("utf8");
+  const preparedLines = preparedBytes.split("\n");
+  const currentLines = currentBytes.split("\n");
+  let prefix = 0;
+  while (prefix < preparedLines.length && prefix < currentLines.length && preparedLines[prefix] === currentLines[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < preparedLines.length - prefix &&
+    suffix < currentLines.length - prefix &&
+    preparedLines[preparedLines.length - 1 - suffix] === currentLines[currentLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  return {
+    prepared: preparedBytes,
+    current: currentBytes,
+    diff: [
+      ...preparedLines.slice(prefix, preparedLines.length - suffix).map((line) => `-${line}`),
+      ...currentLines.slice(prefix, currentLines.length - suffix).map((line) => `+${line}`),
+    ].join("\n"),
+  };
+}
+
 /**
  * Compare the current named Assignment fields with the semantic projection
  * recorded by prepare. Formatting and prose changes do not affect the result;
@@ -1992,36 +2081,51 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
   }
   const recorded = prepared.assignment_intent;
   if (recorded === undefined) return;
-  const current = currentAssignmentIntent(assignmentPath, recorded);
+  let current: AssignmentIntent;
+  try {
+    current = currentAssignmentIntent(assignmentPath, recorded);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const recoveryCommand = "mstar plan recover-assignment";
+    const evidence = assignmentByteDiff(assignmentPath, prepared);
+    const attribution = assignmentEditAttribution(assignmentPath, recorded.control_harness_root);
+    const problem: RecoveryProblem = {
+      component: "assignment-seal",
+      path: "assignment",
+      code: "coordination.assignment-stale",
+      sourcesTried: [
+        `${assignmentPath} as it reads now`,
+        `the semantic projection sealed by prepare at ${prepared.prepared_at}`,
+      ],
+      currentFacts: [message],
+      needed: `${recoveryCommand} requires an explicit re-review or restore decision; prepare cannot replace an existing pin`,
+      withheldEffect: "the requested row transition is withheld; the prepared seal and plan row remain unchanged",
+      availableWork: [
+        `${recoveryCommand} with re-review or restore for plan ${recorded.plan_id}`,
+        "independent operations on other rows, plans and workflows continue",
+      ],
+    };
+    throw new CoordinationError("coordination.assignment-stale", message, {
+      path: assignmentPath,
+      plan_id: recorded.plan_id,
+      changed: ["assignment"],
+      needed: problem.needed,
+      ...(evidence === undefined ? {} : { byte_diff: evidence }),
+      attribution,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+        unresolved: [problem],
+      }),
+    });
+  }
   const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
   if (changed.length === 0) return;
-  const preparedBytes = prepared.assignment_bytes;
-  const currentBytes = readFileSync(assignmentPath).toString("utf8");
-  const preparedLines = preparedBytes?.split("\n") ?? [];
-  const currentLines = currentBytes.split("\n");
-  let prefix = 0;
-  while (prefix < preparedLines.length && prefix < currentLines.length && preparedLines[prefix] === currentLines[prefix]) {
-    prefix += 1;
-  }
-  let suffix = 0;
-  while (
-    suffix < preparedLines.length - prefix &&
-    suffix < currentLines.length - prefix &&
-    preparedLines[preparedLines.length - 1 - suffix] === currentLines[currentLines.length - 1 - suffix]
-  ) {
-    suffix += 1;
-  }
-  const byteDiff = preparedBytes === undefined
-    ? undefined
-    : [
-        ...preparedLines.slice(prefix, preparedLines.length - suffix).map((line) => `-${line}`),
-        ...currentLines.slice(prefix, currentLines.length - suffix).map((line) => `+${line}`),
-      ].join("\n");
+  const byteDiff = assignmentByteDiff(assignmentPath, prepared);
   const recoveryCommand = "mstar plan recover-assignment";
-  const attribution = {
-    actor: "unknown",
-    reason: "the stale refusal has no observed control-root edit-attribution record",
-  };
+  const attribution = assignmentEditAttribution(assignmentPath, recorded.control_harness_root);
   const facts = changed.map(
     (field) => `${field}: recorded as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
   );
@@ -2053,13 +2157,7 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       expected: changed.map((field) => recorded[field]),
       actual: changed.map((field) => current[field] ?? null),
       needed: problem.needed,
-      ...(byteDiff === undefined ? {} : {
-        byte_diff: {
-          prepared: preparedBytes,
-          current: currentBytes,
-          diff: byteDiff,
-        },
-      }),
+      ...(byteDiff === undefined ? {} : { byte_diff: byteDiff }),
       attribution,
       sources_tried: problem.sourcesTried,
       current_facts: problem.currentFacts,
