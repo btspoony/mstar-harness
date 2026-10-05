@@ -466,7 +466,7 @@ describe("trusted root, author.declared ignore, and host capability", () => {
         openBrowser: async () => {},
       },
     };
-    const result = await definition.execute({}, context);
+    const result = await definition.execute({ path: root }, context);
     expect(result.status).toBe("ok");
     expect(readFileSync(path.join(root, ".gitignore"), "utf8")).toBe(ignore);
   });

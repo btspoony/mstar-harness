@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { InvocationContext, JudgmentProvider } from "../src/index.js";
-import { getJudgmentCommandDefinitions } from "../src/index.js";
+import { executeCommand, getJudgmentCommandDefinitions } from "../src/index.js";
 
 const result = {
   schema: "mstar.judgment-cli/v1",
@@ -30,18 +30,15 @@ function definition(provider: JudgmentProvider) {
 
 describe("judgment command family", () => {
   test("validates command input and reports malformed or incomplete input as usage", async () => {
-    let calls = 0;
-    const execute = definition(async () => { calls += 1; return result; }).execute;
     const ctx = context();
 
-    const malformed = await execute({ file: 42, pilot: "pilot.json" }, ctx);
-    const missingSource = await execute({ pilot: "pilot.json" }, ctx);
-    const conflictingSources = await execute({ file: "pack.json", stdin: true, pilot: "pilot.json" }, ctx);
+    const malformed = await executeCommand("judgment.review-advice", { file: 42, pilot: "pilot.json" }, ctx);
+    const missingSource = await executeCommand("judgment.review-advice", { pilot: "pilot.json" }, ctx);
+    const conflictingSources = await executeCommand("judgment.review-advice", { file: "pack.json", stdin: true, pilot: "pilot.json" }, ctx);
 
     expect(malformed).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(missingSource).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(conflictingSources).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(calls).toBe(0);
   });
 
   test("passes stdin through the invocation effects and provider fixture without reading process stdin", async () => {

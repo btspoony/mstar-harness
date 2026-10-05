@@ -23,6 +23,7 @@ import {
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -73,14 +74,8 @@ class PlanInputError extends Error {}
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function refused(id: string, code: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message };
-}
-function usage(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
-}
 function failure(id: string, error: unknown): CommandEnvelope<never> {
-  if (error instanceof PlanInputError) return usage(id, error.message);
+  if (error instanceof PlanInputError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: error.message });
   const message = error instanceof Error ? error.message : String(error);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
@@ -89,7 +84,7 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
     : undefined;
-  return { ...refused(id, code, message), ...(details !== undefined ? { details } : {}) };
+  return { ...refusalEnvelope({ command: id, status: "refused", code: code, exitCode: 1, message: message }), ...(details !== undefined ? { details } : {}) };
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;
@@ -166,22 +161,18 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
   try {
     if (id === "plan.residual-add" || id === "plan.residual-close") {
       const replacement = id.endsWith("residual-add") ? "issue-add" : "issue-close";
-      return refused(
-        id,
-        "plan.verb-retired",
-        `\`mstar plan ${replacement}\` is the replacement for \`${id.replace("plan.", "mstar plan ")}\``,
-      );
+      return refusalEnvelope({ command: id, status: "refused", code: "plan.verb-retired", exitCode: 1, message: `\`mstar plan ${replacement}\` is the replacement for \`${id.replace("plan.", "mstar plan ")}\`` });
     }
     if (input.session !== undefined && input.sessionRef !== undefined) {
-      return usage(id, "pre-activation and active transports are disjoint");
+      return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "pre-activation and active transports are disjoint" });
     }
     if (id === "plan.bind") {
       const cwd = context.cwd;
       if (input.resumeRef !== undefined) {
-        if (context.sessionId === undefined) return usage(id, `active resume requires runtime session identity (${IDENTITY_SUPPLIES}).`);
+        if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active resume requires runtime session identity (${IDENTITY_SUPPLIES}).` });
         const ref = decodeExecutionSessionRef(input.resumeRef);
         const root = resolveProcessHarnessDir(cwd, input.harness);
-        if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+        if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
         setArtifactStore(createFsStore(root));
         const identity: ExecutionIdentity = {
           source: context.host === undefined ? "local" : "host",
@@ -194,22 +185,22 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       }
       if (input.execution === true) {
         if (context.sessionId === undefined || input.workflow === undefined) {
-          return usage(id, `active bind requires runtime session identity and workflow (identity ${IDENTITY_SUPPLIES}).`);
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active bind requires runtime session identity and workflow (identity ${IDENTITY_SUPPLIES}).` });
         }
-        if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active bind requires a full execution token");
+        if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires a full execution token" });
         const coordinator = input.coordinator === true;
-        if (coordinator && input.plan !== undefined) return usage(id, "coordinator bind accepts no plan");
-        if (!coordinator && input.plan === undefined) return usage(id, "active bind requires coordinator or plan");
+        if (coordinator && input.plan !== undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
+        if (!coordinator && input.plan === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires coordinator or plan" });
         const role = coordinator ? "coordinator" : "plan-pm";
         const planId = coordinator ? null : input.plan!;
         const acquired = context.executionIdentity;
         if (acquired !== undefined && (
           acquired.workflowId !== input.workflow || acquired.role !== role || acquired.planId !== planId
         )) {
-          return usage(id, "bind selectors do not match the acquired caller identity");
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind selectors do not match the acquired caller identity" });
         }
         const root = resolveProcessHarnessDir(cwd, input.harness);
-        if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+        if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
         setArtifactStore(createFsStore(root));
         const identity: ExecutionIdentity = acquired ?? {
           source: context.host === undefined ? "local" : "host",
@@ -236,7 +227,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       let bindInput: BindPlanSessionInput;
       if (input.resume !== undefined) {
         if ((context.sessionId !== undefined && context.sessionIdSource !== "env") || input.harness !== undefined) {
-          return usage(id, "--resume accepts no --session-id or --harness");
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--resume accepts no --session-id or --harness" });
         }
         const resumePath = absolutePath(input.resume, "resume");
         pinSessionStore(resumePath);
@@ -246,9 +237,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           const message = context.sessionIdSource === "env"
             ? "legacy pre-activation coordinator bootstrap does not accept env-provided identity; pass --session-id explicitly"
             : `coordinator bind requires runtime session identity (${IDENTITY_SUPPLIES}).`;
-          return usage(id, message);
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: message });
         }
-        if (input.workflow === undefined) return usage(id, "coordinator bind requires workflow");
+        if (input.workflow === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind requires workflow" });
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
         bindInput = {
@@ -260,7 +251,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         };
       } else if (input.assignment !== undefined) {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
-          return usage(id, `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).`);
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).` });
         }
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
@@ -271,7 +262,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         };
       } else if (input.workflow !== undefined && input.plan !== undefined) {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
-          return usage(id, `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).`);
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).` });
         }
         const root = resolveProcessHarnessDir(cwd, input.harness);
         if (root !== null) setArtifactStore(createFsStore(root));
@@ -281,7 +272,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           sessionId: context.sessionId,
         };
       } else {
-        return usage(id, "bind requires a session, coordinator workflow, assignment, or workflow and plan");
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind requires a session, coordinator workflow, assignment, or workflow and plan" });
       }
       // The confirmed #324 surface: this legacy file route reads a snapshot
       // directory, and an ACTIVE execution authority keeps its workflows in
@@ -314,11 +305,11 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd));
       }
       if (input.sessionRef === undefined || input.plan === undefined || context.sessionId === undefined) {
-        return usage(id, `show requires a session file or sessionRef, plan selector, and runtime session identity (identity ${IDENTITY_SUPPLIES}).`);
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `show requires a session file or sessionRef, plan selector, and runtime session identity (identity ${IDENTITY_SUPPLIES}).` });
       }
       const ref = decodeExecutionSessionRef(input.sessionRef);
       const root = resolveProcessHarnessDir(context.cwd, input.harness);
-      if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+      if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
       setArtifactStore(createFsStore(root));
       const identity: ExecutionIdentity = {
         source: context.host === undefined ? "local" : "host",
@@ -337,9 +328,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
     // check then reports the truthful ACTIVE/upgrade fact instead of a dead end.
     if (input.sessionRef !== undefined || (input.session === undefined && (sparseSelectors || id === "plan.release"))) {
       if (context.sessionId === undefined) {
-        return usage(id, `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).`);
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).` });
       }
-      if (input.expect !== undefined && typeof input.expect !== "string") return usage(id, "active operation requires a full execution token");
+      if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active operation requires a full execution token" });
       // Release is ACTIVE-only: a pre-activation control root has no DB claim to
       // release, so it reports the supported operator-authorized store upgrade
       // path rather than a generic unknown-operation. The engine re-reports the
@@ -347,11 +338,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       if (id === "plan.release") {
         const releaseRoot = resolveProcessHarnessDir(context.cwd, input.harness);
         if (releaseRoot !== null && (await resolveExecutionReadRoute({ harnessDir: releaseRoot })) !== "execution") {
-          return refused(
-            id,
-            "execution.not-active",
-            "plan release requires an ACTIVE execution authority; this control root is pre-activation. An authorized operator may run `mstar store upgrade --operator <name>` to import legacy state and activate the authority, then bind and release. This call does not authorize that route.",
-          );
+          return refusalEnvelope({ command: id, status: "refused", code: "execution.not-active", exitCode: 1, message: "plan release requires an ACTIVE execution authority; this control root is pre-activation. An authorized operator may run `mstar store upgrade --operator <name>` to import legacy state and activate the authority, then bind and release. This call does not authorize that route." });
         }
       }
       // A numeric revision is the file route's CAS transport; the active route
@@ -360,7 +347,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       const operationId = input.operation ?? randomUUID();
       const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
       const root = resolveProcessHarnessDir(context.cwd, input.harness);
-      if (root === null) return usage(id, "no control harness resolved; supply an absolute harness");
+      if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
       setArtifactStore(createFsStore(root));
       const acquired = context.executionIdentity;
       const workflowId = ref?.workflowId ?? acquired?.workflowId ?? input.workflow;
@@ -369,17 +356,17 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       // plan this operation addresses (which a coordinator states explicitly).
       const ownPlan = ref !== undefined ? ref.planId : acquired?.planId ?? input.plan ?? null;
       if (input.workflow !== undefined && input.workflow !== workflowId) {
-        return usage(id, "workflow selector does not match the caller's workflow");
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the caller's workflow" });
       }
       // A stated `--coordinator` seat is a role constraint, never a hint the
       // family may reinterpret: when the acquired/declared caller is this
       // plan's own plan session, the mismatch refuses before any address,
       // token or ownership fact is read.
       if (input.coordinator === true && role !== "coordinator") {
-        return usage(id, "--coordinator does not match the caller's acquired plan session seat; a plan-session claim is released by the seat that holds it");
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--coordinator does not match the caller's acquired plan session seat; a plan-session claim is released by the seat that holds it" });
       }
       if (workflowId === undefined || role === undefined) {
-        return usage(id, "sparse active plan operation needs a minted own-scope identity or workflow plus coordinator/plan selector; bind the caller first");
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "sparse active plan operation needs a minted own-scope identity or workflow plus coordinator/plan selector; bind the caller first" });
       }
       // A plan-pm call addresses its own bound plan; a coordinator call must
       // state the plan it addresses. Neither is guessed from "the only" row.
@@ -388,10 +375,10 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         addressedPlan = input.plan;
       } else {
         if (ownPlan === null) {
-          return usage(id, "a plan-pm sparse operation needs its own plan binding or an explicit plan selector");
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "a plan-pm sparse operation needs its own plan binding or an explicit plan selector" });
         }
         if (input.plan !== undefined && input.plan !== ownPlan) {
-          return usage(id, "plan selector does not match the caller's plan");
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan selector does not match the caller's plan" });
         }
         addressedPlan = ownPlan;
       }
@@ -400,7 +387,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         role !== acquired.role ||
         (role === "plan-pm" && ownPlan !== acquired.planId)
       )) {
-        return usage(id, "selected workflow, role or plan does not match the acquired caller identity");
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "selected workflow, role or plan does not match the acquired caller identity" });
       }
       const identity: ExecutionIdentity = {
         source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
@@ -419,10 +406,10 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       return ok(id, receipt);
     }
     if (id === "plan.release") {
-      return refused(id, "execution.not-active", "plan release is available only under ACTIVE execution authority; run the operator-authorized `mstar store upgrade --operator <name>` before binding and releasing");
+      return refusalEnvelope({ command: id, status: "refused", code: "execution.not-active", exitCode: 1, message: "plan release is available only under ACTIVE execution authority; run the operator-authorized `mstar store upgrade --operator <name>` before binding and releasing" });
     }
     const operation = fileOperation(id, input);
-    if (input.session === undefined) return usage(id, "operation requires session or active sessionRef");
+    if (input.session === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires session or active sessionRef" });
     const sessionPath = absolutePath(input.session, "session");
     pinSessionStore(sessionPath);
     const result = await mutatePlanCoordination({

@@ -15,6 +15,7 @@ import {
   type ArtifactStore,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope } from "../types.js";
 
@@ -42,13 +43,6 @@ function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "persist.ok", exitCode: 0, data };
 }
 
-function refused(command: string, code: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command, status: "refused", code, exitCode: 1, message };
-}
-
-function usage(command: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command, status: "usage", code: "command.invalid-input", exitCode: 2, message };
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -110,21 +104,21 @@ function parseKind(kind: unknown, command: string): PersistKind | CommandEnvelop
   const parsed = kindSchema.safeParse(kind);
   if (parsed.success) return parsed.data;
   if (kind === "residuals") {
-    return refused(command, "persist.kind-retired", "persist residuals is retired; the issue store is the only findings authority");
+    return refusalEnvelope({ command: command, status: "refused", code: "persist.kind-retired", exitCode: 1, message: "persist residuals is retired; the issue store is the only findings authority" });
   }
-  return usage(command, "kind must be status, snapshot, review, or json");
+  return refusalEnvelope({ command: command, status: "usage", code: "command.invalid-input", exitCode: 2, message: "kind must be status, snapshot, review, or json" });
 }
 
 function readPayload(input: string | undefined, file: string | undefined, cwd: string, command: string): string | CommandEnvelope<never> {
-  if (input !== undefined && file !== undefined) return usage(command, "input and file are mutually exclusive");
+  if (input !== undefined && file !== undefined) return refusalEnvelope({ command: command, status: "usage", code: "command.invalid-input", exitCode: 2, message: "input and file are mutually exclusive" });
   if (input !== undefined) return input;
-  if (file === undefined) return usage(command, "provide input or file; protocol stdin is never read implicitly");
+  if (file === undefined) return refusalEnvelope({ command: command, status: "usage", code: "command.invalid-input", exitCode: 2, message: "provide input or file; protocol stdin is never read implicitly" });
   const requested = path.isAbsolute(file) ? file : path.resolve(cwd, file);
-  if (!existsSync(requested)) return refused(command, "persist.input-file-not-found", `persist payload file not found: ${requested}`);
+  if (!existsSync(requested)) return refusalEnvelope({ command: command, status: "refused", code: "persist.input-file-not-found", exitCode: 1, message: `persist payload file not found: ${requested}` });
   try {
     return readFileSync(requested, "utf8");
   } catch (error) {
-    return refused(command, "persist.input-read-failed", messageOf(error));
+    return refusalEnvelope({ command: command, status: "refused", code: "persist.input-read-failed", exitCode: 1, message: messageOf(error) });
   }
 }
 
@@ -163,26 +157,26 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.write";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
-        if (input.key === "") return usage(id, "key must be non-empty");
+        if (input.key === "") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "key must be non-empty" });
         const keyProblem = invalidKey(kind, input.key);
-        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
+        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem });
         const raw = readPayload(input.input, input.file, context.cwd, id);
         if (typeof raw !== "string") return raw;
         let payload: unknown;
-        try { payload = JSON.parse(raw); } catch (error) { return refused(id, "persist.invalid-json", `persist payload is not valid JSON: ${messageOf(error)}`); }
+        try { payload = JSON.parse(raw); } catch (error) { return refusalEnvelope({ command: id, status: "refused", code: "persist.invalid-json", exitCode: 1, message: `persist payload is not valid JSON: ${messageOf(error)}` }); }
         try {
           validatePayload(kind, payload);
           const coordinated = kind === "status" || kind === "snapshot";
           const sessionPath = input.session;
-          if (!coordinated && sessionPath !== undefined) return usage(id, "session applies only to coordinated snapshot artifacts");
-          if (coordinated && input.schema !== undefined) return usage(id, `schema does not apply to coordinated ${kind} replacement`);
-          if (kind === "snapshot" && sessionPath === undefined) return usage(id, "coordinated snapshot replacement requires a coordinator session");
-          if (sessionPath !== undefined && !path.isAbsolute(sessionPath)) return usage(id, "session must be an absolute path");
-          if (kind === "status" && sessionPath !== undefined) return usage(id, "session applies to snapshot replacement only");
+          if (!coordinated && sessionPath !== undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "session applies only to coordinated snapshot artifacts" });
+          if (coordinated && input.schema !== undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `schema does not apply to coordinated ${kind} replacement` });
+          if (kind === "snapshot" && sessionPath === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinated snapshot replacement requires a coordinator session" });
+          if (sessionPath !== undefined && !path.isAbsolute(sessionPath)) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "session must be an absolute path" });
+          if (kind === "status" && sessionPath !== undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "session applies to snapshot replacement only" });
           const store = await resolveStore(input.store, context.cwd);
           if (coordinated) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
-            if (typeof root !== "string") return refused(id, "coordination.local-store-required", "coordinated replacement requires the local FsStore");
+            if (typeof root !== "string") return refusalEnvelope({ command: id, status: "refused", code: "coordination.local-store-required", exitCode: 1, message: "coordinated replacement requires the local FsStore" });
             await replaceCoordinatedArtifact({
               harnessRoot: root,
               ref: { kind: kind as "status" | "snapshot", key: input.key },
@@ -194,7 +188,7 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
           }
           return ok(id, { kind, key: input.key });
         } catch (error) {
-          return refused(id, errorCode(error, "persist.write-refused"), messageOf(error));
+          return refusalEnvelope({ command: id, status: "refused", code: errorCode(error, "persist.write-refused"), exitCode: 1, message: messageOf(error) });
         }
       },
     }),
@@ -207,26 +201,26 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.get";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
-        if (input.key === "") return usage(id, "key must be non-empty");
+        if (input.key === "") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "key must be non-empty" });
         const keyProblem = invalidKey(kind, input.key);
-        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
+        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem });
         try {
           const store = await resolveStore(input.store, context.cwd);
           if (input.versioned === true) {
             const root = (store as ArtifactStore & { root?: unknown }).root;
-            if (typeof root !== "string") return refused(id, "coordination.local-store-required", "versioned reads require the local FsStore");
+            if (typeof root !== "string") return refusalEnvelope({ command: id, status: "refused", code: "coordination.local-store-required", exitCode: 1, message: "versioned reads require the local FsStore" });
             const read = await readCoordinatedArtifact(root, { kind, key: input.key });
             return ok(id, { payload: read.payload ?? null, version: read.version });
           }
           const payload = await store.get({ kind, key: input.key });
-          if (payload === undefined) return refused(id, "persist.not-found", `persist get ${kind}/${input.key}: no stored document`);
+          if (payload === undefined) return refusalEnvelope({ command: id, status: "refused", code: "persist.not-found", exitCode: 1, message: `persist get ${kind}/${input.key}: no stored document` });
           if (input.validate === true) {
             validatePayload(kind, payload);
             return ok(id, { payload, validation: kind === "json" ? "parse-only" : "ok" });
           }
           return ok(id, { payload });
         } catch (error) {
-          return refused(id, errorCode(error, "persist.get-refused"), messageOf(error));
+          return refusalEnvelope({ command: id, status: "refused", code: errorCode(error, "persist.get-refused"), exitCode: 1, message: messageOf(error) });
         }
       },
     }),
@@ -238,14 +232,14 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.list";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
-        if (kind === "json") return usage(id, "ArtifactStore json keys are absolute paths and cannot be listed");
+        if (kind === "json") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "ArtifactStore json keys are absolute paths and cannot be listed" });
         try {
           const store = await resolveStore(input.store, context.cwd);
-          if (typeof store.list !== "function") return usage(id, "store does not support list");
+          if (typeof store.list !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support list" });
           const refs = await store.list(kind);
           return ok(id, refs.map(({ key }) => key).sort());
         } catch (error) {
-          return refused(id, errorCode(error, "persist.list-refused"), messageOf(error));
+          return refusalEnvelope({ command: id, status: "refused", code: errorCode(error, "persist.list-refused"), exitCode: 1, message: messageOf(error) });
         }
       },
     }),
@@ -257,16 +251,16 @@ export function getPersistCommandDefinitions(): readonly CommandDefinition[] {
         const id = "persist.delete";
         const kind = parseKind(input.kind, id);
         if (isFailure(kind)) return kind;
-        if (input.key === "") return usage(id, "key must be non-empty");
+        if (input.key === "") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "key must be non-empty" });
         const keyProblem = invalidKey(kind, input.key);
-        if (keyProblem !== null) return refused(id, "persist.key-refused", keyProblem);
+        if (keyProblem !== null) return refusalEnvelope({ command: id, status: "refused", code: "persist.key-refused", exitCode: 1, message: keyProblem });
         try {
           const store = await resolveStore(input.store, context.cwd);
-          if (typeof store.delete !== "function") return usage(id, "store does not support delete");
+          if (typeof store.delete !== "function") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "store does not support delete" });
           await store.delete({ kind, key: input.key });
           return ok(id, { kind, key: input.key, deleted: true });
         } catch (error) {
-          return refused(id, errorCode(error, "persist.delete-refused"), messageOf(error));
+          return refusalEnvelope({ command: id, status: "refused", code: errorCode(error, "persist.delete-refused"), exitCode: 1, message: messageOf(error) });
         }
       },
     }),

@@ -20,6 +20,7 @@ import {
   type ToolSignal,
 } from "@mstar-harness/engine";
 import { z } from "zod";
+import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import {
   diagnoseCodexHost,
@@ -59,12 +60,6 @@ const agentsTemplate = `# AGENTS.md — .mstar/ (harness layer)
 
 function ok(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
-}
-function refused(id: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) };
-}
-function usage(id: string, message: string): CommandEnvelope<never> {
-  return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message };
 }
 
 function runBin(bin: string): (args: string[]) => string {
@@ -247,7 +242,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         };
         return errors.length === 0
           ? ok("doctor", data)
-          : refused("doctor", "doctor.unhealthy", `${errors.length} issue(s)`, data);
+          : refusalEnvelope({ command: "doctor", status: "refused", code: "doctor.unhealthy", exitCode: 1, message: `${errors.length} issue(s)`, details: data });
       },
     }),
     command("plugin.validate", {
@@ -260,7 +255,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         const result = validateAgentPlugin(root);
         return result.ok
           ? ok("plugin.validate", { root, ...result })
-          : refused("plugin.validate", "plugin.invalid", result.errors.join("\n"), { root, ...result });
+          : refusalEnvelope({ command: "plugin.validate", status: "refused", code: "plugin.invalid", exitCode: 1, message: result.errors.join("\n"), details: { root, ...result } });
       },
     }),
     command("path.resolve", {
@@ -276,9 +271,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
         // start directory alone, as the contract's canonical form does.
         const harnessDir = resolveHarnessDir(startDir);
         if (harnessDir === null) {
-          return refused("path.resolve", "path.harness-not-found", `no harness dir found from ${startDir}`, {
+          return refusalEnvelope({ command: "path.resolve", status: "refused", code: "path.harness-not-found", exitCode: 1, message: `no harness dir found from ${startDir}`, details: {
             startDir, harnessDir: null, specsDir: null, workflowDir: null, projectDir: null,
-          });
+          } });
         }
         return ok("path.resolve", {
           startDir,
@@ -296,9 +291,9 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       description: "Detect the active host from comma-separated tool-shape signals.",
       async execute(input) {
         const signals = input.signals.split(",").map((signal) => signal.trim()).filter((signal) => signal !== "");
-        if (signals.length === 0) return usage("host.detect", "usage: host detect --signals <comma-list>");
+        if (signals.length === 0) return refusalEnvelope({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2, message: "usage: host detect --signals <comma-list>" });
         const unknown = signals.find((signal) => !hostSignals.includes(signal as (typeof hostSignals)[number]));
-        if (unknown !== undefined) return usage("host.detect", `unknown signal ${JSON.stringify(unknown)}`);
+        if (unknown !== undefined) return refusalEnvelope({ command: "host.detect", status: "usage", code: "command.invalid-input", exitCode: 2, message: `unknown signal ${JSON.stringify(unknown)}` });
         return ok("host.detect", { host: detectHost(signals as ToolSignal[]) });
       },
     }),
@@ -315,7 +310,7 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
       effects: ["read"],
       description: "Resolve the loaded skill root for a host.",
       async execute(input) {
-        if (!hostIds.includes(input.host as (typeof hostIds)[number])) return usage("host.skill-root", `unknown host ${JSON.stringify(input.host)}`);
+        if (!hostIds.includes(input.host as (typeof hostIds)[number])) return refusalEnvelope({ command: "host.skill-root", status: "usage", code: "command.invalid-input", exitCode: 2, message: `unknown host ${JSON.stringify(input.host)}` });
         return ok("host.skill-root", { root: resolveSkillRoot(input.host as HostId, { skill: input.skill, rel: input.rel }) });
       },
     }),

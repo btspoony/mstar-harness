@@ -38,10 +38,8 @@ const failureEnvelopeSchema = z.object({
 }).passthrough();
 
 export function usageEnvelope(id: string, message: string): CommandEnvelope<never> {
-  const helpRoute = `mstar ${id.replaceAll(".", " ")} --help`;
   return refusalEnvelope({
     command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message,
-    helpRoute, recovery: `Review ${helpRoute} and correct the reported input.`,
     diagnostics: [{ code: "command.invalid-input", message }],
   });
 }
@@ -256,7 +254,6 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
       message: parsed.error.issues.map((entry) => entry.message).join("; "),
-      helpRoute, recovery: `Review ${helpRoute} and correct the reported input.`,
       diagnostics,
       ...(rejected === undefined ? {} : { rejected }),
     });
