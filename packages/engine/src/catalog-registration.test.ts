@@ -1324,7 +1324,7 @@ describe("catalog execution registration \u2014 recovery segments at the raising
 
     await expect(reconcileCatalogExecution(context, "op-recovery-reconcile-publish")).rejects.toMatchObject({
       code: "catalog.reconcile-conflict",
-      message: expect.stringContaining("publish it against a current review instead"),
+      message: expect.stringContaining("this reviewed delta is stale. Re-derive it against the current catalog revision in a new review, then retry."),
     });
   });
 
