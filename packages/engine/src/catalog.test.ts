@@ -395,8 +395,10 @@ describe("catalog path authority", () => {
     symlinkSync(join(outside, "dir"), join(specsRoot, "escape-dir"));
     symlinkSync(join(outside, "gone.md"), join(specsRoot, "dangling.md"));
 
+    await expect(
+      registerCatalogEntity(context, doc("doc-unknown-root", { rootKind: "elsewhere" as never }), op("path-unknown-root")),
+    ).rejects.toMatchObject({ code: "catalog.path-refused" });
     const cases: Array<[string, Partial<CatalogEntityInput>]> = [
-      ["unknown-root", { rootKind: "elsewhere" as never }],
       ["absolute", { relativePath: "/etc/passwd" }],
       ["traversal", { relativePath: "../escape.md" }],
       ["windows-traversal", { relativePath: "..\\escape.md" }],
