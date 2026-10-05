@@ -54,6 +54,24 @@ describe("catalog and roadmap command families", () => {
     expect(result.status).toBe("refused");
     expect(result.code).toMatch(/^store\.(not-initialized|not-active)$/);
   });
+  test("inactive catalog mutation exposes the store activation recovery", async () => {
+    const cwd = join(root, "inactive-mutation");
+    const harness = join(cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
+    store.close();
+    const result = await catalog["catalog.register"]!.execute({
+      harness, kind: "document", id: "doc", title: "Doc", rootKind: "specs", path: "doc.md",
+      operationId: "inactive-register", actor: "test",
+    }, invocation(cwd));
+    expect(result.status).toBe("refused");
+    expect(result.code).toBe("store.not-active");
+    expect(result.message).toContain("store upgrade --operator <name>");
+    expect(result.message).toContain("store activate --manifest <migration.json> --attestation <file.json>");
+    expect(result.message).toContain("then retry");
+  });
+
 
   test("catalog mutations preserve execution workflow state", async () => {
     const { cwd, harness } = await activeFixture("snapshot-immutability");
