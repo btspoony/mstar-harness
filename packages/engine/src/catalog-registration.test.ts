@@ -1279,6 +1279,55 @@ describe("catalog execution registration \u2014 recovery segments at the raising
       message: expect.stringContaining("nothing was registered. Re-run with a fresh operation id to read the current catalog revision, or reconcile the pending operation with `mstar catalog reconcile --operation-id <op>`."),
     });
   });
+  test("the publish-time reviewed-revision refusal says nothing was published", async () => {
+    const { harnessDir, context } = await fixture("recovery-publish-revision-");
+    const base = createFsStore(harnessDir);
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (doc.kind === "status") {
+          const handle = await openStore(context, "write");
+          handle.db.prepare("update store_meta set catalog_revision = 1 where id = 1").run();
+          handle.close();
+        }
+      },
+    });
+
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-publish-revision", expectedCatalogRevision: 0 })),
+    ).rejects.toMatchObject({
+      code: "catalog.revision-conflict",
+      message: expect.stringContaining("nothing was published. Re-run with a fresh operation id"),
+    });
+  });
+
+  test("reconcile at publish requires a current review", async () => {
+    const { harnessDir, context } = await fixture("recovery-reconcile-publish-revision-");
+    setArtifactStore(failingStore(harnessDir, "status"));
+    await expect(
+      registerCatalogExecution(context, planRequest({ harnessDir, operationId: "op-recovery-reconcile-publish", expectedCatalogRevision: 0 })),
+    ).rejects.toThrow(/injected status write failure/);
+
+    const base = createFsStore(harnessDir);
+    setArtifactStore({
+      ...base,
+      put: async (doc) => {
+        await base.put(doc);
+        if (doc.kind === "status") {
+          const handle = await openStore(context, "write");
+          handle.db.prepare("update store_meta set catalog_revision = 1 where id = 1").run();
+          handle.close();
+        }
+      },
+    });
+
+    await expect(reconcileCatalogExecution(context, "op-recovery-reconcile-publish")).rejects.toMatchObject({
+      code: "catalog.reconcile-conflict",
+      message: expect.stringContaining("publish it against a current review instead"),
+    });
+  });
+
 
   test("a missing snapshot after the producer reports success names verify, re-drive and record steps", async () => {
     const { harnessDir, context } = await fixture("recovery-missing-snapshot-");
