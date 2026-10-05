@@ -85,6 +85,17 @@ describe("generated CLI adapter", () => {
     expect(diagnostic?.usage).toContain("--execution");
     expect(body.details?.recovery).toContain("Correct usage:");
   });
+  test("plan bind does not attribute option-like positionals after the terminator", async () => {
+    const result = await run(["plan", "bind", "--", "--plan", "--workflow", "w"]);
+    const body = JSON.parse(result.stdout) as {
+      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string };
+    };
+    const diagnostic = body.details?.diagnostics?.[0];
+    expect(diagnostic).not.toHaveProperty("path");
+    expect(diagnostic?.usage).toContain("--plan <value>");
+    expect(body.details?.recovery).toContain("Correct usage:");
+  });
+
 
   test("issue show positional parse errors retain their diagnostic shape", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");

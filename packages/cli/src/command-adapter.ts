@@ -84,7 +84,9 @@ function parserField(
 ): string | undefined {
   const quoted = /'([^']+)'/.exec(error.message)?.[1];
   if (error.code === "commander.excessArguments" && definition !== undefined) {
-    const args = argv.slice(2);
+    const rawArgs = argv.slice(2);
+    const terminator = rawArgs.indexOf("--");
+    const args = terminator === -1 ? rawArgs : rawArgs.slice(0, terminator);
     const options = definition.cli.options;
     for (let index = 0; index < args.length; index++) {
       const token = args[index]!;
