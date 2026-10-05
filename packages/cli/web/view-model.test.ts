@@ -13,7 +13,6 @@
 import { describe, expect, test } from "bun:test";
 import type {
   CatalogIdentityDTO,
-  DashboardViewData,
   IssueDetail,
   IssueFlow,
   IterationDTO,
@@ -21,6 +20,8 @@ import type {
   IterationPlanDTO,
   MilestoneIssueDTO,
   MilestoneRead,
+  ProjectListDTO,
+  ProjectListItem,
   ProjectMilestoneDTO,
   ReadProjection,
   RoadmapDTO,
@@ -1051,10 +1052,6 @@ describe("milestone freshness disclosure", () => {
 const PROJECT_LIST_HINT = "Choose a project to view its stored roadmap. This list is read-only; make changes with the CLI.";
 const EMPTY_CATALOG_COPY =
   "No projects are registered in the catalog. Use the CLI to register a project; this dashboard cannot create one.";
-
-/** The engine publishes the projects DTO through `DashboardViewData`, not individually. */
-type ProjectListDTO = DashboardViewData["projects"];
-type ProjectListItem = ProjectListDTO["items"][number];
 
 function projectItem(id: string, overrides: Partial<CatalogIdentityDTO> = {}, openIssues = 0): ProjectListItem {
   return {

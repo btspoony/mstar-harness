@@ -19,9 +19,10 @@
  * unavailable execution data never invalidates them.
  */
 import type {
-  DashboardViewData,
   MilestoneIssueDTO,
   MilestoneRead,
+  ProjectListDTO,
+  ProjectListItem,
   ProjectMilestoneDTO,
   ReadProjection,
   RoadmapDTO,
@@ -43,14 +44,6 @@ import {
   useEnvelope,
 } from "../components";
 import { dispositionTone } from "../format";
-
-/**
- * The catalog's project list, named here instead of declared a second time: the
- * engine publishes this DTO through `DashboardViewData`, not individually
- * (the `IssueProvenance` derivation in `format.ts` is the precedent).
- */
-type ProjectListDTO = DashboardViewData["projects"];
-type ProjectListItem = ProjectListDTO["items"][number];
 
 /** The project the address bar selects; absent and blank both mean "none". */
 export function roadmapProject(search: string): string | null {
