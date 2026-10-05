@@ -48,4 +48,32 @@ describe("MCP command outcome refusal contract", () => {
     const envelope = { version: 1, command: definition.id, status: "ok", code: "ok", exitCode: 0, data: { registered: true } };
     expect(validateCommandOutcome(definition, envelope)).toEqual(envelope);
   });
+
+  test("a non-standard refusal exit is not collapsed to 1 on the MCP surface", () => {
+    const envelope = refusalEnvelope({
+      command: definition.id,
+      status: "refused",
+      code: "sdd.task-brief.refused",
+      exitCode: 3,
+      message: "task 3 not found in the plan document",
+    });
+    const outcome = validateCommandOutcome(definition, envelope);
+    expect(outcome).toMatchObject({ status: "refused", code: "sdd.task-brief.refused", exitCode: 3 });
+    expect(outcome.message.split("\n")[0]).toBe("task 3 not found in the plan document");
+    expect(outcome.details).toMatchObject({ helpRoute: "mstar workflow register --help" });
+  });
+
+  test("a first-line rejected-input fact survives the MCP round trip", () => {
+    const envelope = refusalEnvelope({
+      command: definition.id,
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      message: "invalid value",
+      rejected: { path: "--session-id", expected: "non-empty string", received: '""' },
+    });
+    const outcome = validateCommandOutcome(definition, envelope);
+    expect(outcome.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received ""');
+    expect(outcome).toMatchObject({ status: "usage", exitCode: 2 });
+  });
 });
