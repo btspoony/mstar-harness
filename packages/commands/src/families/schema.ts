@@ -1,3 +1,4 @@
+import { refusalEnvelope } from "../envelope.js";
 import { ISSUE_PAYLOAD_SCHEMAS } from "@mstar-harness/engine";
 import type { IssuePayloadName, PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -244,7 +245,14 @@ export function getSchemaCommandDefinitions(): readonly CommandDefinition<Schema
         return { version: 1, command: id, status: "ok", code: "schema.ok", exitCode: 0, data };
       } catch (error) {
         if (!(error instanceof CommandSchemaSelectionError)) throw error;
-        return { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: error.message };
+        return refusalEnvelope({
+          command: id,
+          status: "usage",
+          code: "command.invalid-input",
+          exitCode: 2,
+          message: error.message,
+          details: { selectors: error.selectorKeys },
+        });
       }
     },
   };
