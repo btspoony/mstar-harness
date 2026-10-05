@@ -437,6 +437,7 @@ export type PlanCoordinationOperation =
   | { kind: "integration-accept"; handoffId: string }
   | { kind: "complete"; handoffId: string }
   | { kind: "repair-delivery-source"; handoffId: string }
+  | { kind: "recover-assignment"; decision: "re-review" | "restore" }
   | { kind: "release"; reason?: string }
   | { kind: "reconcile"; handoffId: string }
 
@@ -1899,7 +1900,12 @@ async function withRowCommit(
     };
     // Prepare and bind may replace recorded provenance; row mutations retain
     // the Assignment's semantic field constraints.
-    if (opts.kind !== "claim" && opts.kind !== "prepare" && coordination?.prepared !== undefined) {
+    if (
+      opts.kind !== "claim" &&
+      opts.kind !== "prepare" &&
+      opts.kind !== "recover-assignment" &&
+      coordination?.prepared !== undefined
+    ) {
       assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
     const warnings: readonly ResolutionWarning[] =
@@ -3669,6 +3675,91 @@ async function mutatePrepare(
   };
 }
 
+async function mutateRecoverAssignment(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: { decision: "re-review" | "restore"; expectedRevision: number },
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    kind: "recover-assignment",
+    expectedRevision: request.expectedRevision,
+    precheck: async (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      if (context.coordination?.prepared === undefined) {
+        throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no prepared Assignment`);
+      }
+      return null;
+    },
+    mutate: async (context, reportExternalCommit) => {
+      const prepared = context.coordination?.prepared;
+      if (prepared === undefined || prepared.assignment_bytes === undefined) {
+        throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no retained prepared Assignment bytes`);
+      }
+      const bytes = request.decision === "restore"
+        ? Buffer.from(prepared.assignment_bytes, "utf8")
+        : readFileSync(prepared.assignment_path);
+      const assignment = parseAssignmentBytes(prepared.assignment_path, bytes);
+      const recoveredScope = scopeFromAssignment(assignment, session.harness_root, {
+        requirePrepared: false,
+        chosenRoot: session.harness_root,
+      });
+      if (
+        recoveredScope.planId !== scope.planId ||
+        recoveredScope.workflowId !== scope.workflowId ||
+        canonicalTarget(recoveredScope.assignmentPath) !== canonicalTarget(prepared.assignment_path) ||
+        recoveredScope.planPath !== scope.planPath
+      ) {
+        throw new CoordinationError(
+          "coordination.scope-mismatch",
+          "assignment recovery cannot change the prepared workflow, plan, or plan path",
+          { workflow_id: recoveredScope.workflowId, plan_id: recoveredScope.planId },
+        );
+      }
+      if (request.decision === "restore") {
+        writeFileSync(prepared.assignment_path, bytes);
+        reportExternalCommit("prepared Assignment bytes restored");
+      }
+      const at = nowIso();
+      const nextPrepared: PreparedCoordination = {
+        ...prepared,
+        assignment_sha256: sha256Bytes(bytes),
+        qa_gate: assignment.qaGate,
+        findings_cleanup: assignment.findingsCleanup,
+        assignment_intent: assignmentIntentOf(assignment),
+        assignment_bytes: bytes.toString("utf8"),
+        prepared_by: session.session_id,
+        prepared_at: at,
+        recovery_history: [
+          ...(prepared.recovery_history ?? []),
+          { actor: session.session_id, decision: request.decision, at },
+        ],
+      };
+      assertViolationFree(validatePreparedCoordination(nextPrepared), "recovered prepared block");
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
+        prepared: nextPrepared,
+      };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+      return {
+        row: { ...context.row, coordination: nextCoordination },
+        coordination: nextCoordination,
+      };
+    },
+  });
+  return {
+    ok: true,
+    operation: "recover-assignment",
+    session,
+    session_file: sessionPath,
+    outcome: "assignment-recovered",
+    recovery: result.recovery,
+    view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
+  };
+}
+
+
 /**
  * §4.2 (R6/R7/A09/A12) the record one progress report writes, as the row field
  * it lives in and the value this intent asks that field to hold. The selection
@@ -4268,6 +4359,17 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       }
       return mutatePrepare(scope, assignment, session, sessionAbs, { ...operation, expectedRevision });
     }
+    case "recover-assignment": {
+      assertExactKeys(operation, ["kind", "decision"], "recover-assignment operation");
+      if (operation.decision !== "re-review" && operation.decision !== "restore") {
+        throw invalidInput("recover-assignment decision must be re-review or restore");
+      }
+      return mutateRecoverAssignment(await coordinatorScope(session, request.planId, kind), session, sessionAbs, {
+        decision: operation.decision,
+        expectedRevision,
+      });
+    }
+
     case "progress": {
       assertExactKeys(operation, ["kind", "progress"], "progress operation");
       return mutateProgress(await sessionScope(session), session, sessionAbs, { ...operation, expectedRevision });

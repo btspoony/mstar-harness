@@ -90,6 +90,15 @@ describe("plan command family", () => {
       expect(input.data).not.toHaveProperty("expect");
     }
   });
+  test("assignment recovery is one shared command with an explicit two-value decision", () => {
+    const recovery = definition("plan.recover-assignment");
+    expect(recovery.effects).toEqual(["write"]);
+    expect(recovery.payloads?.decision?.schema.safeParse("re-review").success).toBe(true);
+    expect(recovery.payloads?.decision?.schema.safeParse("restore").success).toBe(true);
+    expect(recovery.payloads?.decision?.schema.safeParse("silent-adopt").success).toBe(false);
+    expect(recovery.input.safeParse({ decision: "re-review" }).success).toBe(true);
+  });
+
 
   test("plan family payload decode rejects malformed fields with accurate paths", () => {
     const planProgress = definition("plan.progress");
