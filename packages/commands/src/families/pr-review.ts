@@ -8,6 +8,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
@@ -38,9 +39,11 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
 };
 const idFor = (verb: Verb) => `pr-review.${verb}`;
 const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data });
-const failure = (id: string, error: unknown): CommandEnvelope<never> => error instanceof UsageError
-  ? { version: 1, command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: error.message }
-  : { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+const failure = (id: string, error: unknown): CommandEnvelope<never> => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
+  return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+};
 class UsageError extends Error {}
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
 const need = (value: string | undefined, name: string): string => { if (value === undefined || value === "") throw new UsageError(`${name} is required`); return value; };

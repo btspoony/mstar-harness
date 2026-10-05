@@ -42,6 +42,16 @@ describe("pr-review command family", () => {
     expect(validation.status).toBe("refused");
     expect(validation.details).toMatchObject({ violations: expect.arrayContaining([expect.objectContaining({ code: expect.any(String) })]) });
   });
+  test("report-path refusal preserves its authored target message and usage contract", async () => {
+    const { context } = fixture();
+    const result = await command("pr-review.report-path").execute({ reportsDir: ".", target: "unknown" }, context);
+    expect(result).toMatchObject({
+      status: "usage",
+      code: "command.invalid-input",
+      exitCode: 2,
+      message: 'invalid --target "unknown"; expected pr:<n> | branch:<slug> | diff:<sha> | diff',
+    });
+  });
 
   test("post admission preserves target authorization before any review write", async () => {
     const { cwd, context, calls } = fixture();
