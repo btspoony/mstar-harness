@@ -138,7 +138,12 @@ describe("catalog registration identity", () => {
     await registerCatalogEntity(context, doc("doc-1"), op("dup-1"));
     await expect(
       registerCatalogEntity(context, doc("doc-1", { relativePath: "elsewhere.md" }), op("dup-2")),
-    ).rejects.toMatchObject({ code: "catalog.duplicate" });
+    ).rejects.toMatchObject({
+      code: "catalog.duplicate",
+      message: expect.stringContaining(
+        "Discover the current revision with mstar catalog show <kind> <id>, then relocate it with mstar catalog update <kind> <id> --path <new> [--root-kind <k>] --expect <revision> --operation-id <id> --actor <role>.",
+      ),
+    });
     expect((await getCatalog(context, { kind: "document", id: "doc-1" })).entity.relativePath).toBe("doc-1.md");
   });
 
@@ -404,7 +409,12 @@ describe("catalog path authority", () => {
     for (const [name, overrides] of cases) {
       await expect(
         registerCatalogEntity(context, doc(`doc-${name}`, overrides), op(`path-${name}`)),
-      ).rejects.toMatchObject({ code: "catalog.path-refused" });
+      ).rejects.toMatchObject({
+        code: "catalog.path-refused",
+        message: expect.stringContaining(
+          "Correct the --path value to a root-relative, non-traversing, non-empty path (the user corrects the input value; no hidden-state repair needed).",
+        ),
+      });
     }
     expect((await listCatalog(context, {})).total).toBe(0);
   });
