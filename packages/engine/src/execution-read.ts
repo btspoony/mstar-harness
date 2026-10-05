@@ -127,7 +127,8 @@ export async function readExecutionAuthority(
   if (view === undefined || token === undefined) {
     throw new CoordinationError(
       "coordination.plan-not-found",
-      `workflow ${JSON.stringify(addressed.workflowId)} holds no plan ${JSON.stringify(addressed.planId)}`,
+      `workflow ${JSON.stringify(addressed.workflowId)} holds no plan ${JSON.stringify(addressed.planId)}. ` +
+        `List valid plan ids via mstar status validate (data.authority.workflows[].planTokens); re-run mstar plan bind --execution --workflow <workflowId> --plan <validPlanId>.`,
       { workflow_id: addressed.workflowId, plan_id: addressed.planId },
     );
   }
