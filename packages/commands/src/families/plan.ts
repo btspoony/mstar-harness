@@ -33,6 +33,7 @@ const progressPayloadSchema = z.record(z.string(), z.unknown());
 const entryPayloadSchema = z.record(z.string(), z.unknown());
 const entriesPayloadSchema = z.array(entryPayloadSchema);
 const evidencePayloadSchema = z.record(z.string(), z.unknown());
+const assignmentRecoveryDecisionSchema = z.enum(["re-review", "restore"]);
 const inputSchema = z.object({
   session: z.string().min(1).optional(),
   sessionRef: z.string().min(1).optional(),
@@ -48,6 +49,7 @@ const inputSchema = z.object({
   expect: z.union([z.string().min(1), z.number().int().nonnegative()]).optional(),
   operation: z.string().min(1).optional(),
   handoff: z.string().min(1).optional(),
+  decision: assignmentRecoveryDecisionSchema.optional(),
   reason: z.string().min(1).optional(),
   progress: progressPayloadSchema.optional(),
   entries: entriesPayloadSchema.optional(),
@@ -66,6 +68,7 @@ const transitions = [
   ["integration-accept", "Verify the pinned Git result of a started integration attempt"],
   ["complete", "Record Done after verified delivery proof"],
   ["repair-delivery-source", "Replace a wrong registered delivery source from the accepted handoff pin"],
+  ["recover-assignment", "Re-review the current Assignment bytes or restore the prepared bytes"],
   ["reconcile", "Recover an interrupted integration attempt from the observed checkout"],
 ] as const;
 
@@ -138,6 +141,9 @@ function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation 
       };
     case "plan.handoff":
       return { kind: "handoff", evidence: jsonObject(input.evidence ?? payloadFromFile(input.file, "file"), "file") as never };
+    case "plan.recover-assignment":
+      if (input.decision === undefined) throw new PlanInputError("decision must be re-review or restore");
+      return { kind: "recover-assignment", decision: input.decision };
     case "plan.release":
       return { kind: "release", ...(input.reason === undefined ? {} : { reason: input.reason }) };
     case "plan.accept":
@@ -430,6 +436,7 @@ const writeCommands: Record<string, true> = {
   "integration-accept": true,
   complete: true,
   "repair-delivery-source": true,
+  "recover-assignment": true,
   release: true,
   reconcile: true,
   "residual-add": true,

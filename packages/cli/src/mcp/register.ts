@@ -3,7 +3,7 @@ import { executeCommand } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
-import { renderCommandContract } from "../command-adapter.js";
+import { renderCommandContract, surfaceAssignmentRecovery } from "../command-adapter.js";
 import { validateCommandOutcome } from "./outcome.js";
 export type ResolveContext = (
   definition: CommandDefinition,
@@ -111,7 +111,7 @@ export function registerMcpCommands(
       });
       const validated = await connectionEffects.withInput(input, requestContext, async () => {
         const envelope = await executeCommand(definition.id, invocationInput, requestContext);
-        return validateCommandOutcome(definition, envelope);
+        return validateCommandOutcome(definition, surfaceAssignmentRecovery(definition.id, envelope));
       });
       return {
         content: [{ type: "text", text: JSON.stringify(validated) }],

@@ -77,6 +77,7 @@ export const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   "integration-accept": true,
   complete: true,
   "repair-delivery-source": true,
+  "recover-assignment": true,
   reconcile: true,
   release: true,
 };
@@ -90,6 +91,7 @@ const COORDINATOR_OPERATIONS: readonly string[] = [
   "integration-accept",
   "complete",
   "repair-delivery-source",
+  "recover-assignment",
   "reconcile",
 ];
 
@@ -136,6 +138,7 @@ export function allowedOperations(
   if (role === "coordinator") {
     // The coordinator seat is per workflow: an unbound session advertises nothing.
     if (snapshot.coordination?.coordinator.session_id !== sessionId) return [];
+    if (coordination?.prepared !== undefined) out.push("recover-assignment");
     if (
       coordination?.prepared === undefined &&
       coordination?.session === undefined &&

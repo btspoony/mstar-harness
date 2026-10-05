@@ -16,7 +16,7 @@
  * operation union exists (W4).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
@@ -48,7 +48,7 @@ import {
   gitObjectExists,
   gitRead,
   integrationProof,
-  parseAssignmentFile,
+  parseAssignmentBytes,
   planAreaRoots,
   proofRepository,
   revalidateGitProofWitness,
@@ -144,6 +144,7 @@ import {
   type CaptureInput,
   type ComposedTransactionRevision,
 } from "./issue.js";
+import { withStatusWriteLock } from "./lease.js";
 import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
@@ -718,8 +719,9 @@ function storedCoordinationOf(view: ExecutionPlanView): Record<string, unknown> 
  *
  * The caller has already passed `assertPlanOperationAdmissible` and the
  * operation-shape checks; `run` is synchronous for the same reason
- * `withExecutionTransaction` requires it — nothing awaits, launches, reads Git
- * or appends a file between BEGIN and COMMIT.
+ * `withExecutionTransaction` requires it — nothing awaits, launches or reads
+ * Git, and the recover-assignment restore is the sole atomic external write: it
+ * holds the control-root lock and reports a partial refusal if COMMIT fails.
  */
 function withExecutionPlanOperation<T>(
   context: ExecutionContext,
@@ -850,6 +852,7 @@ function withExecutionPlanOperation<T>(
 /** Parsed prepare inputs and record-only document digests. */
 type PreparedInputs = {
   assignment: AssignmentHeaders;
+  assignmentBytes: string;
   assignmentSha256: string;
   planSha256: string;
 };
@@ -865,13 +868,27 @@ type PreparedInputs = {
 function controlHarnessRoot(context: ExecutionContext): string {
   return canonicalizeNearestExisting(dirname(storeDbPath(context)));
 }
+function writeAssignmentBytes(path: string, bytes: string): void {
+  const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temporary, bytes, "utf8");
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
 
 /**
  * Read and validate current prepare inputs before the database transaction.
  * Named fields establish scope; digests are recorded as provenance only.
  */
-function readPrepareInputs(context: ExecutionContext, call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
-  const assignment = parseAssignmentFile(call.operation.assignmentPath);
+function readPrepareInputs(
+  context: ExecutionContext,
+  call: { planId: string; operation: { assignmentPath: string } },
+): PreparedInputs {
+  const assignmentBytes = readFileSync(call.operation.assignmentPath);
+  const assignment = parseAssignmentBytes(call.operation.assignmentPath, assignmentBytes);
   const harnessRoot = controlHarnessRoot(context);
   if (assignment.controlHarnessRoot !== harnessRoot) {
     throw new CoordinationError(
@@ -917,7 +934,8 @@ function readPrepareInputs(context: ExecutionContext, call: ExecutionPlanRequest
   }
   return {
     assignment,
-    assignmentSha256: sha256Bytes(readFileSync(assignment.assignmentPath)),
+    assignmentSha256: sha256Bytes(assignmentBytes),
+    assignmentBytes: assignmentBytes.toString("utf8"),
     planSha256: sha256Bytes(readFileSync(assignment.planPath)),
   };
 }
@@ -1010,6 +1028,7 @@ export async function prepareExecutionPlan(
 
     const prepared: PreparedCoordination = {
       assignment_path: inputs.assignment.assignmentPath,
+      assignment_bytes: inputs.assignmentBytes,
       assignment_sha256: inputs.assignmentSha256,
       plan_sha256: inputs.planSha256,
       qa_gate: inputs.assignment.qaGate,
@@ -1041,6 +1060,153 @@ export async function prepareExecutionPlan(
     return satisfied
       ? { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch }
       : undefined;
+  });
+}
+
+/**
+ * One coordinator recovery intent on the active DB authority. The Assignment
+ * write and row transaction share the control-root lock; if SQLite refuses
+ * after the atomic file replace, the refusal reports that external effect.
+ */
+export async function recoverAssignmentExecutionPlan(
+  context: ExecutionContext,
+  request: ExecutionPlanRequest<Extract<CoordinationOperation, { kind: "recover-assignment" }>>,
+): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  const resolved = resolvePlanOperationRequest(context.caller, request, "recover-assignment");
+  const operation = resolved.call.operation;
+  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "decision"], "recover-assignment operation");
+  if (operation.decision !== "re-review" && operation.decision !== "restore") {
+    throw invalidPlanInput("recover-assignment decision must be re-review or restore");
+  }
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
+  let restoredPath: string | null = null;
+  return withStatusWriteLock(join(controlHarnessRoot(context), "status.json"), async () => {
+    try {
+      return await withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
+        const existing = witness.view.coordination?.prepared;
+        if (existing === undefined) {
+          throw new CoordinationError("coordination.not-prepared", `plan ${witness.planId} has no prepared Assignment`);
+        }
+        if (!isNonEmptyString(existing.assignment_path)) {
+          throw new CoordinationError("coordination.not-prepared", `plan ${witness.planId} has no prepared Assignment path`);
+        }
+        if (operation.decision === "restore" && !isNonEmptyString(existing.assignment_bytes)) {
+          throw new CoordinationError("coordination.not-prepared", `plan ${witness.planId} has no retained prepared Assignment bytes`);
+        }
+        if (witness.view.executionLease !== null && witness.view.executionLease.holder !== context.caller.sessionId) {
+          throw new ExecutionError(
+            "execution.lease-held",
+            `plan ${witness.planId} is held by another execution session; recover-assignment is coordinator-only after the lease is released`,
+            { plan_id: witness.planId, holder: witness.view.executionLease.holder },
+          );
+        }
+        assertNoHandoffTransition(witness.view.coordination ?? undefined, witness.planId);
+        let reviewed: PreparedInputs | undefined;
+        if (operation.decision === "re-review") {
+          try {
+            reviewed = readPrepareInputs(context, {
+              planId: witness.planId,
+              operation: { assignmentPath: existing.assignment_path },
+            });
+          } catch (error) {
+            if (!existsSync(existing.assignment_path)) {
+              const problem: RecoveryProblem = {
+                component: "assignment-seal",
+                path: existing.assignment_path,
+                code: "coordination.assignment-stale",
+                sourcesTried: [existing.assignment_path, "the prepared Assignment byte pin"],
+                currentFacts: ["the prepared Assignment file is missing"],
+                needed: "choose re-review or restore with mstar plan recover-assignment",
+                withheldEffect: "the active prepared row and plan state remain unchanged",
+                availableWork: [`mstar plan recover-assignment --decision restore --plan ${witness.planId}`],
+              };
+              throw new CoordinationError("coordination.assignment-stale", problem.currentFacts[0]!, {
+                path: existing.assignment_path,
+                plan_id: witness.planId,
+                needed: problem.needed,
+                available_work: problem.availableWork,
+                recovery: unresolvedRecovery({
+                  target: { workflowId: witness.workflowId, planId: witness.planId },
+                  unresolved: [problem],
+                  resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
+                }),
+              });
+            }
+            try {
+              assertPreparedFresh(existing.assignment_path, existing);
+            } catch (stale) {
+              throw stale;
+            }
+            throw error;
+          }
+        }
+        if (reviewed !== undefined && canonicalTarget(reviewed.assignment.assignmentPath) !== canonicalTarget(existing.assignment_path)) {
+          throw new CoordinationError("coordination.scope-mismatch", "assignment recovery cannot change the prepared Assignment path");
+        }
+        const assignmentBytes = reviewed?.assignmentBytes ?? existing.assignment_bytes!;
+        if (operation.decision === "restore") {
+          writeAssignmentBytes(existing.assignment_path, assignmentBytes);
+          restoredPath = existing.assignment_path;
+        }
+        const nextPrepared: PreparedCoordination = {
+          ...existing,
+          assignment_sha256: reviewed?.assignmentSha256 ?? existing.assignment_sha256,
+          qa_gate: reviewed?.assignment.qaGate ?? existing.qa_gate,
+          findings_cleanup: reviewed?.assignment.findingsCleanup ?? existing.findings_cleanup,
+          assignment_intent: reviewed === undefined ? existing.assignment_intent : assignmentIntentOf(reviewed.assignment),
+          assignment_bytes: assignmentBytes,
+          prepared_by: context.caller.sessionId,
+          prepared_at: at,
+          recovery_history: [
+            ...(existing.recovery_history ?? []),
+            { actor: context.caller.sessionId, decision: operation.decision, at },
+          ],
+        };
+        assertViolationFree(validatePreparedCoordination(nextPrepared), "recovered prepared block");
+        writeCoordinationBlock(tx, witness, {
+          block: { ...storedCoordinationOf(witness.view), prepared: nextPrepared },
+          what: `plan ${witness.planId} coordination`,
+        });
+        const committed = readExecutionPlanWitness(tx, resolved.read);
+        return {
+          data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch,
+        };
+      });
+    } catch (error) {
+      if (restoredPath === null) throw error;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const originalDetails = error instanceof ExecutionError ? error.details ?? {} : {};
+      const causeCode = error instanceof ExecutionError ? error.code : "execution.partial-effect";
+      const recovery: RecoveryDetails = {
+        outcome: "partial",
+        target: { workflowId: resolved.read.workflowId, planId: resolved.read.planId },
+        applied: [`prepared Assignment bytes restored at ${restoredPath}`],
+        unresolved: [{
+          component: "active-plan-row",
+          path: "coordination.prepared",
+          code: causeCode,
+          sourcesTried: ["atomic Assignment restore", "active plan row transaction"],
+          currentFacts: [
+            `the prepared Assignment bytes at ${restoredPath} were restored`,
+            `the database transaction result requires reconciliation: ${errorMessage}`,
+          ],
+          needed: "re-read the active plan row and Assignment before retrying this operation",
+          withheldEffect: "the prepared pin, recovery audit entry and operation receipt are not confirmed",
+          availableWork: [
+            `read active plan ${resolved.read.planId}`,
+            "retry the same recovery intent with its original operation id and a current plan token",
+          ],
+        }],
+        resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
+        warnings: [],
+        commitState: "partial",
+      };
+      throw new ExecutionError(
+        "execution.partial-effect",
+        `active assignment recovery refused after restoring Assignment bytes; the plan-row transaction requires reconciliation: ${errorMessage}`,
+        { ...originalDetails, recovery },
+      );
+    }
   });
 }
 
@@ -3236,6 +3402,8 @@ export async function mutateExecutionPlan(
   switch (strict.kind) {
     case "prepare":
       return prepareExecutionPlan(context, { ...resolved, operation: strict });
+    case "recover-assignment":
+      return recoverAssignmentExecutionPlan(context, { ...resolved, operation: strict });
     case "progress":
       return progressExecutionPlan(context, { ...resolved, operation: strict });
     case "residual-add":

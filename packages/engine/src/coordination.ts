@@ -437,6 +437,7 @@ export type PlanCoordinationOperation =
   | { kind: "integration-accept"; handoffId: string }
   | { kind: "complete"; handoffId: string }
   | { kind: "repair-delivery-source"; handoffId: string }
+  | { kind: "recover-assignment"; decision: "re-review" | "restore" }
   | { kind: "release"; reason?: string }
   | { kind: "reconcile"; handoffId: string }
 
@@ -989,7 +990,7 @@ const ABSOLUTE_PATH_HEADERS = ["control harness root", "plan path", "worktree pa
  * second, drifting header reader.
  */
 /** Parse one already-read Assignment body (the read's own bytes, never a second read). */
-function parseAssignmentBytes(abs: string, bytes: Buffer): AssignmentHeaders {
+export function parseAssignmentBytes(abs: string, bytes: Buffer): AssignmentHeaders {
   const text = bytes.toString("utf8");
   const values = new Map<string, string>();
   let fenced = false;
@@ -1413,11 +1414,60 @@ export async function resolvePlanScope(
   // (`assignment-stale`); the scope RESOLVER used as an addressing step (the
   // file-route close, which discloses an interrupted run's scope refusal) keeps
   // the caller-addressed vocabulary (`assignment-invalid`) it pins.
-  const assignment = options.sealedRead === true
-    ? readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers
-    : parseAssignmentFile(prepared.assignment_path);
+  let assignment: AssignmentHeaders;
+  try {
+    assignment = options.sealedRead === true
+      ? readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers
+      : parseAssignmentFile(prepared.assignment_path);
+  } catch (error) {
+    if (prepared.assignment_intent !== undefined) assertPreparedFresh(prepared.assignment_path, prepared);
+    throw error;
+  }
   return scopeFromAssignment(assignment, cwd, { requirePrepared: true, chosenRoot: harnessRoot, preloaded: { snapshot } });
 }
+
+async function coordinatorRecoveryScope(
+  session: CoordinationSession,
+  planId: string | undefined,
+  kind: string,
+): Promise<ResolvedPlanScope> {
+  if (!isNonEmptyString(planId)) throw invalidInput(`${kind} requires the planId of the row it transitions`);
+  const snapshot = readSnapshot(dirname(snapshotPathOf(session.harness_root, session.workflow_id)));
+  return recoveryScopeFromSnapshot(session, planId, snapshot);
+}
+
+function recoveryScopeFromSnapshot(
+  session: CoordinationSession,
+  planId: string,
+  snapshot: WorkflowSnapshot,
+): ResolvedPlanScope {
+  const { row } = findPlanRow(snapshot, planId);
+  const prepared = rowCoordinationOf(row)?.prepared;
+  const intent = prepared?.assignment_intent;
+  if (
+    prepared === undefined ||
+    intent === undefined ||
+    !isNonEmptyString(prepared.assignment_path) ||
+    intent.control_harness_root !== session.harness_root ||
+    intent.workflow_id !== session.workflow_id ||
+    intent.plan_id !== planId
+  ) {
+    throw new CoordinationError("coordination.not-prepared", `plan ${planId} has no valid retained recovery scope`);
+  }
+  return {
+    harnessRoot: session.harness_root,
+    workflowId: session.workflow_id,
+    planId,
+    snapshotPath: snapshotPathOf(session.harness_root, session.workflow_id),
+    planPath: intent.plan_path,
+    assignmentPath: prepared.assignment_path,
+    worktreePath: intent.worktree_path,
+    workingBranch: intent.working_branch,
+    projectId: projectIdOf(row),
+    sddDir: intent.sdd_dir,
+  };
+}
+
 
 /* ------------------------------------------------------------------------ *
  * § Session envelopes
@@ -1766,15 +1816,15 @@ function rowFrameRefusal(
     sourcesTried: [
       `${input.scope.snapshotPath} as this call reads it under its own write lock`,
       `the ${input.kind} operation's own admission rules for the facts it depends on`,
-      ...(partialOutside ? ["the issue authority this mutation had already committed in"] : []),
+      ...(partialOutside ? ["the external effects this mutation had already committed"] : []),
     ],
     currentFacts: [
       `plan ${input.scope.planId} is at row revision ${input.context.revision} (status ${rowStatusOf(input.context.row) || "none"})`,
       `the refusal reports: ${message}`,
       ...(partialOutside
         ? [
-            `before refusing, the ${input.kind} had already committed ${appliedOutside.length} component(s) in the issue authority: ${appliedOutside.join("; ")}`,
-            "the components after the failing one were not attempted, and the failing component's own commit boundary is unknown \u2014 a retry must reconcile them",
+            `before refusing, the ${input.kind} had already committed ${appliedOutside.length} component(s) outside the row: ${appliedOutside.join("; ")}`,
+            "later components were not attempted; the snapshot commit boundary requires reconciliation",
           ]
         : []),
     ],
@@ -1783,16 +1833,14 @@ function rowFrameRefusal(
       ? `the ${input.kind} operation: a prerequisite it genuinely needs could not be read, so plan ${input.scope.planId}, its ` +
         "coordination block and every revision are exactly as they were"
       : partialOutside
-        ? `the rest of the ${input.kind} operation: ${appliedOutside.length} component(s) had already committed in the issue ` +
-          "authority when the call refused and they are not rolled back, so plan " +
-          `${input.scope.planId}'s snapshot is not the whole story`
+        ? `the rest of the ${input.kind} operation: ${appliedOutside.length} external component(s) had already committed and are not rolled back, ` +
+          `so plan ${input.scope.planId}'s snapshot is not the whole story`
         : `the ${input.kind} operation and its whole transaction: plan ${input.scope.planId}, its coordination block and every ` +
           "revision are exactly as they were",
     availableWork: [
       `read plan ${input.scope.planId} and its current row state`,
       partialOutside
-        ? `retry the ${input.kind} operation exactly as it was requested: every component it already committed is ` +
-          "operation-id idempotent, so the repeat settles those components and completes the remainder"
+        ? `reconcile the ${input.kind} operation's already committed external components (${appliedOutside.join("; ")}) before retrying`
         : `retry the ${input.kind} operation once the conflicting fact is resolved`,
       "independent operations on other rows, plans and workflows continue",
     ],
@@ -1893,7 +1941,12 @@ async function withRowCommit(
     };
     // Prepare and bind may replace recorded provenance; row mutations retain
     // the Assignment's semantic field constraints.
-    if (opts.kind !== "claim" && opts.kind !== "prepare" && coordination?.prepared !== undefined) {
+    if (
+      opts.kind !== "claim" &&
+      opts.kind !== "prepare" &&
+      opts.kind !== "recover-assignment" &&
+      coordination?.prepared !== undefined
+    ) {
       assertPreparedFresh(scope.assignmentPath, coordination.prepared);
     }
     const warnings: readonly ResolutionWarning[] =
@@ -1939,7 +1992,17 @@ async function withRowCommit(
     for (const key of commit.dropTopLevel ?? []) {
       delete (nextSnapshot as Record<string, unknown>)[key];
     }
-    await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
+    try {
+      await commitSnapshot(scope.harnessRoot, scope.workflowId, scope.snapshotPath, nextSnapshot);
+    } catch (error) {
+      throw rowFrameRefusal(error, {
+        scope,
+        kind: opts.kind,
+        context,
+        warnings,
+        appliedOutside: committedOutside,
+      });
+    }
     return { snapshot: nextSnapshot, row: commit.row, satisfied: null, applied: true, warnings };
   });
   return {
@@ -1978,6 +2041,89 @@ export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentInt
   };
 }
 
+type AssignmentEditAttribution =
+  | { actor: "unknown"; reason: string }
+  | { actor: string; edited_at: string; workflow: string; scope: string };
+
+function assignmentEditAttribution(assignmentPath: string, controlRoot: string): AssignmentEditAttribution {
+  let entries: Array<{ edited_at: string; seat: string; iteration: string; scope: string }> = [];
+  try {
+    const iterationsDir = join(controlRoot, "iterations");
+    for (const iteration of readdirSync(iterationsDir, { withFileTypes: true })) {
+      if (!iteration.isDirectory()) continue;
+      const attributionPath = join(iterationsDir, iteration.name, "edit-attribution.jsonl");
+      if (!existsSync(attributionPath)) continue;
+      for (const line of readFileSync(attributionPath, "utf8").split("\n")) {
+        if (line.trim() === "") continue;
+        try {
+          const value: unknown = JSON.parse(line);
+          if (
+            value !== null &&
+            typeof value === "object" &&
+            "edited_at" in value &&
+            typeof value.edited_at === "string" &&
+            "seat" in value &&
+            typeof value.seat === "string" &&
+            "iteration" in value &&
+            typeof value.iteration === "string" &&
+            "scope" in value &&
+            typeof value.scope === "string" &&
+            resolve(value.scope) === resolve(assignmentPath)
+          ) {
+            entries.push({
+              edited_at: value.edited_at,
+              seat: value.seat,
+              iteration: value.iteration,
+              scope: value.scope,
+            });
+          }
+        } catch {
+          // Ignore malformed local records; they cannot establish attribution.
+        }
+      }
+    }
+  } catch {
+    return { actor: "unknown", reason: "no matching control-root edit-attribution record was available" };
+  }
+  entries.sort((a, b) => b.edited_at.localeCompare(a.edited_at));
+  const latest = entries[0];
+  return latest === undefined
+    ? { actor: "unknown", reason: "no matching control-root edit-attribution record was available" }
+    : { actor: latest.seat, edited_at: latest.edited_at, workflow: latest.iteration, scope: latest.scope };
+}
+
+function assignmentByteDiff(assignmentPath: string, prepared: PreparedCoordination): {
+  prepared: string;
+  current: string;
+  diff: string;
+} | undefined {
+  if (prepared.assignment_bytes === undefined) return undefined;
+  const preparedBytes = prepared.assignment_bytes;
+  const currentBytes = readFileSync(assignmentPath).toString("utf8");
+  const preparedLines = preparedBytes.split("\n");
+  const currentLines = currentBytes.split("\n");
+  let prefix = 0;
+  while (prefix < preparedLines.length && prefix < currentLines.length && preparedLines[prefix] === currentLines[prefix]) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < preparedLines.length - prefix &&
+    suffix < currentLines.length - prefix &&
+    preparedLines[preparedLines.length - 1 - suffix] === currentLines[currentLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  return {
+    prepared: preparedBytes,
+    current: currentBytes,
+    diff: [
+      ...preparedLines.slice(prefix, preparedLines.length - suffix).map((line) => `-${line}`),
+      ...currentLines.slice(prefix, currentLines.length - suffix).map((line) => `+${line}`),
+    ].join("\n"),
+  };
+}
+
 /**
  * Compare the current named Assignment fields with the semantic projection
  * recorded by prepare. Formatting and prose changes do not affect the result;
@@ -1986,15 +2132,75 @@ export function assignmentIntentOf(assignment: AssignmentHeaders): AssignmentInt
  */
 export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCoordination): void {
   if (!existsSync(assignmentPath)) {
-    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}`, {
+    const recoveryCommand = "mstar plan recover-assignment";
+    const recorded = prepared.assignment_intent;
+    const problem: RecoveryProblem = {
+      component: "assignment-seal",
+      path: "assignment",
+      code: "coordination.assignment-stale",
+      sourcesTried: [assignmentPath, "the semantic projection sealed by prepare"],
+      currentFacts: ["the prepared Assignment file is missing"],
+      needed: `${recoveryCommand} requires an explicit re-review or restore decision`,
+      withheldEffect: "the requested row transition is withheld",
+      availableWork: [`${recoveryCommand} with re-review or restore${recorded ? ` for plan ${recorded.plan_id}` : ""}`],
+    };
+    throw new CoordinationError("coordination.assignment-stale", `prepared Assignment is gone: ${assignmentPath}; use ${recoveryCommand} with re-review or restore`, {
       path: assignmentPath,
+      needed: problem.needed,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: recorded === undefined ? {} : { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+        unresolved: [problem],
+      }),
     });
   }
   const recorded = prepared.assignment_intent;
   if (recorded === undefined) return;
-  const current = currentAssignmentIntent(assignmentPath, recorded);
+  let current: AssignmentIntent;
+  try {
+    current = currentAssignmentIntent(assignmentPath, recorded);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const recoveryCommand = "mstar plan recover-assignment";
+    const evidence = assignmentByteDiff(assignmentPath, prepared);
+    const attribution = assignmentEditAttribution(assignmentPath, recorded.control_harness_root);
+    const problem: RecoveryProblem = {
+      component: "assignment-seal",
+      path: "assignment",
+      code: "coordination.assignment-stale",
+      sourcesTried: [
+        `${assignmentPath} as it reads now`,
+        `the semantic projection sealed by prepare at ${prepared.prepared_at}`,
+      ],
+      currentFacts: [message],
+      needed: `${recoveryCommand} requires an explicit re-review or restore decision; prepare cannot replace an existing pin`,
+      withheldEffect: "the requested row transition is withheld; the prepared seal and plan row remain unchanged",
+      availableWork: [
+        `${recoveryCommand} with re-review or restore for plan ${recorded.plan_id}`,
+        "independent operations on other rows, plans and workflows continue",
+      ],
+    };
+    throw new CoordinationError("coordination.assignment-stale", message, {
+      path: assignmentPath,
+      plan_id: recorded.plan_id,
+      changed: ["assignment"],
+      needed: problem.needed,
+      ...(evidence === undefined ? {} : { byte_diff: evidence }),
+      attribution,
+      sources_tried: problem.sourcesTried,
+      current_facts: problem.currentFacts,
+      available_work: problem.availableWork,
+      recovery: unresolvedRecovery({
+        target: { workflowId: recorded.workflow_id, planId: recorded.plan_id },
+        unresolved: [problem],
+      }),
+    });
+  }
   const changed = ASSIGNMENT_INTENT_FIELDS.filter((field) => current[field] !== recorded[field]);
   if (changed.length === 0) return;
+  const byteDiff = assignmentByteDiff(assignmentPath, prepared);
+  const recoveryCommand = "mstar plan recover-assignment";
+  const attribution = assignmentEditAttribution(assignmentPath, recorded.control_harness_root);
   const facts = changed.map(
     (field) => `${field}: recorded as ${JSON.stringify(recorded[field])}, the Assignment now declares ${JSON.stringify(current[field] ?? "absent")}`,
   );
@@ -2007,12 +2213,11 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       `the semantic Assignment projection recorded at ${prepared.prepared_at}`,
     ],
     currentFacts: facts,
-    needed:
-      `restore the reviewed ${changed.join(", ")} values for plan ${recorded.plan_id}; prepared intent is not resealed`,
+    needed: `${recoveryCommand} requires an explicit re-review or restore decision; the prepared intent is not resealed by bind`,
     withheldEffect:
       "the requested row transition is withheld; no prepared digest or semantic projection is rewritten",
     availableWork: [
-      `review the current Assignment values for plan ${recorded.plan_id}`,
+      `${recoveryCommand} with re-review or restore for plan ${recorded.plan_id}`,
       "independent operations on other rows, plans and workflows continue",
     ],
   };
@@ -2026,6 +2231,9 @@ export function assertPreparedFresh(assignmentPath: string, prepared: PreparedCo
       changed,
       expected: changed.map((field) => recorded[field]),
       actual: changed.map((field) => current[field] ?? null),
+      needed: problem.needed,
+      ...(byteDiff === undefined ? {} : { byte_diff: byteDiff }),
+      attribution,
       sources_tried: problem.sourcesTried,
       current_facts: problem.currentFacts,
       available_work: problem.availableWork,
@@ -3478,9 +3686,10 @@ async function mutatePrepare(
     mutate: async (context) => {
       // Hashes are read inside the lock so the pinned bytes are the ones the
       // revision they are stored with was committed against.
+      const assignmentBytes = readFileSync(scope.assignmentPath);
       const prepared: PreparedCoordination = {
         assignment_path: scope.assignmentPath,
-        assignment_sha256: sha256Bytes(readFileSync(scope.assignmentPath)),
+        assignment_sha256: sha256Bytes(assignmentBytes),
         plan_sha256: sha256Bytes(readFileSync(scope.planPath)),
         qa_gate: assignment.qaGate,
         findings_cleanup: assignment.findingsCleanup,
@@ -3488,6 +3697,7 @@ async function mutatePrepare(
         // projection, so every later re-authentication compares meaning: a
         // reformatted document stays fresh, a scope/approval change does not.
         assignment_intent: assignmentIntentOf(assignment),
+        assignment_bytes: assignmentBytes.toString("utf8"),
         prepared_by: session.session_id,
         prepared_at: nowIso(),
       };
@@ -3533,6 +3743,105 @@ async function mutatePrepare(
     ),
   };
 }
+
+async function mutateRecoverAssignment(
+  scope: ResolvedPlanScope,
+  session: CoordinationSession,
+  sessionPath: string,
+  request: { decision: "re-review" | "restore"; expectedRevision: number },
+): Promise<CoordinationResult> {
+  const result = await withRowCommit(scope, {
+    kind: "recover-assignment",
+    expectedRevision: request.expectedRevision,
+    precheck: async (context) => {
+      assertCoordinatorBinding(session, sessionPath, context.snapshot);
+      assertNoHandoffTransition(context.coordination, scope.planId);
+      const lease = context.row.execution_lease;
+      if (lease !== undefined && (!isPlainObject(lease) || lease.holder !== session.session_id)) {
+        throw new CoordinationError("coordination.duplicate-holder", `plan ${scope.planId} has an execution lease owned by another session`, {
+          plan_id: scope.planId,
+          holder: isPlainObject(lease) ? lease.holder : null,
+        });
+      }
+      if (context.coordination?.prepared === undefined) {
+        throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no prepared Assignment`);
+      }
+      return;
+    },
+    mutate: async (context, reportExternalCommit) => {
+      const prepared = context.coordination?.prepared;
+      if (prepared === undefined || prepared.assignment_bytes === undefined) {
+        throw new CoordinationError("coordination.not-prepared", `plan ${scope.planId} has no retained prepared Assignment bytes`);
+      }
+      let bytes: Buffer;
+      try {
+        bytes = request.decision === "restore"
+          ? Buffer.from(prepared.assignment_bytes, "utf8")
+          : readFileSync(prepared.assignment_path);
+      } catch (error) {
+        assertPreparedFresh(prepared.assignment_path, prepared);
+        throw error;
+      }
+      const assignment = parseAssignmentBytes(prepared.assignment_path, bytes);
+      const recoveredScope = scopeFromAssignment(assignment, session.harness_root, {
+        requirePrepared: false,
+        chosenRoot: session.harness_root,
+      });
+      if (
+        recoveredScope.planId !== scope.planId ||
+        recoveredScope.workflowId !== scope.workflowId ||
+        canonicalTarget(recoveredScope.assignmentPath) !== canonicalTarget(prepared.assignment_path) ||
+        recoveredScope.planPath !== scope.planPath
+      ) {
+        throw new CoordinationError(
+          "coordination.scope-mismatch",
+          "assignment recovery cannot change the prepared workflow, plan, or plan path",
+          { workflow_id: recoveredScope.workflowId, plan_id: recoveredScope.planId },
+        );
+      }
+      if (request.decision === "restore") {
+        writeFileSync(prepared.assignment_path, bytes);
+        reportExternalCommit("prepared Assignment bytes restored");
+      }
+      const at = nowIso();
+      const nextPrepared: PreparedCoordination = {
+        ...prepared,
+        assignment_sha256: sha256Bytes(bytes),
+        qa_gate: assignment.qaGate,
+        findings_cleanup: assignment.findingsCleanup,
+        assignment_intent: assignmentIntentOf(assignment),
+        assignment_bytes: bytes.toString("utf8"),
+        prepared_by: session.session_id,
+        prepared_at: at,
+        recovery_history: [
+          ...(prepared.recovery_history ?? []),
+          { actor: session.session_id, decision: request.decision, at },
+        ],
+      };
+      assertViolationFree(validatePreparedCoordination(nextPrepared), "recovered prepared block");
+      const nextCoordination: RowCoordination = {
+        ...(context.coordination ?? { revision: 0 }),
+        revision: context.revision + 1,
+        prepared: nextPrepared,
+      };
+      assertViolationFree(validateRowCoordination(nextCoordination), `plan ${scope.planId} coordination`);
+      return {
+        row: { ...context.row, coordination: nextCoordination },
+        coordination: nextCoordination,
+      };
+    },
+  });
+  return {
+    ok: true,
+    operation: "recover-assignment",
+    session,
+    session_file: sessionPath,
+    outcome: "assignment-recovered",
+    recovery: result.recovery,
+    view: buildView(scope.harnessRoot, scope.workflowId, scope.projectId, scope, result.snapshot, result.row, session, sessionPath),
+  };
+}
+
 
 /**
  * §4.2 (R6/R7/A09/A12) the record one progress report writes, as the row field
@@ -4133,6 +4442,17 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       }
       return mutatePrepare(scope, assignment, session, sessionAbs, { ...operation, expectedRevision });
     }
+    case "recover-assignment": {
+      assertExactKeys(operation, ["kind", "decision"], "recover-assignment operation");
+      if (operation.decision !== "re-review" && operation.decision !== "restore") {
+        throw invalidInput("recover-assignment decision must be re-review or restore");
+      }
+      return mutateRecoverAssignment(await coordinatorRecoveryScope(session, request.planId, kind), session, sessionAbs, {
+        decision: operation.decision,
+        expectedRevision,
+      });
+    }
+
     case "progress": {
       assertExactKeys(operation, ["kind", "progress"], "progress operation");
       return mutateProgress(await sessionScope(session), session, sessionAbs, { ...operation, expectedRevision });

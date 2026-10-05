@@ -380,8 +380,11 @@ export type PreparedCoordination = {
   findings_cleanup: string;
   /** Semantic Assignment projection when recorded by the Prepare producer. */
   assignment_intent?: AssignmentIntent;
+  /** Exact reviewed Assignment bytes, retained as the basis for stale evidence and restore. */
+  assignment_bytes?: string;
   prepared_by: string;
   prepared_at: string;
+  recovery_history?: Array<{ actor: string; decision: "re-review" | "restore"; at: string }>;
 };
 
 /** A bound session: identity + the canonical envelope that proves it. */
@@ -724,8 +727,10 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     "qa_gate",
     "findings_cleanup",
     "assignment_intent",
+    "assignment_bytes",
     "prepared_by",
     "prepared_at",
+    "recovery_history",
   ];
   const violations: ValidationResult[] = [];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
@@ -733,8 +738,29 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
     violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
   }
   for (const key of allowed) {
-    if (key !== "assignment_intent" && !isNonEmptyString(value[key])) {
+    if (
+      key !== "assignment_intent" &&
+      key !== "assignment_bytes" &&
+      key !== "recovery_history" &&
+      !isNonEmptyString(value[key])
+    ) {
       violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+    }
+  }
+  if (value.recovery_history !== undefined) {
+    if (!Array.isArray(value.recovery_history)) {
+      violations.push(invalid("coordination.row.prepared-field", `${what}.recovery_history must be an array`));
+    } else {
+      for (const [index, entry] of value.recovery_history.entries()) {
+        if (
+          !isPlainObject(entry) ||
+          !isNonEmptyString(entry.actor) ||
+          (entry.decision !== "re-review" && entry.decision !== "restore") ||
+          !isNonEmptyString(entry.at)
+        ) {
+          violations.push(invalid("coordination.row.prepared-field", `${what}.recovery_history[${index}] is malformed`));
+        }
+      }
     }
   }
   const intent = value.assignment_intent;

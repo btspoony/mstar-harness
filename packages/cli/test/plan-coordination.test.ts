@@ -21,7 +21,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { encodeExecutionSessionRef, serializeExecutionValue } from "@mstar-harness/engine";
-import { executeCommand } from "@mstar-harness/commands";
+import { executeCommand, getCommandDefinitions, type InvocationContext } from "@mstar-harness/commands";
+import { registerMcpCommands } from "../src/mcp/register";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -299,7 +300,7 @@ function bindCoordinator(fixture: Fixture): string {
     ],
     fixture.root,
   );
-  expect(bound.exitCode).toBe(0);
+  expect(bound.exitCode, `${bound.stdout}${bound.stderr}`).toBe(0);
   const payload = jsonOf(bound);
   expect(payload.ok).toBe(true);
   expect(payload.role).toBe("coordinator");
@@ -307,7 +308,7 @@ function bindCoordinator(fixture: Fixture): string {
 }
 
 /** Prepare one row through the bound coordinator session. */
-function preparePlan(fixture: Fixture, coordinatorSession: string, planId: string): void {
+function preparePlan(fixture: Fixture, coordinatorSession: string, planId: string): number {
   const view = runCli(["plan", "show", "--session", coordinatorSession, "--plan", planId, "--json"], fixture.root);
   expect(view.exitCode).toBe(0);
   const revision = jsonOf(view).revision;
@@ -330,6 +331,7 @@ function preparePlan(fixture: Fixture, coordinatorSession: string, planId: strin
   );
   expect(prepared.exitCode).toBe(0);
   expect(jsonOf(prepared).outcome).toBe("prepared");
+  return rowRevision(fixture, coordinatorSession, planId);
 }
 
 /** Bind a plan session through the workflow+plan address form. */
@@ -349,7 +351,7 @@ function rowRevision(fixture: Fixture, session: string, planId?: string): number
   const args = ["plan", "show", "--session", session, "--json"];
   if (planId !== undefined) args.push("--plan", planId);
   const result = runCli(args, fixture.root);
-  expect(result.exitCode).toBe(0);
+  expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
   return Number(jsonOf(result).revision);
 }
 
@@ -1717,6 +1719,120 @@ function transition(fixture: Fixture, verb: string, coordinator: string, handoff
     ],
     fixture.root,
   );
+}
+
+function recoverAssignment(fixture: Fixture, coordinator: string, decision: "re-review" | "restore", revision: number): RunResult {
+  return runCli(
+    [
+      "plan",
+      "recover-assignment",
+      "--session",
+      coordinator,
+      "--plan",
+      PLAN_ID,
+      "--decision",
+      decision,
+      "--expect",
+      String(revision),
+      "--json",
+    ],
+    fixture.root,
+  );
+}
+
+describe("assignment stale recovery transport", () => {
+  for (const decision of ["re-review", "restore"] as const) {
+    test(`stale bind refusal names recover-assignment; ${decision} then bind succeeds within three calls`, () => {
+      const fixture = makeFixture();
+      const coordinator = bindCoordinator(fixture);
+      const revision = preparePlan(fixture, coordinator, PLAN_ID);
+      const prepared = readText(fixture.assignmentPath);
+      writeText(fixture.assignmentPath, prepared.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
+
+      const refusal = runCli(
+        ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", `stale-${decision}`, "--json"],
+        fixture.root,
+      );
+      expect(refusal.exitCode).toBe(1);
+      const refused = jsonOf(refusal);
+      expect(refused.code).toBe("coordination.assignment-stale");
+      expect(String(refused.message)).toContain("mstar plan recover-assignment --decision re-review");
+      expect(String(refused.message)).toContain("mstar plan recover-assignment --decision restore");
+      expect((refused.details as Record<string, unknown>).recoveryCommand).toBe(
+        "mstar plan recover-assignment --decision re-review",
+      );
+      expect((refused.details as Record<string, unknown>).recoveryDecisions).toEqual(["re-review", "restore"]);
+      expect(JSON.stringify(refused.details)).toContain("recover-assignment");
+
+      const recovered = recoverAssignment(fixture, coordinator, decision, revision);
+      expect(recovered.exitCode, `${recovered.stdout}${recovered.stderr}`).toBe(0);
+      expect(jsonOf(recovered).outcome).toBe("assignment-recovered");
+      if (decision === "restore") expect(readText(fixture.assignmentPath)).toBe(prepared);
+
+      const bound = runCli(
+        ["plan", "bind", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID, "--session-id", `recovered-${decision}`, "--json"],
+        fixture.root,
+      );
+      expect(bound.exitCode).toBe(0);
+      expect(jsonOf(bound).outcome).toBe("claimed");
+    }, RECOVERY_TIMEOUT);
+  }
+});
+
+for (const decision of ["re-review", "restore"] as const) {
+test(`MCP refusal exposes assignment recovery and ${decision} then bind succeeds in three calls`, async () => {
+  const fixture = makeFixture();
+  const coordinator = bindCoordinator(fixture);
+  const revision = preparePlan(fixture, coordinator, PLAN_ID);
+  const prepared = readText(fixture.assignmentPath);
+  writeText(fixture.assignmentPath, prepared.replace("**QA gate**: mandatory", "**QA gate**: pm-acceptance"));
+
+  type Handler = (input: unknown, extra: { mcpReq: { signal: AbortSignal } }) => Promise<unknown>;
+  const handlers = new Map<string, Handler>();
+  const server = {
+    registerTool(name: string, _options: unknown, handler: Handler) {
+      handlers.set(name, handler);
+    },
+  };
+  const signal = new AbortController().signal;
+  const mcpContext: InvocationContext = {
+    cwd: fixture.root,
+    controlRoot: null,
+    versions: { engine: null, cli: "test", plugin: null, host: null, platform: "test" },
+    signal,
+    effects: {
+      async readInput() { return ""; },
+      async spawn() { throw new Error("unused"); },
+      async startDashboard() { throw new Error("unused"); },
+      async openBrowser() { throw new Error("unused"); },
+    },
+  };
+  registerMcpCommands(server as never, getCommandDefinitions(), () => mcpContext);
+  const call = async (name: string, input: Record<string, unknown>) =>
+    await handlers.get(name)!(input, { mcpReq: { signal } }) as {
+      structuredContent: Record<string, unknown>;
+    };
+
+  const refused = await call("mstar_plan_bind", {
+    workflow: WORKFLOW_ID, plan: PLAN_ID, harness: fixture.harness, sessionId: "mcp-stale",
+  });
+  expect(refused.structuredContent.code).toBe("coordination.assignment-stale");
+  expect(String(refused.structuredContent.message)).toContain("mstar plan recover-assignment --decision re-review");
+  expect(String(refused.structuredContent.message)).toContain("mstar plan recover-assignment --decision restore");
+
+  const recovered = await call("mstar_plan_recover_assignment", {
+    session: coordinator, plan: PLAN_ID, decision, expect: revision, sessionId: FIXTURE_COORDINATOR_ID,
+  });
+  expect(recovered.structuredContent.status).toBe("ok");
+  expect(JSON.stringify(recovered.structuredContent)).toContain("assignment-recovered");
+  if (decision === "restore") expect(readText(fixture.assignmentPath)).toBe(prepared);
+
+  const bound = await call("mstar_plan_bind", {
+    workflow: WORKFLOW_ID, plan: PLAN_ID, harness: fixture.harness, sessionId: "mcp-recovered",
+  });
+  expect(bound.structuredContent.status).toBe("ok");
+  expect(JSON.stringify(bound.structuredContent)).toContain("claimed");
+}, RECOVERY_TIMEOUT);
 }
 
 /** The operator's merge — the CLI never runs one. */

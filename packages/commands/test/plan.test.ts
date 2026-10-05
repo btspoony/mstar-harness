@@ -90,6 +90,15 @@ describe("plan command family", () => {
       expect(input.data).not.toHaveProperty("expect");
     }
   });
+  test("assignment recovery exposes a plain enum option with two accepted decisions", () => {
+    const recovery = definition("plan.recover-assignment");
+    expect(recovery.effects).toEqual(["write"]);
+    expect(recovery.input.safeParse({ decision: "re-review" }).success).toBe(true);
+    expect(recovery.input.safeParse({ decision: "restore" }).success).toBe(true);
+    expect(recovery.input.safeParse({ decision: "silent-adopt" }).success).toBe(false);
+    expect(recovery.cli.options.find((option) => option.key === "decision")?.flags).toBe("--decision <value>");
+  });
+
 
   test("plan family payload decode rejects malformed fields with accurate paths", () => {
     const planProgress = definition("plan.progress");
