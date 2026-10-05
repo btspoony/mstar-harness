@@ -68,7 +68,7 @@
  * fail-loud path agreement, exactly as they do today.
  */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { promotedAuditSnapshot, promoteAuditPlans, promotedAuditPlanRows, type PromoteAuditPlansOptions } from "./audit.js";
 import {
@@ -1106,63 +1106,84 @@ type ExecutionWrite = FileVersions & { recovered: boolean };
  * refuse anything that is not this reviewed request. Nothing foreign is ever
  * replaced, re-pointed or deleted (contract §3 step 2/step 4).
  */
-async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> {
-  const conflictError = (detail: string): CatalogRegistrationError => {
-    const suffix = " \u2014 nothing was replaced or deleted";
-    return mode === "reconcile"
-      ? new CatalogRegistrationError("catalog.reconcile-conflict", `${detail}${suffix}`)
-      : new CatalogRegistrationError("catalog.registration-conflict", `${detail}${suffix}`);
-  };
-  const rootEntry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
-  const existing = readSnapshotIfPresent(plan.dir);
+async function ensureExecutionRegistration(context: StoreContext, plan: CatalogExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> { const conflictError = (detail: string): CatalogRegistrationError => {
+  const suffix = " \u2014 nothing was replaced or deleted";
+  return mode === "reconcile"
+    ? new CatalogRegistrationError("catalog.reconcile-conflict", `${detail}${suffix}`)
+    : new CatalogRegistrationError("catalog.registration-conflict", `${detail}${suffix}`);
+};
+const rootEntry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
+const existing = readSnapshotIfPresent(plan.dir);
 
-  if (existing !== undefined) {
-    if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
-      throw conflictError(
-        `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
-          "whose identity is NOT this reviewed request" +
-          " -- Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
-      );
-    }
-    if (rootEntry === undefined) {
-      await writeRootEntry(plan, existing.snapshot);
-      return { ...readFileVersions(plan), recovered: true };
-    }
-    if (mode === "register") {
-      throw conflictError(
-        `workflow ${JSON.stringify(plan.workflowId)} is already registered (snapshot + root entry); registration is create-only \u2014 ` +
-          "remove that workflow before registering again, or reconcile an operation you already started",
-      );
-    }
+if (existing !== undefined) {
+  if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
+    throw conflictError(
+      `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
+        "whose identity is NOT this reviewed request" +
+        " -- Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
+    );
+  }
+  if (rootEntry === undefined) {
+    await writeRootEntry(plan, existing.snapshot);
     return { ...readFileVersions(plan), recovered: true };
   }
-
-  if (rootEntry !== undefined) {
+  if (mode === "register") {
     throw conflictError(
-      `the root register shows workflow ${JSON.stringify(plan.workflowId)} but its snapshot ${plan.snapshotPath} is missing; ` +
-        "a stale root entry is never repaired or re-pointed" +
-        " -- Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
+      `workflow ${JSON.stringify(plan.workflowId)} is already registered (snapshot + root entry); registration is create-only \u2014 ` +
+        "remove that workflow before registering again, or reconcile an operation you already started",
     );
   }
-
-  const created = await createExecution(plan);
-  const written = readSnapshotIfPresent(plan.dir);
-  if (written === undefined) {
-    throw new CatalogRegistrationError(
-      "catalog.registration-invalid",
-      `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}. Verify via mstar status validate <snapshotPath>; re-drive via mstar catalog reconcile --list and mstar catalog reconcile --operation-id <op>; record via mstar issue add.`,
-    );
-  }
-  if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
-    throw conflictError(`the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity`);
-  }
-  if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
-    // The producer writes the root entry itself; reaching here means it was
-    // removed between the two steps. Finish the write we own.
-    await writeRootEntry(plan, written.snapshot);
-  }
-  return { ...readFileVersions(plan), recovered: created.recovered };
+  return { ...readFileVersions(plan), recovered: true };
 }
+
+if (rootEntry !== undefined) {
+  throw conflictError(
+    `the root register shows workflow ${JSON.stringify(plan.workflowId)} but its snapshot ${plan.snapshotPath} is missing; ` +
+      "a stale root entry is never repaired or re-pointed" +
+      " -- Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
+  );
+}
+
+const created = await createExecution(plan);
+const written = readSnapshotIfPresent(plan.dir);
+if (written === undefined) {
+  throw new CatalogRegistrationError(
+    "catalog.registration-invalid",
+    `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}. Verify via mstar status validate <snapshotPath>; re-drive via mstar catalog reconcile --list and mstar catalog reconcile --operation-id <op>; record via mstar issue add.`,
+  );
+}
+if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
+  const snapshotContentSha256 = createHash("sha256").update(readFileSync(plan.snapshotPath)).digest("hex");
+  const recordedAt = nowRfc3339();
+  await withJournalWrite(context, (db) => {
+    const row = readRow(db, plan.request.operationId);
+    if (row === undefined) {
+      throw new CatalogError("catalog.not-found", `Registration operation ${plan.request.operationId} is not recorded.`);
+    }
+    db.prepare("update catalog_operations set after_versions_json = ?, updated_at = ? where operation_id = ?").run(
+      JSON.stringify({
+        failure: {
+          workflow_id: plan.workflowId,
+          snapshot_path: plan.snapshotPath,
+          snapshot_content_sha256: snapshotContentSha256,
+          reviewed_identity: plan.identity,
+          recorded_at: recordedAt,
+        },
+      }),
+      recordedAt,
+      plan.request.operationId,
+    );
+  });
+  throw conflictError(
+    `the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity — recover with mstar catalog purge-registration --workflow ${plan.workflowId} --operation ${plan.request.operationId} --expect ${plan.request.expectedCatalogRevision} --actor ${plan.request.actor}.`,
+  );
+}
+if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
+  // The producer writes the root entry itself; reaching here means it was
+  // removed between the two steps. Finish the write we own.
+  await writeRootEntry(plan, written.snapshot);
+}
+return { ...readFileVersions(plan), recovered: created.recovered }; }
 
 /** The one authorized root write: the entry for a snapshot this operation owns. */
 async function writeRootEntry(plan: CatalogExecutionPlan, snapshot: WorkflowSnapshot): Promise<void> {
@@ -1509,7 +1530,7 @@ export async function registerCatalogExecution(
 
   // Step 2 — the file primitives. A failure here leaves the prepared row as
   // the recovery record (and any partial bytes it produced), never a receipt.
-  const write = await ensureExecutionRegistration(plan, "register");
+  const write = await ensureExecutionRegistration(context, plan, "register");
   await withJournalWrite(context, (db) => recordExecutionWritten(db, validated.operationId, { ...write, ...readJournalVersions(db) }, plan.identity));
 
   // Step 3 — verify + publish + commit.
@@ -1673,7 +1694,7 @@ export async function reconcileCatalogExecution(
 
   let write: ExecutionWrite;
   try {
-    write = await ensureExecutionRegistration(plan, "reconcile");
+    write = await ensureExecutionRegistration(context, plan, "reconcile");
   } catch (error) {
     if (error instanceof CatalogRegistrationError) throw error;
     // A re-drive failure (IO, a store-root mismatch, a producer refusal) is NOT
