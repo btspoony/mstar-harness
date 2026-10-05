@@ -108,7 +108,7 @@ function parserField(
 function renderCliUsage(definition: CommandDefinition): string {
   const options = definition.cli.options.map((option) => cliOptionFlags(definition, option)).join(" ");
   const args = definition.cli.arguments.map((argument) =>
-    argument.required ? `<${argument.name}>` : `[${argument.name}]`,
+    argument.required ? `<${argument.key}>` : `[${argument.key}]`,
   ).join(" ");
   return `Usage: mstar ${definition.cli.path.join(" ")}${options === "" ? "" : ` ${options}`}${args === "" ? "" : ` ${args}`}`;
 }
