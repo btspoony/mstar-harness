@@ -1154,10 +1154,7 @@ async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "re
     );
   }
   if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
-    throw conflictError(
-      `the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity` +
-        " — This is an internal post-write invariant/race with no CLI or engine recovery action; report the failure for investigation.",
-    );
+    throw conflictError(`the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity`);
   }
   if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
     // The producer writes the root entry itself; reaching here means it was
