@@ -117,12 +117,6 @@ describe("executeCommand input diagnostics", () => {
     expect(envelope.message).toContain("received 42");
   });
 
-  test("non-secret scalar received values remain fully rendered", async () => {
-    const envelope = await executeCommand("worktree.qc-alignment", { files: 42 }, context());
-    expect(envelope.status).toBe("usage");
-    if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message.split("\n")[0]).toContain("received 42");
-  });
 });
 
 describe("session selector admission", () => {

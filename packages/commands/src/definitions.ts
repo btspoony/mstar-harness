@@ -176,15 +176,25 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
  * diagnostic shape: field path, stable issue code, message and the first array
  * index where relevant. Never carries submitted values.
  */
-function inputDiagnostic(issue: z.ZodError["issues"][number]): RefusalDiagnostic {
+function redactInputScalar(value: string): string {
+  return redactSecrets(value).text
+    .replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
+}
+
+function inputDiagnostic(issue: z.ZodError["issues"][number], input: unknown): RefusalDiagnostic {
   const path = issue.path.reduce((path: string, part: string | number | symbol) =>
     typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
   "");
   const index = issue.path.find((part) => typeof part === "number");
+  const value = inputValueAtPath(input, issue.path);
+  const message = typeof value === "string"
+    ? redactSecrets(issue.message).text.replaceAll(value, redactInputScalar(value))
+    : redactSecrets(issue.message).text;
   return {
     path,
     code: issue.code,
-    message: redactSecrets(issue.message).text,
+    message,
     ...(typeof index === "number" ? { index } : {}),
   };
 }
@@ -216,7 +226,7 @@ function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { 
   const value = inputValueAtPath(input, issue.path);
   const received = value === undefined ? "undefined" : value === null ? "null" :
     typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
-      redactSecrets(String(value)).text.replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]");
+      redactInputScalar(String(value));
   return { path: inputPath(issue), expected, received };
 }
 
@@ -241,7 +251,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   }
   const parsed = definition.input.safeParse(input);
   if (!parsed.success) {
-    const diagnostics = parsed.error.issues.map(inputDiagnostic);
+    const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, input));
     const issue = parsed.error.issues[0];
     const facts = rejectionFacts(issue, input);
     const optionKey = issue.path.map(String).join(".");
