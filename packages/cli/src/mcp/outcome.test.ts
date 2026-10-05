@@ -1,6 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import { commandEnvelopeSchema, refusalEnvelope, type CommandDefinition } from "@mstar-harness/commands";
+import { commandEnvelopeSchema, executeCommand, getCommandDefinitions, getSddCommandDefinitions, refusalEnvelope, sddFailed, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
+import { SddScriptError } from "@mstar-harness/engine";
 import { validateCommandOutcome } from "./outcome.js";
+
+function context(cwd = "/tmp"): InvocationContext {
+  return {
+    cwd, controlRoot: null,
+    versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+    signal: new AbortController().signal,
+    effects: {
+      readInput: async () => "",
+      spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+      startDashboard: async () => ({ url: "", close: async () => {} }),
+      openBrowser: async () => {},
+    },
+  };
+}
 
 const definition = {
   id: "workflow.register",
@@ -75,5 +89,31 @@ describe("MCP command outcome refusal contract", () => {
     const outcome = validateCommandOutcome(definition, envelope);
     expect(outcome.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received ""');
     expect(outcome).toMatchObject({ status: "usage", exitCode: 2 });
+  });
+  test("SDD exit-3 refusal reaches the MCP consumer with matching metadata (QCS1-F1)", () => {
+    const err = new SddScriptError("sdd script failed mid-run", 3);
+    const cli = sddFailed("sdd.evidence.capture", err);
+    const sddDefinition = getSddCommandDefinitions().find((entry) => entry.id === "sdd.evidence.capture");
+    if (sddDefinition === undefined) throw new Error("missing sdd.evidence.capture definition");
+    const mcp = validateCommandOutcome(sddDefinition, cli);
+
+    expect(mcp.status).toBe(cli.status);
+    expect(mcp.code).toBe(cli.code);
+    expect(mcp.exitCode).toBe(cli.exitCode);
+    expect(mcp.message.split("\n")[0]).toBe(cli.message.split("\n")[0]);
+  });
+
+  test("status.validate missing-harness refusal reaches the MCP consumer with matching metadata (QCS1-F1)", async () => {
+    const cli = await executeCommand("status.validate", {}, context("/tmp/parity-no-such-harness"));
+    const statusDefinition = getCommandDefinitions().find((entry) => entry.id === "status.validate");
+    if (statusDefinition === undefined) throw new Error("missing status.validate definition");
+    const mcp = validateCommandOutcome(statusDefinition, cli);
+
+    expect(mcp.status).toBe("refused");
+    expect(mcp.status).toBe(cli.status);
+    expect(mcp.code).toBe(cli.code);
+    expect(mcp.exitCode).toBe(cli.exitCode);
+    expect(mcp.message.split("\n")[0]).toBe(cli.message.split("\n")[0]);
+    expect(mcp.details?.helpRoute ?? cli.details?.helpRoute).toBeDefined();
   });
 });
