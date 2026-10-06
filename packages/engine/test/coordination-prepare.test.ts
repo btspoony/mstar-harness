@@ -3155,16 +3155,17 @@ describe("prepare coordinator recovery", () => {
       expect(existsSync(coordinatorEnvelopeOf(fixture, RECOVERED_COORDINATOR_ID))).toBe(false);
     }
 
-    // An executed row (any row coordination block) is never recovered: the
-    // ORIGINAL all-row admission decides, and nothing is written.
+    // A row that has actually started cannot be recovered through Prepare;
+    // an empty coordination revision alone is not execution evidence.
     const snapshot = prepareSnapshotOf(fixture);
-    (snapshot.plans[0] as Record<string, unknown>).coordination = { revision: 1 };
+    (snapshot.plans[0] as Record<string, unknown>).status = "InProgress";
     writeJson(fixture.snapshotPath, snapshot);
     const executed = protectedBytes(fixture);
     const activeRefusal = await prepareRefusalOf(() =>
       recoverPrepareCoordinator(recoveryInputOf(fixture)),
     );
     expect(activeRefusal.code).toBe("coordination.identity-recovery.execution-started");
+    expect(protectedBytes(fixture)).toEqual(executed);
     
   }, 60000);
 
