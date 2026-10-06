@@ -489,7 +489,7 @@
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
-        "parallel SDD implementer dispatches",
+        "parallel SDD implementer dispatches with unmet task dependencies, missing per-task reviewers, shared/non-isolated task workspaces, or bypassed serialized mstar plan progress updates",
         "paste full plan or task history into dispatch",
         "leaf executor invokes Task for PM work",
         "assignment uses non-English field keys",
@@ -537,7 +537,7 @@
         "QC without MERGE_BASE..HEAD review-package",
         "tri-review split across multiple dispatch messages",
         "bulk inline implement Assignment with full plan or T1-Tn pasted for multi-task plan",
-        "parallel SDD implementer dispatches",
+        "parallel SDD implementer dispatches with unmet task dependencies, missing per-task reviewers, shared/non-isolated task workspaces, or bypassed serialized mstar plan progress updates",
         "assignment uses non-English field keys"
       ]
     },
@@ -600,7 +600,7 @@
         "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
         "marks Done or deletes execution_lease before successful integration merge commit",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
-        "parallel SDD implementer dispatches within same plan",
+        "parallel SDD implementer dispatches within same plan with unmet task dependencies, missing per-task reviewers, shared/non-isolated task workspaces, or bypassed serialized mstar plan progress updates",
         "assignment uses non-English field keys"
       ]
     },
