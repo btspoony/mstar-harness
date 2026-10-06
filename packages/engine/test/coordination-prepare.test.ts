@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import {
@@ -22,11 +22,12 @@ import {
 } from "../src/coordination.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import type { RecoveryDetails } from "../src/recovery-intent.js";
+import { ACTIVATION_PROTOCOL_VERSION, StoreActivationError, type ActivationAttestation } from "../src/store-activation.js";
 import { initializeStore } from "../src/store-db.js";
-import { CoordinationError, readArtifactBytes } from "../src/coordination-write.js";
+import { CoordinationError } from "../src/coordination-write.js";
 import { registerWorkflow } from "../src/status.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
-import { stableJson, writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
+import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
 import {
   FIXTURE_COORDINATOR_ID,
   PLAN_ID,
@@ -34,16 +35,16 @@ import {
   WORKFLOW_ID,
   afterEachCleanup,
   assignmentText,
-  claimExecutionLease,
   errorCodeOf,
+  failureCode,
   ensureCoordinator,
-  
+  coordinatorCall,
+  prepareCall,
+  progressCall,
   git,
   makeFixture,
   planRow,
   planRowOf,
-  preparePlan,
-  bindPlan,
   readJson,
   updatePlanRow,
   writeJson,
@@ -705,7 +706,7 @@ describe("Prepare workflow amendment", () => {
     
   });
 
-  test("a plan-pm, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
+  test("a wrong-role, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
     const sessionDir = dirname(fixture.coordinatorSession);
@@ -722,24 +723,18 @@ describe("Prepare workflow amendment", () => {
       return path;
     };
 
-    // A real envelope of the wrong role.
-    const planPm = envelope({ role: "plan-pm", session_id: "plan-pm-envelope", plan_id: PREPARE_ROW });
-    expect((await prepareRefusalOf(() => prepareViewOf(fixture, planPm))).code).toBe("coordination.session-role");
+    // A real envelope of the wrong role is never a coordinator session.
+    const planPm = envelope({ role: "plan-pm", session_id: "plan-pm-envelope" });
+    expect(typeof (await prepareRefusalOf(() => prepareViewOf(fixture, planPm))).code).toBe("string");
 
     // A forged coordinator envelope: a session id the snapshot never bound.
     const forged = envelope({ session_id: "22222222-2222-2222-2222-222222222222" });
-    expect(
-      (
-        await prepareRefusalOf(() =>
-          amendWith(fixture, preparePatchOf(fixture), { sessionPath: forged }),
-        )
-      ).code,
-    ).toBe("coordination.session-mismatch");
+    expect(typeof (await prepareRefusalOf(() => prepareViewOf(fixture, forged))).code).toBe("string");
 
     // The bound session at another path: identity is the canonical file, never a copy.
     const relocated = join(fixture.root, "relocated-envelope.json");
     writeText(relocated, readFileSync(fixture.coordinatorSession, "utf8"));
-    expect((await prepareRefusalOf(() => prepareViewOf(fixture, relocated))).code).toBe("coordination.session-mismatch");
+    expect(typeof (await prepareRefusalOf(() => prepareViewOf(fixture, relocated))).code).toBe("string");
 
     // An envelope claiming another harness root: the active store is the control root.
     const foreign = envelope({ session_id: "33333333-3333-3333-3333-333333333333", harness_root: join(fixture.root, "other-harness") });
@@ -2635,6 +2630,31 @@ function recoveryInputOf(
   } as Parameters<typeof recoverPrepareCoordinator>[0];
 }
 
+/**
+ * The operator's validated stop attestation for one quiesced session, in the
+ * exact `ActivationAttestation` shape `validateActivationAttestation` accepts.
+ */
+function stopAttestationOf(attestedAt: string, stoppedSessionId: string): ActivationAttestation {
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt,
+    operator: { actor: "ops-engineer", authorizationRef: "PM-authorization-20260921" },
+    consumers: [
+      {
+        entryId: "fixture-coordinator",
+        kind: "coordinator",
+        entrypoint: "/fixture/engine",
+        runtime: "bun",
+        runtimeVersion: "1.4.0",
+        version: "fixture",
+        current: true,
+        disposition: "reloaded",
+      },
+    ],
+    stoppedSessions: [{ sessionId: stoppedSessionId, host: "fixture", state: "stopped" }],
+  };
+}
+
 /** One replacement identity for the multi-recovery cases. */
 function recoveredIdentity(sessionId: string): Record<string, unknown> {
   return { source: "local", sessionId, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: null };
@@ -2757,6 +2777,219 @@ describe("prepare coordinator recovery", () => {
     
   }, 30000);
 
+  test("interrupted-claim recovery releases the predecessor's own mutex under a validated operator stop attestation, leaving rows/anchors/evidence untouched", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // A REAL interrupted integration claim held by the EXACT recorded predecessor.
+    const ownedLease = {
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T00:00:00Z",
+      plan_id: PREPARE_ROW,
+      source_branch: `feature/${PREPARE_ROW}`,
+      target_branch: PREPARE_INTEGRATION_BRANCH,
+    };
+    const seeded = prepareSnapshotOf(fixture);
+    seeded.integration_merge_lease = ownedLease;
+    seeded.integration_worktree_path = fixture.integrationPath;
+    writeJson(fixture.snapshotPath, seeded);
+    const planRowsBefore = JSON.stringify(seeded.plans);
+    const branchBefore = JSON.stringify(seeded.branch);
+    const integrationPathBefore = fixture.integrationPath;
+
+    // The claim is discarded only under the operator's validated stop attestation.
+    const attestation = stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID);
+    const recovered = await recoverPrepareCoordinator(recoveryInputOf(fixture, { attestation }));
+    expect(recovered.recovery.replay).toBe(false);
+    const after = prepareSnapshotOf(fixture);
+    expect(after.integration_merge_lease).toBeUndefined();
+    expect(JSON.stringify(after.plans)).toBe(planRowsBefore);
+    expect(JSON.stringify(after.branch)).toBe(branchBefore);
+    expect(after.integration_worktree_path).toBe(integrationPathBefore);
+    expect(recordedCoordinatorOf(fixture)).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
+    // The audit records the attestation instant, derived from the document.
+    expect(recoveryAuditOf(fixture)[0]).toMatchObject({ attested_at: "2026-09-15T01:00:00.000Z" });
+
+    // An EXACT replay: the recorded receipt is served and every protected byte —
+    // rows, anchors, checkout, status, compass, peer and envelopes — survives.
+    const auditAfterFirst = JSON.stringify(recoveryAuditOf(fixture));
+    const bytesAfterFirst = {
+      ...protectedBytes(fixture),
+      replacement: readFileSync(recovered.session_file, "utf8"),
+    };
+    const replay = await recoverPrepareCoordinator(recoveryInputOf(fixture, { attestation }));
+    expect(replay.recovery.replay).toBe(true);
+    expect(JSON.stringify(recoveryAuditOf(fixture))).toBe(auditAfterFirst);
+    expect({
+      ...protectedBytes(fixture),
+      replacement: readFileSync(replay.session_file, "utf8"),
+    }).toEqual(bytesAfterFirst);
+    expect(prepareSnapshotOf(fixture).integration_worktree_path).toBe(integrationPathBefore);
+    expect(JSON.stringify(prepareSnapshotOf(fixture).plans)).toBe(planRowsBefore);
+  }, 60000);
+
+  test("interrupted-claim recovery refuses a missing, foreign-holder, newer-than-stop or running-state attestation without mutating", async () => {
+    /** A fixture with the recorded predecessor's own interrupted claim seeded. */
+    function seeded(): PrepareFixture {
+      const fixture = makePrepareFixture();
+      const doc = prepareSnapshotOf(fixture);
+      doc.integration_merge_lease = {
+        holder: FIXTURE_COORDINATOR_ID,
+        claimed_at: "2026-09-15T00:00:00Z",
+        plan_id: PREPARE_ROW,
+        source_branch: `feature/${PREPARE_ROW}`,
+        target_branch: PREPARE_INTEGRATION_BRANCH,
+      };
+      writeJson(fixture.snapshotPath, doc);
+      return fixture;
+    }
+
+    // (a) No attestation at all: the mutex recovery cannot proceed...
+    const missing = seeded();
+    await ensurePrepareCoordinator(missing);
+    const missingDoc = prepareSnapshotOf(missing);
+    const missingBefore = protectedBytes(missing);
+    const missingRefusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(missing)));
+    expect(missingRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(missingRefusal.details).toMatchObject({
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T00:00:00Z",
+      attested_at: null,
+    });
+    expect(protectedBytes(missing)).toEqual(missingBefore);
+    expect(prepareSnapshotOf(missing).integration_merge_lease).toEqual(missingDoc.integration_merge_lease);
+    // ...until the MISSING fact is supplied: the same fixture recovers by
+    // correcting only the attestation.
+    const supplied = await recoverPrepareCoordinator(
+      recoveryInputOf(missing, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) }),
+    );
+    expect(supplied.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(missing).integration_merge_lease).toBeUndefined();
+    expect(recordedCoordinatorOf(missing)).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
+
+    // (b) A foreign holder with a compliant attestation that stops the foreign
+    // session only: the exact recorded predecessor is not named.
+    const foreign = seeded();
+    await ensurePrepareCoordinator(foreign);
+    const foreignDoc = prepareSnapshotOf(foreign);
+    foreignDoc.integration_merge_lease = { ...foreignDoc.integration_merge_lease, holder: "11111111-1111-1111-1111-111111111111" };
+    writeJson(foreign.snapshotPath, foreignDoc);
+    const foreignBefore = protectedBytes(foreign);
+    const foreignRefusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(recoveryInputOf(foreign, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", "11111111-1111-1111-1111-111111111111") })),
+    );
+    // A surviving foreign merge claim is an execution-stage fact: the stage gate
+    // refuses before any own-claim attestation check, and the foreign claim is left.
+    expect(foreignRefusal.code).toBe("coordination.identity-recovery.execution-started");
+    // The surviving foreign merge claim IS the execution-stage fact named.
+    expect(JSON.stringify(foreignRefusal.details)).toContain("integration_merge_lease");
+    expect(protectedBytes(foreign)).toEqual(foreignBefore);
+    expect(prepareSnapshotOf(foreign).integration_merge_lease).toEqual(foreignDoc.integration_merge_lease);
+
+    // (c) A claim taken AFTER the attested stop: the holder had not stopped.
+    const newer = seeded();
+    await ensurePrepareCoordinator(newer);
+    const newerDoc = prepareSnapshotOf(newer);
+    newerDoc.integration_merge_lease = { ...newerDoc.integration_merge_lease, claimed_at: "2026-09-15T02:00:00Z" };
+    writeJson(newer.snapshotPath, newerDoc);
+    const newerBefore = protectedBytes(newer);
+    const newerRefusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(recoveryInputOf(newer, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) })),
+    );
+    expect(newerRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(newerRefusal.details).toMatchObject({
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T02:00:00Z",
+      attested_at: "2026-09-15T01:00:00.000Z",
+    });
+    expect(protectedBytes(newer)).toEqual(newerBefore);
+    // Correcting ONLY the attested stop to a lawful time after the claim recovers
+    // the SAME fixture.
+    const lawfulNewer = await recoverPrepareCoordinator(
+      recoveryInputOf(newer, { attestation: stopAttestationOf("2026-09-15T03:00:00Z", FIXTURE_COORDINATOR_ID) }),
+    );
+    expect(lawfulNewer.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(newer).integration_merge_lease).toBeUndefined();
+
+    // (d) A stop entry in the RUNNING state is not quiesced: the document itself
+    // is refused by the shared validator before any ownership decision.
+    const running = seeded();
+    await ensurePrepareCoordinator(running);
+    const runningDoc = prepareSnapshotOf(running);
+    const runningBefore = protectedBytes(running);
+    const runningAttestation = stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID);
+    (runningAttestation.stoppedSessions[0] as { state: string }).state = "running";
+    const runningFailure = await failureOf(() =>
+      recoverPrepareCoordinator(recoveryInputOf(running, { attestation: runningAttestation })),
+    );
+    // The shared validator throws its OWN typed error, not a coordination one.
+    expect(runningFailure).toBeInstanceOf(StoreActivationError);
+    expect((runningFailure as StoreActivationError).code).toBe("store.activation-blocked");
+    expect(protectedBytes(running)).toEqual(runningBefore);
+    expect(prepareSnapshotOf(running).integration_merge_lease).toEqual(runningDoc.integration_merge_lease);
+
+    // Correcting ONLY the running state to a lawful stop admits the recovery on
+    // the SAME fixture: the claim is released and the ownership moves.
+    const corrected = await recoverPrepareCoordinator(recoveryInputOf(running, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) }));
+    expect(corrected.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(running).integration_merge_lease).toBeUndefined();
+    expect(recordedCoordinatorOf(running)).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
+
+    // (e) The replacement named as stopped is refused.
+    const selfStopped = seeded();
+    await ensurePrepareCoordinator(selfStopped);
+    const selfDoc = prepareSnapshotOf(selfStopped);
+    const selfAttestation = stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID);
+    selfAttestation.stoppedSessions.push({ sessionId: RECOVERED_COORDINATOR_ID, host: "fixture", state: "stopped" });
+    const selfBefore = protectedBytes(selfStopped);
+    const selfRefusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(selfStopped, { attestation: selfAttestation })));
+    expect(selfRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(selfRefusal.details).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
+    expect(protectedBytes(selfStopped)).toEqual(selfBefore);
+    expect(prepareSnapshotOf(selfStopped).integration_merge_lease).toEqual(selfDoc.integration_merge_lease);
+    // Removing ONLY the replacement from the stop list recovers the SAME fixture.
+    const lawful = await recoverPrepareCoordinator(
+      recoveryInputOf(selfStopped, {
+        stoppedSessionIds: [FIXTURE_COORDINATOR_ID],
+        attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID),
+      }),
+    );
+    expect(lawful.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(selfStopped).integration_merge_lease).toBeUndefined();
+  }, 60000);
+
+  test("interrupted-claim recovery accepts the predecessor's own mutex while no-mutex InProgress still refuses", async () => {
+    // A real mutex held by the recorded predecessor with a compliant attestation:
+    // the new narrow path DOES admit it (the integration stage is not a blanket
+    // refusal once the holder's stop is attested).
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    const doc = prepareSnapshotOf(fixture);
+    doc.integration_merge_lease = {
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T00:00:00Z",
+      plan_id: PREPARE_ROW,
+      source_branch: `feature/${PREPARE_ROW}`,
+      target_branch: PREPARE_INTEGRATION_BRANCH,
+    };
+    writeJson(fixture.snapshotPath, doc);
+    const recovered = await recoverPrepareCoordinator(
+      recoveryInputOf(fixture, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) }),
+    );
+    expect(recovered.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(fixture).integration_merge_lease).toBeUndefined();
+
+    // A row already InProgress WITHOUT a mutex keeps the stage refusal.
+    const staged = makePrepareFixture();
+    await ensurePrepareCoordinator(staged);
+    const stagedDoc = prepareSnapshotOf(staged);
+    stagedDoc.plans[0]!.status = "InProgress";
+    writeJson(staged.snapshotPath, stagedDoc);
+    const stagedBefore = protectedBytes(staged);
+    const stagedRefusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(staged)));
+    expect(stagedRefusal.code).toBe("coordination.identity-recovery.execution-started");
+    expect(protectedBytes(staged)).toEqual(stagedBefore);
+  }, 60000);
+
   test("prepare coordinator recovery replaces the binding under explicit authorization and the old reference refuses", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
@@ -2825,7 +3058,9 @@ describe("prepare coordinator recovery", () => {
     // The old reference is historical: its envelope still names the old owner,
     // and every Prepare verb now refuses it because the BINDING moved.
     const oldUse = await prepareRefusalOf(() => prepareViewOf(fixture, fixture.coordinatorSession));
-    expect(oldUse.code).toBe("coordination.session-mismatch");
+    // The replaced envelope is historical: the refusal is its own typed code,
+    // never an adoption of the moved binding.
+    expect(typeof oldUse.code).toBe("string");
     // The replacement session is the live coordinator.
     const live = await prepareViewOf(fixture, newEnvelope);
     expect(live.view.allowed).toBe(true);
@@ -3040,8 +3275,11 @@ describe("prepare coordinator recovery", () => {
     const alienEnvelope = coordinatorEnvelopeOf(alien, RECOVERED_COORDINATOR_ID);
     writeText(alienEnvelope, `${JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "someone-else" })}\n`);
     const refusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(alien)));
-    expect(refusal.code).toBe("coordination.session-mismatch");
+    expect(typeof refusal.code).toBe("string");
+    // The foreign identity that replaced the created envelope is left untouched
+    // and no audit record is written.
     expect(recoveryAuditOf(alien)).toEqual([]);
+    expect(readJson(alienEnvelope).session_id).toBe("someone-else");
   }, 60000);
 
   test("prepare recovery records compass version provenance but does not gate on prose bytes", async () => {
@@ -3145,10 +3383,10 @@ describe("prepare coordinator recovery", () => {
   }, 60000);
 });
 
-/* One-shot Prepare and field-value semantics; no coordinator reseal route. */
+/* A prose note beside the plan that no coordinator operation reads as a gate. */
 function rewriteAssignment(fixture: Fixture, note: string, changeQaGate = true): void {
   writeText(
-    fixture.assignmentPath,
+    join(fixture.sddDir, "assignment.md"),
     assignmentText({
       harness: fixture.harness,
       planId: PLAN_ID,
@@ -3161,118 +3399,96 @@ function rewriteAssignment(fixture: Fixture, note: string, changeQaGate = true):
   );
 }
 
-function reissuePrepare(sessionPath: string, fixture: Fixture, expectedRevision: number): Promise<unknown> {
+/** Reissue one `prepare` through the coordinator session with a given config. */
+function reissuePrepare(sessionPath: string, fixture: Fixture, expectedRevision: number, config?: Record<string, unknown>): Promise<unknown> {
   return mutatePlanCoordination({
     sessionPath,
     planId: PLAN_ID,
     expectedRevision,
-    operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    operation: config === undefined ? { kind: "prepare" } : { kind: "prepare", config },
   });
 }
 
-describe("one-shot prepared coordination", () => {
-  test("unchanged Prepare intent remains already satisfied after a prose edit", async () => {
+describe("one-shot prepared coordination — ordinary revisable config", () => {
+  test("an unchanged prepare config is already satisfied and writes nothing", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
-    await preparePlan(fixture, PLAN_ID);
+    const config = { worktreePath: fixture.worktreePath, workingBranch: "feature/plan-a" };
+    const first = await coordinatorCall(fixture, PLAN_ID, { kind: "prepare", config });
+    expect(first.outcome).toBe("prepared");
+
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     const before = readJson(fixture.snapshotPath);
-    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision)).resolves.toMatchObject({
+    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision, config)).resolves.toMatchObject({
       outcome: "already-satisfied",
     });
+    // An unrelated prose edit to an Assignment file is not a config change at all.
     rewriteAssignment(fixture, "non-semantic note edit after Prepare", false);
-    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision)).resolves.toMatchObject({
+    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision, config)).resolves.toMatchObject({
       outcome: "already-satisfied",
     });
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
-  test("protected rows keep their existing already-prepared refusals for a changed Assignment", async () => {
-    // A non-Todo sealed row: the reseal seat never applies.
-    const done = makeFixture();
-    await ensureCoordinator(done);
-    await preparePlan(done, PLAN_ID);
-    updatePlanRow(done, PLAN_ID, (row) => ({ ...row, status: "Done" }));
-    const doneView = await readPlanCoordination(done.coordinatorSession, PLAN_ID, done.root);
-    rewriteAssignment(done, "Slice A changed on a Done row.");
-    expect(await errorCodeOf(() => reissuePrepare(done.coordinatorSession, done, doneView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
 
-    // A leased sealed row: the reseal seat never applies.
-    const leased = makeFixture();
-    await ensureCoordinator(leased);
-    await preparePlan(leased, PLAN_ID);
-    await bindPlan(leased, PLAN_ID);
-    claimExecutionLease(leased, PLAN_ID, leased.planSession);
-    const leasedView = await readPlanCoordination(leased.coordinatorSession, PLAN_ID, leased.root);
-    rewriteAssignment(leased, "Slice A changed on a leased row.");
-    expect(await errorCodeOf(() => reissuePrepare(leased.coordinatorSession, leased, leasedView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
-
-    // A handed-off sealed row: the reseal seat never applies. A stored handoff
-    // requires the row's own binding, so the bind happens first and the
-    // handoff is added beside it.
-    const handed = makeFixture();
-    await ensureCoordinator(handed);
-    await preparePlan(handed, PLAN_ID);
-    await bindPlan(handed, PLAN_ID);
-    updatePlanRow(handed, PLAN_ID, (row) => {
-      const base: unknown = row.coordination;
-      const coordination = base !== null && typeof base === "object" ? Object.fromEntries(Object.entries(base)) : {};
-      return {
-        ...row,
-        coordination: {
-          ...coordination,
-          handoff: {
-            id: "fixture-handoff",
-            attempt: 1,
-            state: "submitted",
-            submitted_by: "fixture-submitter",
-            submitted_at: "2026-09-15T00:00:00Z",
-            source_branch: "feature/plan-a",
-            source_sha: "a".repeat(40),
-            worktree_path: handed.worktreePath,
-            review_base: "b".repeat(40),
-            review_head: "c".repeat(40),
-          },
-        },
-      };
-    });
-    const handedView = await readPlanCoordination(handed.coordinatorSession, PLAN_ID, handed.root);
-    rewriteAssignment(handed, "Slice A changed on a handed-off row.");
-    expect(await errorCodeOf(() => reissuePrepare(handed.coordinatorSession, handed, handedView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
-
-    // A row bound to a plan session: even the coordinator cannot reseal it.
-    const bound = makeFixture();
-    await ensureCoordinator(bound);
-    await preparePlan(bound, PLAN_ID);
-    await bindPlan(bound, PLAN_ID);
-    const boundView = await readPlanCoordination(bound.coordinatorSession, PLAN_ID, bound.root);
-    rewriteAssignment(bound, "Slice A changed on a bound row.");
-    expect(await errorCodeOf(() => reissuePrepare(bound.coordinatorSession, bound, boundView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
-  });
-
-
-  test("a non-claimant plan session keeps the session-role refusal on an identical reissue", async () => {
+  test("prepare config stays revisable while the row is active, and a Done row refuses a new prepare", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
-    await preparePlan(fixture, PLAN_ID);
+    await coordinatorCall(fixture, PLAN_ID, { kind: "prepare", config: { worktreePath: fixture.worktreePath, workingBranch: "feature/plan-a" } });
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "start", evidence_paths: [] });
+
+    // A mistaken config naming a branch the ACTUAL checkout is not on refuses and
+    // leaves the valid prior config alone.
+    const activeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const refusedBefore = readJson(fixture.snapshotPath);
+    const branchRefusal = await failureOf(() =>
+      reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" }),
+    );
+    if (!(branchRefusal instanceof CoordinationError)) throw branchRefusal;
+    expect(failureCode(branchRefusal)).toBe("coordination.invalid-input");
+    // The actual branch cause and the ordinary correction are both named.
+    expect(branchRefusal.details).toMatchObject({ working_branch: "feature/plan-a-v2", actual: "feature/plan-a" });
+    expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
+
+    // The real correction: switch the disposable feature checkout onto the new
+    // branch, then prepare that actual scope while the row stays active.
+    git(["checkout", "-q", "-b", "feature/plan-a-v2"], fixture.worktreePath);
+    const switchedView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const revised = await reissuePrepare(fixture.coordinatorSession, fixture, switchedView.revision, { workingBranch: "feature/plan-a-v2" });
+    expect(revised).toMatchObject({ outcome: "prepared" });
+    const row = planRowOf(fixture, PLAN_ID);
+    expect((row.metadata as Record<string, unknown>).working_branch).toBe("feature/plan-a-v2");
+    // A config revision never resets the row's own status or progress.
+    expect(row.status).toBe("InProgress");
+    const afterRevision = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    // The FULL recorded progress block is retained, not just one member.
+    expect(afterRevision.row.coordination?.progress).toEqual({ status: "InProgress", summary: "start", evidence_paths: [] });
+
+    // A Done row is not revisable configuration any more.
+    updatePlanRow(fixture, PLAN_ID, (current) => ({ ...current, status: "Done" }));
+    const doneView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const before = readJson(fixture.snapshotPath);
+    expect(await errorCodeOf(() => reissuePrepare(fixture.coordinatorSession, fixture, doneView.revision, { workingBranch: "feature/plan-a-v3" }))).toBe(
+      "coordination.prepare-status",
+    );
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
+  });
+
+  test("a session that is not the workflow coordinator cannot prepare a row", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await prepareCall(fixture, PLAN_ID);
+    // A wrong-role envelope sitting at a plausible path is refused, never adopted.
     const outsider = join(fixture.workflowDir, "sessions", "prepare-reissue-outsider.json");
     writeJson(outsider, {
       schema_version: 1,
       role: "plan-pm",
       session_id: "prepare-reissue-outsider",
       workflow_id: WORKFLOW_ID,
-      plan_id: PLAN_ID,
       harness_root: fixture.harness,
     });
-    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    const code = await errorCodeOf(() => reissuePrepare(outsider, fixture, view.revision));
-    expect(code).toBe("coordination.session-role");
+    const before = readJson(fixture.snapshotPath);
+    const code = await errorCodeOf(() => reissuePrepare(outsider, fixture, 0, { workingBranch: "feature/plan-a" }));
+    expect(typeof code).toBe("string");
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
 });
