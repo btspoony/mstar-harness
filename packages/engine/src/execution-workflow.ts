@@ -1699,7 +1699,7 @@ export async function recoverExecutionCoordinator(
           hasCoordinatorRecoveryChain(tx, workflowId, live, priorSessionId);
         if (!continuation) {
           throw new CoordinationError(
-            "coordination.duplicate-holder",
+            "coordination.invalid-transition",
             `workflow ${workflowId} holds the ACTIVE coordinator session ${live.ref.sessionId} at epoch ${tx.epoch}; recovery ` +
               `may replace only the holder it names (${priorSessionId}). Ownership is not replaceable by another identity, ` +
               `and a live holder resumes through its own reference. Nothing was recovered.`,
