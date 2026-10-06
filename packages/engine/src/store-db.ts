@@ -205,22 +205,13 @@ function loadSqliteDriverSync(): SqliteModule {
   }
 }
 
-/** `{resolved process/control harness root}/store.db` via
- * `resolveProcessHarnessDir` for Git worktrees. A supplied non-Git harness
- * directory is already an explicit root; do not mistake its own `plans/`
- * child for a nested harness. */
+/** The caller's selected harness root, not a process-discovery starting address.
+ * Process/FILE callers discover through `resolveProcessHarnessDir` first; its
+ * explicit override keeps even a missing or empty selected root authoritative. */
 export function storeDbPath(context: { harnessDir: string }): string {
   if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const start = resolve(context.harnessDir);
-  // Keep the linked-checkout failure closed; the resolver throws when Git's
-  // main worktree cannot be determined from a linked worktree.
-  const resolved = resolveProcessHarnessDir(start);
-  // The resolver's legacy `plans/` fallback mis-reads an explicitly supplied
-  // non-git root that merely CONTAINS a plans/ directory (its own child) as
-  // the harness root. The explicit root wins there. Standard harness
-  // selections (.mstar/.agents children, ancestor walks) stay authoritative.
-  const hijackedPlansFallback = resolved !== null && resolved === join(start, "plans");
-  return join(hijackedPlansFallback ? start : resolved ?? start, "store.db");
+  const root = resolve(context.harnessDir);
+  return join(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 
 /** Bounded wait is fixed at 5000ms in production (contract §2). The
@@ -1595,6 +1586,8 @@ function readStoreMeta(db: StoreDb): StoreMeta {
 // Public interface (contract §5)
 // ---------------------------------------------------------------------------
 
+/** Selected harness directory; process callers resolve discovery before
+ * constructing this context. FILE guards separately discover from targets. */
 export type StoreContext = { harnessDir: string };
 
 /**
@@ -1773,11 +1766,23 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
   return db;
 }
 
+/** FILE guards receive target directories, including not-yet-created workflow
+ * directories. Keep their existing process/control discovery separate from
+ * selected StoreContexts: otherwise a future target could bypass an ACTIVE
+ * parent store. The resolver retains main-worktree and linked-fail-closed rules. */
+function executionFileStorePath(context: StoreContext): string {
+  if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
+  const start = resolve(context.harnessDir);
+  const root = resolveProcessHarnessDir(start);
+  // A non-Git harness may contain its own plans/ child; it is not a new root.
+  return join(root === join(start, "plans") ? start : root ?? start, "store.db");
+}
+
 /**
- * The execution authority state of the control harness that owns `context`'s
- * path, `{kind: "state", state: null}` when no store exists there, and
+ * The execution authority state at the caller's selected database path,
+ * `{kind: "state", state: null}` when no store exists there, and
  * `{kind: "unreadable"}` when a store file exists there but cannot be read. It
- * shares the path (`storeDbPath`), runtime (`assertStoreRuntimeSupported`),
+ * shares the runtime (`assertStoreRuntimeSupported`),
  * schema (`readAppliedMigrations` / `validateAppliedMigrations`) and metadata
  * (`readStoreMeta` / `readExecutionMeta`) checks with `openStore`, and opens
  * the SAME `node:sqlite` driver read-only through the synchronous loader.
@@ -1801,8 +1806,7 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  * database is removed, so absence is not an authority verdict either (the
  * durable installed binding that closes this is an explicit 2b obligation).
  */
-function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe {
-  const dbPath = storeDbPath(context);
+function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
   // The same no-link discrimination the open makes: a dangling symlink or other
   // non-regular final path is an existing store that cannot be read, never "no
   // store", so the retired file route cannot answer for it.
@@ -1850,7 +1854,7 @@ function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe
  * at all keeps the legacy route (there is no authority to establish).
  */
 export function assertExecutionFileWriteAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(context);
+  const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") return;
   throw new StoreError(
@@ -1891,7 +1895,7 @@ export function assertExecutionFileWriteAllowed(context: StoreContext): void {
  * this guard as well.
  */
 export function assertExecutionFileReadAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(context);
+  const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") return;
   throw new StoreError(
@@ -1910,7 +1914,7 @@ export function withExecutionReadGuard<T>(
   context: StoreContext,
   body: (db: StoreDb, authority: { storeId: string; epoch: number }) => T,
 ): T {
-  const probe = probeExecutionAuthority(context);
+  const probe = probeExecutionAuthority(storeDbPath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") {
     throw new StoreError(
@@ -1974,8 +1978,10 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
   if (!existsSync(dbPath)) {
     throw new StoreError(
       "store.not-initialized",
-      `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace ` +
-        `(or the staged migration for an existing workspace). Nothing was created.`,
+      `No issue store exists at ${dbPath}. For a genuinely empty workspace, run ` +
+        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" ` +
+        `to create and activate the selected store (or "mstar store init" with the same --harness ` +
+        `when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`,
     );
   }
   let db: StoreDb;

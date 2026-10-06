@@ -62,15 +62,13 @@ afterAll(() => {
 
 /**
  * A fresh temp workspace with a real `.mstar` harness root and an initialized
- * (active) store. The `.mstar` marker matters: `resolveHarnessDir` probes a
- * `plans/` child as a harness candidate, so a fixture that creates
- * `{HARNESS_DIR}/plans` must sit under an explicit harness marker — exactly
- * like a real workspace — or the store and catalog roots would move mid-test.
+ * (active) store. Its context selects the harness explicitly, so adding its
+ * own plans/ child cannot move either the database or the catalog root.
  */
 async function initialized(name: string): Promise<StoreContext> {
   const workspace = mkdtempSync(join(ROOT, name));
   mkdirSync(join(workspace, ".mstar"), { recursive: true });
-  const context: StoreContext = { harnessDir: workspace };
+  const context: StoreContext = { harnessDir: join(workspace, ".mstar") };
   const handle = await initializeStore(context);
   handle.close();
   return context;

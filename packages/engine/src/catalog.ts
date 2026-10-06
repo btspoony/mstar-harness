@@ -25,7 +25,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, join, resolve as resolvePath, sep } from "node:path";
-import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   assertSafePathComponent,
   canonicalizeNearestExisting,
@@ -35,7 +34,7 @@ import {
   resolveProjectDir,
   resolveSpecsDir,
 } from "./path.js";
-import { openStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)
@@ -230,10 +229,10 @@ export class CatalogError extends Error {
 
 /**
  * The already-resolved root for a `root_kind`. The harness root is the same
- * one the store itself lives under (`resolveProcessHarnessDir`, contract §2),
- * so a feature worktree can never register against a cwd-local tree; the
- * repository root is the harness dir's parent, the existing convention in
- * `resolveSpecsDir`. `.mstarc` overrides apply through the shared resolvers.
+ * selected root as the database; process callers discover it before building
+ * the StoreContext. The repository root is the harness dir's parent, the
+ * existing convention in `resolveSpecsDir`. `.mstarc` overrides apply through
+ * the shared resolvers.
  */
 export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind): string {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
@@ -242,8 +241,7 @@ export function catalogRootDir(context: StoreContext, rootKind: CatalogRootKind)
       `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`,
     );
   }
-  const start = resolvePath(context.harnessDir);
-  const harness = resolveProcessHarnessDir(start) ?? start;
+  const harness = dirname(storeDbPath(context));
   switch (rootKind) {
     case "repository":
       return dirname(harness);

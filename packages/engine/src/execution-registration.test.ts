@@ -101,15 +101,14 @@ type Fixture = {
 };
 
 /**
- * An ACTIVE, empty execution authority. The workspace carries the `.mstar`
- * harness marker so the store stays pinned to it even once the harness's own
- * `plans/` child appears — the same shape a real control harness has.
+ * An ACTIVE, empty execution authority. The context selects the workspace's
+ * .mstar harness directly, including when its own plans/ child appears.
  */
 async function activeFixture(label: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, `${label}-`));
   const harnessRoot = join(workspace, ".mstar");
   mkdirSync(harnessRoot, { recursive: true });
-  const context: StoreContext = { harnessDir: workspace };
+  const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);

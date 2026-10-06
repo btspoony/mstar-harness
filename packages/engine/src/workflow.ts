@@ -837,7 +837,7 @@ export async function writeWorkflowSnapshot(
   // lock (spec §4.3): with an ACTIVE execution authority the snapshot is
   // retired as a persistence route, so this refuses whatever store the caller
   // injected and before any payload validation. The context is the target
-  // dir; `storeDbPath` normalizes it to the CONTROL harness root.
+  // dir; the FILE guard discovers its owning CONTROL harness root.
   assertExecutionFileWriteAllowed({ harnessDir: dir });
   const gate = validateWorkflowSnapshot(snapshot);
   if (!gate.ok) {

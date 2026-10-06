@@ -67,7 +67,7 @@ async function fixture(name: string, root = ROOT): Promise<Fixture> {
   const workspace = mkdtempSync(join(root, name));
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: workspace };
+  const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
   return {

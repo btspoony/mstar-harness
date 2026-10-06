@@ -876,7 +876,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       setArtifactStore(createFsStore(resolve(root, ".mstar")));
       await scaffoldHarness(root);
 
-      const staged = await openStore({ harnessDir: root }, "read");
+      const staged = await openStore(context, "read");
       const defaultProject = staged.db
         .prepare("select id from catalog_entities where kind = 'project' and id = '_default'")
         .get();

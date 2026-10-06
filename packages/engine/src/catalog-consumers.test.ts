@@ -48,17 +48,15 @@ afterEach(() => {
 });
 
 /**
- * A fresh workspace with a real `.mstar` harness marker. The store context is
- * the workspace root, so `resolveHarnessDir` stops at the marker rung and the
- * store/catalog roots stay pinned even once a `plans/` child appears (the same
- * fixture shape the catalog authority tests use).
+ * A fresh workspace with a real `.mstar` harness marker. The store context
+ * selects that harness directly, including when it owns a plans/ child.
  */
 function workspace(name: string): { root: string; harness: string; context: StoreContext } {
   const root = mkdtempSync(join(ROOT, name));
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   setArtifactStore(createFsStore(harness));
-  return { root, harness, context: { harnessDir: root } };
+  return { root, harness, context: { harnessDir: harness } };
 }
 
 /** One initialized (active) store with the harness artifact store pinned. */
@@ -322,7 +320,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   test("catalog discovery: scaffold registers the project directory, idempotently, without roadmap content", async () => {
     const root = mkdtempSync(join(ROOT, "scaffold-catalog-"));
     const harness = join(root, ".mstar");
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     mkdirSync(harness, { recursive: true });
     setArtifactStore(createFsStore(harness));
     const handle = await initializeStore(context);
@@ -341,7 +339,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
   test("catalog discovery: existing scaffold-location identity and content are not relocated", async () => {
     const root = mkdtempSync(join(ROOT, "scaffold-existing-catalog-"));
     const harness = join(root, ".mstar");
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     mkdirSync(harness, { recursive: true });
     setArtifactStore(createFsStore(harness));
     const handle = await initializeStore(context);
@@ -374,7 +372,7 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     const harness = await scaffoldHarness(root);
     expect(existsSync(join(harness, "projects", "_default"))).toBe(true);
     expect(existsSync(join(harness, "projects", "_default", "roadmap.md"))).toBe(false);
-    const report = await readCatalogCompleteness({ harnessDir: root }, ["projects"]);
+    const report = await readCatalogCompleteness({ harnessDir: harness }, ["projects"]);
     expect(report.ok).toBe(false);
     expect(report.violations.some((violation) => violation.code === "store.not-initialized")).toBe(true);
   });

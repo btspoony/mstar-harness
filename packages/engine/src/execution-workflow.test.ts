@@ -239,7 +239,7 @@ async function workflowFixture(
   runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
   const harnessRoot = join(repoRoot, ".mstar");
   mkdirSync(harnessRoot, { recursive: true });
-  const context: StoreContext = { harnessDir: repoRoot };
+  const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
@@ -2388,7 +2388,7 @@ async function heldMergeClaim(context: StoreContext) {
   const current = await readExecutionState(context);
   const claim = current.data.workflows.find((workflow) => workflow.state.id === WORKFLOW_ID)?.integrationLease;
   expect(claim).not.toBeNull();
-  expect(claim).toEqual(storedMergeClaim(context));
+  expect<unknown>(claim).toEqual(storedMergeClaim(context));
   return claim;
 }
 
@@ -2549,7 +2549,7 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
     // back to the file route or inventing a binding to derive from.
     const workspace = realpathSync(mkdtempSync(join(ROOT, "sparse-no-authority-")));
     mkdirSync(join(workspace, ".mstar"), { recursive: true });
-    const context: StoreContext = { harnessDir: workspace };
+    const context: StoreContext = { harnessDir: join(workspace, ".mstar") };
     const refusal = await refusalOf(() =>
       mutateExecutionWorkflow(domainContext(context, trustedCaller(COORDINATOR_ID, "coordinator")), {
         operationId: "op-sparse-uninitialized",

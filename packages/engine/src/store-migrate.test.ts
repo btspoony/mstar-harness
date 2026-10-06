@@ -28,7 +28,7 @@ type Fixture = { context: StoreContext; harness: string };
 function freshWorkspace(name: string): Fixture {
   const harness = join(mkdtempSync(join(ROOT, name)), ".mstar");
   mkdirSync(harness, { recursive: true });
-  return { context: { harnessDir: dirname(harness) }, harness };
+  return { context: { harnessDir: harness }, harness };
 }
 
 function write(harness: string, relativePath: string, text: string): void {

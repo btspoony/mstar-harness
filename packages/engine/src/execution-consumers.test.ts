@@ -730,7 +730,7 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
   const planPath = join(harnessRoot, "plans", `${RETAINED_PLAN}.md`);
   mkdirSync(dirname(planPath), { recursive: true });
   writeFileSync(planPath, `# ${RETAINED_PLAN}\n`);
-  const context: StoreContext = { harnessDir: repoRoot };
+  const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);

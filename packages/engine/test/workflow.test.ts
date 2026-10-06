@@ -2557,20 +2557,19 @@ describe("catalog registration — the journal joins this producer to the catalo
   });
 
   /**
-   * A temp workspace with the real harness marker (`{root}/.mstar`) and an
-   * initialized active store, plus the artifact store pinned to `root` — the
-   * producers write `{root}/status.json` + `{root}/workflows/`, the store and
-   * catalog roots resolve under the marker.
+   * A temp workspace with the real `.mstar` harness and an initialized store.
+   * The producer, artifact store, catalog context and returned root all select
+   * that same harness.
    */
   async function workspace(prefix: string): Promise<{ root: string; context: StoreContext }> {
     const root = tmpRoot(prefix);
     roots.push(root);
     mkdirSync(join(root, ".mstar"), { recursive: true });
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: join(root, ".mstar") };
     const handle = await initializeStore(context);
     handle.close();
-    setArtifactStore(createFsStore(root));
-    return { root, context };
+    setArtifactStore(createFsStore(context.harnessDir));
+    return { root: context.harnessDir, context };
   }
 
   function planOptions(root: string, planId: string, title: string): RegisterPlanWorkflowOptions {
@@ -2604,7 +2603,7 @@ describe("catalog registration — the journal joins this producer to the catalo
       expectedCatalogRevision: expected,
       workflow: { kind: "plan", workflowId, options: planOptions(root, planId, title) },
       delta: {
-        entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: `plans/${planId}.md` }],
+        entities: [{ kind: "plan", id: planId, title, rootKind: "plans", relativePath: `${planId}.md` }],
         binding: { catalogKind: "plan", catalogId: planId },
       },
     };
