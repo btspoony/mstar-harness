@@ -1819,38 +1819,45 @@ function requireOwnMergeClaim(
   }
   if (lease.holder === witness.session.sessionId) return;
   if (readLiveSessionIdentities(tx, witness.workflowId).has(lease.holder)) {
+    // §4.2 a LIVE foreign holder is not this completion's to release: the claim
+    // belongs to the attempt its holder is executing, and only the holder's own
+    // session (or an authorized recovery that attests its stop) may move it. A
+    // completing caller can never eliminate another session's foreign ownership
+    // by completing a different row.
     throw new CoordinationError(
       "coordination.identity-mismatch",
       `plan ${planId} merge lease is held by the LIVE coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
-        `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released. Resume that holder's own binding ` +
-        `and let it complete plan ${JSON.stringify(lease.plan_id)} from its own recorded scope, or run recoverExecutionCoordinator ` +
-        `naming ${JSON.stringify(lease.holder)} with its stop/reload attestation, the current workflow token (--expect), a fresh ` +
-        `--operation id, a non-empty --reason and a valid activation attestation carried by the independently acquired replacement, ` +
-        `then retry this completion as the recovered coordinator.`,
+        `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released. The claim belongs to the attempt ` +
+        `its holder is executing: that holder completes plan ${JSON.stringify(lease.plan_id)} from its own recorded scope ` +
+        `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or — when this row's recorded ` +
+        `scope is mistaken — correct it through the ordinary plan prepare. Run recoverExecutionCoordinator naming ` +
+        `${JSON.stringify(lease.holder)} with its stop/reload attestation only if that holder is actually stopped.`,
       { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
     );
   }
   // §4.2 the claim matches this attempt but names a session this epoch does NOT
-  // hold active. That is NOT by itself authority to take it: a revoked, suspended,
-  // epoch-invalidated or simply unrelated old row is not "the predecessor this
-  // coordinator recovered", and the ordinary recovery transition REFUSES to name a
-  // predecessor while a different active coordinator — the one reaching this
-  // frame — already holds the workflow. The claim survives because it was taken at
-  // or after the stop evidence that bound the current replacement, so it belongs
-  // to a NEWER attempt, and only the ordinary actions that own it can move it: its
-  // own row's completion from its recorded scope, or its own row's ordinary
-  // prepare/config correction when that recorded scope was mistaken.
+  // hold active. A merely non-active row is NOT authority to take it: the only
+  // recorded linkage that authorises replacing that holder is the workflow-wide
+  // recovery RENEWAL over this workflow's own history — the immutable previous
+  // recovery receipt (which records `prior_session_id`/`stopped_sessions`), the
+  // revoked prior session row, the exact held claim row, and a FRESH full stop
+  // document in which the CURRENT binding is not the stopped session, with
+  // `claimed_at <= stop <= now`. The current binding is not transferred; it is
+  // re-recognised as the replacement the recorded history already produced, and
+  // the recovery then settles the claim row it left behind.
   throw new CoordinationError(
     "coordination.merge-lease-stopped-owner",
-    `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, taken ` +
-      `by holder ${JSON.stringify(lease.holder)} at ${String(lease.claimed_at ?? "an unknown instant")}. That holder's coordinator ` +
-      `session is not active at epoch ${tx.epoch}, and this completing coordinator ${JSON.stringify(witness.session.sessionId)} ` +
-      `already holds the workflow, so recoverExecutionCoordinator CANNOT name ${JSON.stringify(lease.holder)} while this binding is ` +
-      `current. The claim belongs to the attempt it names: complete plan ${JSON.stringify(lease.plan_id)} from its recorded scope ` +
-      `(source ${lease.source_branch}, target ${lease.target_branch}) — that row's own complete releases its claim — or, when the ` +
-      `claim is this plan's but its recorded scope is mistaken, correct this row's worktree/branch through the ordinary plan ` +
-      `prepare and complete against the claim the row actually owns. This completion never takes over or releases another ` +
-      `attempt's claim.`,
+    `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
+      `held by ${JSON.stringify(lease.holder)} since ${String(lease.claimed_at ?? "an unknown instant")}; that holder's ` +
+      `coordinator session is not active at epoch ${tx.epoch}, and this completing coordinator ` +
+      `${JSON.stringify(witness.session.sessionId)} does not hold it. This completion does not take over or release another ` +
+      `holder's claim. The supported route is the coordinator recovery RENEWAL for this recorded relationship: ` +
+      `\`recoverExecutionCoordinator --workflow ${workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <fresh ` +
+      `full stop document naming ${lease.holder} and NOT the current binding, with claimed_at <= stop <= now> --expect <current ` +
+      `workflow token> --operation <fresh operation id>\`, run under the independently acquired replacement binding this caller ` +
+      `already holds. That recovery re-recognises the recorded prior→replacement relationship (previous recovery receipt, revoked ` +
+      `prior session row, this exact held claim row), keeps the current binding, settles this claim row, and then this completion ` +
+      `retries as the same recovered coordinator.`,
     {
       plan_id: planId,
       session_id: witness.session.sessionId,
@@ -1859,6 +1866,7 @@ function requireOwnMergeClaim(
       claim_target_branch: lease.target_branch,
       claim_holder: lease.holder,
       claim_taken_at: lease.claimed_at ?? null,
+      supported_route: "recoverExecutionCoordinator renewal (--workflow, --prior-session, --reason, --attestation, --expect, --operation)",
     },
   );
 }
