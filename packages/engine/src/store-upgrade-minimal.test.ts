@@ -8,9 +8,6 @@ import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { readExecutionState } from "./execution-store.js";
 import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
-import {
-  bindExecutionSession,
-} from "./index.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-"));
 afterAll(() => {
@@ -87,11 +84,12 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
     const plan = store.db.prepare("select workflow_id, plan_id, state_json from execution_plans").get() as { workflow_id: string; plan_id: string; state_json: string };
     expect(plan).toMatchObject({ workflow_id: workflow.workflow_id, plan_id: "wf-creates-and-imports-plan" });
     expect(JSON.parse(plan.state_json)).toMatchObject({ id: plan.plan_id, status: "Todo", title: "Upgrade fixture plan" });
-    expect(store.db.prepare("select workflow_id, role, session_id, plan_id, state from execution_sessions").get())
-      .toMatchObject({ workflow_id: workflow.workflow_id, role: "plan-pm", session_id: "session-creates-and-imports", plan_id: plan.plan_id, state: "suspended" });
-    expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
+    // The legacy plan-PM session envelope is dropped: the seat was removed, so
+    // no plan-scoped session row and no per-plan lease table exist any more.
+    expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 0 });
     expect(result.dispositions).toEqual([
-      "workflow wf-creates-and-imports plan wf-creates-and-imports-plan: stale held lease released on import; re-acquire via plan bind",
+      "workflow wf-creates-and-imports plan wf-creates-and-imports-plan: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations",
+      "workflow wf-creates-and-imports plan wf-creates-and-imports-plan: legacy plan-PM session binding dropped on import; that seat no longer exists",
     ]);
   } finally {
     store.close();
@@ -106,7 +104,6 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
   try {
     expect(replayStore.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
     expect(replayStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 1 });
-    expect(replayStore.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
   } finally {
     replayStore.close();
   }
@@ -133,7 +130,7 @@ test("one store upgrade completes staged store and execution authorities with po
   }
 });
 
-test("active-store import releases stale held leases without changing epoch", async () => {
+test("active-store import drops a legacy per-plan claim without changing epoch", async () => {
   const { context } = legacyWorkspace("active-held-lease");
   const snapshotPath = join(context.harnessDir, "workflows", "wf-active-held-lease", WORKFLOW_SNAPSHOT_FILE);
   const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<Record<string, unknown>> };
@@ -158,16 +155,16 @@ test("active-store import releases stale held leases without changing epoch", as
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-held-lease" });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
   expect(result.dispositions).toEqual([
-    "workflow wf-active-held-lease plan wf-active-held-lease-plan: stale held lease released on import; re-acquire via plan bind",
+    "workflow wf-active-held-lease plan wf-active-held-lease-plan: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations",
+    "workflow wf-active-held-lease plan wf-active-held-lease-plan: legacy plan-PM session binding dropped on import; that seat no longer exists",
   ]);
   const state = await readExecutionState(context);
   const importedPlan = state.data.workflows[0]?.plans[0];
   expect(importedPlan?.plan.status).toBe("Blocked");
-  expect(importedPlan?.executionLease).toBeNull();
   const after = await openStore(context, "read");
   try {
     expect(after.db.prepare("select authority_epoch from store_meta where id = 1").get()).toEqual({ authority_epoch: epoch });
-    expect(after.db.prepare("select state from execution_sessions where session_id = ?").get("session-active-held-lease")).toEqual({ state: "suspended" });
+    expect(after.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 0 });
   } finally {
     after.close();
   }
@@ -203,7 +200,7 @@ test("import records that stale integration leases must be reclaimed", async () 
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-integration-lease-disposition" });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1 });
   expect(result.dispositions).toContain(
-    `workflow ${workflowId}: integration lease released on import; re-claim via plan integration-start`,
+    `workflow ${workflowId}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`,
   );
   const store = await openStore(context, "read");
   try {
@@ -270,12 +267,11 @@ function requiresNewRootStore(repoRoot: string): boolean {
   return existsSync(join(repoRoot, "store.db"));
 }
 
-test("minimal import keeps a prepared InProgress plan recoverable through public plan bind", async () => {
+test("minimal import keeps an InProgress row continuable and drops the sealed Assignment projection", async () => {
   const name = "prepared-inprogress";
   const { context } = legacyWorkspace(name);
   const workflowId = `wf-${name}`;
   const planId = `${workflowId}-plan`;
-  const sessionId = `session-${name}`;
   const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
   const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
     plans: Array<{ status: string; coordination: Record<string, unknown>; metadata?: Record<string, string> }>;
@@ -299,22 +295,27 @@ test("minimal import keeps a prepared InProgress plan recoverable through public
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-prepared-inprogress-import" });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
 
-  // Imported sessions are suspended historical facts. Reachability = a NEW
-  // public plan-pm identity binds cleanly (no lease row blocks the fresh
-  // claim) and takes over the InProgress plan.
-  const caller = { sessionId: `${sessionId}-rebind`, role: "plan-pm" as const, workflowId, planId };
-  const st = await readExecutionState(context);
-  const planToken = st.data.workflows[0]!.planTokens[planId]!;
-  const rebound = await bindExecutionSession(
-    { harnessDir: context.harnessDir, caller },
-    { workflowId, planId, role: "plan-pm", expected: planToken, operationId: "op-prepared-inprogress-bind" },
-  );
-  expect(rebound.data.sessionId).toBe(`${sessionId}-rebind`);
-  const stAfter = await readExecutionState(context);
-  expect(stAfter.data.workflows[0]!.plans[0]!.executionLease).toMatchObject({
-    status: "held",
-    holder_session_id: `${sessionId}-rebind`,
-  });
+  // The row is ordinary coordinator data: it imports as Blocked (its claim is
+  // gone), it keeps the real configuration members, and the removed seat's
+  // sealed `assignment_*` projection is dropped rather than carried forward.
+  const store = await openStore(context, "read");
+  try {
+    const row = store.db.prepare("select state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(workflowId, planId) as { state_json: string; coordination_json: string };
+    const state = JSON.parse(row.state_json) as Record<string, unknown>;
+    expect(state.status).toBe("Blocked");
+    const coordination = JSON.parse(row.coordination_json) as { prepared?: Record<string, unknown> };
+    expect(coordination.prepared).toEqual({
+      qa_gate: "mandatory",
+      findings_cleanup: "allow-residual",
+      prepared_by: "pm-fixture",
+      prepared_at: "2026-10-04T00:00:00Z",
+    });
+  } finally {
+    store.close();
+  }
+  const reachable = await readExecutionState(context);
+  expect(reachable.data.workflows[0]?.plans.map((plan) => plan.plan.id)).toEqual([planId]);
 });
 
 test("minimal import canonicalizes legacy plan_id rows into id", async () => {
@@ -338,7 +339,7 @@ test("minimal import canonicalizes legacy plan_id rows into id", async () => {
   }
 });
 
-test("minimal import preserves coordinator recovery and self-amendment audits in the workflow header", async () => {
+test("minimal import preserves coordinator recovery history and drops the self-amendment audit", async () => {
   const { context } = legacyWorkspace("coordination-audit");
   const workflowDir = join(context.harnessDir, "workflows", "wf-coordination-audit");
   const coordinatorFile = join(workflowDir, "sessions", "coordinator.json");
@@ -385,8 +386,11 @@ test("minimal import preserves coordinator recovery and self-amendment audits in
   try {
     const row = store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get("wf-coordination-audit") as { state_json: string };
     const header = JSON.parse(row.state_json) as Record<string, unknown>;
-    expect(header).toMatchObject({ identity_recoveries: [recovery], self_amendments: [amendment] });
+    expect(header).toMatchObject({ identity_recoveries: [recovery] });
     expect(header).not.toHaveProperty("coordination");
+    // The coordinator self-amendment audit belonged to the removed sealed
+    // Assignment protocol; it is dropped with that protocol.
+    expect(header).not.toHaveProperty("self_amendments");
   } finally {
     store.close();
   }
@@ -416,8 +420,7 @@ test("no-store upgrade initializes execution schema and imports every populated 
     expect(tables.map(({ name }) => name)).toContain("execution_meta");
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 1 });
     expect(store.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 1 });
-    expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 1 });
-    expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
+    expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 0 });
     expect(store.db.prepare("select authority_state from execution_meta where id = 1").get()).toEqual({ authority_state: "active" });
     expect(store.db.prepare("select authority_state from store_meta where id = 1").get()).toEqual({ authority_state: "active" });
   } finally {
@@ -547,8 +550,15 @@ test("path escape and foreign workflow ownership remain integrity refusals", asy
 
   const malformed = legacyWorkspace("malformed-session");
   writeFileSync(join(malformed.context.harnessDir, "workflows", "wf-malformed-session", "sessions", "plan-pm.json"), "{");
-  await expect(upgradeStoreMinimal({ context: malformed.context, operator: "operator", operationId: "op-malformed-session" }))
-    .rejects.toMatchObject({ code: "execution.migration-conflict", message: expect.stringContaining("malformed; repair the envelope or remove its plan-pm binding") });
+  // A malformed legacy plan-PM envelope is now simply unrecognizable and left
+  // in place: the seat it belonged to is gone, so it cannot conflict with any
+  // binding this store still holds.
+  const tolerated = await upgradeStoreMinimal({ context: malformed.context, operator: "operator", operationId: "op-malformed-session" });
+  expect(tolerated.imported).toBe(1);
+  expect(tolerated.skipped).toContainEqual({
+    path: "workflows/wf-malformed-session/sessions/plan-pm.json",
+    reason: "unrecognizable session envelope; left in place",
+  });
 });
 
 test("same operation replays and a reused operation id with a different operator conflicts", async () => {

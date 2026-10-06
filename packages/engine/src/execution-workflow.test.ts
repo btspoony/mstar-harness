@@ -21,8 +21,7 @@
  *   the history rows stay - and a refused close changes none of them;
  * - `recoverExecutionCoordinator` refuses without a named, attested-stopped
  *   prior holder and never replaces a live owner; on success it invalidates the
- *   old reference, binds the caller, and adopts exactly the lease ownership its
- *   revocation orphaned, without reviving an old-epoch lease.
+ *   old reference, binds the caller, and replays idempotently.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -30,11 +29,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  createLocalExecutionIdentity,
-  recoverExecutionPlanSession as publishedRecoverExecutionPlanSession,
-  type WorkflowExecutionOperation,
-} from "../src/index.js";
+import type { WorkflowExecutionOperation } from "../src/index.js";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
@@ -55,7 +50,6 @@ import {
 import {
   mutateExecutionWorkflow,
   recoverExecutionCoordinator,
-  recoverExecutionPlanSession,
   setWorkflowWitnessGapForTest,
 } from "../src/execution-workflow.js";
 import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
@@ -74,7 +68,7 @@ const TS = "2026-01-02T03:04:05.000Z";
 const WORKFLOW_ID = "wf-1";
 const PLAN_ID = "p-1";
 const COORDINATOR_ID = "host-coord";
-const PLAN_PM_ID = "host-plan";
+
 const RECOVERY_ID = "host-coord-next";
 const ITERATION_ID = "iter-20260101-workflow";
 const COMPASS_REF = `iterations/${ITERATION_ID}/delivery-compass.md`;
@@ -85,8 +79,8 @@ const SOURCE_BRANCH = `feature/${PLAN_ID}`;
  * Fixtures
  * ------------------------------------------------------------------------ */
 
-function trustedCaller(sessionId: string, role: "coordinator" | "plan-pm", planId: string | null): ExecutionCaller {
-  return { sessionId, role, workflowId: WORKFLOW_ID, planId };
+function trustedCaller(sessionId: string, role: "coordinator"): ExecutionCaller {
+  return { sessionId, role, workflowId: WORKFLOW_ID };
 }
 
 function domainContext(context: StoreContext, who: ExecutionCaller): ExecutionContext {
@@ -155,101 +149,10 @@ function workflowFootprint(context: StoreContext): Record<string, unknown> {
       `(select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}') as workflow_state, ` +
       `(select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
       "(select count(*) as n from execution_operations) as operations, " +
-      "(select count(*) as n from execution_sessions) as sessions, " +
-      "(select count(*) as n from execution_leases) as leases",
+      "(select count(*) as n from execution_sessions) as sessions",
   );
   return row!;
 }
-/** Exact owner records used to prove refusal and out-of-scope preservation. */
-function workflowOwnershipSnapshot(context: StoreContext): Record<string, unknown> {
-  return {
-    workflow: rows(context, `select revision, creator_session_id, state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`),
-    sessions: rows(
-      context,
-      `select role, session_id, plan_id, epoch, revision, state, bound_at from execution_sessions where workflow_id = '${WORKFLOW_ID}' order by role, session_id`,
-    ),
-    plans: rows(
-      context,
-      `select plan_id, revision, state_json, coordination_json from execution_plans where workflow_id = '${WORKFLOW_ID}' order by ordinal`,
-    ),
-    planInputs: rows(
-      context,
-      `select plan_id, revision, input_json, input_hash, catalog_pin_json from execution_inputs where workflow_id = '${WORKFLOW_ID}' order by plan_id`,
-    ),
-    claims: rows(
-      context,
-      `select plan_id, revision, owner_epoch, lease_json from execution_leases where workflow_id = '${WORKFLOW_ID}' order by plan_id`,
-    ),
-    integration: rows(
-      context,
-      `select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`,
-    ),
-  };
-}
-
-function setTestHandoffState(
-  context: StoreContext,
-  state: "submitted" | "accepted" | "integrating" | "merged" | "returned" | "completed",
-): string {
-  let original = "";
-  withRaw(context, (db) => {
-    const row = db
-      .prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
-      .get(WORKFLOW_ID, PLAN_ID) as { coordination_json: string };
-    original = row.coordination_json;
-    const coordination = parsedJson(row.coordination_json);
-    const root = realpathSync(dirname(storeDbPath(context)));
-    const sourceSha = "a".repeat(40);
-    const handoff: Record<string, unknown> = {
-      id: `${PLAN_ID}-attempt-1`,
-      attempt: 1,
-      state,
-      submitted_by: PLAN_PM_ID,
-      submitted_at: TS,
-      source_branch: SOURCE_BRANCH,
-      source_sha: sourceSha,
-      worktree_path: join(root, "worktrees", PLAN_ID),
-      review_base: sourceSha,
-      review_head: sourceSha,
-      qc: {
-        decision: "approve",
-        reports: [{ path: join(root, "reports", "qc.md"), sha256: "b".repeat(64) }],
-        consolidated: { path: join(root, "reports", "qc-summary.md"), sha256: "c".repeat(64) },
-      },
-      qa: {
-        gate: "mandatory",
-        decision: "pass",
-        report: { path: join(root, "reports", "qa.md"), sha256: "d".repeat(64) },
-      },
-      ...(state === "accepted" || state === "integrating" || state === "merged" || state === "completed"
-        ? { accepted_by: COORDINATOR_ID, accepted_at: TS }
-        : {}),
-      ...(state === "returned" ? { returned_at: TS, return_reason: "The handoff was returned." } : {}),
-      ...(state === "integrating" || state === "merged" || state === "completed"
-        ? {
-            integration: {
-              target_branch: "main",
-              worktree_path: root,
-              base_sha: sourceSha,
-              started_at: TS,
-              ...(state === "merged" || state === "completed" ? { result_sha: sourceSha, verified_at: TS } : {}),
-            },
-          }
-        : {}),
-      ...(state === "completed" ? { completed_at: TS } : {}),
-    };
-    coordination.handoff = handoff;
-    db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
-      JSON.stringify(coordination),
-      WORKFLOW_ID,
-      PLAN_ID,
-    );
-  });
-  return original;
-}
-
-
-
 /** The workflow token of the stored header, built from its own revision. */
 function workflowTokenOfRow(context: StoreContext): ExecutionToken {
   const [workflow] = rows(
@@ -323,7 +226,7 @@ async function workflowFixture(label: string, additionalPlanIds: readonly string
   const planIds = [PLAN_ID, ...additionalPlanIds];
   writeCompass(compassPath, { status: "active", plans: planIds, targetBranch: "main" });
 
-  const coordinatorCaller = trustedCaller(COORDINATOR_ID, "coordinator", null);
+  const coordinatorCaller = trustedCaller(COORDINATOR_ID, "coordinator");
   const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
     entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` } as WorkflowEntry,
     snapshot: {
@@ -416,38 +319,9 @@ function setRowStatus(context: StoreContext, planId: string, status: string): vo
  * that is not its own, so the crash states the recovery bootstrap repairs are
  * planted here - exactly as the W4 fixtures plant a foreign merge lease.
  */
-function plantLease(
-  context: StoreContext,
-  input: { ownerEpoch: number; holderId: string; holderRole: "coordinator" | "plan-pm"; status?: "held" | "released" },
-): void {
-  withRaw(context, (db) => {
-    db.prepare(
-      "insert or replace into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)",
-    ).run(
-      WORKFLOW_ID,
-      PLAN_ID,
-      input.ownerEpoch,
-      JSON.stringify({
-        holder: input.holderId,
-        holder_session_id: input.holderId,
-        holder_role: input.holderRole,
-        plan_worktree_path: join(context.harnessDir, "wt-plan"),
-        plan_branch: SOURCE_BRANCH,
-        worktree_path: join(context.harnessDir, "wt-plan"),
-        working_branch: SOURCE_BRANCH,
-        claimed_at: TS,
-        status: input.status ?? "held",
-      }),
-    );
-  });
-}
 
-function leaseRows(context: StoreContext): Array<Record<string, unknown>> {
-  return rows(
-    context,
-    `select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = '${WORKFLOW_ID}' order by plan_id`,
-  );
-}
+
+
 
 function sessionState(context: StoreContext, sessionId: string): unknown {
   const [row] = rows(
@@ -491,17 +365,7 @@ async function refusalOf(
   }
   throw new Error("expected the call to refuse, but it resolved");
 }
-function planRecoveryIssue(refusal: { details: Record<string, unknown> }): Record<string, unknown> {
-  const recovery = refusal.details.recovery;
-  if (typeof recovery !== "object" || recovery === null || !("unresolved" in recovery) || !Array.isArray(recovery.unresolved)) {
-    throw new Error("refusal did not include a recovery diagnostic");
-  }
-  const issue = recovery.unresolved[0];
-  if (typeof issue !== "object" || issue === null || !("code" in issue) || !("availableWork" in issue) || !Array.isArray(issue.availableWork)) {
-    throw new Error("recovery diagnostic did not expose an actionable unresolved item");
-  }
-  return issue;
-}
+
 
 
 /** The development delivery tail every close needs (contract §4c/§4d/§4f). */
@@ -874,8 +738,6 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       workflowMutation(fixture, "op-close-notdone", { kind: "lifecycle", status: "completed", reason: "done" }),
     );
     expect(notDone.code).toBe("coordination.invalid-transition");
-    expect(notDone.message).toContain("records no handoff at all");
-    expect(notDone.details.needed).toContain("reviewed evidence");
     expect(notDone.details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
     expect(await workflowFootprint(fixture.context)).toEqual(before);
 
@@ -890,7 +752,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     // The delivery tail is a separate ACCEPTED operation; the close attempts
     // after it are compared against the state it produced.
     await workflowMutation(fixture, "op-close-evidence", { kind: "delivery", delivery: DELIVERY_TAIL });
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator" });
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
     const readyToClose = await workflowFootprint(fixture.context);
     const dangling = await refusalOf(() =>
       workflowMutation(fixture, "op-close-dangling", { kind: "lifecycle", status: "completed", reason: "done" }),
@@ -1025,10 +887,10 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(replay.token).toBe(after.token);
   });
 
-  test("pause and resume keep the lifecycle and never touch a lease", async () => {
+  test("pause and resume keep the lifecycle and never touch the integration claim", async () => {
     const fixture = await workflowFixture("pause-resume");
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator" });
-    const leasesBefore = leaseRows(fixture.context);
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
+    const claimsBefore = storedMergeClaim(fixture.context);
 
     const before = (await readExecutionState(fixture.context)).data.workflows[0]!.state as unknown as Record<string, unknown>;
     const paused = await workflowMutation(fixture, "op-pause", {
@@ -1045,42 +907,27 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       reason: "hold lifted",
     });
     expect((resumed.data.workflows[0]!.state as unknown as Record<string, unknown>).status).toBe("running");
-    // Retaining ownership IS the rule: the lease rows are byte-identical.
-    expect(leaseRows(fixture.context)).toEqual(leasesBefore);
+    // Retaining ownership IS the rule: the integration claim row is byte-identical.
+    expect(storedMergeClaim(fixture.context)).toEqual(claimsBefore);
   });
 
-  test("a terminal status refuses while a lease is held and never deletes one", async () => {
-    const fixture = await workflowFixture("stop-lease");
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator" });
+  test("a terminal status refuses while a live integration claim is held and never deletes one", async () => {
+    const fixture = await workflowFixture("stop-claim");
+    // A LIVE holder's integration claim: the close withholds the outcome rather
+    // than releasing an ownership that is another session's.
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
     const held = await refusalOf(() =>
       workflowMutation(fixture, "op-stop-held", { kind: "lifecycle", status: "stopped", reason: "operator cancelled" }),
     );
     expect(held.code).toBe("coordination.invalid-transition");
     expect(held.details.status).toBe("stopped");
-
-    // Released through the existing release path (a retained tombstone): only
-    // then does the lifecycle end, with the row still on disk.
-    plantLease(fixture.context, {
-      ownerEpoch: fixture.epoch,
-      holderId: COORDINATOR_ID,
-      holderRole: "coordinator",
-      status: "released",
-    });
-    await workflowMutation(fixture, "op-stop-clean", { kind: "lifecycle", status: "stopped", reason: "operator cancelled" });
-    expect(leaseRows(fixture.context)).toHaveLength(1);
+    expect(storedMergeClaim(fixture.context)).toMatchObject({ holder: COORDINATOR_ID });
+    expect(storedMergeClaim(fixture.context).released_by).toBeUndefined();
   });
 
   test("an unauthorized, foreign, stale or staged address is refused before any write", async () => {
     const fixture = await workflowFixture("unauthorized");
     const before = await workflowFootprint(fixture.context);
-
-    // A plan-pm identity never performs a workflow-level transition.
-    const planSeat = await refusalOf(() =>
-      workflowMutation(fixture, "op-unauthorized-seat", { kind: "lifecycle", status: "paused", reason: "not mine" }, {
-        who: trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID),
-      }),
-    );
-    expect(planSeat.code).toBe("execution.scope-mismatch");
 
     // A coordinator reference of another workflow authorizes nothing here.
     const foreignCaller: ExecutionCaller = { sessionId: "host-other", role: "coordinator", workflowId: "wf-other", planId: null };
@@ -1495,7 +1342,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
 
     // After an authorized replacement, the replaced identity may not be named
     // again while the new holder is live.
-    await recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)), {
+    await recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
       expected,
       operationId: "op-recover-live-first",
       priorSessionId: COORDINATOR_ID,
@@ -1503,7 +1350,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       attestation: attestation([COORDINATOR_ID]),
     });
     const named = await refusalOf(() =>
-      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)), {
+      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
         expected: workflowTokenOfRow(fixture.context),
         operationId: "op-recover-live-second",
         priorSessionId: COORDINATOR_ID,
@@ -1518,7 +1365,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
   test("recovery invalidates the old reference, binds the caller and replays idempotently", async () => {
     const fixture = await workflowFixture("recovery-ok");
     const expected = await liveWorkflowToken(fixture);
-    const replacement = trustedCaller(RECOVERY_ID, "coordinator", null);
+    const replacement = trustedCaller(RECOVERY_ID, "coordinator");
     const call = (operationId: string) =>
       recoverExecutionCoordinator(domainContext(fixture.context, replacement), {
         expected,
@@ -1564,524 +1411,8 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(replay.data).toEqual(receipt.data);
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
-
-  test("a lease the revocation orphaned becomes readable and is adopted with its epoch unchanged", async () => {
-    const fixture = await workflowFixture("recovery-orphan");
-    // The state a crashed coordinator leaves: it holds a plan's lease in the
-    // CURRENT epoch, while its session row is no longer active.
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator" });
-    withRaw(fixture.context, (db) => {
-      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?").run(
-        WORKFLOW_ID,
-        COORDINATOR_ID,
-      );
-    });
-
-    // R7's consumer-visible symptom: the whole-view reader refuses the pair.
-    const corrupt = await refusalOf(() => readExecutionState(fixture.context));
-    expect(corrupt.code).toBe("store.corrupt");
-
-    const receipt = await recoverExecutionCoordinator(
-      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)),
-      {
-        expected: workflowTokenOfRow(fixture.context),
-        operationId: "op-recover-orphan",
-        priorSessionId: COORDINATOR_ID,
-        reason: "coordinator stopped while holding a plan lease",
-        attestation: attestation([COORDINATOR_ID]),
-      },
-    );
-    expect(receipt.replayed).toBe(false);
-
-    // The lifecycle reads again, and the orphaned ownership is now the recovery
-    // session's - with the epoch it was claimed in, unchanged.
-    const state = await readExecutionState(fixture.context);
-    expect(state.data.workflows).toHaveLength(1);
-    const [lease] = leaseRows(fixture.context);
-    expect(parsedJson(lease!.lease_json)).toMatchObject({
-      holder_session_id: RECOVERY_ID,
-      holder_role: "coordinator",
-      transferred_from: COORDINATOR_ID,
-    });
-    expect(Number(lease!.owner_epoch)).toBe(fixture.epoch);
-  });
-
-  test("released-claim: a recovered coordinator may release only its own adopted execution claim", async () => {
-    const fixture = await workflowFixture("recovery-release-owned-claim");
-    plantLease(fixture.context, {
-      ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "coordinator",
-    });
-    withRaw(fixture.context, (db) => {
-      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?")
-        .run(WORKFLOW_ID, COORDINATOR_ID);
-    });
-    const recovered = await recoverExecutionCoordinator(
-      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)),
-      {
-        expected: workflowTokenOfRow(fixture.context),
-        operationId: "op-recover-release-own-claim",
-        priorSessionId: COORDINATOR_ID,
-        reason: "coordinator stopped while holding a plan lease",
-        attestation: attestation([COORDINATOR_ID]),
-      },
-    );
-    const caller = trustedCaller(RECOVERY_ID, "coordinator", null);
-    const planRead = await readExecutionPlan(domainContext(fixture.context, caller), recovered.data, PLAN_ID);
-    const released = await mutateExecutionPlan(domainContext(fixture.context, caller), {
-      operationId: "op-release-recovered-claim",
-      session: recovered.data,
-      expected: planRead.token,
-      planId: PLAN_ID,
-      operation: { kind: "release" },
-    });
-    expect(released.data.plan.status).toBe("Todo");
-    expect(leaseRows(fixture.context).map((row) => parsedJson(row.lease_json))).toMatchObject([
-      { status: "released", holder_session_id: RECOVERY_ID, released_by: RECOVERY_ID,
-        release_operation_id: "op-release-recovered-claim" },
-    ]);
-  });
-  test("recovery adopts only the ownership the revocation it names orphaned", async () => {
-    const fixture = await workflowFixture("recovery-foreign-orphan");
-    // An UNRELATED plan-pm holder that stopped while holding a plan lease in the
-    // CURRENT epoch: the same unreadable pair the case above repairs, owned by a
-    // session this recovery neither names nor attests. A crash state is planted
-    // (no W-phase verb produces a lease held by a session that is not its own).
-    const elsewhere = "host-plan-pm-elsewhere";
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: elsewhere, holderRole: "plan-pm" });
-    withRaw(fixture.context, (db) => {
-      db.prepare(
-        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-          "values (?, 'plan-pm', ?, ?, ?, 2, 'revoked', ?)",
-      ).run(WORKFLOW_ID, elsewhere, PLAN_ID, fixture.epoch, TS);
-    });
-    const leasesBefore = leaseRows(fixture.context);
-    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
-
-    // The recovery names and attests ONLY the coordinator.
-    const receipt = await recoverExecutionCoordinator(
-      domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)),
-      {
-        expected: workflowTokenOfRow(fixture.context),
-        operationId: "op-recover-foreign-orphan",
-        priorSessionId: COORDINATOR_ID,
-        reason: "coordinator stopped",
-        attestation: attestation([COORDINATOR_ID]),
-      },
-    );
-    expect(receipt.replayed).toBe(false);
-    expect(receipt.data.sessionId).toBe(RECOVERY_ID);
-    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
-
-    // The unrelated holder's ownership is NOT adopted: byte-identical row and no
-    // transfer provenance. It stays outstanding - §2.3 keeps outstanding leases
-    // at their own owner_epoch pending an explicit reconcile (or a recovery that
-    // names THEIR holder), so the workflow stays fail-closed instead of handing
-    // the new coordinator an ownership nothing attested.
-    expect(leaseRows(fixture.context)).toEqual(leasesBefore);
-    const [lease] = leaseRows(fixture.context);
-    expect(parsedJson(lease!.lease_json)).toMatchObject({
-      holder_session_id: elsewhere,
-      holder_role: "plan-pm",
-    });
-    expect(parsedJson(lease!.lease_json).transferred_from).toBeUndefined();
-    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
-  });
-
-  test("an old-epoch lease is never revived by recovery", async () => {
-    const fixture = await workflowFixture("recovery-old-epoch");
-    // Ownership from BEFORE the current epoch (what an activation leaves
-    // behind) is represented, authorizes nothing, and stays exactly as it is.
-    plantLease(fixture.context, {
-      ownerEpoch: fixture.epoch - 1,
-      holderId: "host-before-activation",
-      holderRole: "coordinator",
-    });
-    const before = leaseRows(fixture.context);
-    await recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator", null)), {
-      expected: await liveWorkflowToken(fixture),
-      operationId: "op-recover-old-epoch",
-      priorSessionId: COORDINATOR_ID,
-      reason: "coordinator process stopped",
-      attestation: attestation([COORDINATOR_ID]),
-    });
-    expect(leaseRows(fixture.context)).toEqual(before);
-  });
 });
 
-describe("execution-plan-owner-recovery: stopped plan-PM transfer", () => {
-  test("recovers the exact live named owner and preserves sibling, foreign-role, and integration ownership", async () => {
-    const fixture = await preparedPlanFixture("stopped-plan-owner-recovery", ["p-sibling"]);
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    plantMergeClaim(fixture.context, { ownerEpoch: fixture.coordinator.epoch, holder: COORDINATOR_ID });
-    const planToken = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
-    const before = workflowOwnershipSnapshot(fixture.context);
-    const beforeClaims = before.claims as Array<Record<string, unknown>>;
-    const targetClaimBefore = beforeClaims.find((row) => row.plan_id === PLAN_ID)!;
-    const siblingClaimBefore = beforeClaims.find((row) => row.plan_id === "p-sibling")!;
-    const beforeLease = parsedJson(targetClaimBefore.lease_json);
-    const input = {
-      planId: PLAN_ID,
-      expected: planToken,
-      operationId: "op-recover-plan-owner",
-      priorSessionId: PLAN_PM_ID,
-      reason: "the operator confirmed the prior session stopped",
-      attestation: attestation([PLAN_PM_ID]),
-    };
-    const recovered = await publishedRecoverExecutionPlanSession(coordinatorContext, input);
-    expect(recovered.replayed).toBe(false);
-    expect(recovered.data).toMatchObject({
-      workflowId: WORKFLOW_ID,
-      role: "plan-pm",
-      sessionId: COORDINATOR_ID,
-      planId: PLAN_ID,
-    });
-
-    const after = workflowOwnershipSnapshot(fixture.context);
-    const sessionRows = after.sessions as Array<Record<string, unknown>>;
-    expect(sessionRows.find((row) => row.role === "plan-pm" && row.session_id === PLAN_PM_ID)?.state).toBe("revoked");
-    expect(sessionRows.find((row) => row.role === "plan-pm" && row.session_id === COORDINATOR_ID)?.state).toBe("active");
-    expect(
-      (after.sessions as Array<Record<string, unknown>>).filter(
-        (row) => !(row.role === "plan-pm" && row.plan_id === PLAN_ID) && !(row.role === "plan-pm" && row.session_id === COORDINATOR_ID),
-      ),
-    ).toEqual(
-      (before.sessions as Array<Record<string, unknown>>).filter(
-        (row) => !(row.role === "plan-pm" && row.plan_id === PLAN_ID) && !(row.role === "plan-pm" && row.session_id === COORDINATOR_ID),
-      ),
-    );
-    expect(after.plans).toEqual(before.plans);
-    const afterClaims = after.claims as Array<Record<string, unknown>>;
-    expect(afterClaims.find((row) => row.plan_id === "p-sibling")).toEqual(siblingClaimBefore);
-    expect(after.integration).toEqual(before.integration);
-    const targetClaimAfter = afterClaims.find((row) => row.plan_id === PLAN_ID)!;
-    expect(Number(targetClaimAfter.revision)).toBe(Number(targetClaimBefore.revision) + 1);
-    const afterLease = parsedJson(targetClaimAfter.lease_json);
-    expect(afterLease).toMatchObject({
-      holder_session_id: COORDINATOR_ID,
-      holder_role: "plan-pm",
-      transferred_from: PLAN_PM_ID,
-      claimed_at: beforeLease.claimed_at,
-      plan_branch: beforeLease.plan_branch,
-      worktree_path: beforeLease.worktree_path,
-    });
-    expect(afterLease).toEqual({
-      ...beforeLease,
-      holder: COORDINATOR_ID,
-      holder_session_id: COORDINATOR_ID,
-      holder_role: "plan-pm",
-      transferred_from: PLAN_PM_ID,
-      transferred_at: afterLease.transferred_at,
-    });
-
-    const oldWrite = await refusalOf(() =>
-      mutateExecutionPlan(domainContext(fixture.context, fixture.planCaller), {
-        operationId: "op-old-plan-pm-write-after-recovery",
-        session: fixture.planSession,
-        expected: planToken,
-        planId: PLAN_ID,
-        operation: { kind: "release" },
-      }),
-    );
-    expect(oldWrite.code).toBe("execution.session-unavailable");
-    expect(sessionState(fixture.context, PLAN_PM_ID)).toBe("revoked");
-
-    const replay = await publishedRecoverExecutionPlanSession(coordinatorContext, input);
-    expect(replay.replayed).toBe(true);
-    expect(replay.data).toEqual(recovered.data);
-    expect(await workflowOwnershipSnapshot(fixture.context)).toEqual(after);
-    expect((await readExecutionState(fixture.context)).data.workflows[0]!.plans.some((row) => row.plan.id === PLAN_ID)).toBe(true);
-  });
-
-  test("refuses an unattested active owner and a non-coordinator caller without changing owner records", async () => {
-    const fixture = await preparedPlanFixture("stopped-plan-owner-refusal");
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const expected = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
-    const before = workflowOwnershipSnapshot(fixture.context);
-    const request = {
-      planId: PLAN_ID,
-      expected,
-      operationId: "op-recover-plan-owner-refused",
-      priorSessionId: PLAN_PM_ID,
-      reason: "stop evidence required",
-      attestation: attestation([]),
-    };
-    const missingStop = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, request));
-    expect(missingStop.code).toBe("coordination.invalid-transition");
-    expect(planRecoveryIssue(missingStop)).toMatchObject({ code: "plan-owner.stop-attestation-missing", availableWork: expect.any(Array) });
-    const planCaller = domainContext(fixture.context, fixture.planCaller);
-    const wrongCaller = await refusalOf(() => recoverExecutionPlanSession(planCaller, request));
-    expect(wrongCaller.code).toBe("execution.scope-mismatch");
-    expect(planRecoveryIssue(wrongCaller)).toMatchObject({ code: "plan-owner.wrong-caller", availableWork: expect.any(Array) });
-    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(before);
-  });
-
-  test("a saved receipt cannot restore a released and publicly reacquired claim", async () => {
-    const fixture = await preparedPlanFixture("stopped-plan-owner-replay-after-release");
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const input = {
-      planId: PLAN_ID,
-      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
-      operationId: "op-recover-plan-owner-replay-release",
-      priorSessionId: PLAN_PM_ID,
-      reason: "the operator confirmed the prior session stopped",
-      attestation: attestation([PLAN_PM_ID]),
-    };
-    const recovered = await recoverExecutionPlanSession(coordinatorContext, input);
-    const currentPlanCaller = trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID);
-    const currentContext = domainContext(fixture.context, currentPlanCaller);
-    const releasedRead = await readExecutionPlan(currentContext, recovered.data, PLAN_ID);
-    await mutateExecutionPlan(currentContext, {
-      operationId: "op-release-recovered-plan-claim",
-      session: recovered.data,
-      expected: releasedRead.token,
-      planId: PLAN_ID,
-      operation: { kind: "release" },
-    });
-    const reacquired = await bindExecutionSession(currentContext, {
-      workflowId: WORKFLOW_ID,
-      planId: PLAN_ID,
-      role: "plan-pm",
-      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
-      operationId: "op-reacquire-plan-claim-after-release",
-    });
-    expect(reacquired.data.sessionId).toBe(COORDINATOR_ID);
-    const beforeReplay = workflowOwnershipSnapshot(fixture.context);
-    const replay = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, input));
-    expect(replay.code).toBe("execution.session-unavailable");
-    expect(planRecoveryIssue(replay)).toMatchObject({ code: "plan-owner.replay-stale", availableWork: expect.any(Array) });
-    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(beforeReplay);
-  });
-
-  test("a saved recovery receipt cannot reclaim an accepted then returned handoff", async () => {
-    const fixture = await preparedPlanFixture("stopped-plan-owner-transfer-aba");
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const worktree = join(fixture.harnessRoot, "worktrees", PLAN_ID);
-    mkdirSync(dirname(worktree), { recursive: true });
-    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, worktree], dirname(fixture.harnessRoot));
-    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
-    writeText(join(worktree, "recovery.txt"), "reviewed recovery fixture\n");
-    runGit(["add", "recovery.txt"], worktree);
-    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fixture change"], worktree);
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
-    const report = join(fixture.harnessRoot, "sdd", PLAN_ID, "review", "accepted.md");
-    writeText(report, "# Fixture review\nDecision: Approve\nQA: pass\n");
-    const input = {
-      planId: PLAN_ID,
-      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
-      operationId: "op-recover-before-handoff-transfer",
-      priorSessionId: PLAN_PM_ID,
-      reason: "the operator confirmed the prior session stopped",
-      attestation: attestation([PLAN_PM_ID]),
-    };
-    const recovered = await recoverExecutionPlanSession(coordinatorContext, input);
-    const currentContext = domainContext(fixture.context, trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID));
-    const recoveredOwners = workflowOwnershipSnapshot(fixture.context);
-    const submitted = await mutateExecutionPlan(currentContext, {
-      operationId: "op-submit-before-transfer",
-      session: recovered.data,
-      planId: PLAN_ID,
-      operation: { kind: "handoff", evidence: {
-        source_sha: head, review_base: base, review_head: head,
-        qc: { decision: "Approve", reports: [report], consolidated: report },
-        qa: { gate: "mandatory", decision: "pass", report },
-      } },
-    });
-    const handoffId = submitted.data.coordination!.handoff!.id;
-    await mutateExecutionPlan(coordinatorContext, {
-      operationId: "op-accept-transfer", session: fixture.coordinator, planId: PLAN_ID,
-      operation: { kind: "accept", handoffId },
-    });
-    await mutateExecutionPlan(coordinatorContext, {
-      operationId: "op-return-transfer", session: fixture.coordinator, planId: PLAN_ID,
-      operation: { kind: "return", handoffId, reason: "return fixture for another revision" },
-    });
-    const beforeReplay = workflowOwnershipSnapshot(fixture.context);
-    expect(beforeReplay.sessions).toEqual(recoveredOwners.sessions);
-    const originalClaim = (recoveredOwners.claims as Array<Record<string, unknown>>).find((row) => row.plan_id === PLAN_ID)!;
-    const returnedClaim = (beforeReplay.claims as Array<Record<string, unknown>>).find((row) => row.plan_id === PLAN_ID)!;
-    expect(Number(returnedClaim.revision)).toBeGreaterThan(Number(originalClaim.revision));
-    expect(parsedJson(returnedClaim.lease_json)).toMatchObject({ holder_session_id: COORDINATOR_ID, holder_role: "plan-pm" });
-    const replay = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, input));
-    expect(replay.code).toBe("execution.session-unavailable");
-    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(beforeReplay);
-  });
-
-  test("recovers a second stopped plan through genuine coordinator replacement after ordinary completion", async () => {
-    const secondPlan = "p-second";
-    const fixture = await preparedPlanFixture("sequential-stopped-owners", [secondPlan]);
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const state = (await readExecutionState(fixture.context)).data.workflows[0]!.state;
-    const integrationPath = state.integration_worktree_path!;
-    const repoRoot = dirname(fixture.harnessRoot);
-    const worktree = join(fixture.harnessRoot, "worktrees", PLAN_ID);
-    mkdirSync(dirname(worktree), { recursive: true });
-    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, worktree], repoRoot);
-    const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
-    writeText(join(worktree, "sequential.txt"), "first reviewed plan\n");
-    runGit(["add", "sequential.txt"], worktree);
-    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "fixture first plan"], worktree);
-    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
-    const report = join(fixture.harnessRoot, "sdd", PLAN_ID, "review", "sequential.md");
-    writeText(report, "# Fixture review\nDecision: Approve\nQA: pass\n");
-    const first = await publishedRecoverExecutionPlanSession(coordinatorContext, {
-      planId: PLAN_ID, expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
-      operationId: "seq-recover-first", priorSessionId: PLAN_PM_ID,
-      reason: "the first owner is operator-confirmed stopped", attestation: attestation([PLAN_PM_ID]),
-    });
-    const firstContext = domainContext(fixture.context, trustedCaller(COORDINATOR_ID, "plan-pm", PLAN_ID));
-    const handed = await mutateExecutionPlan(firstContext, {
-      operationId: "seq-first-handoff", session: first.data, planId: PLAN_ID,
-      operation: { kind: "handoff", evidence: {
-        source_sha: head, review_base: base, review_head: head,
-        qc: { decision: "Approve", reports: [report], consolidated: report },
-        qa: { gate: "mandatory", decision: "pass", report },
-      } },
-    });
-    const handoffId = handed.data.coordination!.handoff!.id;
-    for (const kind of ["accept", "integration-start"] as const) {
-      await mutateExecutionPlan(coordinatorContext, {
-        operationId: `seq-first-${kind}`, session: fixture.coordinator, planId: PLAN_ID,
-        operation: { kind, handoffId },
-      });
-    }
-    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", head, "-m", "merge first reviewed plan"], integrationPath);
-    for (const kind of ["integration-accept", "complete"] as const) {
-      await mutateExecutionPlan(coordinatorContext, {
-        operationId: `seq-first-${kind}`, session: fixture.coordinator, planId: PLAN_ID,
-        operation: { kind, handoffId },
-      });
-    }
-    const completed = await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID);
-    expect(completed.data.plan.status).toBe("Done");
-    expect(completed.data.executionLease!.status).toBe("released");
-    expect(completed.data.coordination!.handoff!.state).toBe("completed");
-    const firstOwners = workflowOwnershipSnapshot(fixture.context);
-    const secondOwner = `host-plan-pm-${secondPlan}`;
-    const secondToken = (await readExecutionPlan(coordinatorContext, fixture.coordinator, secondPlan)).token;
-    const blocked = await refusalOf(() => recoverExecutionPlanSession(coordinatorContext, {
-      planId: secondPlan, expected: secondToken,
-      operationId: "seq-direct-second", priorSessionId: secondOwner,
-      reason: "the second owner is operator-confirmed stopped", attestation: attestation([secondOwner]),
-    }));
-    expect(blocked.code).toBe("coordination.session-mismatch");
-    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(firstOwners);
-    const nextIdentity = createLocalExecutionIdentity({ workflowId: WORKFLOW_ID, role: "coordinator", planId: null });
-    const nextCaller = trustedCaller(nextIdentity.sessionId, "coordinator", null);
-    const nextContext = domainContext(fixture.context, nextCaller);
-    const next = await recoverExecutionCoordinator(nextContext, {
-      expected: workflowTokenOfRow(fixture.context), operationId: "seq-replace-coordinator",
-      priorSessionId: COORDINATOR_ID, reason: "operator stopped the previous coordinator after first completion",
-      attestation: attestation([COORDINATOR_ID]),
-    });
-    const second = await publishedRecoverExecutionPlanSession(nextContext, {
-      planId: secondPlan, expected: (await readExecutionPlan(nextContext, next.data, secondPlan)).token,
-      operationId: "seq-recover-second", priorSessionId: secondOwner,
-      reason: "the second owner is operator-confirmed stopped", attestation: attestation([secondOwner]),
-    });
-    expect(second.data.sessionId).toBe(nextIdentity.sessionId);
-    expect(second.data.planId).toBe(secondPlan);
-    const restored = await readExecutionPlan(nextContext, next.data, secondPlan);
-    expect(restored.data.executionLease).toMatchObject({ status: "held", holder_role: "plan-pm", holder_session_id: nextIdentity.sessionId });
-    const firstAfter = await readExecutionPlan(nextContext, next.data, PLAN_ID);
-    expect(firstAfter.data.plan).toEqual(completed.data.plan);
-    expect(firstAfter.data.coordination!.handoff).toEqual(completed.data.coordination!.handoff);
-    expect(firstAfter.data.executionLease).toEqual(completed.data.executionLease);
-    const afterBindings = workflowOwnershipSnapshot(fixture.context).sessions as Array<Record<string, unknown>>;
-    expect(afterBindings.find((row) => row.role === "plan-pm" && row.session_id === COORDINATOR_ID)).toEqual(
-      (firstOwners.sessions as Array<Record<string, unknown>>).find((row) => row.role === "plan-pm" && row.session_id === COORDINATOR_ID),
-    );
-  });
-
-  test("uses handoff-specific public routes and permits a returned handoff without rewriting it", async () => {
-    for (const [handoffState, diagnostic] of [
-      ["submitted", "plan-owner.handoff-submitted"],
-      ["accepted", "plan-owner.handoff-accepted"],
-      ["integrating", "plan-owner.handoff-integrating"],
-      ["merged", "plan-owner.handoff-merged"],
-      ["completed", "plan-owner.handoff-completed"],
-    ] as const) {
-      const fixture = await preparedPlanFixture(`stopped-plan-owner-${handoffState}`);
-      const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-      const token = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
-      setTestHandoffState(fixture.context, handoffState);
-      const before = workflowOwnershipSnapshot(fixture.context);
-      const refused = await refusalOf(() =>
-        recoverExecutionPlanSession(coordinatorContext, {
-          planId: PLAN_ID,
-          expected: token,
-          operationId: `op-recover-handoff-${handoffState}`,
-          priorSessionId: PLAN_PM_ID,
-          reason: "the operator confirmed the prior session stopped",
-          attestation: attestation([PLAN_PM_ID]),
-        }),
-      );
-      expect(planRecoveryIssue(refused)).toMatchObject({ code: diagnostic, availableWork: expect.any(Array) });
-      expect(workflowOwnershipSnapshot(fixture.context)).toEqual(before);
-    }
-
-    const fixture = await preparedPlanFixture("stopped-plan-owner-returned");
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const token = (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token;
-    setTestHandoffState(fixture.context, "returned");
-    const coordinationBefore = (workflowOwnershipSnapshot(fixture.context).plans as Array<Record<string, unknown>>)
-      .find((row) => row.plan_id === PLAN_ID)!.coordination_json;
-    const recovered = await recoverExecutionPlanSession(coordinatorContext, {
-      planId: PLAN_ID,
-      expected: token,
-      operationId: "op-recover-plan-owner-returned",
-      priorSessionId: PLAN_PM_ID,
-      reason: "the operator confirmed the prior session stopped",
-      attestation: attestation([PLAN_PM_ID]),
-    });
-    expect(recovered.data.sessionId).toBe(COORDINATOR_ID);
-    const coordinationAfter = (workflowOwnershipSnapshot(fixture.context).plans as Array<Record<string, unknown>>)
-      .find((row) => row.plan_id === PLAN_ID)!.coordination_json;
-    expect(coordinationAfter).toBe(coordinationBefore);
-  });
-
-  test("refuses rebinding a coordinator identity already owned by another plan", async () => {
-    const fixture = await preparedPlanFixture("stopped-plan-owner-other-plan", ["p-sibling"], false);
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const siblingContext = domainContext(fixture.context, trustedCaller(COORDINATOR_ID, "plan-pm", "p-sibling"));
-    await bindExecutionSession(siblingContext, {
-      workflowId: WORKFLOW_ID,
-      planId: "p-sibling",
-      role: "plan-pm",
-      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, "p-sibling")).token,
-      operationId: "op-bind-coordinator-identity-to-sibling",
-    });
-    const before = workflowOwnershipSnapshot(fixture.context);
-    const refused = await refusalOf(async () =>
-      recoverExecutionPlanSession(coordinatorContext, {
-        planId: PLAN_ID,
-        expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, PLAN_ID)).token,
-        operationId: "op-recover-other-plan-owner",
-        priorSessionId: PLAN_PM_ID,
-        reason: "the operator confirmed the prior session stopped",
-        attestation: attestation([PLAN_PM_ID]),
-      }),
-    );
-    expect(planRecoveryIssue(refused)).toMatchObject({ code: "plan-owner.target-binding-conflict", availableWork: expect.any(Array) });
-    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(before);
-  });
-  test("does not use another plan's binding even when the coordinator has a valid token for the selected plan", async () => {
-    const fixture = await preparedPlanFixture("stopped-plan-owner-wrong-prior", ["p-sibling"]);
-    const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-    const before = workflowOwnershipSnapshot(fixture.context);
-    const refused = await refusalOf(async () =>
-      recoverExecutionPlanSession(coordinatorContext, {
-        planId: "p-sibling",
-        expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, "p-sibling")).token,
-        operationId: "op-recover-plan-with-foreign-prior",
-        priorSessionId: PLAN_PM_ID,
-        reason: "the operator confirmed the prior session stopped",
-        attestation: attestation([PLAN_PM_ID]),
-      }),
-    );
-    expect(planRecoveryIssue(refused)).toMatchObject({ code: "plan-owner.prior-binding-not-found", availableWork: expect.any(Array) });
-    expect(workflowOwnershipSnapshot(fixture.context)).toEqual(before);
-  });
-});
 
 
 /* ------------------------------------------------------------------------ *
@@ -2352,26 +1683,6 @@ describe("execution-close-composition: R10/A20 the terminal close's residue repa
  * §R11/A21/A28 the failed/stopped lifecycle of the DB authority
  * ------------------------------------------------------------------------ */
 
-/**
- * Plant one plan-pm session row in the state a crash leaves it. No W-phase verb
- * hands a lease to a session that then stops - and a plan-pm bind requires a
- * prepared Assignment, a state this fixture deliberately does not build - so the
- * crash states are planted raw, exactly as the W4 fixtures plant a foreign merge
- * lease. `epoch` is the fixture's own, so the row is one ownership fact with the
- * lease that names it.
- */
-function plantPlanPmSession(
-  context: StoreContext,
-  input: { epoch: number; state: "active" | "suspended" | "revoked"; sessionId?: string },
-): void {
-  withRaw(context, (db) => {
-    db.prepare(
-      "insert or replace into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-        "values (?, 'plan-pm', ?, ?, ?, 1, ?, ?)",
-    ).run(WORKFLOW_ID, input.sessionId ?? PLAN_PM_ID, PLAN_ID, input.epoch, input.state, TS);
-  });
-}
-
 /** One workflow-level integration merge claim, planted raw (as the W4 fixtures do). */
 function plantMergeClaim(context: StoreContext, input: { ownerEpoch: number; holder: string; status?: "held" | "released" }): void {
   withRaw(context, (db) => {
@@ -2393,14 +1704,7 @@ function plantMergeClaim(context: StoreContext, input: { ownerEpoch: number; hol
 }
 
 /** The stored execution lease record of the fixture's plan, parsed. */
-function storedLease(context: StoreContext): Record<string, unknown> {
-  const [row] = rows(
-    context,
-    `select lease_json from execution_leases where workflow_id = '${WORKFLOW_ID}' and plan_id = '${PLAN_ID}'`,
-  );
-  if (row === undefined) throw new Error(`fixture: no execution lease row for ${PLAN_ID}`);
-  return parsedJson(row!.lease_json);
-}
+
 
 /** The stored integration merge claim of the fixture's workflow, parsed. */
 function storedMergeClaim(context: StoreContext): Record<string, unknown> {
@@ -2412,417 +1716,39 @@ function storedMergeClaim(context: StoreContext): Record<string, unknown> {
   return parsedJson(row!.lease_json);
 }
 
-/** The terminal outcome and routing one closed lifecycle left behind. */
-function closedRow(context: StoreContext): Record<string, unknown> {
-  const [row] = rows(
-    context,
-    `select (select count(*) from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
-      `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
-      `(select json_extract(state_json, '$.ended_at') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as ended_at, ` +
-      `(select json_extract(state_json, '$.delivery') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as delivery, ` +
-      `(select json_extract(state_json, '$.status') from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${PLAN_ID}') as row_status`,
-  );
-  return row!;
-}
-
-describe("execution-workflow: R11/A21/A28 the failed/stopped lifecycle and its own stopped claims", () => {
-  test("failed lifecycle: an explicit failed close settles its own stopped claims with no delivery evidence (R11/A21)", async () => {
-    const fixture = await workflowFixture("failed-lifecycle");
-    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
-    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
-    const before = revisions(fixture.context);
-    // The workflow this close addresses is UNREADABLE through the whole-view
-    // reader - a held lease whose holder session stopped is exactly the state
-    // `assertLeaseOwnership` refuses - so the caller's CAS is the stored row's
-    // token, the last read it could take before the owner died.
-    const expected = workflowTokenOfRow(fixture.context);
-
-    const receipt = await workflowMutation(
-      fixture,
-      "op-failed-lifecycle",
-      { kind: "lifecycle", status: "failed", reason: "operator abandoned the wave" },
-      { expected },
-    );
-
-    // §R11 no successful-delivery precondition: the row is still Todo, no
-    // delivery evidence was ever recorded, and the lifecycle still ends.
-    const closed = closedRow(fixture.context);
-    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
-    expect(closed.registered).toBe(0);
-    expect(closed.status).toBe("failed");
-    expect(closed.row_status).toBe("Todo");
-    expect(closed.delivery).toBeNull();
-    expect(typeof closed.ended_at).toBe("string");
-
-    // §R11/A21 the cleanup settles EXACTLY the claims this lifecycle owns whose
-    // holder stopped: both become retained tombstones that record the stopped
-    // owner, so "who owned this claim and who ended it" survives the close.
-    expect(storedLease(fixture.context)).toMatchObject({
-      holder_session_id: PLAN_PM_ID,
-      status: "released",
-      released_by: COORDINATOR_ID,
-      release_reason: `stopped-owner:${PLAN_PM_ID}`,
-    });
-    expect(storedMergeClaim(fixture.context)).toMatchObject({
-      holder: PLAN_PM_ID,
-      status: "released",
-      released_by: COORDINATOR_ID,
-      release_reason: `stopped-owner:${PLAN_PM_ID}`,
-    });
-    // One accepted operation: the workflow and the store each advance once, and
-    // the membership loss advances the root once.
-    expect(revisions(fixture.context)).toEqual({ root: before.root + 1, store: before.store + 1, workflow: before.workflow + 1 });
-  });
-
-  test("stopped lifecycle: an explicit stopped close settles its own stopped claim and keeps a released one (R11/A21)", async () => {
-    const fixture = await workflowFixture("stopped-lifecycle");
-    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
-    // An OWN claim that a prior step already released: settled, and never
-    // rewritten by this close.
-    plantLease(fixture.context, {
-      ownerEpoch: fixture.epoch,
-      holderId: COORDINATOR_ID,
-      holderRole: "coordinator",
-      status: "released",
-    });
-    const tombstone = storedLease(fixture.context);
-    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
-
-    const receipt = await workflowMutation(fixture, "op-stopped-lifecycle", {
-      kind: "lifecycle",
-      status: "stopped",
-      reason: "operator cancelled the wave",
-    });
-
-    const closed = closedRow(fixture.context);
-    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
-    expect(closed.registered).toBe(0);
-    expect(closed.status).toBe("stopped");
-    expect(typeof closed.ended_at).toBe("string");
-    // The already released claim is exactly the tombstone it was: the close
-    // settles only what a stopped holder left held.
-    expect(storedLease(fixture.context)).toEqual(tombstone);
-    expect(storedMergeClaim(fixture.context)).toMatchObject({
-      status: "released",
-      released_by: COORDINATOR_ID,
-      release_reason: `stopped-owner:${PLAN_PM_ID}`,
-    });
-    expect(rows(fixture.context, `select 1 from execution_leases where workflow_id = '${WORKFLOW_ID}'`)).toHaveLength(1);
-  });
-
-  test("foreign claim: a live holder's claim is never released and refuses the close (R11/A21)", async () => {
-    const fixture = await workflowFixture("foreign-claim");
-    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "active" });
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
-    const before = await workflowFootprint(fixture.context);
-
-    // §R11 a genuinely LIVE holder is never inferred stopped: the terminal close
-    // withholds the outcome and names the holder whose own stop or transfer the
-    // claim needs.
-    const held = await refusalOf(() =>
-      workflowMutation(fixture, "op-foreign-claim", { kind: "lifecycle", status: "failed", reason: "abandon the wave" }),
-    );
-    expect(held.code).toBe("coordination.invalid-transition");
-    expect(held.message).toContain(PLAN_PM_ID);
-    expect(held.message).toContain("stop or transfer");
-    // No foreign release: the claim stays held and the refused close spent no
-    // revision, row or receipt.
-    expect(storedLease(fixture.context)).toMatchObject({ status: "held", holder_session_id: PLAN_PM_ID });
-    expect(await workflowFootprint(fixture.context)).toEqual(before);
-
-    // The same rule covers a LIVE integration claim: `execution_integration_leases`
-    // is not readable through the narrow held-lease reader, so this is the half the
-    // terminal decision settles beside the claim it already judges.
-    const merge = await workflowFixture("foreign-merge-claim");
-    plantPlanPmSession(merge.context, { epoch: merge.epoch, state: "active" });
-    plantMergeClaim(merge.context, { ownerEpoch: merge.epoch, holder: PLAN_PM_ID });
-    const mergeBefore = await workflowFootprint(merge.context);
-    const mergeHeld = await refusalOf(() =>
-      workflowMutation(merge, "op-foreign-merge", { kind: "lifecycle", status: "stopped", reason: "cancelled" }),
-    );
-    expect(mergeHeld.code).toBe("coordination.invalid-transition");
-    expect(mergeHeld.message).toContain(PLAN_PM_ID);
-    // A held claim carries no release record at all: it is exactly where the live
-    // holder left it.
-    expect(storedMergeClaim(merge.context)).toMatchObject({ holder: PLAN_PM_ID });
-    expect(storedMergeClaim(merge.context).released_by).toBeUndefined();
-    expect(await workflowFootprint(merge.context)).toEqual(mergeBefore);
-
-    // Only THIS lifecycle's own live coordinator settles anything: a foreign
-    // coordinator's failed close is refused before the cleanup runs, so a stopped
-    // claim is left exactly where it was by an unauthorized address.
-    const unauthorized = await workflowFixture("foreign-authority");
-    plantPlanPmSession(unauthorized.context, { epoch: unauthorized.epoch, state: "suspended" });
-    plantLease(unauthorized.context, { ownerEpoch: unauthorized.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
-    const unauthorizedBefore = await workflowFootprint(unauthorized.context);
-    const foreignCaller: ExecutionCaller = { sessionId: "host-other", role: "coordinator", workflowId: "wf-other", planId: null };
-    const refused = await refusalOf(() =>
-      workflowMutation(
-        unauthorized,
-        "op-foreign-authority",
-        { kind: "lifecycle", status: "failed", reason: "not mine to end" },
-        {
-          // The whole-view read refuses this fixture's stopped-holder lease, so the
-          // CAS is the stored row's token: the refusal below is the ADDRESS's, not
-          // a read failure.
-          expected: workflowTokenOfRow(unauthorized.context),
-          who: foreignCaller,
-          session: {
-            ...unauthorized.coordinator,
-            sessionId: "host-other",
-            workflowId: "wf-other",
-          },
-        },
-      ),
-    );
-    expect(refused.code).toBe("execution.scope-mismatch");
-    expect(storedLease(unauthorized.context)).toMatchObject({ status: "held", holder_session_id: PLAN_PM_ID });
-    expect(await workflowFootprint(unauthorized.context)).toEqual(unauthorizedBefore);
-  });
-
-  test("colliding identity: a stopped plan-pm holder sharing the live coordinator's session id settles, and a live one still blocks (R11/A21)", async () => {
-    const fixture = await workflowFixture("colliding-identity");
-    // §2.2 `execution_sessions` is keyed by (workflow, role, session_id), so the
-    // workflow's own ACTIVE coordinator and a STOPPED plan-pm holder may carry
-    // the same session id. A crash state is planted (no W-phase verb produces a
-    // lease held by a session that is not its own).
-    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended", sessionId: COORDINATOR_ID });
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: COORDINATOR_ID, holderRole: "plan-pm" });
-    // The pair is unreadable through the whole-view reader (a held lease whose
-    // plan-pm holder row stopped) - the state this close's own cleanup exists to
-    // settle - so the CAS is the stored row's token.
-    expect((await refusalOf(() => readExecutionState(fixture.context))).code).toBe("store.corrupt");
-    const expected = workflowTokenOfRow(fixture.context);
-
-    const receipt = await workflowMutation(
-      fixture,
-      "op-colliding-identity",
-      { kind: "lifecycle", status: "failed", reason: "the holder of record stopped" },
-      { expected },
-    );
-
-    // Liveness is the lease's OWN ownership identity - role, session id, and the
-    // plan a plan-pm holds - not its session id: the ACTIVE coordinator row that
-    // happens to carry that id is a different owner, so the stopped plan-pm's
-    // claim is settled as stopped-owned instead of being left held, which would
-    // make the close's whole-view read refuse and wedge the terminal outcome.
-    const closed = closedRow(fixture.context);
-    expect(receipt.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
-    expect(closed.registered).toBe(0);
-    expect(closed.status).toBe("failed");
-    expect(typeof closed.ended_at).toBe("string");
-    expect(storedLease(fixture.context)).toMatchObject({
-      holder_session_id: COORDINATOR_ID,
-      holder_role: "plan-pm",
-      status: "released",
-      released_by: COORDINATOR_ID,
-      release_reason: `stopped-owner:${COORDINATOR_ID}`,
-    });
-
-    // The identity rule is not "release whatever shares a session id": the SAME
-    // collision whose plan-pm holder row IS active at this epoch is a genuine
-    // owner, so its claim stays held and the close refuses on it.
-    const live = await workflowFixture("colliding-identity-live");
-    plantPlanPmSession(live.context, { epoch: live.epoch, state: "active", sessionId: COORDINATOR_ID });
-    plantLease(live.context, { ownerEpoch: live.epoch, holderId: COORDINATOR_ID, holderRole: "plan-pm" });
-    const before = await workflowFootprint(live.context);
-    const held = await refusalOf(() =>
-      workflowMutation(live, "op-colliding-identity-live", {
-        kind: "lifecycle",
-        status: "failed",
-        reason: "abandon the wave",
-      }),
-    );
-    expect(held.code).toBe("coordination.invalid-transition");
-    expect(held.message).toContain(COORDINATOR_ID);
-    expect(held.message).toContain("stop or transfer");
-    expect(storedLease(live.context)).toMatchObject({ status: "held", holder_role: "plan-pm" });
-    expect(await workflowFootprint(live.context)).toEqual(before);
-  });
-
-  test("repeated terminal: the identical retry replays the recorded outcome and settles nothing twice (A28)", async () => {
-    const fixture = await workflowFixture("repeated-terminal");
-    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
-    // The whole-view read refuses this state (a held lease whose holder stopped),
-    // so the CAS is the stored row's token - and BOTH calls below present the same
-    // request, which is what makes the second one a replay rather than a new intent.
-    const expected = workflowTokenOfRow(fixture.context);
-    const close: WorkflowExecutionOperation = { kind: "lifecycle", status: "failed", reason: "operator abandoned the wave" };
-
-    const receipt = await workflowMutation(fixture, "op-repeated-terminal", close, { expected });
-    expect(receipt.replayed).toBe(false);
-    const after = revisions(fixture.context);
-    const settled = storedLease(fixture.context);
-    const recorded = closedRow(fixture.context);
-
-    // §R6/A28 the crash at the terminal boundary: the retry of the SAME intent is
-    // answered from the recorded receipt, no claim is settled a second time, no
-    // revision moves, and the recorded outcome keeps its own ended_at.
-    const replay = await workflowMutation(fixture, "op-repeated-terminal", close, { expected });
-    expect(replay.replayed).toBe(true);
-    expect(replay.recovery?.outcome).toBe("already-satisfied");
-    expect(revisions(fixture.context)).toEqual(after);
-    expect(storedLease(fixture.context)).toEqual(settled);
-    expect(closedRow(fixture.context)).toEqual(recorded);
-  });
-
-  test("repeated terminal: a residue settles its leftover claims and never rewrites a recorded outcome (A28)", async () => {
-    const endedAt = "2026-01-05T06:07:08.000Z";
-    const fixture = await workflowFixture("terminal-residue");
-    plantPlanPmSession(fixture.context, { epoch: fixture.epoch, state: "suspended" });
-    plantLease(fixture.context, { ownerEpoch: fixture.epoch, holderId: PLAN_PM_ID, holderRole: "plan-pm" });
-    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: PLAN_PM_ID });
-    // The residue a crash at the terminal boundary leaves: the outcome and its
-    // ended_at are already recorded, the ACTIVE routing row remains, and the
-    // workflow's own stopped claims were never settled.
-    withRaw(fixture.context, (db) => {
-      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.status', 'failed', '$.ended_at', ?) where workflow_id = ?").run(
-        endedAt,
-        WORKFLOW_ID,
-      );
-    });
-    // The whole-view read refuses this state (a held lease whose holder stopped),
-    // so the caller's CAS is the stored row's token.
-    const expected = workflowTokenOfRow(fixture.context);
-
-    const repaired = await workflowMutation(
-      fixture,
-      "op-terminal-residue",
-      { kind: "lifecycle", status: "failed", reason: "residue repaired" },
-      { expected },
-    );
-
-    // §R10/A20 the restatement of the RECORDED status is the residue's own
-    // repair: the outcome and its time stay exactly as they were recorded, the
-    // routing row goes, and the claims the crashed close never settled are
-    // settled by this repair.
-    const closed = closedRow(fixture.context);
-    expect(repaired.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
-    expect(closed.registered).toBe(0);
-    expect(closed.status).toBe("failed");
-    expect(closed.ended_at).toBe(endedAt);
-    expect(storedLease(fixture.context)).toMatchObject({
-      status: "released",
-      released_by: COORDINATOR_ID,
-      release_reason: `stopped-owner:${PLAN_PM_ID}`,
-    });
-    expect(storedMergeClaim(fixture.context)).toMatchObject({
-      status: "released",
-      release_reason: `stopped-owner:${PLAN_PM_ID}`,
-    });
-
-    // §R10/E11 a RECORDED outcome is never rewritten: asking the same residue to
-    // become an outcome it did not record refuses and changes no byte at all.
-    const completed = await workflowFixture("terminal-completed");
-    withRaw(completed.context, (db) => {
-      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.status', 'completed', '$.ended_at', ?) where workflow_id = ?").run(
-        endedAt,
-        WORKFLOW_ID,
-      );
-    });
-    const before = await workflowFootprint(completed.context);
-    const refused = await refusalOf(() =>
-      workflowMutation(completed, "op-terminal-rewrite", {
-        kind: "lifecycle",
-        status: "failed",
-        reason: "claim the wave failed",
-      }),
-    );
-    expect(refused.code).toBe("coordination.invalid-transition");
-    expect(refused.message).toContain("never amended");
-    expect(await workflowFootprint(completed.context)).toEqual(before);
-  });
-});
 /* ------------------------------------------------------------------------ *
  * § One resolver path (S2/E02): the SPARSE intent of the published DB verbs
  * ------------------------------------------------------------------------ */
 
 /**
- * A DB fixture with ONE prepared plan and its bound plan-pm seat - the state a
- * plan-owned write needs. The reviewed Assignment is a real document the DB
- * `prepare` transition seals, and the plan's own session binds through the real
- * verb (so the lease the row admission requires is one the store recorded
- * rather than one a fixture planted).
+ * A DB fixture with the workflow's coordinator bound and its plan rows.
+ *
+ * A plan row is ordinary coordinator data addressed by an explicitly stated
+ * `planId`; there is no per-plan session to bind and no sealed Assignment to
+ * prepare. The worktree/branch scope an operation reads comes from the row's own
+ * metadata, so the fixture needs no separate configuration step.
  */
 async function preparedPlanFixture(
   label: string,
   additionalPlanIds: readonly string[] = [],
-  bindAdditionalPlanOwners = true,
 ): Promise<{
   context: StoreContext;
   harnessRoot: string;
   coordinatorCaller: ExecutionCaller;
   coordinator: ExecutionSessionRef;
-  planCaller: ExecutionCaller;
-  planSession: ExecutionSessionRef;
 }> {
   const fixture = await workflowFixture(label, additionalPlanIds);
   const harnessRoot = realpathSync(dirname(storeDbPath(fixture.context)));
-  const coordinatorContext = domainContext(fixture.context, fixture.coordinatorCaller);
-  let planCaller: ExecutionCaller | undefined;
-  let planSession: ExecutionSessionRef | undefined;
-
   for (const planId of [PLAN_ID, ...additionalPlanIds]) {
-    const planDir = join(harnessRoot, "plans");
-    const sddDir = join(harnessRoot, "sdd", planId);
-    const planWorktree = join(harnessRoot, "worktrees", planId);
-    const planPath = join(planDir, `${planId}.md`);
-    const assignmentPath = join(harnessRoot, "assignments", `${planId}.md`);
+    const planPath = join(harnessRoot, "plans", `${planId}.md`);
     mkdirSync(dirname(planPath), { recursive: true });
-    mkdirSync(sddDir, { recursive: true });
-    mkdirSync(dirname(assignmentPath), { recursive: true });
     writeText(planPath, `# ${planId}\n`);
-    writeText(
-      assignmentPath,
-      [
-        "**Execution scope**: plan",
-        "**Execute as**: project-manager",
-        "**Delegation**: allowed",
-        `**Control harness root**: ${harnessRoot}`,
-        `**Workflow id**: ${WORKFLOW_ID}`,
-        `**Plan id**: ${planId}`,
-        `**Plan Path**: ${planPath}`,
-        `**Worktree path**: ${planWorktree}`,
-        `**Working branch**: ${SOURCE_BRANCH}`,
-        `**SDD dir**: ${sddDir}`,
-        "**QA gate**: mandatory",
-        "**Findings cleanup**: zero-residual",
-        "**Prepare gate**: go",
-        "",
-      ].join("\n"),
-    );
-    await mutateExecutionPlan(coordinatorContext, {
-      operationId: `prepare-${label}-${planId}`,
-      session: fixture.coordinator,
-      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, planId)).token,
-      planId,
-      operation: { kind: "prepare", assignmentPath },
-    });
-    if (planId !== PLAN_ID && !bindAdditionalPlanOwners) continue;
-    const sessionId = planId === PLAN_ID ? PLAN_PM_ID : `host-plan-pm-${planId}`;
-    const caller = trustedCaller(sessionId, "plan-pm", planId);
-    const bound = await bindExecutionSession(domainContext(fixture.context, caller), {
-      workflowId: WORKFLOW_ID,
-      planId,
-      role: "plan-pm",
-      expected: (await readExecutionPlan(coordinatorContext, fixture.coordinator, planId)).token,
-      operationId: `bind-plan-${label}-${planId}`,
-    });
-    if (planId === PLAN_ID) {
-      planCaller = caller;
-      planSession = bound.data;
-    }
   }
-  if (planCaller === undefined || planSession === undefined) throw new Error("fixture: target plan binding was not created");
   return {
     context: fixture.context,
     harnessRoot,
     coordinatorCaller: fixture.coordinatorCaller,
     coordinator: fixture.coordinator,
-    planCaller,
-    planSession,
   };
 }
 
@@ -2866,22 +1792,23 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
     expect(repeated.data.workflows[0]!.state.phase).toBe("phase-2-execute");
   });
 
-  test("a sparse plan intent omitting the session, the token and the plan id reaches the same result (A02)", async () => {
+  test("a sparse plan intent omitting the session and the token reaches the same result (A02)", async () => {
     const specified = await preparedPlanFixture("sparse-plan-specified");
-    const specifiedReceipt = await mutateExecutionPlan(domainContext(specified.context, specified.planCaller), {
+    const specifiedReceipt = await mutateExecutionPlan(domainContext(specified.context, specified.coordinatorCaller), {
       operationId: "op-plan-specified",
-      session: specified.planSession,
-      expected: (await readExecutionPlan(domainContext(specified.context, specified.planCaller), specified.planSession, PLAN_ID)).token,
+      session: specified.coordinator,
+      expected: (await readExecutionPlan(domainContext(specified.context, specified.coordinatorCaller), specified.coordinator, PLAN_ID)).token,
       planId: PLAN_ID,
       operation: SPARSE_PROGRESS,
     });
 
     const sparse = await preparedPlanFixture("sparse-plan-resolved");
-    // The plan id, the session reference and the plan token are all omitted: the
-    // plan-pm identity names the plan, so the engine reads its own binding and
-    // the plan's own token.
-    const sparseReceipt = await mutateExecutionPlan(domainContext(sparse.context, sparse.planCaller), {
+    // The session reference and the plan token are omitted and resolved. The
+    // PLAN ID is always stated: no caller binding names a plan any more, so a
+    // coordinator selects the row with every call.
+    const sparseReceipt = await mutateExecutionPlan(domainContext(sparse.context, sparse.coordinatorCaller), {
       operationId: "op-plan-sparse",
+      planId: PLAN_ID,
       operation: SPARSE_PROGRESS,
     });
 
@@ -2890,27 +1817,40 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
     expect(sparseReceipt.data.coordination?.progress?.summary).toBe(specifiedReceipt.data.coordination?.progress?.summary);
     expect(sparseReceipt.recovery?.outcome).toBe(specifiedReceipt.recovery?.outcome);
     expect(sparseReceipt.recovery?.warnings).toEqual([]);
-    const stored = await readExecutionPlan(domainContext(sparse.context, sparse.planCaller), sparse.planSession, PLAN_ID);
+    const stored = await readExecutionPlan(domainContext(sparse.context, sparse.coordinatorCaller), sparse.coordinator, PLAN_ID);
     expect((stored.data.plan as { status?: unknown }).status).toBe("InProgress");
   });
 
-  test("a sparse plan-authority call resolves the caller's own binding and the plan's own token (A02)", async () => {
+  test("a plan intent that omits the plan id refuses instead of selecting a plan", async () => {
+    const fixture = await preparedPlanFixture("sparse-plan-missing-id");
+    const before = await workflowFootprint(fixture.context);
+    const refusal = await refusalOf(() =>
+      mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+        operationId: "op-plan-no-id",
+        operation: SPARSE_PROGRESS,
+      } as never),
+    );
+    expect(refusal.code).toBe("coordination.invalid-input");
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("a sparse plan-authority call resolves the coordinator's own binding and the plan's own token (A02)", async () => {
     const fixture = await preparedPlanFixture("sparse-authority");
-    const strict = await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID);
+    const strict = await readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID);
     const before = await workflowFootprint(fixture.context);
     const strictWitness = await withExecutionPlanAuthority(
-      domainContext(fixture.context, fixture.planCaller),
+      domainContext(fixture.context, fixture.coordinatorCaller),
       {
-        session: fixture.planSession,
-        expected: (await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID)).token,
+        session: fixture.coordinator,
+        expected: (await readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID)).token,
         planId: PLAN_ID,
         operation: SPARSE_PROGRESS,
       },
       (witness) => witness,
     );
     const sparseWitness: ExecutionPlanWitness = await withExecutionPlanAuthority(
-      domainContext(fixture.context, fixture.planCaller),
-      { operation: SPARSE_PROGRESS },
+      domainContext(fixture.context, fixture.coordinatorCaller),
+      { planId: PLAN_ID, operation: SPARSE_PROGRESS },
       (witness) => witness,
     );
 
@@ -2919,11 +1859,11 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
     expect(sparseWitness.token).toBe(strictWitness.token);
     expect(sparseWitness.token).toBe(strict.token);
     expect(sparseWitness.session).toEqual(strictWitness.session);
-    expect(sparseWitness.session.sessionId).toBe(PLAN_PM_ID);
+    expect(sparseWitness.session.sessionId).toBe(COORDINATOR_ID);
     // Both calls are read-only transitions: resolving the sparse intent wrote
     // nothing - the row, its revisions and the session rows are untouched.
     expect(await workflowFootprint(fixture.context)).toEqual(before);
-    expect((await readExecutionPlan(domainContext(fixture.context, fixture.planCaller), fixture.planSession, PLAN_ID)).token).toBe(strict.token);
+    expect((await readExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator, PLAN_ID)).token).toBe(strict.token);
   });
 
   test("a sparse workflow intent on a root whose authority is not the ACTIVE store refuses without falling back", async () => {
@@ -2935,7 +1875,7 @@ describe("execution-intent-sparse: One resolver path (S2/E02)", () => {
     mkdirSync(join(workspace, ".mstar"), { recursive: true });
     const context: StoreContext = { harnessDir: workspace };
     const refusal = await refusalOf(() =>
-      mutateExecutionWorkflow(domainContext(context, trustedCaller(COORDINATOR_ID, "coordinator", null)), {
+      mutateExecutionWorkflow(domainContext(context, trustedCaller(COORDINATOR_ID, "coordinator")), {
         operationId: "op-sparse-uninitialized",
         operation: { kind: "phase", phase: "phase-2-execute", compassPath: join(workspace, ".mstar", COMPASS_REF) },
       }),
