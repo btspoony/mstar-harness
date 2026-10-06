@@ -90,11 +90,11 @@ describe("prerequisite identity — execution identity validation", () => {
       workflowId: "wf-a",
       role: "coordinator",
     } as unknown as ExecutionIdentity;
-    expect(codeOf(() => validateExecutionIdentity(legacy, scope))).toBe("coordination.identity-missing");
-    // A §3.1 identity ignores an extra root key rather than adopting it: the
-    // root is not read, compared or returned by this validator.
-    const withRoot = { ...identity(), harnessRoot: "/elsewhere/.mstar" } as ExecutionIdentity;
-    expect(() => validateExecutionIdentity(withRoot, scope)).not.toThrow();
+    expect(codeOf(() => validateExecutionIdentity(legacy, scope))).toBe("coordination.forbidden-field");
+    // Even an otherwise valid coordinator identity refuses an extra root:
+    // authority cannot be redirected through an identity field.
+    const withRoot = { ...identity(), harnessRoot: "/elsewhere/.mstar" };
+    expect(codeOf(() => validateExecutionIdentity(withRoot, scope))).toBe("coordination.forbidden-field");
   });
 
   test("a non-coordination role and any scope disagreement are identity-mismatch", () => {

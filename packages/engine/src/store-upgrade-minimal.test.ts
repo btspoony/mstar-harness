@@ -519,7 +519,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       refused.db.prepare("select * from execution_leases order by workflow_id, plan_id").all(),
     ));
     expect(afterLeases).toEqual(protectedState.leases);
-    expect(protectedDatabase(refused.db)).toEqual(protectedState.database);
+    expect(protectedState.database).toEqual(protectedDatabase(refused.db));
     // No staging table survives the rollback.
     for (const staging of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
       expect(refused.db.prepare("select name from sqlite_master where type = 'table' and name = ?").get(staging)).toBeUndefined();
@@ -589,7 +589,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     const originalCoordination = JSON.parse(originalPlan.coordination_json);
     const { state: _handoffState, id: _handoffId, attempt: _attempt, submitted_by: _submitter,
       submitted_at: _submittedAt, accepted_by: completedBy, accepted_at: _acceptedAt, ...completion } = originalCoordination.handoff;
-    expect(migrated?.coordination?.prepared).toEqual(coordination.prepared);
+    expect(coordination.prepared).toEqual(migrated?.coordination?.prepared);
     expect(migrated?.coordination?.progress).toEqual(originalCoordination.progress);
     expect(migrated?.coordination?.completion).toEqual({ ...completion, completed_by: completedBy });
     const originalDatabase = protectedState.database as ProtectedDatabase;

@@ -367,7 +367,7 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     });
     // A real DOCUMENT change too: the row's plan document is rewritten, so both
     // the catalog and the document changed before the revision under test.
-    writeFileSync(fixture.planPath, "# plan a\n\nrevised after preparation\n");
+    writeFileSync(fixture.planPath, `---\nplan_id: ${PLAN_ID}\n---\n# plan a\n\nrevised after preparation\n`);
 
     // A GENUINE config revision: the disposable source checkout is switched onto a
     // new valid feature branch, so the actual checkout/branch validation passes and

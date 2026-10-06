@@ -21,13 +21,15 @@ import {
   bindPlanSession,
   mutatePlanCoordination,
   readPlanCoordination,
-  type CompletionEvidence,
   type CoordinationResult,
-  type PlanPrepareConfig,
-  type PlanProgress,
 } from "../../src/coordination.js";
 import { initializeStore, openStore, type StoreContext } from "../../src/store-db.js";
-import { CoordinationError } from "../../src/coordination-write.js";
+import {
+  CoordinationError,
+  type CompletionEvidence,
+  type PlanPrepareConfig,
+  type PlanProgress,
+} from "../../src/coordination-write.js";
 import { registerCatalogEntity } from "../../src/catalog.js";
 import { createFsStore, setArtifactStore } from "../../src/store.js";
 
@@ -96,7 +98,7 @@ export function planRow(id: string, projectId: string | undefined, workingBranch
     id,
     plan_id: id,
     title: `Plan ${id}`,
-    file: `.mstar/plans/${id}.md`,
+    file: `plans/${id}.md`,
     status: "Todo",
     ...(Object.keys(metadata).length === 0 ? {} : { metadata }),
   };
@@ -153,8 +155,8 @@ export function makeFixture(): Fixture {
   const worktreePath = join(root, "wt-plana");
   const peerWorktreePath = join(root, "wt-planb");
 
-  writeText(planPath, "# plan a\n");
-  writeText(peerPlanPath, "# plan b\n");
+  writeText(planPath, "---\nplan_id: plan-a\n---\n# plan a\n");
+  writeText(peerPlanPath, "---\nplan_id: plan-b\n---\n# plan b\n");
   mkdirSync(sddDir, { recursive: true });
   mkdirSync(peerSddDir, { recursive: true });
   // Real feature checkouts on the branches a `prepare` names: the ordinary

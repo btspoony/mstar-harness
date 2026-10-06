@@ -37,7 +37,7 @@
  */
 import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -530,6 +530,52 @@ describe('dispatch gate — worktree L2 parallel tracks (warn default)', () => {
 })
 
 describe('dispatch gate — worktree L2 hard mode', () => {
+  for (const aliasKind of ['symlink', 'subdirectory'] as const) {
+    it(`two track paths resolving to one checkout (${aliasKind}) deny before dispatch`, async () => {
+      const root = tmpRoot(`dsh-wt-l2-${aliasKind}-`)
+      const wts = worktreeFixture(root, ['feature/shared'])
+      const worktree = wts.get('feature/shared')
+      if (worktree === undefined) throw new Error('fixture did not create its source checkout')
+      const alias = join(aliasKind === 'subdirectory' ? worktree : root, 'alias')
+      if (aliasKind === 'symlink') symlinkSync(worktree, alias)
+      else mkdirSync(alias)
+      const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
+      let dispatched = false
+      app.ctx.on('tools/pre-execute', () => {
+        dispatched = true
+        return Promise.resolve<PreToolDecision>({ kind: 'allow' })
+      })
+      const prompt = trackAssignment([
+        `**Worktree path**: ${worktree}`,
+        `**Worktree path**: ${alias}`,
+        '**Working branch**: feature/shared',
+      ])
+      const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+      expect(decision.kind).toBe('deny')
+      expect(decision.kind === 'deny' && decision.reason).toContain('worktree.l2.checkout-collision')
+      expect(dispatched).toBe(false)
+    }, 60_000)
+  }
+
+  it('distinct writable tracks with code-span paths and branches dispatch under hard enforcement', async () => {
+    const root = tmpRoot('dsh-wt-l2-code-spans-')
+    const wts = worktreeFixture(root, ['feature/track-a', 'feature/track-b'])
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: 'qc-specialist' })
+    let dispatched = false
+    app.ctx.on('tools/pre-execute', () => {
+      dispatched = true
+      return Promise.resolve<PreToolDecision>({ kind: 'allow' })
+    })
+    const prompt = trackAssignment([
+      `**Worktree path**: \`${wts.get('feature/track-a')}\``,
+      '**Working branch**: `feature/track-a`',
+      `**Worktree path**: \`${wts.get('feature/track-b')}\``,
+      '**Working branch**: `feature/track-b`',
+    ])
+    expect(await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)).toEqual({ kind: 'allow' })
+    expect(dispatched).toBe(true)
+  }, 60_000)
+
   it('duplicate track worktreePath under hard → PreToolDecision deny, downstream never runs', async () => {
     const root = tmpRoot('dsh-wt-l2-hard-')
     const shared = join(root, 'wt-shared')

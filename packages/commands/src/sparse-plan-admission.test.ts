@@ -125,8 +125,6 @@ async function buildFixture(label: string): Promise<{
   const created = await createExecutionWorkflow(executionContextFor(context, coordinatorIdentity), { entry, snapshot, expected: initialized.token, operationId: `create-${label}` });
   const coordinatorBind = await bindExecutionSession(executionContextFor(context, coordinatorIdentity), {
     workflowId: WORKFLOW_ID,
-    planId: null,
-    role: "coordinator",
     expected: created.data.workflows[0]!.workflowToken,
     operationId: `bind-coordinator-${label}`,
   });

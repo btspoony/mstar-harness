@@ -58,13 +58,13 @@ import {
 import { evaluatePostMergeClose } from "../src/iteration.js";
 import { PlanPathError } from "../src/plan-path.js";
 import { CoordinationError, type CompletionRecord } from "../src/coordination-write.js";
-import { getCatalog, listCatalog } from "../src/catalog.js";
+import { getCatalog, listCatalog, registerCatalogEntity } from "../src/catalog.js";
 import {
   listPendingCatalogRegistrations,
   reconcileCatalogExecution,
   registerCatalogExecution,
 } from "../src/catalog-registration.js";
-import { bindPlanSession, executionInputHash, mutatePlanCoordination, readPlanCoordination, recoverPrepareCoordinator } from "../src/coordination.js";
+import { bindPlanSession, mutatePlanCoordination, readPlanCoordination, recoverPrepareCoordinator } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
@@ -1887,6 +1887,28 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
   }
 
+  /** Coordinator FILE operations resolve their process root through real Git. */
+  function gitHarness() {
+    const repo = realpathSync(tmpRoot("iteration-register-git-"));
+    roots.push(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+    const root = join(repo, ".mstar");
+    mkdirSync(root);
+    setArtifactStore(createFsStore(root));
+    for (const planId of ROW_IDS) planFile(root, planId);
+    const compassPath = join(root, "iterations", "20260918-fixture", "delivery-compass.md");
+    mkdirSync(dirname(compassPath), { recursive: true });
+    writeFileSync(compassPath, [
+      "---", `iteration_id: ${id}`, "status: locked",
+      "iteration_base_branch: main",
+      "spec_integration_branch: feature/20260918-iteration-fixture",
+      "target_branch: main", "plans:", ...ROW_IDS.map((planId) => `  - ${planId}`),
+      "---", "", "# Fixture compass", "",
+    ].join("\n"));
+    return { root, statusPath: join(root, "status.json"), dir: join(root, "workflows", id), snapshotPath: join(root, "workflows", id, WORKFLOW_SNAPSHOT_FILE) };
+  }
+
   function options(root: string, overrides: Partial<RegisterIterationWorkflowOptions> = {}): RegisterIterationWorkflowOptions {
     return {
       harnessDir: root,
@@ -2113,21 +2135,15 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     const orphan2Bytes = readFileSync(failSnapshot, "utf8");
     writeFileSync(failStatus, emptyRoot());
     const fs = createFsStore(failRoot);
-    setArtifactStore({
-      root: failRoot,
-      async put(doc: ArtifactDoc): Promise<void> {
-        if (doc.kind === "status") throw new Error("injected recovery root failure");
-        return fs.put(doc);
-      },
-      async get<T>(ref): Promise<T | undefined> {
-        return fs.get<T>(ref);
-      },
-      async delete(ref): Promise<void> {
-        return fs.delete(ref);
-      },
-    });
+    const originalPut = fs.put;
+    fs.put = async (doc: ArtifactDoc): Promise<void> => {
+      if (doc.kind === "status") throw new Error("injected recovery root failure");
+      return originalPut(doc);
+    };
+    setArtifactStore(fs);
     const { startedAt: _c2, ...recoverOptions } = options(failRoot);
     await expect(registerIterationWorkflow(id, recoverOptions)).rejects.toThrow(/injected recovery root failure/);
+    expect(readFileSync(failSnapshot, "utf8")).toBe(orphan2Bytes);
     
     expect((JSON.parse(readFileSync(failStatus, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
   });
@@ -2350,23 +2366,18 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
     expect(snapshot.plans[0]!.file).toBe(planPath);
   });
-  test("ordinary coordinator prepare preserves the registered catalog pin across source edits and an SDK reopen", async () => {
-    const { root, snapshotPath } = harness();
+  test("ordinary coordinator prepare freezes real catalog input across source edits and an SDK reopen", async () => {
+    const { root, snapshotPath } = gitHarness();
+    const context: StoreContext = { harnessDir: root };
+    const store = await initializeStore(context);
+    store.close();
+    await registerCatalogEntity(context, {
+      kind: "plan", id: ROW_IDS[0], title: "Engine producer",
+      rootKind: "plans", relativePath: `${ROW_IDS[0]}.md`,
+    }, { operationId: "register-prepare-pin", actor: "project-manager" });
     await registerIterationWorkflow(id, options(root));
-    const registered = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
-      plans: Array<{ id: string; metadata?: Record<string, unknown> }>;
-    };
-    const pinRow = registered.plans.find((row) => row.id === ROW_IDS[0]);
-    if (pinRow === undefined) throw new Error(`fixture plan ${ROW_IDS[0]} is missing`);
-    const frozenFixturePin = {
-      store_id: "store-accepted-before-retirement",
-      entity_revision: 3,
-      document_hash: executionInputHash(pinRow, ROW_IDS[0]),
-      relation_hash: "a".repeat(64),
-    };
-    pinRow.metadata = { ...pinRow.metadata, catalog_pin: frozenFixturePin };
-    writeFileSync(snapshotPath, `${JSON.stringify(registered, null, 2)}\n`, "utf8");
     const prior = await bindPlanSession({
+      coordinator: true,
       workflowId: id,
       harnessDir: root,
       cwd: root,
@@ -2391,7 +2402,12 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       operation: { kind: "prepare", config: { qaGate: "pm-acceptance" } },
     });
     const firstRead = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
-    expect(firstRead.catalog_pin?.pin).toEqual(frozenFixturePin);
+    const frozenFixturePin = firstRead.catalog_pin?.pin;
+    if (frozenFixturePin === undefined || frozenFixturePin === null) throw new Error("ordinary prepare did not record its catalog selection");
+    const registeredPlan = await getCatalog(context, { kind: "plan", id: ROW_IDS[0] });
+    expect(frozenFixturePin.entity_revision).toBe(registeredPlan.entity.revision);
+    expect(frozenFixturePin.document_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(frozenFixturePin.relation_hash).toMatch(/^[a-f0-9]{64}$/);
 
     writeFileSync(planPath, `# Edited after registration\n\n**plan_id:** ${ROW_IDS[0]}\n`, "utf8");
     const reopened = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
@@ -2413,10 +2429,11 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
   });
 
   test("stopped integration claim is recovered through the public coordinator route before failed close", async () => {
-    const { root, snapshotPath } = harness();
+    const { root, snapshotPath } = gitHarness();
     await registerIterationWorkflow(id, options(root));
 
     const prior = await bindPlanSession({
+      coordinator: true,
       workflowId: id,
       harnessDir: root,
       cwd: root,

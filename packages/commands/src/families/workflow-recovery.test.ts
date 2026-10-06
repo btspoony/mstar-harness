@@ -284,8 +284,9 @@ test("an operator authorization mismatch refuses with its specific cause on the 
       invocation(fixture.root),
     );
     expect(refused.status).toBe("refused");
+    if (refused.status !== "refused") throw new Error("expected the operator authorization refusal");
     expect(String(refused.message)).toContain("authorization");
-    expect((refused.details as { field?: string } | undefined)?.field).toBe("attestation.operator.authorizationRef");
+    expect(refused.details).toMatchObject({ field: "attestation.operator.authorizationRef" });
     // The refusal wrote nothing: the held claim and the binding are unchanged.
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
     expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(false);

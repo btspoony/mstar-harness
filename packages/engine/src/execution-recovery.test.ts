@@ -267,7 +267,6 @@ async function recoveryWorld(name: string, planIds: readonly string[] = [PLAN_1]
   const workflow = created.data.workflows[0]!;
   const bound = await bindExecutionSession(contextOf(fixture.context, caller), {
     workflowId: WF,
-    role: "coordinator",
     expected: workflow.workflowToken,
     operationId: `${name}-bind`,
   });
@@ -375,7 +374,6 @@ describe("execution-backup", () => {
       });
       await bindExecutionSession(contextOf(world.context, callerOf(WF, COORDINATOR)), {
         workflowId: WF,
-        role: "coordinator",
         expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
         operationId: "backup-wal-bind",
       });

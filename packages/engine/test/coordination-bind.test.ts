@@ -782,7 +782,7 @@ describe("scope-and-revisions", () => {
 });
 
 describe("historical coordination snapshots", () => {
-  test("accepts stored identity-recovery audit history without validating retired digest gates", () => {
+  test("accepts stored coordinator recovery provenance without requiring the original document bodies", () => {
     const result = validateSnapshotCoordination({
       coordinator: {
         session_id: "coordinator-1",
@@ -799,8 +799,8 @@ describe("historical coordination snapshots", () => {
           authorization_ref: "auth",
           reason: "stopped",
           stopped_session_ids: ["prior"],
-          snapshot_version_before: "b".repeat(64),
-          compass_version: "c".repeat(64),
+          snapshot_version_before: `sha256:${"b".repeat(64)}`,
+          compass_version: `sha256:${"c".repeat(64)}`,
           recovered_at: "2026-10-03T00:00:00.000Z",
         },
       ],
