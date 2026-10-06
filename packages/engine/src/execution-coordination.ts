@@ -1003,7 +1003,11 @@ export async function residualAddExecutionPlan(
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
     assertRunningWorkflow(witness);
     assertIssueStoreActive(tx.db);
-    const projectId = projectBucketOf(witnessSnapshot(witness));
+    // §G2a the project bucket is the ADDRESSED ROW's own `metadata.project_id`
+    // (validated as a safe path component), falling back to `_default`, never the
+    // workflow header's: a residual captured on this row must keep its own
+    // project provenance even when the workflow declares another one.
+    const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
     const derivedEntries = deriveResidualEntries(entries, projectId);
     const { planId } = witness;
     const sessionId = witness.session.sessionId;
