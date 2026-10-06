@@ -21,13 +21,15 @@ import {
   bindPlanSession,
   mutatePlanCoordination,
   readPlanCoordination,
-  type CompletionEvidence,
   type CoordinationResult,
-  type PlanPrepareConfig,
-  type PlanProgress,
 } from "../../src/coordination.js";
 import { initializeStore, openStore, type StoreContext } from "../../src/store-db.js";
-import { CoordinationError } from "../../src/coordination-write.js";
+import {
+  CoordinationError,
+  type CompletionEvidence,
+  type PlanPrepareConfig,
+  type PlanProgress,
+} from "../../src/coordination-write.js";
 import { registerCatalogEntity } from "../../src/catalog.js";
 import { createFsStore, setArtifactStore } from "../../src/store.js";
 
