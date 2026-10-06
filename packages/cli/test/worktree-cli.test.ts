@@ -813,10 +813,10 @@ test("retained track ownership refuses main and ordinary progress repairs retire
     const bound = commandOutput(runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", root, "--session-id", "retained-track-coordinator"], root));
     if (bound.status !== "ok" || typeof bound.data?.session_file !== "string") throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
     const session = bound.data.session_file;
-    const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a"], root));
+    const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", root], root));
     if (shown.status !== "ok" || typeof shown.data?.revision !== "number") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
     const corrected = commandOutput(runCli([
-      "plan", "progress", "--session", session, "--plan", "plan-a", "--expect", String(shown.data.revision),
+      "plan", "progress", "--session", session, "--plan", "plan-a", "--harness", root, "--expect", String(shown.data.revision),
       "--progress", JSON.stringify({ status: "InProgress", summary: "retire the mistaken main track", evidence_paths: [], track_branches: [] }),
     ], root));
     if (corrected.status !== "ok") throw new Error(`track correction failed: ${JSON.stringify(corrected)}`);

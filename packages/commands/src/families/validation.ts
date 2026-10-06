@@ -341,10 +341,10 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           for (const violation of gate.violations) {
             if (violation.code !== "worktree.main.residency-switched") continue;
             const recovery =
-              `workflow "${workflow}" plan "${plan}" records the main branch "${observedMainBranch}" as a retained track. ` +
-              "Use its workflow coordinator's ordinary mstar plan show --session <coordinator-envelope> --plan <plan-id> " +
+              `workflow "${workflow}" plan "${plan}" in control harness "${harness}" records the main branch "${observedMainBranch}" as a retained track. ` +
+              "Use its workflow coordinator's ordinary mstar plan show --session <coordinator-envelope> --plan <plan-id> --harness <control-root> " +
               "to read the current revision and progress, then mstar plan progress --session <coordinator-envelope> " +
-              "--plan <plan-id> --expect <observed-revision> --progress <JSON> with the current status, summary, " +
+              "--plan <plan-id> --harness <control-root> --expect <observed-revision> --progress <JSON> with the current status, summary, " +
               "evidence_paths and corrected complete track_branches. Keep all live tracks; use [] only when no tracks remain. " +
               "If the track is live, move it to a distinct feature branch and report that real branch; do not clear live ownership or switch main merely to satisfy this check.";
             violation.fix = recovery;
