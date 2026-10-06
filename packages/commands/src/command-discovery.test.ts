@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { commandEnvelopeSchema, executeCommand, getCommandDefinitions } from "./definitions.js";
 import {
@@ -279,4 +282,50 @@ test("workflow.evidence publishes the delivery evidence file contract and recove
   const attestation = recovery.cli.options.find((option) => option.key === "attestation");
   expect(attestation).toBeDefined();
   expect(String(attestation!.help)).toContain("ActivationAttestation");
+});
+
+test("workflow.recover-coordinator declares both transports and refuses a mixed invocation", async () => {
+  const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
+  if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
+  const keys = recovery.cli.options.map((option) => option.key);
+  for (const key of ["session", "operationId", "authorizationRef", "stopped", "workflow", "expect", "operation", "priorSession", "unowned", "attestation"]) {
+    expect(keys).toContain(key);
+  }
+  const help = String(recovery.cli.options.find((option) => option.key === "attestation")!.help);
+  expect(help).toContain("ActivationAttestation");
+
+  // A FILE-route invocation that also carries the ACTIVE attestation is refused
+  // before either engine verb runs (the transports are disjoint).
+  const root = mkdtempSync(join(tmpdir(), "mstar-recover-mixed-"));
+  try {
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const sessionPath = join(root, "coordinator.json");
+    writeFileSync(sessionPath, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "prior", workflow_id: "wf-mixed", harness_root: harness }));
+    const envelope = await executeCommand("workflow.recover-coordinator", {
+      session: sessionPath,
+      operationId: "recover-1",
+      reason: "mixed transports",
+      authorizationRef: "auth-1",
+      stopped: ["prior"],
+      attestation: sessionPath,
+      harness,
+    }, {
+      cwd: root,
+      controlRoot: null,
+      sessionId: "caller-session",
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        async readInput() { return ""; },
+        async spawn() { throw new Error("recovery must not spawn a process"); },
+        async startDashboard() { throw new Error("dashboard is unavailable in this test"); },
+        async openBrowser() { throw new Error("browser is unavailable in this test"); },
+      },
+    });
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(String(envelope.message)).toContain("not an activation attestation");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
