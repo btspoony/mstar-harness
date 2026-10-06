@@ -140,6 +140,8 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
   const workflowId = "wf-active-schema8-normalize";
   const planId = `${workflowId}-plan`;
   const sessionId = "session-active-schema8-normalize";
+  /** Full pre-cutover state captured for the refusal comparison. */
+  const protectedState: Record<string, unknown> = {};
 
   // A schema-8 store: initialized, then reverted to the schema-8 SHAPE (frozen
   // migration 4 DDL) and populated with the OLD protocol JSON the removed seat
@@ -351,6 +353,23 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
         status: "held",
       }),
     );
+    // Capture the FULL protected state so the refusal comparison proves every
+    // byte is intact — not just counts or defined-ness.
+    protectedState.plan = JSON.parse(JSON.stringify(
+      initialized.db.prepare("select * from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId),
+    ));
+    protectedState.workflow = JSON.parse(JSON.stringify(
+      initialized.db.prepare("select * from execution_workflows where workflow_id = ?").get(workflowId),
+    ));
+    protectedState.sessions = JSON.parse(JSON.stringify(
+      initialized.db.prepare("select * from execution_sessions order by workflow_id, role, session_id").all(),
+    ));
+    protectedState.claims = JSON.parse(JSON.stringify(
+      initialized.db.prepare("select * from execution_integration_leases order by workflow_id").all(),
+    ));
+    protectedState.leases = JSON.parse(JSON.stringify(
+      initialized.db.prepare("select * from execution_leases order by workflow_id, plan_id").all(),
+    ));
   } finally {
     initialized.close();
   }
@@ -374,11 +393,31 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
   const refused = await openStore(context, "read");
   try {
     expect(refused.schemaVersion).toBe(MIGRATIONS.length - 1);
-    expect(refused.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string } | undefined)
-      .toBeDefined();
-    expect(refused.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 1 });
-    expect(refused.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 1 });
-    expect(refused.db.prepare("select name from sqlite_master where type = 'table' and name = 'execution_lease_cutover'").get()).toBeUndefined();
+    // Every protected row is byte-identical: the batch rolled back whole.
+    const afterPlan = JSON.parse(JSON.stringify(
+      refused.db.prepare("select * from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId),
+    ));
+    expect(afterPlan).toEqual(protectedState.plan);
+    const afterWorkflow = JSON.parse(JSON.stringify(
+      refused.db.prepare("select * from execution_workflows where workflow_id = ?").get(workflowId),
+    ));
+    expect(afterWorkflow).toEqual(protectedState.workflow);
+    const afterSessions = JSON.parse(JSON.stringify(
+      refused.db.prepare("select * from execution_sessions order by workflow_id, role, session_id").all(),
+    ));
+    expect(afterSessions).toEqual(protectedState.sessions);
+    const afterClaims = JSON.parse(JSON.stringify(
+      refused.db.prepare("select * from execution_integration_leases order by workflow_id").all(),
+    ));
+    expect(afterClaims).toEqual(protectedState.claims);
+    const afterLeases = JSON.parse(JSON.stringify(
+      refused.db.prepare("select * from execution_leases order by workflow_id, plan_id").all(),
+    ));
+    expect(afterLeases).toEqual(protectedState.leases);
+    // No staging table survives the rollback.
+    for (const staging of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
+      expect(refused.db.prepare("select name from sqlite_master where type = 'table' and name = ?").get(staging)).toBeUndefined();
+    }
   } finally {
     refused.close();
   }
@@ -448,6 +487,15 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       worktree_path: join(ROOT, "metadata-worktree"),
       working_branch: `feature/${workflowId}-conflict-plan`,
     });
+    // The conflict row carries no phantom coordination or lease: it is clean for
+    // the coordinator's ordinary prepare/progress continuation (T4's cross-track
+    // plan-operation scope; the storage layer preserves the business facts).
+    expect(conflictState.status).toBe("Todo");
+    expect(conflictState).not.toHaveProperty("execution_lease");
+    const conflictCoordination = JSON.parse(
+      (store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(`${workflowId}-conflict`, `${workflowId}-conflict-plan`) as { coordination_json: string }).coordination_json,
+    ) as Record<string, unknown>;
+    expect(conflictCoordination).toEqual({ revision: 1 });
     // The retired seat's integration mutex is settled as a released tombstone,
     // naming the stop evidence that authorized it — not left unreachable.
     const claim = JSON.parse(
@@ -458,6 +506,10 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       prior_holder: sessionId,
       release_reason: `retired-plan-pm-seat:${sessionId}`,
     });
+    // The staging tables are gone.
+    for (const staging of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
+      expect(store.db.prepare("select name from sqlite_master where type = 'table' and name = ?").get(staging)).toBeUndefined();
+    }
   } finally {
     store.close();
   }
