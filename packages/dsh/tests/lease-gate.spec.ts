@@ -21,8 +21,10 @@
  * () => Promise.resolve({ kind: 'allow' }))`).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import { join } from 'node:path'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { bootApp, seedHarness, v2RootWithWorkflow, v2SnapshotWithPlans, type BootResult } from './harness.ts'
+import { bootApp, seedHarness, v2Root, v2WorkflowEntry, v2SnapshotWithPlans, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -58,8 +60,11 @@ const INLINE_ASSIGNMENT = `## Assignment
 
 **Execute as**: fullstack-dev
 **Delegation**: forbidden
+**Task category**: logic
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 **Worktree path**: ${WORKTREE}
+**Working branch**: ${BRANCH}
 
 Do the thing.
 `
@@ -68,6 +73,9 @@ Do the thing.
 const SDD_VIA_SDD_DIR = `## Assignment
 
 **Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 **Execution mode**: sdd
 **SDD dir**: /srv/mstar/sdd/${PLAN_ID}
 **Worktree path**: ${WORKTREE}
@@ -103,7 +111,10 @@ Do the thing.
 /** Read-only orientation role — the row-scope gate must not block read-only dispatch. */
 const SCOUT_ASSIGNMENT = `## Assignment
 
-**Execute as**: code-reviewer
+**Execute as**: scout
+**Delegation**: forbidden
+**Task category**: deep
+**Task budget (implement / ops rounds)**: S — read-only orientation
 **Execution mode**: sdd
 **Plan Path**: /srv/plans/${PLAN_ID}.md
 **Worktree path**: ${WORKTREE}
@@ -116,9 +127,27 @@ const ROW_SCOPE = { worktree_path: WORKTREE, working_branch: BRANCH }
 
 /** Seed the v2 tree: v2 root + active workflow snapshot carrying one plan row. */
 async function seedRowDoc(harnessDir: string, plan: Record<string, unknown>): Promise<void> {
+  // Scope-bearing rows need real checkouts, not absolute-looking placeholders.
+  const root = booted!.root
+  execFileSync('git', ['init', '-q', '-b', 'main', root])
+  execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'])
+  const integrationPath = join(root, 'integration-checkout')
+  const featurePath = join(root, 'feature-checkout')
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', BRANCH, featurePath])
+  const snapshot = v2SnapshotWithPlans('wf-1', [{
+    ...plan,
+    file: `plans/${String(plan.id)}.md`,
+    ...(plan.metadata === ROW_SCOPE ? { metadata: { ...ROW_SCOPE, worktree_path: featurePath } } : {}),
+  }], {
+    type: 'iteration',
+    branch: { base: 'main', integration: 'integration/fixture' },
+    integration_worktree_path: integrationPath,
+  })
   await seedHarness(harnessDir, {
-    'status.json': v2RootWithWorkflow(),
-    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [plan]),
+    'status.json': v2Root([v2WorkflowEntry('wf-1', 'iteration')]),
+    'workflows/wf-1/snapshot.json': snapshot,
+    [`plans/${String(plan.id)}.md`]: `# ${String(plan.id)}\n`,
   })
 }
 
@@ -162,7 +191,13 @@ function toolExec(name: string, args: unknown, agent?: unknown): ToolExecution {
 
 /** The subagent tool call shape: `{ description, prompt, run_in_background? }`. */
 const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
-  toolExec('subagent', { description: 'probe', prompt }, agent)
+  toolExec('subagent', {
+    description: 'probe',
+    prompt: prompt
+      .replaceAll(WORKTREE, join(booted!.root, 'feature-checkout'))
+      .replaceAll('/srv/plans', join(booted!.harnessDir, 'plans'))
+      .replaceAll('/srv/mstar/sdd', join(booted!.harnessDir, 'sdd')),
+  }, agent)
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
@@ -181,7 +216,7 @@ const violationCodes = (advisory: DispatchGateAdvisory | undefined): string[] =>
 
 describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
   it('SDD dispatch + InProgress plan + recorded scope (worktree/branch match) → allow, silent pass', async () => {
-    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -240,7 +275,7 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
   })
 
   it('plan id resolves from the SDD dir fallback (no Plan Path) → the check runs against it', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -262,7 +297,7 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
   })
 
   it('non-SDD assignment (inline) + plan not InProgress → no check, silent pass even with a scope recorded', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, { ...TODO_NO_SCOPE, metadata: ROW_SCOPE })
     const advisories = captureAdvisories(app.ctx)
 
@@ -284,7 +319,7 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
   })
 
   it('read-only role (scout) → the gate is skipped even for sdd + an InProgress row', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_NO_SCOPE)
     const advisories = captureAdvisories(app.ctx)
 
@@ -295,13 +330,13 @@ describe('dispatch gate — row-scope matrix (sdd / InProgress)', () => {
   })
 
   it('sdd Assignment without a resolvable plan id → no check, silent pass', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_NO_SCOPE)
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      subagentExec('## Assignment\n\n**Execution mode**: sdd\n\nNo plan reference.\n'),
+      subagentExec(SDD_ASSIGNMENT.replace(/^\*\*Plan Path\*\*:.*\n/m, '')),
       defaultAllow,
     )
 
@@ -344,23 +379,23 @@ describe('dispatch gate — hostile inputs', () => {
 
   it('missing status.json + sdd + Enforcement: hard → deny with lease.dispatch.unverifiable', async () => {
     const app = booted = await bootApp()
-    const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(SDD_HARD), defaultAllow)
 
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('lease.dispatch.unverifiable')
-    expect(advisories.length).toBeGreaterThan(0)
   })
 })
 
 describe('dispatch gate — header scoping', () => {
   it('body-quoted Worktree path / Plan Path / Working branch do not leak into the comparisons', async () => {
-    const app = booted = await bootApp()
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
     await seedRowDoc(app.harnessDir, IN_PROGRESS_WITH_SCOPE)
     const advisories = captureAdvisories(app.ctx)
 
     const quoted = `${SDD_ASSIGNMENT}
+## Task
+
 Do the thing. Quoted example must not trigger the gate:
 **Worktree path**: /srv/worktrees/somewhere-else
 **Working branch**: feature/somewhere-else

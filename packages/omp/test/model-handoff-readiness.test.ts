@@ -1251,48 +1251,16 @@ function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
     workflowId: ref.workflowId,
     role: ref.role,
     sessionId: ref.sessionId,
-    planId: ref.planId,
   };
 }
 
-/** The scoped Assignment header block `parseAssignmentFile` accepts. */
-function assignmentText(input: {
-  harness: string;
-  workflowId: string;
-  planId: string;
-  planPath: string;
-  worktreePath: string;
-  sddDir: string;
-  branch: string;
-}): string {
-  return [
-    `# Assignment — ${input.planId} independent slice`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Prepared plan for the ACTIVE-route readiness fixtures.",
-    "",
-  ].join("\n");
-}
 
 /**
  * The real ACTIVE-authority fixture: a store upgraded to an execution authority,
  * the plan registered in the catalog, one created workflow (running, with its
  * branch anchors, compass reference, integration checkout and plan row), the
  * coordinator bound under the host session id the binding adopts, the plan
- * PREPARED from a real Assignment file, and the real artifact/Git witnesses the
+ * configured through ordinary prepare, and the real artifact/Git witnesses the
  * checkpoint samples.
  */
 async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<ActiveFixture> {
@@ -1338,21 +1306,8 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
   reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
-  const assignmentPath = join(sddDir, "assignment.md");
   const planningWorktree = join(root, "plan-worktree");
   git(["worktree", "add", "-q", "-b", `feature/${planId}`, planningWorktree], main);
-  writeFileSync(
-    assignmentPath,
-    assignmentText({
-      harness,
-      workflowId,
-      planId,
-      planPath,
-      worktreePath: planningWorktree,
-      sddDir,
-      branch: `feature/${planId}`,
-    }),
-  );
   const compassPath = join(iterationDir, "delivery-compass.md");
   writeFileSync(
     compassPath,
@@ -1385,7 +1340,7 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   );
   const context: ExecutionContext = {
     harnessDir: harness,
-    caller: { sessionId, role: "coordinator", workflowId, planId: null } satisfies ExecutionCaller,
+    caller: { sessionId, role: "coordinator", workflowId } satisfies ExecutionCaller,
   };
   await createExecutionWorkflow(context, {
     entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
@@ -1405,8 +1360,6 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
           id: planId,
           title: planId,
           file: `plans/${planId}.md`,
-          // The DB prepare admission accepts only `Todo`/`Blocked` rows, so a
-          // newly created plan row is `Todo`; the fixture never advances it.
           status: "Todo",
         },
       ],
@@ -1417,7 +1370,6 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   const workflowToken: ExecutionToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token;
   const bound = await bindExecutionSession(context, {
     workflowId,
-    planId: null,
     role: "coordinator",
     expected: workflowToken,
     operationId: `bind-${sessionId}`,
@@ -1428,7 +1380,7 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
       session: plainRef(bound.data),
       expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId, planId })).token,
       planId,
-      operation: { kind: "prepare", assignmentPath } as never,
+      operation: { kind: "prepare", config: { worktreePath: planningWorktree, workingBranch: `feature/${planId}` } },
     });
   }
 
@@ -1496,14 +1448,7 @@ describe("E1 explicit binding on the ACTIVE route", () => {
     if (adopted === null || adopted === undefined) throw new Error("the ACTIVE arm must adopt the DB binding");
     expect(adopted.version).toBe(1);
     expect(adopted.harnessRoot).toBe(realpathSync(f.harness));
-    expect(adopted.session).toEqual({
-      storeId: f.coordinator.storeId,
-      epoch: f.coordinator.epoch,
-      workflowId: f.workflowId,
-      role: "coordinator",
-      sessionId: f.sessionId,
-      planId: null,
-    });
+    expect(adopted.session).toEqual(f.coordinator);
     // The reference a durable record persists is a plain canonical value, never
     // the engine's own object.
     expect(Object.getPrototypeOf(adopted.session)).toBe(Object.prototype);
@@ -1629,11 +1574,10 @@ describe("E2 phase 1 readiness on the ACTIVE route", () => {
     expect(detail).not.toHaveProperty("current");
   }, 120_000);
 
-  test("a plan the DB does not record as prepared refuses prepare-not-locked", async () => {
+  test("artifact readiness does not require a ceremonial DB prepare record", async () => {
     const f = await buildActiveFixture({ skipPrepare: true });
     const readiness = await inspectPhase1Readiness(f.binding, f.input);
-    expect(readiness.ready).toBe(false);
-    expect(codesOf(readiness)).toContain("prepare-not-locked");
+    expect(readiness.ready).toBe(true);
   }, 120_000);
 
   test("an unlocked DB-route compass is classified as an unlocked Prepare", async () => {

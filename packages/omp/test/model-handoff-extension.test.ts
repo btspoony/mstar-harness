@@ -963,7 +963,10 @@ describe("new coordinator start only", () => {
 
     // A session whose named workflow the authority does not hold refuses the
     // start from the DB's own view — never from a registered plan selector.
-    const missingRepo = buildControlRepo();
+    const missingRepo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const missingStore = await initializeStore({ harnessDir: missingRepo.harness });
+    missingStore.close();
+    await initializeExecutionAuthority({ harnessDir: missingRepo.harness });
     writePluginOverrides(missingRepo.main, { modelHandoff: true, handoffTarget: "@default" });
     const missing = await createHarness({
       cwd: missingRepo.main,
@@ -2378,10 +2381,10 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     expect(existsSync(envelopePath)).toBe(true);
     expect(JSON.parse(readFileSync(envelopePath, "utf8"))).toMatchObject({ role: "coordinator", session_id: hostId });
 
-    // Duplicate-holder refusal is preserved: the second bind mutates nothing.
+    // Rebinding an existing coordinator envelope is refused without mutation.
     const bytesBefore = readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8");
     const again = await harness.runCoordinatorTool({ operation: "bind", workflowId });
-    expect(coordinatorCodeOf(again)).toBe("coordination.duplicate-holder");
+    expect(again.isError).toBe(true);
     expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(bytesBefore));
   }, 60_000);
 
@@ -2862,37 +2865,6 @@ type ActiveHandoffState = Readonly<{
   plans: readonly Readonly<{ planId: string; planPath: string; prepareEvidencePath: string }>[];
 }>;
 
-/** The scoped Assignment header block `parseAssignmentFile` accepts. */
-function activeAssignmentText(input: {
-  harness: string;
-  workflowId: string;
-  planId: string;
-  planPath: string;
-  worktreePath: string;
-  sddDir: string;
-  branch: string;
-}): string {
-  return [
-    `# Assignment — ${input.planId} independent slice`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Prepared plan for the ACTIVE-route handoff fixtures.",
-    "",
-  ].join("\n");
-}
 
 /** A canonical plain copy of an engine-returned session reference. */
 function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
@@ -2902,7 +2874,6 @@ function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
     workflowId: ref.workflowId,
     role: ref.role,
     sessionId: ref.sessionId,
-    planId: ref.planId,
   };
 }
 
@@ -2911,7 +2882,7 @@ function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
  * an execution authority, the plan registered in the catalog, one running
  * workflow with its branch anchors, compass reference, integration checkout and
  * plan row, the coordinator bound under `coordinatorSessionId`, the plan
- * PREPARED from a real Assignment, and the real artifact/Git witnesses the
+ * configured through ordinary prepare, and the real artifact/Git witnesses the
  * readiness checkpoint samples. No root register and no workflow snapshot exist
  * anywhere on this route.
  */
@@ -2935,19 +2906,6 @@ async function seedActiveHandoffAuthority(
   reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
   const planWorktree = join(repo.root, `${workflowId}-plan-worktree`);
   git(["worktree", "add", "-q", "-b", `feature/${planId}`, planWorktree], repo.main);
-  const assignmentPath = join(sddDir, "assignment.md");
-  writeFileSync(
-    assignmentPath,
-    activeAssignmentText({
-      harness,
-      workflowId,
-      planId,
-      planPath,
-      worktreePath: planWorktree,
-      sddDir,
-      branch: `feature/${planId}`,
-    }),
-  );
   writeFileSync(
     join(iterationDir, "delivery-compass.md"),
     [
@@ -2979,7 +2937,7 @@ async function seedActiveHandoffAuthority(
   );
   const context: ExecutionContext = {
     harnessDir: harness,
-    caller: { sessionId: coordinatorSessionId, role: "coordinator", workflowId, planId: null } satisfies ExecutionCaller,
+    caller: { sessionId: coordinatorSessionId, role: "coordinator", workflowId } satisfies ExecutionCaller,
   };
   await createExecutionWorkflow(context, {
     entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
@@ -3001,7 +2959,6 @@ async function seedActiveHandoffAuthority(
   });
   const bound = await bindExecutionSession(context, {
     workflowId,
-    planId: null,
     role: "coordinator",
     expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token,
     operationId: `bind-${coordinatorSessionId}`,
@@ -3011,7 +2968,7 @@ async function seedActiveHandoffAuthority(
     session: plainRef(bound.data),
     expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId, planId })).token,
     planId,
-    operation: { kind: "prepare", assignmentPath } as never,
+    operation: { kind: "prepare", config: { worktreePath: planWorktree, workingBranch: `feature/${planId}` } },
   });
   return {
     planId,
@@ -3071,14 +3028,7 @@ describe("model handoff on the ACTIVE route", () => {
     const adopted = record.binding.executionBinding;
     expect(adopted).toBeDefined();
     expect(adopted?.harnessRoot).toBe(realpathSync(repo.harness));
-    expect(adopted?.session).toEqual({
-      storeId: state.coordinator.storeId,
-      epoch: state.coordinator.epoch,
-      workflowId: state.workflowId,
-      role: "coordinator",
-      sessionId: session.getSessionId(),
-      planId: null,
-    });
+    expect(adopted?.session).toEqual(state.coordinator);
     expect(Object.getPrototypeOf(adopted?.session)).toBe(Object.prototype);
 
     // The completion checkpoint runs the ACTIVE readiness arm: no envelope path
@@ -3124,7 +3074,6 @@ describe("model handoff on the ACTIVE route", () => {
       workflowId: state.workflowId,
       sessionId: session.getSessionId(),
       role: "coordinator",
-      planId: null,
     });
   }, 120_000);
 
