@@ -185,6 +185,39 @@ function storePath(context: StoreContext): string {
 }
 
 /**
+ * Bounded turns the reported clean-close case may wait for the runtime's
+ * collection-scheduled sidecar cleanup (#360). Only the WAIT is bounded: the
+ * assertions after it are not, and whatever residue survives the bound still
+ * fails their strict guards.
+ */
+const QUIESCENCE_TURNS = 100;
+
+/**
+ * Wait, within a bound of event-loop turns, for the runtime's
+ * collection-scheduled SQLite cleanup to land. This runtime completes a closed
+ * connection's cleanup — checkpoint every committed frame into the database
+ * file, then remove the now-empty `-wal`/`-shm` pair — when the closed handle
+ * is collected, not when `close()` returns (#360), so the post-close store
+ * shape is the garbage collector's to schedule rather than the test's to
+ * assume: a single forced collection is not a guarantee that the cleanup has
+ * already completed. Each turn forces a collection and then yields one
+ * event-loop turn before looking again (the yield is a turn, never a duration;
+ * the sibling execution-recovery case yields the same way). This only waits:
+ * it never relaxes the caller's guard, and a store that never reaches its
+ * quiesced shape fails that guard exactly as it did before.
+ */
+async function settleQuiescedSidecars(context: StoreContext): Promise<void> {
+  const wal = `${storePath(context)}-wal`;
+  const shm = `${storePath(context)}-shm`;
+  for (let turn = 0; turn < QUIESCENCE_TURNS; turn++) {
+    if (!existsSync(wal) && !existsSync(shm)) return;
+    Bun.gc(true);
+    if (!existsSync(wal) && !existsSync(shm)) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
  * Write a real pre-migration-4 store: migrations 1–3 applied with the exact
  * checksums such a store carries, plus representative issue/catalog records
  * and a live issue/catalog authority state. `rogueTable` simulates a store
@@ -2654,11 +2687,16 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     );
     const accepted = executionFootprint(context);
 
-    Bun.gc(true);
     // The precondition this case is about: SQLite's own quiesced shape — every
     // committed frame in the database file, both sidecars gone — is really on
-    // disk. If a runtime stops leaving it, this fails here rather than passing
-    // the reads below for the wrong reason.
+    // disk. This runtime lands that cleanup at handle collection rather than at
+    // `close()` return (#360), so a single forced collection is not a guarantee
+    // that the scheduled cleanup has already completed: the case waits for the
+    // shape — within a bound of event-loop turns — before it asserts it. The
+    // wait is the only thing that is bounded: if the shape is still absent
+    // after it, these guards fail on the residual files, exactly as before, and
+    // the reads below never run for the wrong reason.
+    await settleQuiescedSidecars(context);
     expect(existsSync(`${storePath(context)}-wal`)).toBe(false);
     expect(existsSync(`${storePath(context)}-shm`)).toBe(false);
 
@@ -2695,9 +2733,11 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
       sessionBind("wf-1", null, workflowToken, "bind-clean-close-coordinator"),
     );
     // Every handle the case opened is closed by now, but this runtime completes
-    // a closed connection's cleanup at collection, so force it: past this point
-    // the post-close shape is SQLite's own quiesced shape.
-    Bun.gc(true);
+    // a closed connection's cleanup at collection (#360), so wait for it —
+    // within a bound of event-loop turns — before measuring the shape. The
+    // bound is the only bounded thing: the discriminator below still fails on
+    // any content-bearing residue the wait could not fold away.
+    await settleQuiescedSidecars(context);
     const walPath = `${storePath(context)}-wal`;
     const walBytes = existsSync(walPath) ? statSync(walPath).size : 0;
     if (existsSync(walPath)) expect(walBytes).toBe(0);
