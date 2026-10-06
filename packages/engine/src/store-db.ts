@@ -22,9 +22,26 @@ import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 // Type-only: the activation validator itself lives in store-activation.ts, which
-// imports this module; a runtime import here would be a cycle. The value is
-// validated by the caller before it reaches a migration.
-import type { ActivationAttestation } from "./store-activation.js";
+// imports this module. That cycle is safe here — the validator is only
+// dereferenced inside an async function body, never during module evaluation, so
+// the ESM live binding is already initialised by the time it runs.
+import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
+
+/**
+ * The real operator stop evidence, run through the existing activation
+ * validator. Every exported upgrade/init entrypoint applies it before touching
+ * schema, so a thin or malformed document is never accepted as authority.
+ */
+async function validatedActivationAttestation(value: unknown): Promise<ActivationAttestation> {
+  return validateActivationAttestation(value);
+}
+
+/** A validated instant: `Date.parse` finite, so offset spellings compare chronologically. */
+function parsedInstant(value: unknown): number | null {
+  if (typeof value !== "string" || value === "") return null;
+  const instant = Date.parse(value);
+  return Number.isFinite(instant) ? instant : null;
+}
 
 /** Minimum Bun runtime floor (contract §8). */
 export const MIN_BUN_VERSION = "1.4.0";
@@ -1263,51 +1280,39 @@ function normalizeExecutionState(db: StoreDb, context: MigrationContext): void {
  * The per-plan integration merges the removed plan-PM seat left held are an
  * UNSUPPORTED orphan once their holder rows retire: they can never be released
  * through the surviving API. This pass settles exactly those claims in the SAME
- * cutover that retires the holder rows, so the store never keeps an unreachable
- * mutex — and it REFUSES, keeping every byte of the schema-8 store, when an
- * orphan it cannot account for is present. The whole migration batch rolls back,
- * so the operator retries the same public `store upgrade --attestation <file>`
- * once their stop evidence is complete.
+ * cutover that retires the holder rows.
  *
- * An orphan is a held claim whose `holder` names a plan-PM session this cutover
- * retires. It is settled only when the operator's FULL validated attestation:
+ * The safe basis is the staged REAL retired plan-PM session's exact
+ * (workflow_id, session_id) pair matched against the held claim's own
+ * `workflow_id`/`holder` — never a globally unique session-id assumption, and
+ * never a claim whose plan does not actually exist in that workflow. The
+ * operator's FULL validated attestation must name that holder as stopped at or
+ * after the claim, and at or before this cutover.
  *
- * - NAMES that exact holder in `stoppedSessions` with state stopped/reloaded;
- * - is a real document (version, operator authorization, at least one current
- *   consumer) — the caller validated it before the transaction;
- * - attests at or after the claim (`claimed_at <= attestedAt`);
- *
- * and the retired session/lease identity matches EXACTLY: same workflow, same
- * plan, same holder. The claim becomes a released tombstone naming the stopped
- * holder; the holder is never made a coordinator and the claim is never moved to
- * another identity.
+ * A missing or plan-mismatched legacy lease is a REPORTED historical
+ * disposition, not a blocker: the retired seat's authority is what this cutover
+ * withdraws, and the surviving ordinary metadata/prepare path remains the
+ * revisable record of scope. A foreign workflow, a non-retired session, a
+ * current live holder, and a claim newer than the attested stop are all left
+ * exactly where they are.
  */
 function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationContext): void {
-  const retired = db
+  // Retired plan-PM sessions, keyed by (workflow, session) so the same session
+  // id recorded under another workflow is never cross-matched.
+  const retiredByWorkflowSession = new Map<string, string>();
+  for (const row of db
     .prepare("select workflow_id, plan_id, session_id from execution_session_cutover")
-    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; session_id?: unknown }>;
-  const holders = new Map<string, { workflowId: string; planId: string }>();
-  for (const row of retired) {
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; session_id?: unknown }>) {
     if (typeof row.session_id !== "string" || row.session_id === "") continue;
-    holders.set(row.session_id, { workflowId: String(row.workflow_id ?? ""), planId: String(row.plan_id ?? "") });
+    retiredByWorkflowSession.set(`${String(row.workflow_id ?? "")}/${row.session_id}`, String(row.plan_id ?? ""));
   }
-  const leases = db
-    .prepare("select workflow_id, plan_id, lease_json from execution_lease_cutover")
-    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; lease_json?: unknown }>;
-  const leaseOwners = new Set<string>();
-  for (const row of leases) {
-    const raw: unknown = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
-    if (!isRecord(raw)) continue;
-    const holder = raw.holder;
-    if (typeof holder === "string" && holder !== "") {
-      leaseOwners.add(`${String(row.workflow_id ?? "")}/${String(row.plan_id ?? "")}/${holder}`);
-    }
-  }
+  const attestation = context.attestation;
+  const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+  const cutoverInstant = parsedInstant(new Date().toISOString());
   const claims = db
     .prepare("select workflow_id, lease_json from execution_integration_cutover")
     .all() as Array<{ workflow_id?: unknown; lease_json?: unknown }>;
   const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
-  const attestation = context.attestation;
   for (const row of claims) {
     const workflowId = String(row.workflow_id ?? "");
     const raw: unknown = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
@@ -1317,33 +1322,34 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
     const claim = raw;
     if (claim.status === "released") continue;
     const holder = claim.holder;
-    const planId = claim.plan_id;
     if (typeof holder !== "string" || holder === "") continue;
-    const seat = holders.get(holder);
-    // Not a retired plan-PM holder's claim: a coordinator's or a foreign claim is
-    // left exactly where it is.
-    if (seat === undefined) continue;
-    const exactIdentity =
-      seat.workflowId === workflowId &&
-      typeof planId === "string" &&
-      planId === seat.planId &&
-      leaseOwners.has(`${workflowId}/${seat.planId}/${holder}`);
-    if (!exactIdentity) {
+    const seatPlanId = retiredByWorkflowSession.get(`${workflowId}/${holder}`);
+    // Not a retired plan-PM holder's claim in THIS workflow: a coordinator's, a
+    // foreign workflow's or a live claim is left exactly where it is.
+    if (seatPlanId === undefined) continue;
+    // The claim must name a plan that actually exists in this workflow; a claim
+    // pointing at a missing business row is registry corruption handled through
+    // the supported backup/restore API, not something an attestation can rewrite.
+    const planRow = db.prepare("select 1 as present from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, typeof claim.plan_id === "string" ? claim.plan_id : "");
+    if (planRow === undefined) {
       throw new StoreError(
-        "store.upgrade-attestation-missing",
-        `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} whose plan/lease identity does not match ` +
-          `the retired record; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's complete stop attestation, ` +
-          `or resolve the mismatched historical facts, then retry.`,
+        "store.corrupt",
+        `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in ` +
+          `this workflow's registry. Restore the store from its supported backup/restore recovery point; nothing was modified.`,
       );
     }
     const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
+    const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+    const claimedInstant = parsedInstant(claim.claimed_at);
     const settled =
       attestation !== undefined &&
       attested !== undefined &&
       (attested.state === "stopped" || attested.state === "reloaded") &&
-      typeof claim.claimed_at === "string" &&
-      claim.claimed_at !== "" &&
-      claim.claimed_at <= attestation.attestedAt;
+      claimedInstant !== null &&
+      attestedInstant !== null &&
+      cutoverInstant !== null &&
+      claimedInstant <= attestedInstant &&
+      attestedInstant <= cutoverInstant;
     if (!settled) {
       throw new StoreError(
         "store.upgrade-attestation-missing",
@@ -1357,7 +1363,7 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
       status: "released",
       prior_holder: holder,
       released_by: "store-upgrade",
-      released_at: attestation.attestedAt,
+      released_at: attestation!.attestedAt,
       release_reason: `retired-plan-pm-seat:${holder}`,
     };
     update.run(JSON.stringify(tombstone), workflowId);
@@ -1999,9 +2005,13 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
  */
 export async function initializeStore(
   context: StoreContext,
-  options: { attestation?: MigrationContext["attestation"] } = {},
+  options: { attestation?: unknown } = {},
 ): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
+  // The operator's stop evidence is validated by the existing activation
+  // validator before any file is created: a thin or malformed document is never
+  // accepted as authority for a cutover.
+  const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
   const dbPath = storeDbPath(context);
   const alreadyExists = (): StoreError =>
     new StoreError(
@@ -2039,7 +2049,7 @@ export async function initializeStore(
         db.exec("rollback");
         throw alreadyExists();
       }
-      applyPendingMigrations(db, { alreadyInTransaction: true, attestation: options.attestation });
+      applyPendingMigrations(db, { alreadyInTransaction: true, attestation });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
     } catch (error) {
@@ -2097,7 +2107,7 @@ export async function initializeStore(
  */
 export async function upgradeStore(
   context: StoreContext,
-  options: { attestation?: MigrationContext["attestation"] } = {},
+  options: { attestation?: unknown } = {},
 ): Promise<{ schemaVersion: number }> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
@@ -2108,6 +2118,10 @@ export async function upgradeStore(
         `genuinely empty workspace. Nothing was created.`,
     );
   }
+  // The operator's stop evidence is validated by the existing activation
+  // validator before the schema is touched: a thin or malformed document is
+  // never accepted as authority for a cutover.
+  const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
   let db: StoreDb;
   try {
     db = await connect(dbPath, "write");
@@ -2115,7 +2129,7 @@ export async function upgradeStore(
     refuseOpenFailure(error, dbPath);
   }
   try {
-    const schemaVersion = applyPendingMigrations(db, { attestation: options.attestation });
+    const schemaVersion = applyPendingMigrations(db, { attestation });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.

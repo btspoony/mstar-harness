@@ -1606,6 +1606,20 @@ export async function recoverExecutionCoordinator(
   // activation barrier: the existing validator project the declared shape, so a
   // credential-bearing or incomplete attestation never reaches the store.
   const attestation = validateActivationAttestation(input?.attestation);
+  // The replacement identity must be a genuinely acquired, CURRENT session: an
+  // attestation that names it as stopped/reloaded means the operator is asking
+  // this recovery to resurrect a stopped identity, which it never does. The
+  // refusal happens BEFORE any mutation, so every session row, claim and business
+  // fact is left exactly as it was; the supported retry uses a real acquired
+  // replacement and an attestation whose stop list covers only the prior holder.
+  if (attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+    throw invalidWorkflowTransition(
+      `the replacement coordinator ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; a recovery ` +
+          `binds a genuinely acquired CURRENT session and never resurrects a stopped one. Rerun with the replacement's own acquired session id ` +
+          `and an attestation whose stop list covers only the prior holder ${JSON.stringify(priorSessionId ?? "<none>")}.`,
+      { workflow_id: workflowId, session_id: caller.sessionId },
+    );
+  }
   const requestHash = recoverCoordinatorRequestHash(caller, workflowId, {
     expected: input.expected,
     priorSessionId,
@@ -1773,9 +1787,10 @@ function readCoordinatorRows(tx: ExecutionTransaction, workflowId: string): Sess
  *
  * The claim is released, never transferred: the released tombstone keeps its
  * prior holder and epoch, and row/business state is untouched. This is the
- * supported recovery for a legacy per-plan holder's integration mutex and for a
- * coordinator that crashed mid-integration — no plan-PM seat, reconcile, or
- * transfer verb is reintroduced.
+ * supported recovery for a coordinator that crashed mid-integration — no
+ * plan-PM seat, reconcile, or transfer verb is reintroduced. (A legacy per-plan
+ * holder's mutex is settled by the store cutover, not this coordinator
+ * bootstrap.)
  */
 function settleStoppedIntegrationClaim(
   tx: ExecutionTransaction,
@@ -1785,14 +1800,19 @@ function settleStoppedIntegrationClaim(
   // The prior holder must be NAMED by the operator's stop evidence, the caller
   // must not be one of the attested-stopped sessions, and the claimed instant must
   // not postdate the stop attestation (a claim taken after the holder was observed
-  // stopped belongs to a newer attempt).
+  // stopped belongs to a newer attempt). Timestamps compare as PARSED instants,
+  // never as strings: offset spellings and precision differ across producers.
   if (priorSessionId === null || priorSessionId === callerId) return;
   if (!stoppedSessionIds.includes(priorSessionId) || stoppedSessionIds.includes(callerId)) return;
   const graph = readExecutionStateGraph(tx);
   const claim = graph.data.workflows.find((workflow) => workflow.state.id === workflowId)?.integrationLease ?? null;
   if (claim === null || claim.holder !== priorSessionId) return;
-  const claimedAt = isNonEmptyString(claim.claimed_at) ? claim.claimed_at : null;
-  if (claimedAt === null || claimedAt > attestedAt || attestedAt > at) return;
+  const claimedAt = isNonEmptyString(claim.claimed_at) ? Date.parse(claim.claimed_at) : null;
+  const attestedAtInstant = Date.parse(attestedAt);
+  const recoveredAtInstant = Date.parse(at);
+  if (claimedAt === null || !Number.isFinite(claimedAt)) return;
+  if (!Number.isFinite(attestedAtInstant) || !Number.isFinite(recoveredAtInstant)) return;
+  if (claimedAt > attestedAtInstant || attestedAtInstant > recoveredAtInstant) return;
   releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: callerId, at });
 }
 

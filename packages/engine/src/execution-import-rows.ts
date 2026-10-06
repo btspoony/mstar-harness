@@ -56,10 +56,11 @@ function insertCoordinatorSession(tx: ExecutionTransaction, workflowId: string, 
  */
 function projectLegacyRowCoordination(row: Record<string, unknown>): Record<string, unknown> {
   const legacy = isPlainObject(row.coordination) ? row.coordination : {};
-  // The block's `revision` belongs to the dedicated `execution_plans.revision`
-  // column, never to the stored JSON (the DB representation invariant the whole
-  // reader set relies on), so the projection carries no revision.
-  const out: Record<string, unknown> = {};
+  // A SNAPSHOT row's coordination keeps the revision the live snapshot schema
+  // requires; the DB writer strips it before storing, because there the value
+  // belongs to the dedicated `execution_plans.revision` column alone.
+  const revision = Number.isInteger(legacy.revision) && (legacy.revision as number) >= 0 ? (legacy.revision as number) : 1;
+  const out: Record<string, unknown> = { revision };
   const prepared = legacy.prepared;
   if (isPlainObject(prepared)) {
     const qaGate = prepared.qa_gate;
@@ -139,6 +140,30 @@ function projectLegacyLeaseScope(row: Record<string, unknown>): Record<string, s
 }
 
 /**
+ * The raw historical inventory a stopped workspace's plan rows carry BEFORE any
+ * projection: which rows were bound to the removed seat and which carried a
+ * per-plan lease. The import bookkeeping (Blocked normalisation and the
+ * receipt's dispositions) must read these from the RAW rows, because the
+ * projected snapshot no longer carries them.
+ */
+export function legacySnapshotInventory(raw: unknown): ReadonlyMap<string, { droppedSession: boolean; droppedLease: boolean }> {
+  const inventory = new Map<string, { droppedSession: boolean; droppedLease: boolean }>();
+  const snapshot = isPlainObject(raw) ? raw : {};
+  const plans = Array.isArray(snapshot.plans) ? snapshot.plans : [];
+  for (const plan of plans) {
+    if (!isPlainObject(plan)) continue;
+    const id = typeof plan.id === "string" && plan.id !== "" ? plan.id : typeof plan.plan_id === "string" ? plan.plan_id : "";
+    if (id === "") continue;
+    const coordination = isPlainObject(plan.coordination) ? plan.coordination : {};
+    inventory.set(id, {
+      droppedSession: coordination.session !== undefined,
+      droppedLease: plan.execution_lease !== undefined,
+    });
+  }
+  return inventory;
+}
+
+/**
  * Project a stopped workspace's RAW snapshot onto the target shape BEFORE any
  * current validator sees it. Discovery and the writer both validate with the
  * live exact-key schema, and that schema refuses the members the removed
@@ -192,16 +217,17 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
   const insertInput = tx.db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) values (?, ?, 1, ?, ?, ?)");
   const routeSnapshot = { ...(snapshot as unknown as WorkflowSnapshot), plans: plans.map((plan) => ({ id: plan.id })) } as WorkflowSnapshot;
   plans.forEach(({ id: planId, row, pin, droppedLease }, ordinal) => {
-    const block = projectLegacyRowCoordination(row);
+    // The snapshot row was projected at discovery and carries the revision the
+    // live snapshot schema requires; the stored DB block strips it, because
+    // there that value belongs to the dedicated revision column alone.
+    const projected = isPlainObject(row.coordination) ? row.coordination : {};
+    const block: Record<string, unknown> = { ...projected };
+    delete block.revision;
     // Source/cleanup ownership survives the removed lease: its recorded
     // worktree/branch move into the ordinary row metadata the target shape uses,
-    // so L1 facts and cleanup ownership are never lost with the seat.
-    const scope = projectLegacyLeaseScope(row);
+    // so L1 facts and cleanup ownership are never lost with the seat. The
+    // projection already merged that scope into metadata at discovery.
     const state: Record<string, unknown> = { ...row, id: planId };
-    if (Object.keys(scope).length > 0) {
-      const metadata = isPlainObject(row.metadata) ? { ...row.metadata } : {};
-      state.metadata = { ...metadata, ...scope };
-    }
     // A stopped workspace's in-progress claim is not carried into the new
     // authority as live work: that is why the row imports as Blocked rather
     // than apparently being worked on.
@@ -216,7 +242,7 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     const stateGate = validatePlanRow(state);
     if (!stateGate.ok) conflict(`plan ${planId} of workflow ${id} has an invalid stored row (${stateGate.violations.map((v) => v.code).join(", ")}).`);
     const violations = validateRowCoordination(
-      { revision: 1, ...block },
+      block,
       `execution_plans(${id},${planId}).coordination_json`,
       rowValidationRoute(routeSnapshot, state as never),
     );

@@ -8,7 +8,7 @@ import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, ty
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
-import { projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
+import { legacySnapshotInventory, projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { initializeStore, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
 
 export type MinimalImportResult = {
@@ -162,6 +162,9 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
       skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: `snapshot is unrecognizable (${snapshotGate.violations.map((v) => v.code).join(", ")}); left in place` });
       continue;
     }
+    // The raw historical inventory (removed-seat bindings and per-plan leases)
+    // is read from the RAW rows, before projection deletes them.
+    const rawInventory = legacySnapshotInventory(snapshotValue);
     const snapshot = projectLegacySnapshot(snapshotValue);
     if (existsSync(sessionsDir)) {
       const sessionsInfo = lstatSync(sessionsDir);
@@ -211,14 +214,11 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
       planIds.add(id);
       const planRow: Record<string, unknown> = { ...rawPlan, id };
       delete planRow.plan_id;
-      // A legacy per-plan PM binding and a legacy held lease are DROPPED
-      // projections of the removed seat, not preconditions: the stopped
-      // workspace's business row state (status, progress, evidence) imports
-      // unchanged, and a row that was apparently in progress under a claim
-      // nobody now holds imports as Blocked rather than as live work.
-      const droppedSession = isPlainObject(planRow.coordination) && planRow.coordination.session !== undefined;
-      const droppedLease = isPlainObject(planRow.execution_lease);
-      plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, entry.id, id), droppedSession, droppedLease });
+      // The removed-seat inventory comes from the RAW rows: the projected
+      // snapshot no longer carries a session binding or a per-plan lease, so
+      // reading it there would silently report nothing was dropped.
+      const rawFlags = rawInventory.get(id) ?? { droppedSession: false, droppedLease: false };
+      plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, entry.id, id), droppedSession: rawFlags.droppedSession, droppedLease: rawFlags.droppedLease });
     }
     if (coordinator !== null) verifyBinding(coordinator, { root, dir, workflowId: entry.id });
     for (const dirent of readdirSync(dir, { withFileTypes: true })) {
