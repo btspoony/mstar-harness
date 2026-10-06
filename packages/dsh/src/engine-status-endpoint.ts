@@ -82,7 +82,7 @@ const ENDPOINT_LOGGER = 'mstar-engine-status-endpoint'
 /**
  * The session's CURRENT control state (D4): the selection the server resolves
  * for the session it just validated — the durable picker record folded with
- * the verified live Agent's lease holder. Deliberately SEPARATE from
+ * the live session's structural identity. Deliberately SEPARATE from
  * `payload` / `at` / `turn`, which keep naming the last model emission.
  */
 export interface MstarEngineStatusBinding {
@@ -386,10 +386,9 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
 
   /**
    * The session's CURRENT selection: the durable picker record folded with the
-   * session's structural identity and — for a LIVE session — the verified live
-   * Agent's opaque id as the lease holder. An unreadable binding record keeps
+   * session's structural identity. An unreadable binding record keeps
    * the structural hint only (the pick is unknown, never invented), and the
-   * request's `sessionId` is NEVER substituted for the holder.
+   * request's `sessionId` is NEVER substituted for the session identity.
    */
   private currentSelection(
     harnessDir: string,

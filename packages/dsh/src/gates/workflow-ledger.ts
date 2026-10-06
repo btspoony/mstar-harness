@@ -218,18 +218,6 @@ interface SessionsView {
 }
 
 /**
- * Minimal structural view of the live `agents` service (`@deepseek-ai/dsh-agent`
- * `AgentRegistry` — the same read the host endpoint and the plan-mode bridge
- * perform): `get(sessionId)` yields the session's live Agent, whose own `id`
- * IS the session identity the selection hint forwards. Absent service (a
- * composition without dsh-agent, or one published after this consumer) → no
- * holder, never a guessed one.
- */
-interface AgentsView {
-  get(id: string): unknown
-}
-
-/**
  * Structural view of one session on the INSTALLED `Session` surface
  * (upstream `core/session`, live-verified: `'events' in session === false`):
  * the identity header (`header.id` is the session id the real Session's `id`
@@ -798,9 +786,8 @@ export function registerWorkflowLedger(
     const workspace = sessionCwdOf(session)
     const harnessDir = resolver.forWorkspace(workspace)
     if (harnessDir === null) return
-    // D4 binding: this session's durable pick + no-backfill floor, and — for a
-    // LIVE session — its lease holder (the identity the dispatch gate already
-    // verified for this dispatch). An UNREADABLE record is not "no pick": the
+    // D4 binding: this session's durable pick + no-backfill floor. An
+    // UNREADABLE record is not "no pick": the
     // row is left alone (no workflow-dir write, no floor write) and
     // re-evaluated at the next scan rather than attributed to whichever
     // lifecycle happens to resolve.
@@ -898,8 +885,8 @@ export function registerWorkflowLedger(
     const bounded = Math.max(floor, cut)
     if (resolveTarget !== undefined) return bounded
     const selected = binding.binding?.selectedWorkflowId
-    // The SAME hint `consume` builds for this session (identity + lease
-    // holder + pick), or the scan would start from a different workflow dir
+    // The SAME hint `consume` builds for this session (identity + pick), or
+    // the scan would start from a different workflow dir
     // than the rows belong in.
     const hint: SessionHint = {
       sessionId: sid,

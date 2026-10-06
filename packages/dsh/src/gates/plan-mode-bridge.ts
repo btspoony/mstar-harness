@@ -237,10 +237,10 @@ export interface PlanModeSyncInput {
 
 /**
  * The root session's carrying hint: the structural identity off the agent
- * (cwd + `header.id` + its opaque agent id as the lease holder) folded with
+ * (cwd + `header.id`) folded with
  * the session's DURABLE pick when the binding record is readable. An
  * unreadable record keeps the structural hint only — the pick is unknown,
- * never invented, so the resolver falls back to lease/cwd/unique evidence (or
+ * never invented, so the resolver falls back to row-scope/cwd/unique evidence (or
  * reports unbound) instead of this bridge guessing.
  * @param agent - the root agent.
  * @param harnessDir - the resolved `{HARNESS_DIR}` for its workspace.

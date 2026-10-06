@@ -503,11 +503,10 @@ export function sessionHeaderIdOf(agent: unknown): string | undefined {
 }
 
 /**
- * The opaque id of one agent — the LEASE-holder identity (`Agent.id`,
- * structural read). Deliberately distinct from {@link sessionHeaderIdOf}:
- * the durable picker key is `session.header.id` while a lease's `holder` is
- * the dispatching agent's own id, and the two are never substituted for one
- * another (no host-prefix coercion — the resolver compares them opaquely).
+ * The opaque id of one agent (`Agent.id`, structural read). Deliberately
+ * distinct from {@link sessionHeaderIdOf}: the durable binding key is
+ * `session.header.id`, while this is the dispatching agent's own id — used as
+ * a catalog cache-key component, never substituted for the session id.
  */
 export function agentIdOf(agent: unknown): string | undefined {
   const id = (agent as { id?: unknown } | null | undefined)?.id
