@@ -63,9 +63,9 @@ import {
   listPendingCatalogRegistrations,
   reconcileCatalogExecution,
   registerCatalogExecution,
-  resolveCatalogRegistrationState,
-  type CatalogExecutionRequest,
 } from "../src/catalog-registration.js";
+import { bindPlanSession, executionInputHash, mutatePlanCoordination, readPlanCoordination, recoverPrepareCoordinator } from "../src/coordination.js";
+import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactStore } from "../src/store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import { unregisterWorkflow, validateStatus } from "../src/status.js";
@@ -1000,31 +1000,48 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
 
   const completion = { policy: "acceptance report", evidence: "sdd/plan-a/report.md" };
 
-  test("a Done report-only row freezes its recorded completion policy and reference", async () => {
+  test("an accepted matching report-only completion policy/reference is frozen, while identical evidence replays", async () => {
     const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "InReview", done_at: undefined })] });
     const recorded = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
     expect(recorded.written).toBe(true);
     const done = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     (done.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
     writeFileSync(path, JSON.stringify(done, null, 4) + "\n");
+    const acceptedBytes = readFileSync(path, "utf8");
+    const acceptedCompletion = JSON.parse(acceptedBytes).delivery.completion;
 
-    const edited = { ...completion, evidence: "edited document body remains ordinary content" };
-    await expect(recordWorkflowDelivery(id, dir, { evidence: { completion: edited } })).rejects.toMatchObject({
+    await expect(recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "edited document body remains ordinary content" } } })).rejects.toMatchObject({
       code: "coordination.completion-frozen",
+      details: { workflow_id: id, completion_policy: completion.policy },
     });
+    expect(readFileSync(path, "utf8")).toBe(acceptedBytes);
     await expect(
       recordWorkflowDelivery(id, dir, { evidence: { completion: { policy: "different policy", evidence: completion.evidence } } }),
-    ).rejects.toMatchObject({ code: "coordination.completion-frozen" });
+    ).rejects.toMatchObject({
+      code: "coordination.completion-frozen",
+      details: { workflow_id: id, completion_policy: completion.policy },
+    });
+    expect(readFileSync(path, "utf8")).toBe(acceptedBytes);
     expect((await recordWorkflowDelivery(id, dir, { evidence: { completion } })).written).toBe(false);
+    expect(JSON.parse(readFileSync(path, "utf8")).delivery.completion).toEqual(acceptedCompletion);
     const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-14" });
     expect(closed.status).toBe("completed");
   });
 
-  test("a first-time fulfilment recorded after Done is refused because no recorded basis exists", async () => {
-    const { dir } = reportOnlyFixture({ plans: [legacyRow({ status: "Done" })] });
-    await expect(recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" })).rejects.toMatchObject({
-      code: "coordination.completion-frozen",
+  test.each([
+    ["missing", undefined],
+    ["mismatched", { policy: "historical policy", evidence: "historical reference" }],
+  ])("a Done report-only row with %s historical completion can be corrected", async (_state, previous) => {
+    const { dir, path } = reportOnlyFixture({
+      plans: [legacyRow({ status: "Done" })],
+      ...(previous === undefined ? {} : { delivery: { completion: previous } }),
     });
+    const corrected = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
+    expect(corrected.written).toBe(true);
+    expect(corrected.snapshot.delivery?.completion).toEqual(completion);
+    const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-14" });
+    expect(closed.status).toBe("completed");
+    expect(closed.delivery?.completion).toEqual(completion);
   });
   test("grandfathering: pre-existing delivery evidence with non-Done rows is untouched and close consultation is unchanged", async () => {
     const { dir, path } = fixture({
@@ -1413,7 +1430,7 @@ describe("coordinated-writer — coordinated close authorization", () => {
     expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
   });
-  test("failed close settles only a mutex holder recorded as stopped by coordinator recovery", async () => {
+  test("failed close settles only a mutex holder proven stopped before its claim's recovery", async () => {
     const stopped = "prior-integration-session";
     const integrationMergeLease = {
       holder: stopped,
@@ -1427,6 +1444,7 @@ describe("coordinated-writer — coordinated close authorization", () => {
       prior_session_id: stopped,
       session_id: "s-1",
       stopped_session_ids: [stopped],
+      attested_at: "2026-09-21T09:30:00Z",
     });
     const { dir, path, sessionFile } = fixture({
       integration_merge_lease: integrationMergeLease,
@@ -1444,23 +1462,71 @@ describe("coordinated-writer — coordinated close authorization", () => {
   });
 
   test.each([
-    ["unattested", []],
-    ["live holder", [recoveryEntry({ workflow_id: id, stopped_session_ids: ["some-other-session"] })]],
-  ])("failed close refuses a held integration mutex with %s evidence and writes nothing", async (_label, identityRecoveries) => {
+    {
+      name: "unrelated stopped identity",
+      holder: "prior-integration-session",
+      claimedAt: "2026-09-21T09:00:00Z",
+      audit: recoveryEntry({
+        workflow_id: id,
+        prior_session_id: "different-prior",
+        session_id: "s-1",
+        stopped_session_ids: ["different-prior", "prior-integration-session"],
+        attested_at: "2026-09-21T09:30:00Z",
+      }),
+    },
+    {
+      name: "current coordinator holder",
+      holder: "s-1",
+      claimedAt: "2026-09-21T09:00:00Z",
+      audit: recoveryEntry({
+        workflow_id: id,
+        prior_session_id: "s-1",
+        session_id: "s-1",
+        stopped_session_ids: ["s-1"],
+        attested_at: "2026-09-21T09:30:00Z",
+      }),
+    },
+    {
+      name: "claim newer than stop attestation",
+      holder: "prior-integration-session",
+      claimedAt: "2026-09-21T10:00:00Z",
+      audit: recoveryEntry({
+        workflow_id: id,
+        prior_session_id: "prior-integration-session",
+        session_id: "s-1",
+        stopped_session_ids: ["prior-integration-session"],
+        attested_at: "2026-09-21T09:30:00Z",
+      }),
+    },
+    {
+      name: "attested stop without an explicit stop instant",
+      holder: "prior-integration-session",
+      claimedAt: "2026-09-21T09:00:00Z",
+      audit: recoveryEntry({
+        workflow_id: id,
+        prior_session_id: "prior-integration-session",
+        session_id: "s-1",
+        stopped_session_ids: ["prior-integration-session"],
+      }),
+    },
+  ])("$name cannot release the integration mutex", async ({ holder, claimedAt, audit }) => {
     const { dir, path, sessionFile } = fixture({
       integration_merge_lease: {
-        holder: "prior-integration-session",
-        claimed_at: "2026-09-21T09:00:00Z",
+        holder,
+        claimed_at: claimedAt,
         plan_id: id,
         source_branch: "feature/source",
         target_branch: "main",
       },
-      identityRecoveries,
+      identityRecoveries: [audit],
     });
     const before = readFileSync(path, "utf8");
     await expect(
       closeWorkflow(id, dir, { endedAt, outcome: "failed", sessionPath: sessionFile }),
-    ).rejects.toThrow(/recover the coordinator with explicit stop attestation/);
+    ).rejects.toMatchObject({
+      code: "coordination.invalid-transition",
+      details: { workflow_id: id, status: "failed", holder },
+    });
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
@@ -2257,6 +2323,152 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     expect(result.recovered).toBe(false);
     const snapshot = JSON.parse(readFileSync(result.snapshotPath, "utf8")) as { plans: Array<{ file: string }> };
     expect(snapshot.plans[0]!.file).toBe(planPath);
+  });
+  test("ordinary coordinator prepare preserves the registered catalog pin across source edits and an SDK reopen", async () => {
+    const { root, snapshotPath } = harness();
+    const registered = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
+      plans: Array<{ id: string; metadata?: Record<string, unknown> }>;
+    };
+    const pinRow = registered.plans.find((row) => row.id === ROW_IDS[0]);
+    if (pinRow === undefined) throw new Error(`fixture plan ${ROW_IDS[0]} is missing`);
+    const frozenFixturePin = {
+      store_id: "store-accepted-before-retirement",
+      entity_revision: 3,
+      document_hash: executionInputHash(pinRow, ROW_IDS[0]),
+      relation_hash: "a".repeat(64),
+    };
+    pinRow.metadata = { ...pinRow.metadata, catalog_pin: frozenFixturePin };
+    writeFileSync(snapshotPath, `${JSON.stringify(registered, null, 2)}\n`, "utf8");
+    const prior = await bindPlanSession({
+      workflowId: id,
+      harnessDir: root,
+      cwd: root,
+      source: "local",
+      sessionId: "catalog-pin-coordinator",
+    });
+    const identity = {
+      source: "local" as const,
+      sessionId: prior.session.session_id,
+      workflowId: id,
+      role: "coordinator" as const,
+    };
+    const planPath = join(root, "plans", `${ROW_IDS[0]}.md`);
+    const before = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
+    await mutatePlanCoordination({
+      sessionPath: prior.session_file,
+      cwd: root,
+      controlRoot: root,
+      identity,
+      planId: ROW_IDS[0],
+      expectedRevision: before.revision,
+      operation: { kind: "prepare", config: { qaGate: "pm-acceptance" } },
+    });
+    const firstRead = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
+    const frozenPin = firstRead.catalog_pin?.pin;
+    expect(frozenPin).not.toBeNull();
+
+    writeFileSync(planPath, `# Edited after registration\n\n**plan_id:** ${ROW_IDS[0]}\n`, "utf8");
+    const reopened = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
+    expect(reopened.catalog_pin?.pin).toEqual(frozenPin);
+    await mutatePlanCoordination({
+      sessionPath: prior.session_file,
+      cwd: root,
+      controlRoot: root,
+      identity,
+      planId: ROW_IDS[0],
+      expectedRevision: reopened.revision,
+      operation: { kind: "prepare", config: { qaGate: "mandatory" } },
+    });
+
+    const finalRead = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
+    expect(finalRead.catalog_pin?.pin).toEqual(frozenPin);
+    expect(finalRead.prepared?.qa_gate).toBe("mandatory");
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8")).plans[0].metadata.catalog_pin).toEqual(frozenPin);
+  });
+
+  test("stopped integration claim is recovered through the public coordinator route before failed close", async () => {
+    const { root, snapshotPath } = harness();
+    await registerIterationWorkflow(id, options(root));
+
+    const prior = await bindPlanSession({
+      workflowId: id,
+      harnessDir: root,
+      cwd: root,
+      source: "local",
+      sessionId: "prior-integration-coordinator",
+    });
+    const claimedAt = new Date(Date.now() - 60_000).toISOString();
+    const stoppedAt = new Date(Date.now() - 30_000).toISOString();
+    const interrupted = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+    interrupted.integration_merge_lease = {
+      holder: prior.session.session_id,
+      claimed_at: claimedAt,
+      plan_id: ROW_IDS[0],
+      source_branch: "feature/20260918-iteration-fixture",
+      target_branch: "main",
+    };
+    writeFileSync(snapshotPath, `${JSON.stringify(interrupted, null, 2)}\n`, "utf8");
+
+    const authorizationRef = "compass D29 / coordinator recovery decision";
+    const attestation: ActivationAttestation = {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      attestedAt: stoppedAt,
+      operator: { actor: "ops-engineer", authorizationRef },
+      consumers: [{
+        entryId: "coordinator-omp",
+        kind: "coordinator",
+        entrypoint: "/opt/mstar/coordinator/dist/index.js",
+        runtime: "node",
+        runtimeVersion: "24.18.0",
+        version: "3.11.2",
+        current: true,
+        disposition: "reloaded",
+      }],
+      stoppedSessions: [{ sessionId: prior.session.session_id, host: "omp", state: "stopped" }],
+    };
+    const recovered = await recoverPrepareCoordinator({
+      cwd: root,
+      harnessDir: root,
+      identity: {
+        source: "local",
+        sessionId: "replacement-integration-coordinator",
+        workflowId: id,
+        role: "coordinator",
+      },
+      priorSessionPath: prior.session_file,
+      priorSessionId: prior.session.session_id,
+      operationId: "op-recover-interrupted-integration",
+      reason: "the integration coordinator stopped before the attempt settled",
+      authorizationRef,
+      stoppedSessionIds: [prior.session.session_id],
+      attestation,
+    });
+
+    const recoveredSnapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
+      integration_merge_lease?: unknown;
+      coordination?: { coordinator?: { session_id: string }; identity_recoveries?: Array<Record<string, unknown>> };
+    };
+    expect(recoveredSnapshot.integration_merge_lease).toBeUndefined();
+    expect(recoveredSnapshot.coordination?.coordinator?.session_id).toBe(recovered.session.session_id);
+    expect(recoveredSnapshot.coordination?.identity_recoveries?.at(-1)).toMatchObject({
+      prior_session_id: prior.session.session_id,
+      session_id: recovered.session.session_id,
+      attested_at: stoppedAt,
+      stopped_session_ids: [prior.session.session_id],
+    });
+
+    const closed = await closeWorkflow(id, join(root, "workflows", id), {
+      endedAt: new Date().toISOString(),
+      outcome: "failed",
+      sessionPath: recovered.session_file,
+    });
+    expect(closed.status).toBe("failed");
+    expect(closed.integration_merge_lease).toBeUndefined();
+    expect(closed.coordination?.identity_recoveries?.at(-1)).toMatchObject({
+      prior_session_id: prior.session.session_id,
+      session_id: recovered.session.session_id,
+      attested_at: stoppedAt,
+    });
   });
 
   test("prerequisite path: a missing or mismatched declaration refuses before any write", async () => {

@@ -634,7 +634,7 @@ export {
 } from "./execution-session.js";
 // Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
-export { bindExecutionPlanSession, mutateExecutionPlan } from "./execution-coordination.js";
+export { mutateExecutionPlan } from "./execution-coordination.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a

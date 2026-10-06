@@ -626,7 +626,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.l1.feature-scope-missing");
-    expect(result.violations[0]?.fix).toContain("plan prepare --workflow wf-1 --plan-id p-1");
+    expect(result.violations[0]?.fix).toContain("plan prepare --workflow wf-1 --plan p-1 --worktree-path <absolute-feature-worktree>");
   });
 
   test("missing row working branch → worktree.l1.feature-branch-missing", () => {
@@ -643,7 +643,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.l1.feature-branch-missing");
-    expect(result.violations[0]?.fix).toContain("plan prepare --workflow wf-1 --plan-id p-1");
+    expect(result.violations[0]?.fix).toContain('plan prepare --workflow wf-1 --plan p-1 --worktree-path "/tmp/lease" --working-branch');
   });
 
   test("missing feature worktree dir → worktree.l1.feature-missing", () => {

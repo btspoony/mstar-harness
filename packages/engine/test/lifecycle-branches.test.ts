@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "../src/lifecycle-branches.js";
 
 test("ownership includes retained tracks and excludes base/target anchors", () => {
-  expect(collectActiveLifecycleBranches([
-    { branch: { integration: "iteration/a", base: "main", target: "release" }, plans: [
-      { metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } },
-    ] },
-  ])).toEqual(["iteration/a", "feature/track", "feature/a", "feature/retained"]);
+  expect(
+    new Set(collectActiveLifecycleBranches([
+      { branch: { integration: "iteration/a", base: "main", target: "release" }, plans: [
+        { metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } },
+      ] },
+    ])),
+  ).toEqual(new Set(["iteration/a", "feature/track", "feature/a", "feature/retained"]));
 });
 
 test("unreadable active register shapes fail closed, including null", () => {

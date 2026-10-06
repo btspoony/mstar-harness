@@ -1222,8 +1222,8 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       expectedMainBranch,
       lifecycleBranches: collectActiveLifecycleBranches(match.activeSnapshots),
       rowWorktreePath,
+      rowWorkingBranch,
       workflowId: snapshot.id,
-      planId,
     });
     if (!l1.ok) throwGateFail(l1.violations);
     if (canonicalizeNearestExisting(rowWorktreePath) !== canonicalFeatureCwd) {
@@ -1232,7 +1232,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
           "high",
           "sdd.context.row-worktree-mismatch",
           `SddExecutionContext.featureCwd "${canonicalFeatureCwd}" does not match row metadata.worktree_path "${rowWorktreePath}" (plan "${planId}")`,
-          `Run coordinator \`plan prepare --workflow ${match.snapshot.id} --plan-id ${planId}\` to correct recorded row scope, or set featureCwd to the recorded worktree`,
+          `If row metadata is wrong, run \`mstar plan prepare --workflow ${snapshot.id} --plan ${planId} --worktree-path ${JSON.stringify(canonicalFeatureCwd)} --working-branch ${JSON.stringify(workingBranch)}\`; otherwise set featureCwd to the recorded worktree`,
         ),
       ]);
     }
@@ -1242,7 +1242,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
           "high",
           "sdd.context.row-branch-mismatch",
           `SddExecutionContext.workingBranch "${workingBranch}" does not match row metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`,
-          `Run coordinator \`plan prepare --workflow ${match.snapshot.id} --plan-id ${planId}\` to correct recorded row scope, or set workingBranch to the recorded branch`,
+          `If row metadata is wrong, run \`mstar plan prepare --workflow ${snapshot.id} --plan ${planId} --worktree-path ${JSON.stringify(rowWorktreePath)} --working-branch ${JSON.stringify(workingBranch)}\`; otherwise set workingBranch to the recorded branch`,
         ),
       ]);
     }
@@ -1266,7 +1266,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
             "on the normal plan route, SDD execution requires a registered running workflow row (plan-workflow-lifecycle contract \u00a76 S2; a retained terminal snapshot's row is history, never registration evidence): " +
             "register it with `mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path> " +
             `--delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}> ...` +
-            "` (`registerPlanWorkflow`), then retry \u2014 registration is create-only and preserves prior state; " +
+            "` (`registerPlanWorkflow`), then retry — registration is create-only and preserves prior state; " +
             "re-running the same register command completes an interrupted registration without duplicating identity",
           "register the plan workflow, then retry the execution",
         ),

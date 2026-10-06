@@ -1371,18 +1371,35 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
       }
     }
     let closeBase = snapshot;
-    if (snapshot.integration_merge_lease !== undefined) {
-      const stoppedHolder = snapshot.integration_merge_lease.holder;
+    const coordinatorSessionId = snapshot.coordination?.coordinator?.session_id;
+    const lease = snapshot.integration_merge_lease;
+    if (lease !== undefined) {
+      const leaseClaimedAt = Date.parse(lease.claimed_at);
       const attestedStopped =
         outcome !== "completed" &&
-        (snapshot.coordination?.identity_recoveries ?? []).some((recovery) =>
-          recovery.stopped_session_ids.includes(stoppedHolder),
-        );
+        coordinatorSessionId !== undefined &&
+        lease.holder !== coordinatorSessionId &&
+        Number.isFinite(leaseClaimedAt) &&
+        (snapshot.coordination?.identity_recoveries ?? []).some((recovery) => {
+          const stoppedAt = Date.parse(recovery.attested_at ?? "");
+          const recoveredAt = Date.parse(recovery.recovered_at);
+          return (
+            recovery.workflow_id === workflowId &&
+            recovery.prior_session_id === lease.holder &&
+            recovery.session_id === coordinatorSessionId &&
+            recovery.stopped_session_ids.includes(lease.holder) &&
+            !recovery.stopped_session_ids.includes(coordinatorSessionId) &&
+            Number.isFinite(stoppedAt) &&
+            Number.isFinite(recoveredAt) &&
+            leaseClaimedAt <= stoppedAt &&
+            stoppedAt <= recoveredAt
+          );
+        });
       if (!attestedStopped) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `workflow ${workflowId} cannot become ${outcome} while the integration merge mutex holder is live or lacks recorded stop evidence; use \`mstar workflow recover-coordinator\` with explicit stop attestation, then close as failed or stopped`,
-          { workflow_id: workflowId, status: outcome, holder: stoppedHolder },
+          `workflow ${workflowId} cannot become ${outcome} while the integration mutex holder is live or lacks a matching stop attestation at or after this claim; for pre-activation FILE authority, recover the recorded coordinator with \`mstar workflow recover-coordinator --session <prior-coordinator-envelope> --operation-id <id> --reason <reason> --authorization-ref <approved-reference> --stopped <prior-session-id> --attestation <absolute-ActivationAttestation.json>\`, then close as failed or stopped`,
+          { workflow_id: workflowId, status: outcome, holder: lease.holder, current_coordinator: coordinatorSessionId ?? null },
         );
       }
       const { integration_merge_lease: _settled, ...withoutMutex } = snapshot;
@@ -1568,18 +1585,23 @@ export async function recordWorkflowDelivery(
     }
     const previousCompletion = isPlainObject(stored.completion) ? stored.completion : undefined;
     const nextCompletion = isPlainObject(evidence.completion) ? evidence.completion : undefined;
-    if (
+    const completionAccepted =
       snapshot.delivery_kind === "verification/report-only" &&
       doneRows &&
+      nonEmptyString(snapshot.completion_policy) &&
+      previousCompletion !== undefined &&
+      previousCompletion.policy === snapshot.completion_policy &&
+      nonEmptyString(previousCompletion.evidence);
+    if (
+      completionAccepted &&
+      previousCompletion !== undefined &&
       nextCompletion !== undefined &&
-      (previousCompletion === undefined ||
-        previousCompletion.policy !== nextCompletion.policy ||
-        previousCompletion.evidence !== nextCompletion.evidence)
+      (previousCompletion.policy !== nextCompletion.policy || previousCompletion.evidence !== nextCompletion.evidence)
     ) {
       throw new CoordinationError(
         "coordination.completion-frozen",
-        `workflow ${workflowId} is Done against completion policy ${String(previousCompletion?.policy ?? snapshot.completion_policy)} and reference ${String(previousCompletion?.evidence ?? "(none)")}; keep the recorded reference and edit that document normally; a different completed intent uses its own workflow`,
-        { workflow_id: workflowId },
+        `workflow ${workflowId} has accepted completion evidence against its registered policy/reference; the accepted fulfilment cannot be replaced`,
+        { workflow_id: workflowId, completion_policy: snapshot.completion_policy },
       );
     }
     const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;

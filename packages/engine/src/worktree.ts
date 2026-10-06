@@ -450,7 +450,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
         "high",
         "worktree.l1.feature-scope-missing",
         `metadata.worktree_path is empty for plan "${planId}" — no registered feature worktree to dispatch against`,
-        `use the coordinator's ordinary \`plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan-id ${planId}\` operation to record the absolute feature worktree path and branch`,
+        `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path <absolute-feature-worktree> --working-branch ${rowWorkingBranch.trim() === "" ? "<feature-branch>" : JSON.stringify(rowWorkingBranch)}\` to record the missing worktree path`,
       ),
     );
   }
@@ -460,7 +460,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
         "high",
         "worktree.l1.feature-branch-missing",
         `metadata.working_branch is empty for plan "${planId}"`,
-        `use the coordinator's ordinary \`plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan-id ${planId}\` operation to record the feature branch`,
+        `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path ${rowWorktreePath.trim() === "" ? "<absolute-feature-worktree>" : JSON.stringify(rowWorktreePath)} --working-branch <feature-branch>\` to record the missing feature branch`,
       ),
     );
   }

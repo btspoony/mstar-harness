@@ -601,8 +601,8 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
       violation(
         "high",
         "PHASE6_DANGLING_LEASE",
-        "Terminal snapshot still carries an integration merge lease — close never releases leases",
-        "Resolve the integration attempt through the coordinator, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+        "A terminal snapshot still carries an integration mutex. The mutex must be settled before closing a failed/stopped workflow; a terminal snapshot cannot be amended by retrying close.",
+        "For a still-running workflow, use pre-activation FILE `mstar workflow recover-coordinator --session <prior-envelope> --operation-id <id> --reason <reason> --authorization-ref <reference> --stopped <prior-id> --attestation <absolute-json>` or ACTIVE `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`, then close as failed/stopped. If already terminal, preserve the snapshot and escalate an explicit workflow residual; do not retry close.",
       ),
     );
   }
@@ -894,8 +894,8 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
               violation(
                 "high",
                 "PHASE6_DANGLING_LEASE",
-                "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close requires recorded coordinator stop evidence",
-                "If the mutex holder stopped, run `mstar workflow recover-coordinator` with explicit stop attestation, close the lifecycle as failed or stopped, then re-run `mstar iteration gate --phase 6 --workflow <id>`",
+                "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close needs an attested recovery of the exact recorded coordinator holder before terminal close.",
+                "Recovery is authority-specific: pre-activation FILE uses `mstar workflow recover-coordinator --session <prior-envelope> --operation-id <id> --reason <reason> --authorization-ref <reference> --stopped <prior-id> --attestation <absolute-json>`; ACTIVE uses `mstar session recover --workflow <id> --prior-session <holder-id> --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id>`. Only recover/close while the lifecycle is running; if already terminal, preserve it and escalate an explicit workflow residual.",
               ),
             );
           }

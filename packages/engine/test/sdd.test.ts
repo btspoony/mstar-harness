@@ -1237,7 +1237,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       const branchErr = errOf(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
       expect(branchErr.exitCode).toBe(1);
       expect(branchErr.message).toContain("sdd.context.row-branch-mismatch");
-      expect(branchErr.message).toContain("plan prepare --workflow wf-1 --plan-id");
+      expect(branchErr.message).toContain("plan prepare --workflow wf-1 --plan");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1251,7 +1251,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("worktree.l1.feature-scope-missing");
-      expect(err.message).toContain("plan prepare --workflow <id> --plan-id <id>");
+      expect(err.message).toContain("plan prepare --workflow <id> --plan <id>");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
