@@ -4,14 +4,14 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import { assertExecutionFileWriteAllowed, initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
 import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
 import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
 import { mutateExecutionPlan } from "./execution-coordination.js";
-import { executionInputHash, executionInputSelection } from "./coordination.js";
+import { executionInputHash, executionInputSelection, resolveProcessHarnessDir } from "./coordination.js";
 import { previewExecutionRestore, restoreExecutionBackup } from "./execution-recovery.js";
 import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
@@ -1114,15 +1114,16 @@ test("import records that stale integration leases must be reclaimed", async () 
   }
 });
 
-test("existing git-root store stays reachable: upgrade imports into the same db instead of creating a second empty store", async () => {
-  // Old layout per Greptile Issue 2: harnessDir is a repo root with a .mstar
-  // child; the store lives at <root>/.mstar/store.db (the resolver's own
-  // selection, unchanged by this PR). Pre-seed marked data there, then run
-  // the upgrade against the repo root and prove the SAME database received
-  // the import — no second, empty store at <root>/store.db.
+test("a discovered workspace store stays reachable: upgrade imports into the same db instead of creating a second empty store", async () => {
+  // Process discovery selects the .mstar store before the domain context is
+  // constructed. Preserve its marked data and import into that same database,
+  // never a second, empty store at the workspace root.
   const repoRoot = join(ROOT, "git-root-reachable");
   mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
-  const storeContext: StoreContext = { harnessDir: repoRoot };
+  const discovered = resolveProcessHarnessDir(repoRoot);
+  expect(discovered).toBe(join(repoRoot, ".mstar"));
+  if (discovered === null) throw new Error("the workspace harness must be discoverable");
+  const storeContext: StoreContext = { harnessDir: discovered };
   const seeded = await initializeStore(storeContext);
   try { seeded.close(); } catch { /* already closed by initializeStore */ }
   const marked = await openStore(storeContext, "read");
@@ -1340,12 +1341,12 @@ test("no-store upgrade initializes execution schema and imports every populated 
     afterReplay.close();
   }
 });
-test("store path preserves fail-closed refusal for an unresolved linked worktree", () => {
+test("FILE authority discovery preserves fail-closed refusal for an unresolved linked worktree", () => {
   const harnessDir = join(ROOT, "unresolved-linked-checkout");
   mkdirSync(join(harnessDir, "plans"), { recursive: true });
   writeFileSync(join(harnessDir, ".git"), "gitdir: /missing/worktree/metadata\n");
 
-  expect(() => storeDbPath({ harnessDir })).toThrow("linked checkout");
+  expect(() => assertExecutionFileWriteAllowed({ harnessDir })).toThrow("linked checkout");
 });
 
 

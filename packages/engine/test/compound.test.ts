@@ -343,7 +343,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
       mkdirSync(dirname(join(harness, "knowledge", relative)), { recursive: true });
       writeFileSync(join(harness, "knowledge", relative), "# doc\n");
     }
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
     return { root, context };

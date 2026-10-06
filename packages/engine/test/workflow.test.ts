@@ -2559,14 +2559,14 @@ describe("catalog registration — the journal joins this producer to the catalo
   /**
    * A temp workspace with the real harness marker (`{root}/.mstar`) and an
    * initialized active store, plus the artifact store pinned to `root` — the
-   * producers write `{root}/status.json` + `{root}/workflows/`, the store and
-   * catalog roots resolve under the marker.
+   * producers write `{root}/status.json` + `{root}/workflows/`, while the
+   * store and catalog contexts explicitly select the marker.
    */
   async function workspace(prefix: string): Promise<{ root: string; context: StoreContext }> {
     const root = tmpRoot(prefix);
     roots.push(root);
     mkdirSync(join(root, ".mstar"), { recursive: true });
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: join(root, ".mstar") };
     const handle = await initializeStore(context);
     handle.close();
     setArtifactStore(createFsStore(root));

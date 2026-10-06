@@ -66,7 +66,7 @@ function freshWorkspace(name: string): Fixture {
   const root = mkdtempSync(join(ROOT, name));
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
-  return { context: { harnessDir: root }, harness, root };
+  return { context: { harnessDir: harness }, harness, root };
 }
 
 function write(harness: string, relativePath: string, text: string): void {

@@ -21,10 +21,10 @@
  *   held past the bounded wait refuses the file route instead of falling back
  *   to JSON.
  *
- * The fixture is a real Git main worktree with `.mstar`: the route guards
- * resolve the CONTROL harness root through `storeDbPath` (main worktree → that
- * harness), so these cases exercise the production resolution instead of an
- * environment override.
+ * The fixture is a real Git main worktree with `.mstar`: the FILE route guards
+ * discover the CONTROL harness root through `resolveProcessHarnessDir`, while
+ * DB contexts retain their selected root. These cases exercise production
+ * resolution instead of an environment override.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -564,6 +564,26 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
           ),
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  test("a future workflow directory cannot bypass its ACTIVE parent store", async () => {
+    const fx = workspace("exec-routing-future-");
+    try {
+      await activeExecution(fx);
+      const options = planOptions(fx, PLANTED_ID);
+      const futureDir = join(fx.harnessDir, "workflows", PLANTED_ID);
+      const before = await readExecutionState(fx.context);
+      expect(existsSync(futureDir)).toBe(false);
+      expect(
+        await refusalOf(() =>
+          writeWorkflowSnapshot(planWorkflowSnapshot(PLANTED_ID, options, "2026-09-01T00:00:00.000Z"), futureDir),
+        ),
+      ).toMatchObject({ code: "execution.direct-write-refused" });
+      expect(existsSync(futureDir)).toBe(false);
+      expect(await readExecutionState(fx.context)).toEqual(before);
     } finally {
       rmSync(fx.root, { recursive: true, force: true });
     }

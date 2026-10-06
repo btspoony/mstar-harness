@@ -13,6 +13,7 @@ import type { Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, writeJson } from "./core.js";
 import { assertProtectedWriteAuthorized, canonicalTarget, type ProtectedWriteKind } from "./coordination-write.js";
+import { resolveProcessHarnessDir } from "./coordination.js";
 import {
   assertSafePathComponent,
   resolveHarnessDir,
@@ -22,7 +23,6 @@ import {
 import {
   assertExecutionFileReadAllowed,
   assertExecutionFileWriteAllowed,
-  storeDbPath,
 } from "./store-db.js";
 
 /** JSON coordination-doc kinds the store persists. The former `residuals`
@@ -333,13 +333,12 @@ export function createFsStore(harnessRoot: string): ArtifactStore & { root: stri
 let injectedStore: ArtifactStore | undefined;
 
 /**
- * The canonical CONTROL harness root this process resolves to. `storeDbPath`
- * is what normalizes it: it routes any path through `resolveProcessHarnessDir`,
- * so a linked feature worktree or a cwd-local artifact directory cannot select
- * the root whose execution authority the guard below consults.
+ * The canonical CONTROL harness root this process resolves to. Discover from
+ * cwd before selecting a store: linked feature worktrees and artifact
+ * directories must still consult the main worktree's execution authority.
  */
 function processControlRoot(): string {
-  return dirname(storeDbPath({ harnessDir: process.cwd() }));
+  return resolveProcessHarnessDir(process.cwd()) ?? resolve(process.cwd());
 }
 
 /**
