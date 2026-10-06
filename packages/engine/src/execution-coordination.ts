@@ -1551,11 +1551,9 @@ export async function completeExecutionPlan(
   // semantic request is served on the READ route, before any Git command or
   // evidence hash. An identical retry therefore never re-runs Git and never
   // fails because the committed checkout, HEAD or report moved in the meantime.
-  const replayed = await readPlanOperationReplayBeforeProof<ExecutionPlanView>(context, {
+  const replayed = await readPlanOperationReplayBeforeProof<ExecutionPlanView>(context, resolved.read, {
     operationId: resolved.call.operationId,
     requestHash,
-    workflowId: resolved.read.workflowId,
-    planId: resolved.read.planId,
   });
   if (replayed !== null) return replayed;
   // §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot and

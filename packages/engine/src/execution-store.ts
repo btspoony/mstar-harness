@@ -2478,14 +2478,40 @@ export function readPlanOperationReplay<T>(
  * `complete` (or any plan verb) whose external proof is expensive or destructive
  * to repeat consults this FIRST — a matching operation id whose receipt carries
  * the same request fingerprint is served without re-running Git or re-hashing
- * evidence. It is a pure read: no revision, row or receipt changes, and a
- * mismatched fingerprint still refuses `execution.operation-conflict`.
+ * evidence.
+ *
+ * §2.3 the same READ transaction first revalidates the caller's CURRENT
+ * authority: the caller must be the trusted coordinator the resolved address
+ * named, the reference's store/epoch fence must hold, and the caller's own row
+ * must be ACTIVE at this epoch — the same two facts `liveSession` decides through
+ * the ordinary plan witness. A reference that is foreign, stale or belongs to a
+ * suspended/revoked/epoch-invalidated binding authorizes nothing here, so a
+ * revoked coordinator cannot regain a completed row through an old receipt. Only
+ * then is the operation ledger consulted; a mismatched fingerprint still refuses
+ * `execution.operation-conflict`.
  */
 export async function readPlanOperationReplayBeforeProof<T>(
   context: ExecutionContext,
-  input: { operationId: string; requestHash: string; workflowId: string; planId: string },
+  read: ResolvedPlanRead,
+  input: { operationId: string; requestHash: string },
 ): Promise<ExecutionReceipt<T> | null> {
-  return withExecutionReadTransaction(context, (tx) => readPlanOperationReplay<T>(tx, input));
+  const caller = context.caller;
+  if (caller.role !== "coordinator" || caller.sessionId !== read.sessionId || caller.workflowId !== read.workflowId) {
+    throw new CoordinationError(
+      "coordination.identity-mismatch",
+      "the trusted caller is not the coordinator session this plan address was resolved for",
+      { session_id: read.sessionId, workflow_id: read.workflowId },
+    );
+  }
+  return withExecutionReadTransaction(context, (tx) => {
+    assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
+    liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId });
+    return readPlanOperationReplay<T>(tx, {
+      ...input,
+      workflowId: read.workflowId,
+      planId: read.planId,
+    });
+  });
 }
 
 /**
@@ -2773,8 +2799,8 @@ export async function bindExecutionSession(
           detail:
             `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` +
             `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator naming the recorded coordinator ` +
-            `${JSON.stringify(recorded.ref.sessionId)} (epoch ${recorded.ref.epoch}) with its stop/reload attestation, or ` +
-            `priorSessionId: null with a valid activation attestation. Nothing was bound.`,
+            `${JSON.stringify(recorded.ref.sessionId)} (epoch ${recorded.ref.epoch}) with its stop/reload attestation, the current ` +
+            `workflow token, an operation id, a reason and a valid activation attestation. Nothing was bound.`,
           workflowId: bind.workflowId,
           sessionId: bind.sessionId,
           holder: recorded.ref.sessionId,
