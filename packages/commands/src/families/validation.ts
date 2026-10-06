@@ -313,16 +313,15 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
         if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail);
         for (const other of siblingScan.branches) lifecycleBranches.add(other);
-        // The selected row's own worktree/branch metadata is checked by the
-        // dedicated row-vs-main identity guard; other current-snapshot ownership
-        // still blocks main.
-        const snapshotWithoutSelectedRow = {
+        // The selected row's source checkout/branch uses the dedicated identity
+        // guard; its retained tracks and other snapshot ownership still block main.
+        const snapshotWithoutSelectedSource = {
           ...snapshot,
           plans: snapshot.plans.map((row: Record<string, unknown>) =>
-            row.id === plan || row.plan_id === plan ? { ...row, metadata: undefined } : row,
+            row.id === plan || row.plan_id === plan ? { ...row, metadata: { track_branches: rowMetadata.track_branches } } : row,
           ),
         };
-        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedRow])) lifecycleBranches.add(branch);
+        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedSource])) lifecycleBranches.add(branch);
         const integrationPath = input.integration ?? input.control ?? snapshot.integration_worktree_path;
         const integrationBranch = snapshot.branch?.integration;
         const gate = l1PreDispatchCheck({
