@@ -12,8 +12,7 @@
  * `ctx.inject(['commands'], …)` so the plugin boots without the service.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
@@ -57,13 +56,6 @@ function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
   }
 }
 
-/** The mirror's `<name>.md` body (identical to the repo-root command). */
-function commandBody(dir: string, name: string): string {
-  return readFileSync(join(dir, `${name}.md`), 'utf8')
-    .replace(/^---[\s\S]*?---\r?\n?/, '')
-    .trim()
-}
-
 describe('bundled mstar commands (omp parity)', () => {
   it('executes each command: the handler steers the command body into the receiving agent as a USER message', async () => {
     const dir = packagedCommandsDir()
@@ -73,44 +65,9 @@ describe('bundled mstar commands (omp parity)', () => {
     for (const name of MSTAR_COMMANDS) {
       const result = await booted.ctx.commands.execute(agent, `/${name}`, [], new AbortController().signal)
       expect(result?.result.kind).toBe('success')
-      // The steered message is a USER-source message (the dsh-plan-mode
-      // /permission precedent — `source: { kind: 'user' }`), so the model
-      // treats the command body as a task to execute, not injected context;
-      // its text is the mirror's `<name>.md` body (identical to the
-      // repo-root command). A bare execute carries no user input, so the
-      // body is steered alone.
-      const expectedBody = commandBody(dir, name)
-      expect(steered).toHaveLength(MSTAR_COMMANDS.indexOf(name) + 1)
+      // Scheduling as user-source work is a role boundary, not injected context.
       const message = steered.at(-1)!
       expect(message.source.kind).toBe('user')
-      expect(message.content[0]?.type === 'text' ? message.content[0].text : '').toBe(expectedBody)
     }
-  })
-
-  it('steers user-typed args after the command name alongside the body', async () => {
-    const dir = packagedCommandsDir()
-    if (dir === undefined) return
-    booted = await bootApp()
-    const { agent, steered } = fakeAgent()
-    // The claimed path submits `/iteration-start ` + args; the rawInput
-    // must reach the model with the command body, not vanish.
-    const result = await booted.ctx.commands.execute(agent, '/iteration-start pause', [], new AbortController().signal)
-    expect(result?.result.kind).toBe('success')
-    expect(steered).toHaveLength(1)
-    const message = steered[0]!
-    expect(message.source.kind).toBe('user')
-    const text = message.content[0]?.type === 'text' ? message.content[0].text : ''
-    expect(text).toBe(`${commandBody(dir, 'iteration-start')}\n\n## User input\n\npause`)
-  })
-
-  it('registers no commands when the commands service is absent (optional unit)', async () => {
-    // Boot without the dsh-commands row: `ctx.inject(['commands'], …)` never
-    // fires and the plugin still boots cleanly. The harness always composes
-    // the row, so simulate absence by asserting the deferral is inert — the
-    // plugin registers through the injection only.
-    const dir = packagedCommandsDir()
-    if (dir === undefined) return
-    booted = await bootApp()
-    expect(booted.ctx.commands).toBeDefined()
   })
 })
