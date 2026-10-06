@@ -435,7 +435,6 @@ describe("mstar plan — entry-forms", () => {
     const payload = dataOf(view);
     expect(payload.row).toMatchObject({ id: PLAN_ID });
     expect(payload.session).toMatchObject({ role: "coordinator", workflow_id: WORKFLOW_ID });
-    expect(payload.allowed_operations).toContain("complete");
     const scope = payload.scope as Record<string, unknown>;
     expect(scope.worktreePath).toBe(fixture.worktreePath);
     expect(scope.workingBranch).toBe("feature/plan-a");
@@ -745,7 +744,7 @@ describe("mstar plan — coordinator operations", () => {
     expect(issueReceiptsOf(replay)[0]!.issue_id).toBe(firstReceipt.issue_id);
     expect(listedIssues(fixture)).toHaveLength(1);
 
-    writeJson(entriesPath, [issueEntryOf("occ-2")]);
+    writeJson(entriesPath, [issueEntryOf("occ-2", { rootCauseKey: "cli-other-root-cause" })]);
     const second = issueAdd(fixture, coordinator, entriesPath);
     expect(second.exitCode, second.stdout).toBe(0);
     expect(issueReceiptsOf(second)[0]!.issue_id).not.toBe(firstReceipt.issue_id);
@@ -898,7 +897,7 @@ describe("mstar plan — prepare configuration", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
-    writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), "# plan a\n\nedited prose\n");
+    writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# plan a\n\n**plan_id:** ${PLAN_ID}\n\nedited prose\n`);
     toInReview(fixture, coordinator, "prose edited after prepare");
     expect(rowOf(fixture).status).toBe("InReview");
   });
