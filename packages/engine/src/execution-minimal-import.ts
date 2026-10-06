@@ -8,7 +8,7 @@ import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, ty
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin } from "./store-activation.js";
-import { writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
+import { projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { initializeStore, storeDbPath, upgradeStore, type StoreContext } from "./store-db.js";
 
 export type MinimalImportResult = {
@@ -114,7 +114,7 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
       const snapshotValue = readRegularJson(snapshotPath, `unregistered snapshot at ${snapshotPath}`);
       const snapshotGate = snapshotValue === UNPARSEABLE_JSON
         ? { ok: false, violations: [{ code: "workflow.snapshot.invalid-json" }] }
-        : validateWorkflowSnapshot(snapshotValue);
+        : validateWorkflowSnapshot(projectLegacySnapshot(snapshotValue));
       if (!snapshotGate.ok) {
         skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unregistered snapshot is unrecognizable; left in place" });
         continue;
@@ -157,12 +157,12 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
       skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: "unparseable snapshot; left in place" });
       continue;
     }
-    const snapshotGate = validateWorkflowSnapshot(snapshotValue);
+    const snapshotGate = validateWorkflowSnapshot(projectLegacySnapshot(snapshotValue));
     if (!snapshotGate.ok) {
       skipped.push({ path: relative(root, snapshotPath).split(/[\\/]+/).join("/"), reason: `snapshot is unrecognizable (${snapshotGate.violations.map((v) => v.code).join(", ")}); left in place` });
       continue;
     }
-    const snapshot = snapshotValue as WorkflowSnapshot;
+    const snapshot = projectLegacySnapshot(snapshotValue);
     if (existsSync(sessionsDir)) {
       const sessionsInfo = lstatSync(sessionsDir);
       if (sessionsInfo.isSymbolicLink() || !sessionsInfo.isDirectory()) conflict(`workflow ${entry.id} sessions path is not a real directory; replace it with a real directory or remove it, then rerun store upgrade.`);

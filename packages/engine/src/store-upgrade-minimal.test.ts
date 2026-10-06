@@ -253,6 +253,8 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
         "values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
     ).run(workflowId, sessionId, planId);
+    // The REAL per-plan lease — the only place this row records its checkout and
+    // branch. Its facts must reach metadata before the table is dropped.
     initialized.db.prepare(
       "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
     ).run(
@@ -268,14 +270,42 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
         status: "held",
       }),
     );
-    // A second plan whose row metadata ALREADY records a scope that disagrees
-    // with its removed lease. The metadata is the authoritative, revisable
-    // record, so the upgrade must keep it and never hard-stop on the stale copy.
-    const conflictPlanId = `${planId}-2`;
-    initialized.db.prepare(
-      "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 1, ?, ?)",
-    ).run(
+    // A valid historical workflow has its ACTIVE registry routing row; without
+    // it `readExecutionState` cannot enumerate the workflow.
+    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(
       workflowId,
+      JSON.stringify({ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }),
+    );
+    // A second, SEPARATE workflow whose row metadata already records a scope that
+    // disagrees with its removed lease. The metadata is the authoritative,
+    // revisable record, so the upgrade must keep it and never hard-stop on the
+    // stale copy. It is kept single-plan so the standalone route stays intact.
+    const conflictWorkflowId = `${workflowId}-conflict`;
+    const conflictPlanId = `${conflictWorkflowId}-plan`;
+    initialized.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
+      .run(
+        conflictWorkflowId,
+        JSON.stringify({
+          schema_version: 1,
+          id: conflictWorkflowId,
+          type: "plan",
+          status: "running",
+          started_at: "2026-10-04",
+          updated_at: "2026-10-04",
+          delivery_kind: "development",
+          branch: { source: `feature/${conflictPlanId}`, target: "main" },
+        }),
+        "2026-10-04",
+        "2026-10-04",
+      );
+    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(
+      conflictWorkflowId,
+      JSON.stringify({ id: conflictWorkflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${conflictWorkflowId}` }),
+    );
+    initialized.db.prepare(
+      "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)",
+    ).run(
+      conflictWorkflowId,
       conflictPlanId,
       JSON.stringify({
         id: conflictPlanId,
@@ -292,7 +322,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     initialized.db.prepare(
       "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
     ).run(
-      workflowId,
+      conflictWorkflowId,
       conflictPlanId,
       JSON.stringify({
         holder: sessionId,
@@ -361,14 +391,88 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     const readable = await readExecutionState(context);
     const migrated = readable.data.workflows.find((workflow) => workflow.state.id === workflowId)?.plans[0];
     expect(migrated?.plan.id).toBe(planId);
-    // The conflicting plan's own metadata survived untouched — no hard gate.
+    // The conflicting workflow's own metadata survived untouched — no hard gate.
     const conflictState = JSON.parse(
-      (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, `${planId}-2`) as { state_json: string }).state_json,
+      (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(`${workflowId}-conflict`, `${workflowId}-conflict-plan`) as { state_json: string }).state_json,
     ) as Record<string, unknown>;
     expect(conflictState.metadata).toEqual({
       worktree_path: join(ROOT, "metadata-worktree"),
-      working_branch: `feature/${planId}-2`,
+      working_branch: `feature/${workflowId}-conflict-plan`,
     });
+  } finally {
+    store.close();
+  }
+});
+
+test("a sealed/completed legacy file snapshot is projected and imported instead of skipped", async () => {
+  const { context } = legacyWorkspace("legacy-sealed-completed");
+  const workflowId = "wf-legacy-sealed-completed";
+  const planId = `${workflowId}-plan`;
+  const sessionId = "session-legacy-sealed-completed";
+  const snapshotPath = join(context.harnessDir, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  // The raw legacy shape admission must survive: a sealed prepared Assignment
+  // projection, a completed handoff, a plan session and a header self-amendment.
+  const plans = snapshot.plans as Array<Record<string, unknown>>;
+  const plan = plans[0]!;
+  plan.coordination = {
+    revision: 1,
+    prepared: {
+      assignment_path: join(ROOT, "assignment.md"),
+      assignment_sha256: "a".repeat(64),
+      plan_sha256: "b".repeat(64),
+      qa_gate: "mandatory",
+      findings_cleanup: "allow-residual",
+      prepared_by: "host-coord",
+      prepared_at: "2026-10-04T00:00:00Z",
+    },
+    session: { session_id: sessionId, session_file: join(context.harnessDir, "workflows", workflowId, "sessions", "plan-pm.json"), bound_at: "2026-10-04T00:00:00Z" },
+    handoff: {
+      id: `${planId}-attempt-1`,
+      attempt: 1,
+      state: "completed",
+      submitted_by: sessionId,
+      submitted_at: "2026-10-04T01:00:00Z",
+      source_branch: `feature/${workflowId}`,
+      source_sha: "c".repeat(40),
+      worktree_path: join(ROOT, "legacy-worktree"),
+      review_base: "c".repeat(40),
+      review_head: "c".repeat(40),
+      qc: { decision: "Approve", reports: [{ path: join(ROOT, "qc.md"), sha256: "d".repeat(64) }], consolidated: { path: join(ROOT, "qc-s.md"), sha256: "e".repeat(64) } },
+      qa: { gate: "mandatory", decision: "pass", report: { path: join(ROOT, "qa.md"), sha256: "f".repeat(64) } },
+      accepted_by: "host-coord",
+      accepted_at: "2026-10-04T02:00:00Z",
+      completed_at: "2026-10-04T03:00:00Z",
+    },
+  };
+  plan.status = "Todo";
+  snapshot.coordination = {
+    coordinator: { session_id: "host-coord", session_file: join(ROOT, "coord.json"), bound_at: "2026-10-04T00:00:00Z" },
+    self_amendments: [{ at: "2026-10-04T01:00:00Z", session_id: "plan-session", operation_id: "amend-op" }],
+  };
+  writeFileSync(snapshotPath, JSON.stringify(snapshot));
+
+  const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-legacy-sealed-completed" });
+  // The workflow is ADMITTED, not skipped as unrecognizable.
+  expect(result.imported).toBe(1);
+  expect(result.skipped.some((entry) => entry.path.endsWith("snapshot.json"))).toBe(false);
+  const store = await openStore(context, "read");
+  try {
+    const coordination = JSON.parse(
+      (store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { coordination_json: string })
+        .coordination_json,
+    ) as Record<string, unknown>;
+    expect(Object.keys(coordination).sort()).toEqual(["completion", "prepared"]);
+    expect((coordination.prepared as Record<string, unknown>)).toMatchObject({ qa_gate: "mandatory", prepared_by: "host-coord" });
+    expect((coordination.completion as Record<string, unknown>)).toMatchObject({ source_branch: `feature/${workflowId}`, completed_by: "host-coord" });
+    const state = JSON.parse(
+      (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string }).state_json,
+    ) as Record<string, unknown>;
+    expect(state).toMatchObject({ status: "Done", metadata: { worktree_path: join(ROOT, "legacy-worktree"), working_branch: `feature/${workflowId}` } });
+    const header = JSON.parse(
+      (store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json,
+    ) as Record<string, unknown>;
+    expect(header).not.toHaveProperty("self_amendments");
   } finally {
     store.close();
   }

@@ -133,6 +133,39 @@ function projectLegacyLeaseScope(row: Record<string, unknown>): Record<string, s
   return scoped;
 }
 
+/**
+ * Project a stopped workspace's RAW snapshot onto the target shape BEFORE any
+ * current validator sees it. Discovery and the writer both validate with the
+ * live exact-key schema, and that schema refuses the members the removed
+ * protocol wrote (`session`, `handoff`, the sealed assignment fields,
+ * `self_amendments`) — so projecting them away here is what lets a real legacy
+ * snapshot through admission instead of being skipped whole. Business facts
+ * (progress, prepared configuration, completed QC/QA/source/integration
+ * evidence, scope ownership) are preserved; nothing is re-added.
+ */
+export function projectLegacySnapshot(raw: unknown): WorkflowSnapshot {
+  const snapshot: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  if (isPlainObject(snapshot.coordination)) {
+    const coordination: Record<string, unknown> = { ...snapshot.coordination };
+    delete coordination.self_amendments;
+    snapshot.coordination = coordination;
+  }
+  const plans = Array.isArray(snapshot.plans) ? snapshot.plans : [];
+  snapshot.plans = plans.map((plan) => {
+    if (!isPlainObject(plan)) return plan;
+    const row: Record<string, unknown> = { ...plan };
+    row.coordination = projectLegacyRowCoordination(row);
+    const scope = projectLegacyLeaseScope(row);
+    if (Object.keys(scope).length > 0) {
+      const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+      row.metadata = { ...metadata, ...scope };
+    }
+    delete row.execution_lease;
+    return row;
+  });
+  return snapshot as unknown as WorkflowSnapshot;
+}
+
 /** Reused transaction row mapping for file-imported workflow state. */
 export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source: ImportedWorkflow): void {
   const { id, entry, snapshot, coordinator, plans } = source;
