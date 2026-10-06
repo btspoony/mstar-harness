@@ -1163,8 +1163,6 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
 
     // Replay is byte-stable and does NOT re-consume the recorded fulfilment: remove
     // it from the header before retrying the identical request.
-    const storedAfter = storedReplaySurface(context, OWN_PLAN);
-    const footprintAfter = footprint(context);
     withRaw(context, (db) => {
       const [row] = db
         .prepare("select state_json from execution_workflows where workflow_id = ?")
@@ -1173,25 +1171,14 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       delete (state.delivery as Record<string, unknown>).completion;
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
+    const storedAfter = storedReplaySurface(context, OWN_PLAN);
+    const footprintAfter = footprint(context);
     const replay = await planCall(fixture, OWN_PLAN, "complete-ro", await planTokenOf(fixture, OWN_PLAN), {
       kind: "complete",
       evidence,
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
-    // The header was mutated by the fixture above, so compare the plan/lease/receipt
-    // surface only (the workflow header is intentionally changed).
-    const afterSurface = storedReplaySurface(context, OWN_PLAN);
-    expect({
-      planState: afterSurface.planState,
-      coordination: afterSurface.coordination,
-      lease: afterSurface.lease,
-      receipts: afterSurface.receipts,
-    }).toEqual({
-      planState: storedAfter.planState,
-      coordination: storedAfter.coordination,
-      lease: storedAfter.lease,
-      receipts: storedAfter.receipts,
-    });
+    expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedAfter);
     expect(footprint(context)).toEqual(footprintAfter);
     expect({ ...replay, replayed: false }).toEqual(receipt);
   }, 30000);
