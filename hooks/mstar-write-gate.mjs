@@ -5,7 +5,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
 import { readFileSync as readFileSync2, readlinkSync, realpathSync, statSync as statSync3, writeSync } from "node:fs";
-import { basename as basename3, dirname as dirname10, isAbsolute as isAbsolute3, join as join6, relative as relative6, resolve as resolve5 } from "node:path";
+import { basename as basename3, dirname as dirname11, isAbsolute as isAbsolute3, join as join6, relative as relative6, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
@@ -58,9 +58,9 @@ import {
 import { dirname as dirname9, isAbsolute as isAbsolute10, join as join19, relative as relative5, resolve as resolve14, sep as sep10 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync6 } from "node:fs";
-import { join as join20, resolve as resolve15 } from "node:path";
+import { dirname as dirname10, join as join20, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname13, join as join23, relative as relative7, resolve as resolve17 } from "node:path";
+import { basename as basename13, dirname as dirname14, join as join23, relative as relative7, resolve as resolve17 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash14 } from "node:crypto";
 import { readFileSync as readFileSync20 } from "node:fs";
@@ -15086,7 +15086,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname13(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -15120,8 +15120,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -15129,7 +15129,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname13(resolved));
+  const fallbackDir = resolveHarnessDir(dirname14(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -17455,7 +17455,7 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname10(dir));
+  const parentResolved = resolveHarnessDir(dirname11(dir));
   return parentResolved !== null && resolve5(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
@@ -17463,14 +17463,14 @@ function landedPathOf(resolved) {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve5(dirname10(resolved), readlinkSync(resolved));
+      return resolve5(dirname11(resolved), readlinkSync(resolved));
     } catch {
-      let dir = dirname10(resolved);
+      let dir = dirname11(resolved);
       for (;; ) {
         try {
           return join6(realpathSync(dir), relative6(dir, resolved));
         } catch {
-          const parent = dirname10(dir);
+          const parent = dirname11(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -17482,13 +17482,13 @@ function landedPathOf(resolved) {
 function isStoreAuthorityTarget(target) {
   if (!STORE_AUTHORITY_NAMES.includes(basename3(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname10(target));
+  return isHarnessRootDir(dirname11(target));
 }
 function caseFoldedRegisterRoot(candidate) {
   const target = resolve5(candidate);
   if (!REGISTER_BASENAME.test(basename3(target)))
     return null;
-  let dir = dirname10(target);
+  let dir = dirname11(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
@@ -17500,7 +17500,7 @@ function caseFoldedRegisterRoot(candidate) {
       if (REGISTER_SHAPE.test(relative6(projectDir, target)))
         return dir;
     }
-    const parent = dirname10(dir);
+    const parent = dirname11(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -17630,7 +17630,7 @@ try {
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname10(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname11(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }
