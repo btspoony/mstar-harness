@@ -675,7 +675,7 @@ describe("Prepare workflow amendment", () => {
       fixture,
       preparePatchOf(fixture, {
         appendPlans: [],
-        correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }],
+        correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }],
       }),
     );
     expect(landed.outcome).toBe("amended");
@@ -694,17 +694,17 @@ describe("Prepare workflow amendment", () => {
         semantic,
         preparePatchOf(semantic, {
           appendPlans: [],
-          correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(semantic.planDir, `${PREPARE_ROW}.md`) }],
+          correctPlanFiles: [{ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(semantic.planDir, `${PREPARE_ROW}.md`) }],
         }),
       ),
     );
     expect(refusal.code).toBe("coordination.prepare-amendment.invalid-plan");
     expect(refusal.details).toMatchObject({
       plan_id: PREPARE_ROW,
-      expected: `.mstar/plans/${PREPARE_ROW}.md`,
+      expected: `plans/${PREPARE_ROW}.md`,
       actual: `.mstar/plans/${PREPARE_UNREVIEWED}.md`,
     });
-    
+    expect(protectedBytes(semantic)).toEqual(before);
   });
 
   test("a wrong-role, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
@@ -818,27 +818,20 @@ describe("Prepare workflow amendment", () => {
     const driftCases: ReadonlyArray<{
       name: string;
       blocker: string;
-      patchSnapshot: (doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>, fixture: PrepareFixture) => void;
+      beforeSnapshot?: (fixture: PrepareFixture) => Promise<unknown>;
+      patchSnapshot?: (doc: { plans: Array<Record<string, unknown>> } & Record<string, unknown>, fixture: PrepareFixture) => void;
     }> = [
       { name: "phase-2", blocker: "not-prepare", patchSnapshot: (doc) => { doc.phase = "phase-2-execute"; } },
       { name: "row-in-progress", blocker: "execution-started", patchSnapshot: (doc) => { doc.plans[0]!.status = "InProgress"; } },
       { name: "row-progress", blocker: "execution-started", patchSnapshot: (doc) => { doc.plans[0]!.progress = 40; } },
       {
-        name: "row-execution-lease",
+        name: "row-coordination-progress",
         blocker: "execution-started",
-        patchSnapshot: (doc, fixture) => {
-          doc.plans[0]!.execution_lease = {
-            holder: "11111111-1111-1111-1111-111111111111",
-            claimed_at: "2026-09-16T00:00:00Z",
-            worktree_path: join(fixture.root, "wt-row"),
-            working_branch: `feature/${PREPARE_ROW}`,
-          };
-        },
-      },
-      {
-        name: "row-coordination",
-        blocker: "execution-started",
-        patchSnapshot: (doc) => { doc.plans[0]!.coordination = { revision: 1 }; },
+        beforeSnapshot: (fixture) => mutatePlanCoordination({
+          sessionPath: fixture.coordinatorSession,
+          planId: PREPARE_ROW,
+          operation: { kind: "progress", progress: { status: "InProgress", summary: "started", evidence_paths: [] } },
+        }),
       },
       {
         name: "integration-merge-lease",
@@ -858,8 +851,9 @@ describe("Prepare workflow amendment", () => {
     for (const driftCase of driftCases) {
       const fixture = makePrepareFixture();
       await ensurePrepareCoordinator(fixture);
+      await driftCase.beforeSnapshot?.(fixture);
       const doc = prepareSnapshotOf(fixture);
-      driftCase.patchSnapshot(doc, fixture);
+      driftCase.patchSnapshot?.(doc, fixture);
       const siblingRow = doc.plans[0]!;
       writeJson(fixture.snapshotPath, doc);
 
@@ -1524,6 +1518,10 @@ describe("Prepare workflow amendment", () => {
     await ensurePrepareCoordinator(fixture);
     const before = prepareSnapshotOf(fixture);
     const oldRow = before.plans[0]!;
+    // Isolate the historical malformed pointer instead of changing every
+    // valid fixture row away from the selected-harness-relative contract.
+    oldRow.file = `.mstar/plans/${PREPARE_ROW}.md`;
+    writeJson(fixture.snapshotPath, before);
     const correctedPath = join(fixture.planDir, `${PREPARE_ROW}.md`);
     // The fixture row holds the repository-relative pointer rows registered
     // before the resolver landed; the correction names that same plan's
@@ -1563,7 +1561,7 @@ describe("Prepare workflow amendment", () => {
       preparePatchOf(only, {
         appendPlans: [],
         correctPlanFiles: [
-          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: onlyPath },
+          { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: onlyPath },
         ],
       }),
     );
@@ -1608,15 +1606,15 @@ describe("Prepare workflow amendment", () => {
         name: "unexpected-key",
         correction: (fixture) => ({
           id: PREPARE_ROW,
-          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          expectedFile: `plans/${PREPARE_ROW}.md`,
           file: join(fixture.planDir, `${PREPARE_ROW}.md`),
           status: "Todo",
         }),
       },
-      { name: "missing-id", correction: (fixture) => ({ expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
+      { name: "missing-id", correction: (fixture) => ({ expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }) },
       {
         name: "unsafe-id",
-        correction: (fixture) => ({ id: "../plan-prepare", expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+        correction: (fixture) => ({ id: "../plan-prepare", expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
       },
       {
         name: "unknown-row",
@@ -1639,26 +1637,26 @@ describe("Prepare workflow amendment", () => {
       },
       {
         name: "new-file-foreign",
-        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.root, `${PREPARE_ROW}.md`) }),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.root, `${PREPARE_ROW}.md`) }),
       },
       {
         name: "new-file-another-plan",
-        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_APPEND}.md`) }),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_APPEND}.md`) }),
       },
       {
         name: "new-file-traversal",
-        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: `../plans/${PREPARE_ROW}.md` }),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: `../plans/${PREPARE_ROW}.md` }),
       },
       {
         name: "new-file-missing",
         prepare: (fixture) => rmSync(join(fixture.planDir, `${PREPARE_ROW}.md`)),
-        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
       },
       {
         name: "new-file-header-mismatch",
         prepare: (fixture) =>
           writeText(join(fixture.planDir, `${PREPARE_ROW}.md`), preparePlanMarkdown({ id: "plan-other", workingBranch: "feature/plan-other" })),
-        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
+        correction: (fixture) => ({ id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) }),
       },
       {
         // The row's pointer names another plan: a correction repairs a
@@ -1718,7 +1716,7 @@ describe("Prepare workflow amendment", () => {
       expect(`${correctionCase.name}: ${refusal.code}`).toBe(
         `${correctionCase.name}: coordination.prepare-amendment.invalid-plan`,
       );
-      
+      expect(protectedBytes(fixture)).toEqual(before);
     }
 
     // §5/A09/A12 the exact already-applied correction is a CURRENT SUCCESS: a
@@ -1753,7 +1751,7 @@ describe("Prepare workflow amendment", () => {
       `correct-plan-file ${PREPARE_ROW}`,
     );
     expect(current.recovery?.commitState).toBe("none");
-    
+    expect(protectedBytes(noop)).toEqual(noopBefore);
   }, 30000);
 
   test("a plan-file correction is gated by the collision, CAS and addressed-row rules", async () => {
@@ -1765,7 +1763,7 @@ describe("Prepare workflow amendment", () => {
       amendPrepare(malformed, preparePatchOf(malformed, { correctPlanFiles: "plan-prepare" })),
     );
     expect(malformedRefusal.code).toBe("coordination.prepare-amendment.invalid-patch");
-    
+    expect(protectedBytes(malformed)).toEqual(malformedBefore);
 
     // The same id cannot be appended and corrected in one patch.
     const overlap = makePrepareFixture();
@@ -1786,7 +1784,7 @@ describe("Prepare workflow amendment", () => {
       ),
     );
     expect(overlapRefusal.code).toBe("coordination.prepare-amendment.duplicate-plan");
-    
+    expect(protectedBytes(overlap)).toEqual(overlapBefore);
 
     // …and never twice in one correction list. The duplicate is a PER-COMPONENT
     // problem, not a preflight throw: both entries are withheld with the
@@ -1802,8 +1800,8 @@ describe("Prepare workflow amendment", () => {
         preparePatchOf(duplicate, {
           appendPlans: [],
           correctPlanFiles: [
-            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
-            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(duplicate.planDir, `${PREPARE_ROW}.md`) },
           ],
         }),
       ),
@@ -1815,7 +1813,7 @@ describe("Prepare workflow amendment", () => {
     expect(duplicateRecovery.applied).toEqual([]);
     expect(duplicateRecovery.unresolved.map((entry) => entry.path)).toEqual(["correctPlanFiles[0]", "correctPlanFiles[1]"]);
     expect(duplicateRecovery.commitState).toBe("none");
-    
+    expect(protectedBytes(duplicate)).toEqual(duplicateBefore);
 
 
     // A prepared/sealed ADDRESSED row is never repointed: the row this
@@ -1830,17 +1828,7 @@ describe("Prepare workflow amendment", () => {
       ) => void;
     }> = [
       { name: "prepared-row", patch: (doc) => { doc.plans[0]!.coordination = { revision: 1 }; } },
-      {
-        name: "sealed-row-lease",
-        patch: (doc, fixture) => {
-          doc.plans[0]!.execution_lease = {
-            holder: "11111111-1111-1111-1111-111111111111",
-            claimed_at: "2026-09-16T00:00:00Z",
-            worktree_path: join(fixture.root, "wt-row"),
-            working_branch: `feature/${PREPARE_ROW}`,
-          };
-        },
-      },
+      { name: "progressed-row", patch: (doc) => { doc.plans[0]!.progress = 40; } },
     ];
 
     for (const admissionCase of admissionCases) {
@@ -1857,7 +1845,7 @@ describe("Prepare workflow amendment", () => {
           preparePatchOf(fixture, {
             appendPlans: [],
             correctPlanFiles: [
-              { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+              { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
             ],
           }),
         ),
@@ -1866,16 +1854,15 @@ describe("Prepare workflow amendment", () => {
       expect(`${admissionCase.name}: ${refusal.code}`).toBe(
         `${admissionCase.name}: coordination.prepare-amendment.execution-started`,
       );
-      
+      expect(protectedBytes(fixture)).toEqual(before);
     }
   }, 30000);
 
   test("a pointer correction lands while a sibling row runs and the compass set is incomplete (pointer correction — A06/#278)", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
-    // The addressed row holds the malformed repository-relative pointer the
-    // legacy registration wrote; the sibling row is mid-execution, with its own
-    // lease, progress and coordination evidence.
+    // The addressed row holds its selected-harness-relative pointer; the
+    // sibling row is mid-execution with its own progress and coordination.
     const runningSibling: Record<string, unknown> = {
       ...planRow(PREPARE_APPEND, PROJECT_ID, `feature/${PREPARE_APPEND}`),
       status: "InProgress",
@@ -1917,7 +1904,7 @@ describe("Prepare workflow amendment", () => {
         correctPlanFiles: [
           {
             id: PREPARE_ROW,
-            expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+            expectedFile: `plans/${PREPARE_ROW}.md`,
             file: join(fixture.planDir, `${PREPARE_ROW}.md`),
           },
         ],
@@ -2118,7 +2105,7 @@ describe("Prepare workflow amendment", () => {
         correctPlanFiles: [
           {
             id: PREPARE_ROW,
-            expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+            expectedFile: `plans/${PREPARE_ROW}.md`,
             file: join(existing.planDir, `${PREPARE_ROW}.md`),
           },
         ],
@@ -2143,7 +2130,7 @@ describe("Prepare workflow amendment", () => {
       correctPlanFiles: [
         {
           id: PREPARE_ROW,
-          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          expectedFile: `plans/${PREPARE_ROW}.md`,
           file: join(fixture.planDir, `${PREPARE_ROW}.md`),
         },
       ],
@@ -2180,7 +2167,7 @@ describe("Prepare workflow amendment", () => {
       correctPlanFiles: [
         {
           id: PREPARE_ROW,
-          expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+          expectedFile: `plans/${PREPARE_ROW}.md`,
           file: join(fixture.planDir, `${PREPARE_ROW}.md`),
         },
       ],
@@ -2227,7 +2214,7 @@ describe("Prepare workflow amendment", () => {
     const patch = preparePatchOf(fixture, {
       appendPlans: [prepareAppendOf(fixture, PREPARE_UNREVIEWED)],
       correctPlanFiles: [
-        { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+        { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
       ],
     });
     const before = protectedBytes(fixture);
@@ -2293,7 +2280,7 @@ describe("Prepare workflow amendment", () => {
     writeJson(fixture.snapshotPath, doc);
     const correction = {
       id: PREPARE_ROW,
-      expectedFile: `.mstar/plans/${PREPARE_ROW}.md`,
+      expectedFile: `plans/${PREPARE_ROW}.md`,
       file: join(fixture.planDir, `${PREPARE_ROW}.md`),
     };
 
@@ -2343,7 +2330,7 @@ describe("Prepare workflow amendment", () => {
       preparePatchOf(idle, {
         appendPlans: [],
         correctPlanFiles: [
-          { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(idle.planDir, `${PREPARE_ROW}.md`) },
+          { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(idle.planDir, `${PREPARE_ROW}.md`) },
         ],
         integrationWorktreePath: idle.integrationPath,
         planParallelism: "parallel",
@@ -2458,7 +2445,7 @@ describe("Prepare workflow amendment", () => {
         preparePatchOf(fixture, {
           appendPlans: [],
           correctPlanFiles: [
-            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
           ],
           integrationWorktreePath: fixture.integrationPath,
           planParallelism: "maybe",
@@ -2515,7 +2502,7 @@ describe("Prepare workflow amendment", () => {
         preparePatchOf(fixture, {
           appendPlans: [prepareAppendOf(fixture, PREPARE_APPEND), prepareAppendOf(fixture, PREPARE_APPEND)],
           correctPlanFiles: [
-            { id: PREPARE_ROW, expectedFile: `.mstar/plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
+            { id: PREPARE_ROW, expectedFile: `plans/${PREPARE_ROW}.md`, file: join(fixture.planDir, `${PREPARE_ROW}.md`) },
           ],
         }),
       ),

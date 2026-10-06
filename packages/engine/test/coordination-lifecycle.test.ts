@@ -82,7 +82,7 @@ function mergeUnrelated(fixture: GitFixture): string {
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unrelated work"], fixture.integrationPath);
   const unrelated = headOf(fixture.integrationPath);
   git(["checkout", "-q", "-"], fixture.integrationPath);
-  git(["merge", "-q", "--no-ff", unrelated, "-m", "Merge unrelated work"], fixture.integrationPath);
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", unrelated, "-m", "Merge unrelated work"], fixture.integrationPath);
   return headOf(fixture.integrationPath);
 }
 
@@ -1124,7 +1124,7 @@ describe("gitRead subprocess failure classification", () => {
     // `git` answered the proof's read with a numeric status, so `gitRead`
     // resolves `undefined` and the proof keeps its repository-answer code rather
     // than the environment code.
-    expect(report.code).toBe("coordination.git-proof");
+    expect(report.code).toBe("coordination.not-in-git");
     expect(report.code).not.toBe("coordination.git-unavailable");
     expect(report.message).toContain(fixture.worktreePath);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");

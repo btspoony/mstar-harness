@@ -1441,20 +1441,20 @@ describe("coordinated-writer — coordinated close authorization", () => {
     const { dir, path, sessionFile } = fixture();
     const before = readFileSync(path, "utf8");
     await expect(closeWorkflow(id, dir, { endedAt })).rejects.toMatchObject({
-      code: "coordination.session-mismatch",
+      code: "coordination.identity-mismatch",
       details: { path, expected: sessionFile, actual: undefined },
     });
-    
+    expect(readFileSync(path, "utf8")).toBe(before);
   });
 
   test("refuses to close a coordinated workflow from a foreign session and leaves the bytes unchanged", async () => {
     const { dir, path, otherSessionFile } = fixture();
     const before = readFileSync(path, "utf8");
     await expect(closeWorkflow(id, dir, { endedAt, sessionPath: otherSessionFile })).rejects.toMatchObject({
-      code: "coordination.session-mismatch",
+      code: "coordination.identity-mismatch",
       details: { path, actual: otherSessionFile },
     });
-    
+    expect(readFileSync(path, "utf8")).toBe(before);
   });
 
   test("closes a coordinated workflow for its bound coordinator and preserves the binding", async () => {
@@ -2997,6 +2997,15 @@ describe("workflow snapshot — missing phase derivation (R3/#293)", () => {
     expect(derived.phase).toBe(EXECUTE_PHASE);
     expect(derived.facts.join(" | ")).toContain("20260928-plan-a status=InProgress");
     expect(readWorkflowSnapshot(executing.dir).snapshot.phase).toBe(EXECUTE_PHASE);
+
+    // Recorded row progress is execution even if its status still says Todo.
+    const progressed = phaseLessIteration(root, {
+      plans: [{ id: "20260928-plan-a", title: "Plan A", file: "plans/20260928-plan-a.md", status: "Todo", progress: 40 }],
+    });
+    const progressedRead = readWorkflowSnapshot(progressed.dir);
+    expect(progressedRead.snapshot.phase).toBe(EXECUTE_PHASE);
+    expect(deriveLifecyclePhase(progressedRead.snapshot).facts).toContain("plan 20260928-plan-a progress=40");
+    expect(readFileSync(progressed.path, "utf8")).toBe(progressed.raw);
 
     const closedOut = phaseLessIteration(root, {
       plans: [

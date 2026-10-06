@@ -426,13 +426,17 @@ describe("migration 7 - project_milestones", () => {
   test("milestone migration refusal covers version gaps and newer versions", async () => {
     for (const [label, mutate, code] of [
       ["gap", "delete from schema_version where version=2", "store.schema-drift"],
-      ["newer", "insert into schema_version values(9, 'future', 'future', 'now')", "store.schema-unsupported"],
+      ["newer", `insert into schema_version values(${MIGRATIONS.length + 1}, 'future', 'future', 'now')`, "store.schema-unsupported"],
     ] as const) {
       const dir = mkdtempSync(join(ROOT, `milestone-${label}-`));
       const handle = await initializeStore({ harnessDir: dir });
       handle.db.exec(mutate);
+      const versionsBefore = handle.db.prepare("select * from schema_version order by version").all();
       handle.close();
       await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code });
+      const unchanged = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
+      expect(unchanged.prepare("select * from schema_version order by version").all()).toEqual(versionsBefore);
+      unchanged.close();
     }
   });
 

@@ -367,7 +367,7 @@ function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
   if (status !== "running") {
     throw new CoordinationError(
       "coordination.workflow-not-running",
-      `workflow ${witness.workflowId} is ${String(status)} — a plan operation requires a running lifecycle`,
+      `workflow ${witness.workflowId} is ${String(status)} \u2014 a plan operation requires a running lifecycle`,
       { workflow_id: witness.workflowId, plan_id: witness.planId, status },
     );
   }
@@ -449,7 +449,7 @@ function stalePlanRowRefusal(
       `the supplied token carries revision ${freshness.readRevision}`,
     ],
     needed:
-      `re-read plan ${witness.planId} and retry the ${kind} operation with the token that read returns — the row's ` +
+      `re-read plan ${witness.planId} and retry the ${kind} operation with the token that read returns \u2014 the row's ` +
       `current token is ${witness.token}`,
     withheldEffect:
       `the ${kind} operation and its whole transaction: the row, its coordination block and every revision are exactly ` +
@@ -845,7 +845,7 @@ function validateSuppliedCheckout(worktreePath: string, workingBranch: string | 
     );
   }
   if (dirty.length > 0) {
-    throw gitProof(`prepare requires a clean supplied worktree — ${worktreePath} has uncommitted changes`, {
+    throw gitProof(`prepare requires a clean supplied worktree \u2014 ${worktreePath} has uncommitted changes`, {
       plan_id: planId,
       worktree_path: worktreePath,
       head,
@@ -855,7 +855,7 @@ function validateSuppliedCheckout(worktreePath: string, workingBranch: string | 
   const branch = gitRead(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== workingBranch) {
     throw gitProof(
-      `prepare requires the supplied worktreePath ${worktreePath} to be on the supplied workingBranch ${workingBranch} — got ` +
+      `prepare requires the supplied worktreePath ${worktreePath} to be on the supplied workingBranch ${workingBranch} \u2014 got ` +
         `${branch || "a detached HEAD"}`,
       { plan_id: planId, expected: workingBranch, actual: branch },
     );
@@ -1114,7 +1114,7 @@ export async function residualCloseExecutionPlan(
   }
   if (!Number.isInteger(operation.expectedIssueRevision) || operation.expectedIssueRevision < 0) {
     throw invalidPlanInput(
-      `expectedIssueRevision must be a nonnegative integer — the issue revision guards the DB mutation; got ${JSON.stringify(operation.expectedIssueRevision)}`,
+      `expectedIssueRevision must be a nonnegative integer \u2014 the issue revision guards the DB mutation; got ${JSON.stringify(operation.expectedIssueRevision)}`,
     );
   }
   assertTerminalDisposition(operation.disposition);
@@ -1281,14 +1281,14 @@ function requirePinnedDeliveryRoute(
   if (route !== pinned.route) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires plan ${planId} to keep the ${pinned.route} delivery route proven before the transaction — the workflow now declares ${route}`,
+      `${what} requires plan ${planId} to keep the ${pinned.route} delivery route proven before the transaction \u2014 the workflow now declares ${route}`,
       { plan_id: planId, expected: pinned.route, actual: route },
     );
   }
   if (route === "report-only" && snapshot.completion_policy !== pinned.completionPolicy) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `${what} requires plan ${planId} to keep the completion policy pinned before the transaction — recorded ` +
+      `${what} requires plan ${planId} to keep the completion policy pinned before the transaction \u2014 recorded ` +
         `${JSON.stringify(snapshot.completion_policy)}, pinned ${JSON.stringify(pinned.completionPolicy)}`,
       { plan_id: planId, expected: pinned.completionPolicy, actual: snapshot.completion_policy },
     );
@@ -1388,7 +1388,7 @@ function assertSourceReviewProof(
   }
   assertFeatureCheckout(worktreePath, sourceSha, "complete", planId);
   if (reviewHead !== sourceSha) {
-    throw gitProof(`complete requires review_head to be the pinned source ${sourceSha} — got ${reviewHead}`, {
+    throw gitProof(`complete requires review_head to be the pinned source ${sourceSha} \u2014 got ${reviewHead}`, {
       plan_id: planId,
       source_sha: sourceSha,
       review_head: reviewHead,
@@ -1397,14 +1397,14 @@ function assertSourceReviewProof(
   const branch = gitRead(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== sourceBranch) {
     throw gitProof(
-      `complete requires the plan worktree ${worktreePath} to be on ${sourceBranch} — got ${branch || "a detached HEAD"}`,
+      `complete requires the plan worktree ${worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
       { plan_id: planId, expected: sourceBranch, actual: branch },
     );
   }
   const refTip = gitRead(worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
   if (refTip !== sourceSha) {
     throw gitProof(
-      `complete requires refs/heads/${sourceBranch} to resolve to the pinned source ${sourceSha} — got ${refTip || "missing"}`,
+      `complete requires refs/heads/${sourceBranch} to resolve to the pinned source ${sourceSha} \u2014 got ${refTip || "missing"}`,
       { plan_id: planId, expected: sourceSha, actual: refTip },
     );
   }
@@ -1467,7 +1467,7 @@ function assertExactMergeResult(
           .slice(1);
   if (parents === undefined || parents.length !== 2 || parents[0] !== baseSha || parents[1] !== sourceSha) {
     throw integrationDiverged(
-      `plan ${planId} recorded result ${result} carries parents ${JSON.stringify(parents ?? null)}, expected the exact two-parent merge [${baseSha}, ${sourceSha}] — ` +
+      `plan ${planId} recorded result ${result} carries parents ${JSON.stringify(parents ?? null)}, expected the exact two-parent merge [${baseSha}, ${sourceSha}] \u2014 ` +
         `a direct completion names the serial merge that was performed, so a no-merge base is refused`,
       { plan_id: planId, result, base: baseSha, source: sourceSha, parents: parents ?? null },
     );
@@ -1849,10 +1849,10 @@ function requireOwnMergeClaim(
     throw new CoordinationError(
       "coordination.identity-mismatch",
       `plan ${planId} merge lease is held by the LIVE coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
-        `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released. The claim belongs to the attempt ` +
+        `${JSON.stringify(witness.session.sessionId)} \u2014 a live foreign claim is never released. The claim belongs to the attempt ` +
         `its holder is executing: that holder completes plan ${JSON.stringify(lease.plan_id)} from its own recorded scope ` +
-        `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or — when this row's recorded ` +
-        `scope is mistaken — correct it through mstar plan prepare --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
+        `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or \u2014 when this row's recorded ` +
+        `scope is mistaken \u2014 correct it through mstar plan prepare --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
         `--worktree-path <actual-source-checkout> --working-branch <actual-source-branch>. Only after that holder actually stopped, use mstar session recover --workflow ` +
         `${witness.workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> ` +
         `--expect <current-workflow-token> --operation <fresh-id> under the independently acquired replacement.`,
@@ -1880,7 +1880,7 @@ function requireOwnMergeClaim(
       `--attestation <absolute-full-stop-document> --expect <current-workflow-token> --operation <fresh-id>\`, ` +
       `with renewed evidence naming ${lease.holder} stopped after its claim and NOT naming the current binding, run under ` +
       `the independently acquired replacement binding this caller already holds. ` +
-      `That recovery re-recognises the recorded prior→replacement relationship (previous recovery receipt, revoked ` +
+      `That recovery re-recognises the recorded prior\u2192replacement relationship (previous recovery receipt, revoked ` +
       `prior session row, this exact held claim row), keeps the current binding, settles this claim row, and then this completion ` +
       `retries as the same recovered coordinator.`,
     {
@@ -1934,7 +1934,7 @@ function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: str
       source: "workflow snapshot delivery_kind verification/report-only",
       message:
         `close requires report-only plan ${planId}'s lifecycle to declare the completion_policy its report is accepted against, ` +
-        `and this workflow records none — declare the policy through workflow registration, then retry`,
+        `and this workflow records none \u2014 declare the policy through workflow registration, then retry`,
     });
   }
   const recorded = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.completion)
@@ -1949,7 +1949,7 @@ function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: str
       source: "workflow snapshot delivery evidence",
       message:
         `close requires the workflow to RECORD the fulfilment of its registered completion policy ${JSON.stringify(policy)}, and ` +
-        `nothing is recorded — record it through the ordinary \`mstar workflow evidence\` action (which records its explicit ` +
+        `nothing is recorded \u2014 record it through the ordinary \`mstar workflow evidence\` action (which records its explicit ` +
         `fulfilment), then retry; a QA pass alone is not the fulfilment of a policy`,
     });
   }
@@ -1957,7 +1957,7 @@ function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: str
     throw new CoordinationError(
       "coordination.invalid-transition",
       `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
-        `while the lifecycle registers ${JSON.stringify(policy)} — a re-pointed completion is never the basis of a Done`,
+        `while the lifecycle registers ${JSON.stringify(policy)} \u2014 a re-pointed completion is never the basis of a Done`,
       { plan_id: planId, recorded: recorded.policy, registered: policy },
     );
   }
@@ -1986,7 +1986,7 @@ export async function readEntailedRowCompletion(
         field: "coordination.completion",
         source: "plan row coordination block",
         message:
-          `close requires plan ${planId} to record Done, and this row records ${status || "no status"} — ` +
+          `close requires plan ${planId} to record Done, and this row records ${status || "no status"} \u2014 ` +
           `complete it with the ordinary plan complete operation, then retry the close`,
       });
     }
@@ -2000,7 +2000,7 @@ export async function readEntailedRowCompletion(
     field: "coordination.completion",
     source: "plan row coordination block",
     message:
-      `close requires every owned row to record Done, and plan ${planId} records ${status || "no status"} — ` +
+      `close requires every owned row to record Done, and plan ${planId} records ${status || "no status"} \u2014 ` +
       `complete it with the ordinary plan complete operation, then retry the close`,
   });
 }

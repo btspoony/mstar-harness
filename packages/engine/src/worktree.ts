@@ -449,7 +449,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       violation(
         "high",
         "worktree.l1.feature-scope-missing",
-        `metadata.worktree_path is empty for plan "${planId}" — no registered feature worktree to dispatch against`,
+        `metadata.worktree_path is empty for plan "${planId}" \u2014 no registered feature worktree to dispatch against`,
         `Run \`mstar plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan ${planId} --worktree-path <absolute-feature-worktree> --working-branch ${rowWorkingBranch.trim() === "" ? "<feature-branch>" : JSON.stringify(rowWorkingBranch)}\` to record the missing worktree path`,
       ),
     );
@@ -580,7 +580,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
       integrationWorktreePath,
       rowWorktreePath,
       "worktree.l1.feature-equals-integration",
-      `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") — the feature worktree must be distinct from both main and integration`,
+      `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") \u2014 the feature worktree must be distinct from both main and integration`,
       "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>)",
     );
     if (v !== null) violations.push(v);
@@ -738,7 +738,7 @@ export function assertControlVsFeaturePath(
       violation(
         "critical",
         "worktree.control-feature.same",
-        `main control root and feature worktree path are both empty — metadata.worktree_path MUST be a distinct checkout from the main worktree`,
+        `main control root and feature worktree path are both empty \u2014 metadata.worktree_path MUST be a distinct checkout from the main worktree`,
         "record a distinct feature worktree path",
       ),
     );
@@ -752,7 +752,7 @@ export function assertControlVsFeaturePath(
       violation(
         "critical",
         "worktree.control-feature.same",
-        `main control root "${controlWorktreePath}" and feature worktree path "${featureWorktreePath}" are not distinct Git checkouts — a plain subdirectory or symlink alias of the main checkout is not isolation; metadata.worktree_path MUST be a distinct checkout`,
+        `main control root "${controlWorktreePath}" and feature worktree path "${featureWorktreePath}" are not distinct Git checkouts \u2014 a plain subdirectory or symlink alias of the main checkout is not isolation; metadata.worktree_path MUST be a distinct checkout`,
         "use a distinct feature worktree for the plan's product edits (git worktree add <path> <branch>)",
       ),
     );
