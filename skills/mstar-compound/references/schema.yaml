@@ -108,7 +108,7 @@ track_rules:
 optional_fields:
   plan_id:
     type: string
-    description: "Link to status.json plans[].id"
+    description: "Registered workflow/plan identity (ACTIVE execution_plans row)"
   tags:
     type: array
     max_items: 8

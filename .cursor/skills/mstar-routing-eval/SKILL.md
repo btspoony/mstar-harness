@@ -38,6 +38,8 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 5. 验证 Assignment 的语言契约：字段名英文、任务正文可中文、执行产出/报告英文（除非用户明确要求其他语言）。
 6. 记录路由质量和缺失的证据。
 
+**Authority-aware fixture interpretation**：未显式标注文件路由的断言按 ACTIVE 主线判定：`integration_merge_lease` 是 workflow 级串行合并 exclusion 的逻辑名称，经公共 workflow view 读取（per-plan execution lease 已移除，fixture 不得要求 per-row lease/claim 断言）；协调写入经公共动词的事务 + execution-token CAS。仅显式 pre-activation / engine-absent 场景保留 snapshot + same-host 文件锁语义。control root 是主 checkout 的路径定位，不要求发明 ACTIVE `control_worktree_path` 列；branch anchors 与 `integration_worktree_path` 经执行域 workflow view 读取。open findings 始终为 store linked issues，`residuals.json` 只作迁移历史。措辞 SSOT → `mstar-artifacts`、`mstar-branch-worktree` L1、`mstar-dispatch-gates` 与 `mstar-iteration/references/phase-2-worktree-lease.md` §2.0 / Coordination transactions。
+
 ### 评估执行步骤（1-2-3）
 
 1. **准备输入**：加载当前 `assets/routing-evals.json`、`project-manager.md`、`mstar-harness-core`（含 references）。
@@ -97,7 +99,7 @@ description: "[Cursor maint] Morning Star 路由与 prompt 迭代评估 —— �
 - **并行技能标签缺失**：已下发 **≥2 条并行实现 Assignment**（或 `Dev routing: parallel` / tasks 并行标记）且走 Superpowers 工作流时，**Status Update 或 Assignment 的 `Superpowers` 未**出现 **`dispatching-parallel-agents`**（或同义短语）；或 **同仓 ≥2 可写并发** 却未叠 **`using-git-worktrees`** 与检出约定
 - **N invoke ≠ worktree 隔离**：同条消息已发 ≥2 implement invoke，但 Assignment 无绝对 **`Worktree path`** / 未在 invoke 前 `git worktree add`（见 **`mstar-branch-worktree`** → **`references/parallel-writable-pre-dispatch.md`**）
 - **Source isolation/coordination bypass:** cross-plan writable tasks lack distinct registered row metadata checkouts or safe atomic coordinator transactions/CAS; foreign workflow integration exclusion is stolen or real integration merges run concurrently. An InProgress row without a historical per-row lease is not an orphan; never require a claim/bind/seal to continue valid facts.
-- **No shared safe authority:** use serial scheduling when writers cannot share atomic coordination, unless actual current-turn cross-host risk is explicitly authorized and recorded. A worktree waiver alone never authorizes lockless cross-host writes.
+- **No shared safe authority:** cross-plan parallel writable dispatch without the ACTIVE control store's transaction and execution-token CAS arbitration should be **Blocked** or **`Plan parallelism: serial`** (pre-activation / engine-absent only: same-host exclusive snapshot write lock); missing same-host flock alone is not an ACTIVE serial trigger, and a file-route race is acceptable only on current-turn `Cross-host lease race: accepted` (or equivalent) + append-only `notes.jsonl` audit. A worktree waiver alone never authorizes lockless cross-host writes or bypasses this gate — integration merges stay serial.
 - **invoke 角色字段缺失（静默 generic 回退）**：已发 Task/subagent invoke，但 item 漏写与 **`Execute as`** 匹配的角色绑定字段（omp **`agent`** / Cursor **`subagent_type`** / OpenCode **`subagent`** / Kimi·ZCode **`subagent_type`**）⇒ 宿主静默回退 generic worker，却因 count=N 通过而误判「派发完成」（见 **`mstar-dispatch-gates`**、**`mstar-host/references/parallel-dispatch.md`**）。**N=1 顺序 Review-&-Edit 链**最易触发——count 门恒过，字段门是唯一保护
 - **Removed entry accepted:** nonempty iteration-drive arguments boot/mutate instead of refusal or silently become whole-iteration authorization (`direct-plan-removed-entry-refused`). No-argument control still drives the full selected lifecycle (`direct-plan-noargs`).
 - **Another per-row PM:** launches project-manager as subagent/terminal primary or requires per-row identity/claim/bind/transfer (`direct-plan-two-rows-one-coordinator`).

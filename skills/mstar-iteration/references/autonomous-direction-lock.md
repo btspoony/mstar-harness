@@ -46,13 +46,13 @@ Persistence has three ordered steps; none invents human approval:
 
 ### What counts toward the budget（HARD）
 
-Count only **business delivery plans** registered in compass / workflow snapshot (`workflows/<id>/snapshot.json`) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
+Count only **business delivery plans** registered in compass / the workflow registration (ACTIVE: store execution authority; pre-activation: snapshot) whose primary outcome is product, feature, bugfix, user-facing docs, API/contract, or architecture work for the locked direction.
 
 **Do not count** harness / process work as plans (and do not invent plans whose sole job is process):
 
 | Exclude from scale count | Examples |
 |--------------------------|----------|
-| Phase 1 process | Research, direction lock, retained prototype, Review & Edit, compass/catalog/`status.json` bootstrap |
+| Phase 1 process | Research, direction lock, retained prototype, Review & Edit, compass/catalog/execution registration |
 | Phase 2 process | Per-task SDD briefs/reviews, plan QC tri, QA gate, branch merge-back |
 | Phase 3–5 process | Compound / package promotion, iteration-close, Create PR, merge-ready / CI babysit |
 | Meta “plans” | “run QC”, “do compound”, “open PR”, “setup harness”, “write compass only” |
@@ -75,7 +75,7 @@ When a free-text direction / feedback constraint is supplied by the caller:
 
 Resolve `iteration_base_branch` and `target_branch` in order（first hit wins per field）:
 
-1. Workflow snapshot `branch` anchors（`{WORKFLOW_DIR}/<id>/snapshot.json` → `branch.base` / `branch.target`；缺失则根 `status.json` `workflows[]` 无该 entry 时先登记）
+1. Workflow `branch.base` / `branch.target` from ACTIVE execution authority (`mstar status validate`; pre-activation: snapshot fields); absent registration goes through `mstar iteration register` against current authority, never handwritten root / snapshot writes
 2. Existing / prior iteration compass frontmatter
 3. Current git branch **only if** it is already a documented delivery, integration, or project-policy branch（not merely “whatever HEAD is”）
 4. Still missing → **STOP** — escalate; **never** substitute `main` / `master` because those names exist

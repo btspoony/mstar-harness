@@ -92,6 +92,13 @@ Unscoped `mstar issue` remains actor-only: write verbs require `--actor`, `--ope
 | Operation id | Exact-request replay key; changed semantics under the same id refuse |
 | Issue revision | Issue read/capture receipt, passed as `--expect-issue` |
 
+| Code | When |
+|---|---|
+| `execution.direct-write-refused` | ACTIVE root/snapshot/session file mutation is refused; use the owning public workflow/plan verb |
+| `execution.consumer-not-ready` | a file-route consumer tries to read ACTIVE execution state; use `status validate` / `plan show`, or update the consumer |
+| `execution.not-active` | an execution-store operation has no ACTIVE authority; use the documented store upgrade/activation route, not file repair |
+| `execution.token-kind` | an explicit token addresses the wrong scope/kind; read the addressed scope and use its full token |
+
 After a mutation use its new token or derive current own context; an explicitly supplied stale token refuses. Machine output is one JSON object; human summaries go to stderr. Success names operation/scope/fresh token/store/epoch/id/replay and action-local outcome. Failure names stable code plus safe current/expected scope facts, never credential/identity-channel payloads. Consult the refusal instead of inventing a top-down repair sequence. Transactional row refusal changes no row/receipt/counter; where a composed action documents partial application, retain applied components and retry only the remaining action.
 
 Refusals cover absent/ambiguous scope, missing/mismatched independent identity, duplicate coordinator, invalid status/configuration, stopped workflow, foreign real merge exclusion, open critical/findings-cleanup failure and unavailable/mismatched Git facts. No force option or silent scope broadening exists.

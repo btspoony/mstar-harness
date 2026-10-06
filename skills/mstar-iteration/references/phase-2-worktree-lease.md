@@ -2,7 +2,7 @@
 
 > Loaded by `mstar-iteration` SKILL.md on the **execute / resume** route, and by the Phase 2+ command layer. **Read `mstar-harness-core` first.** Entry = §2.0 五道闸全过；continuous execution / push 纪律（§2.6）的 SSOT 仍在 `mstar-iteration` SKILL.md。
 
-Field semantics → `mstar-artifacts/references/status-and-residuals.md`; public parameter shapes and recovery → `mstar-use-cli/references/plan-and-workflow.md`. The primary coordinator uses ordinary plan domain operations on both file and ACTIVE DB routes. Atomic writes, CAS and operation receipts belong inside those actions; no per-plan identity, claim or transfer step is required. Leaf executors receive only assigned paths/scope, never coordinator session references.
+Field semantics → `mstar-artifacts/references/status-and-residuals.md`; public parameter shapes and recovery → `mstar-use-cli/references/plan-and-workflow.md`. The primary coordinator uses ordinary plan domain operations on both file and ACTIVE DB routes. Atomic writes, CAS and operation receipts belong inside those actions; no per-plan identity, claim or transfer step is required. Leaf executors receive only assigned paths/scope, never coordinator session references. This reference owns the iteration execution checklist, not another field or transport protocol.
 
 ## When it applies
 
@@ -11,29 +11,29 @@ command layer；`iteration-start` ends before this）. Defaults are **hard** unl
 explicitly waives via Assignment `Worktree mode: waived` (or equivalent user
 instruction), within the limited scope in § Waiver; main residency and the
 dedicated integration checkout remain mandatory. `Plan parallelism: serial` is **not** a waiver — it only forces
-serial cross-plan **implement** scheduling while the worktree + lease gates remain
-required.
+serial cross-plan **implement** scheduling while checkout isolation, atomic coordination
+and workflow-wide serial integration safety remain required.
 
-Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree + lease gate
+Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree safety gate
 starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start` §6, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
 
 **Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`phase-4-5-pr-delivery.md`** §5.0。
 
-**本 Phase 定义 per-plan 派发循环的完整流程**：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→**QA gate**→Done→合并）、dispatch-first 约束。PM 读取本 Phase（含 §2.0–§2.5 与下方 lease 细则）即可执行迭代。
+This Phase owns the complete per-plan dispatch loop: entry checks, session todos, backlog, integration branch/checkout management, isolated implementation, QC, QA, real serial merge, direct Done and dispatch-first discipline. Read §2.0–§2.5 and the workflow merge-exclusion guidance below before iteration execution.
 
-**Findings cleanup（默认）**：Phase 2 每个 plan Assignment 默认 **`Findings cleanup: allow-residual`**（open R# 先登记 project register，再离 InReview；各决策面披露 id/severity/跟踪位置；unresolved `critical` 仍阻断 Approve）。compass 或 Assignment 可显式覆写为 `zero-residual`（可修 findings 当轮 fix→re-review 清干净；仅真 blocker-defer + Durable Roadmap 可留 open R#，`critical` 不属 defer）。登记与披露职责 SSOT → **`mstar-artifacts`**「Findings cleanup modes」。
+**Findings cleanup（默认）**：Phase 2 Assignment 默认 **`Findings cleanup: allow-residual`**；open finding 先经 `mstar plan issue-add` 捕获为 store issue，再离 InReview，并披露 id / issue severity / 跟踪位置。`zero-residual` 为显式 opt-in；清理与披露权威 → **`mstar-artifacts`**「Findings cleanup modes」。project register 无条件退役为迁移历史。
 
 ## 2.0 前置条件（五道闸）
 
 进入 Autonomous Execute 前必须满足：
 
-1. workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）中至少一条 plan `status` ≠ `Done`；根 `status.json` `workflows[]` 含该 iteration entry
+1. ACTIVE `execution_plans` 至少一条 plan `status` ≠ `Done`，且 `execution_registry` 含该 iteration（经 `mstar status validate` / `mstar plan show` 读取）；仅 pre-activation / engine-absent 回退读取 snapshot 与根 `status.json`
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
-4. **Branch metadata gate**：snapshot `branch.base`（`iteration_base_branch`）、`branch.target`（`target_branch`）已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`（或可从 compass 同轮 backfill）。**缺失 → STOP**，不得用 `main`/`master` 补位。
-5. **Worktree and concurrent-write safety:** confirm the main checkout/control root and its recorded `Main worktree branch`; establish a separate integration checkout and distinct feature checkouts before writable dispatch. Record source branch/worktree through ordinary prepare when not already present. Use absolute control-root Plan Path/SDD paths. Shared coordination writes use the engine's same-host lock or DB transaction/CAS; independent writable tasks use L1/L2 isolation. Without a shared safe authority, schedule cross-plan writes serially. Serial scheduling does not waive checkout isolation. Integration merges always remain serial.
+4. **Branch metadata gate:** current authoritative workflow `branch.base` / `branch.target` and at least one active plan's `metadata.spec_integration_branch` are registered; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master`.
+5. **Worktree and concurrent-write safety:** confirm the main checkout/control root and its recorded `Main worktree branch`; establish a separate integration checkout and distinct feature checkouts before writable dispatch. Record missing or corrected source branch/worktree through ordinary prepare. ACTIVE execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `Worktree path`, `Working branch`, control `Plan Path` and `SDD dir`. Shared coordination writes use the engine's same-host file lock or DB transaction/CAS; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
 
-> **Engine-check（lease verify / verify-integration）唯一规范体：** `mstar-artifacts` `SKILL.md`（Engine check lease 行；standalone 保证同文）。
+> **Engine-check pointer:** `mstar-artifacts` `SKILL.md` owns the worktree/isolation and `lease verify-integration` callout; these checks do not confer row authority.
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 
@@ -45,15 +45,15 @@ starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree ch
 |----------|------|---------|
 | 任意宿主（有 session todo / plan UI 时） | 宿主自身的 session todo / plan UI | 当前 `plan_id`；下一批 gates（implement/QC/**QA gate**）；分支 checkpoint；**仅剩 1 个非 Done plan 时追加 `phase-3-iteration-close`**（open 直至 §3.5）；Phase 4 后 **`phase-5-pr-merge-ready`**（open 直至 §5.5） |
 
-SSOT = `{WORKFLOW_DIR}/<id>/snapshot.json` + `{PLAN_DIR}/`。todos 只追踪本轮下一步。
+SSOT = ACTIVE store.db 执行行 + `{PLAN_DIR}/` authored plans；pre-activation 才使用 snapshot 文件。todos 只追踪本轮下一步。
 
-Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：先按 snapshot / plan 证据勾掉已完成条目，保留未决 gate 条目，再追加下一批条目；todos 只是投影，不授权状态转换。
+Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新；依据当前权威行与 plan 证据勾掉完成项，保留未决 gate 并追加下一批。todos 只是投影，不授权转换。
 
 ## 2.2 Read backlog
 
-1. 读 `mstar-artifacts` + workflow snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）与根 `status.json`
-2. 列出 snapshot 中 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
-3. 读 snapshot `branch.base` / `branch.target`，以及 plan `metadata.spec_integration_branch` / `merge_target` / `primary_spec` 链接
+1. 读 `mstar-artifacts`；ACTIVE 经 `mstar status validate` / `mstar plan show` 读取执行行与 DB 根 register，pre-activation 才读 snapshot / `status.json`
+2. 列出当前权威 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
+3. 读 workflow `branch.base` / `branch.target` 与 plan `metadata.spec_integration_branch` / `merge_target` / `primary_spec`
 
 ## 2.3 Branch anchors + integration branch + integration worktree（Phase 2 入口）
 
@@ -61,9 +61,9 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
 
 **Branch anchors 解析顺序**（任一环节缺失则 STOP，**禁止**默认 `main`/`master`）：
 
-1. workflow snapshot → `branch.base`（`iteration_base_branch`）、`branch.target`（`target_branch`）、`branch.integration`（`spec_integration_branch`）；plan 行 → `metadata.spec_integration_branch`
-2. 若 (1) 缺字段 → 读当前迭代 compass frontmatter 同名键：优先 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`；若无则 legacy `{ITERATION_DIR}/<iteration-id>-delivery-compass.md`
-3. 若 compass 有值而 snapshot 无 → **同轮 backfill** snapshot `branch`
+1. ACTIVE workflow 执行行 → `branch.base` / `branch.target` / `branch.integration`；plan 行 → `metadata.spec_integration_branch`（pre-activation：snapshot 对应字段）
+2. 若缺字段 → 读当前 compass frontmatter 同名键：优先 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`，否则 legacy flat compass
+3. compass 有值而当前权威无值 → 经受守卫公共 workflow 动词处理（Prepare 注册/修订见 Phase 1 §1.5）；没有合法修订路径则升级，不手写 DB 或 snapshot。仅 pre-activation / engine-absent 文件路由才可按其协议 backfill snapshot `branch`
 4. 仍缺 → 向用户确认 base / PR target；**不得**因 `git symbolic-ref refs/remotes/origin/HEAD` 指向 `main` 就自动采用
 5. 所有参与本轮迭代的 active plan **必须**解析到**同一** `spec_integration_branch`；不一致 → **STOP**
 
@@ -75,7 +75,7 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
 2. 用 `git worktree add <integration-path> <spec_integration_branch>` 建立独立 integration checkout；分支不存在时用 `git worktree add -b <spec_integration_branch> <integration-path> <iteration_base_branch>`。
 3. `git -C <integration-path> branch --show-current` 确认 integration 分支；后续 merge 仅在该 checkout。waiver 仅豁免每 plan feature worktree 默认，不豁免 integration 协调 checkout；产品写入仍须避开主 checkout 和 integration checkout。
 
-`spec_integration_branch` 是本迭代内所有 plan feature branch 的 merge target。QC **`Review range` / `Diff basis`** 的 merge-base 参照优先用 snapshot `branch.target`（或 PM 书面指定的 base ref），**禁止**无 Assignment 依据写死 `origin/main`。
+`spec_integration_branch` 是本迭代 plan feature branch 的 merge target。QC merge-base 参照优先用当前权威 workflow `branch.target`（ACTIVE：执行行；pre-activation：snapshot；或 PM 书面指定 base），不无依据写死 `origin/main`。
 
 ## Integration worktree (Phase 2 entry) + control root
 
@@ -92,17 +92,17 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
    main worktree**; never reuse the primary checkout for integration.
 4. Verify `git -C <integration> branch --show-current` equals
    `spec_integration_branch`; working tree clean before merge operations.
-5. Record canonical absolute repository-root path in the workflow snapshot
-   top-level `integration_worktree_path` (not `{HARNESS_DIR}`; canonicalize
-   symlinks). The main worktree is **not** recorded in the snapshot — it is
-   derived from Git every session.
-6. Resolve coordination paths from the **control root** (default-gitignored process artifacts live on the **main-worktree filesystem**, not as Git blobs):
-   - status register: `<main-repo-root>/{HARNESS_DIR}/status.json` (v2 root — active workflow entries)
-   - snapshot SSOT: `<main-repo-root>/{WORKFLOW_DIR}/<id>/snapshot.json` (plan rows + leases + branch anchors)
-   - project register: `<main-repo-root>/{PROJECT_DIR}/<id>/residuals.json`
-   - plans SSOT: `<main-repo-root>/{PLAN_DIR}/`
-   - iterations SSOT: `<main-repo-root>/{ITERATION_DIR}/`
+5. 经 `mstar workflow integration-worktree` 记录 canonical absolute repository-root
+   `integration_worktree_path` 到 ACTIVE workflow 执行行（pre-activation：
+   snapshot 顶层字段；形状以 help 为准）。主 worktree 由 Git 派生，不是该字段。
+6. 从 **control root** 解析协调面：
+   - ACTIVE authority: `<main-repo-root>/{HARNESS_DIR}/store.db` (root register, workflow/plan rows, coordinator sessions, registered inputs and workflow-wide merge exclusion)
+   - authored plans: `<main-repo-root>/{PLAN_DIR}/`
+   - authored iteration package: `<main-repo-root>/{ITERATION_DIR}/`
    - SDD tree: `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/`
+   - retained append-only notes: `<main-repo-root>/{WORKFLOW_DIR}/<id>/notes.jsonl`
+   - pre-activation / engine-absent only: root `status.json` / workflow `snapshot.json` / session envelopes；ACTIVE 读写被拒
+   - project `residuals.json` 无条件退役为迁移历史；findings 权威始终是 store issues
 7. **Phase 1 route — push the branch.** Push the newly created
    `spec_integration_branch` (`git push -u origin <branch>` — upstream setup
    only). Phase 1 writes only default-gitignored paths: compass / plans / the
@@ -125,7 +125,7 @@ Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-a
    anchor instead requires that pushed remote tip to equal the live integration
    HEAD, so it must not be executed before this step's push.
 
-The coordinator refreshes the authoritative control-root workflow view before a plan mutation or integration action; engine transactions revalidate the selected row and CAS.
+The coordinator refreshes the authoritative control-root workflow view before a plan mutation or integration action. ACTIVE public verbs re-read state and merge exclusion in the DB transaction and check scope CAS; pre-activation domain writers re-read under their same-host file lock. No row claim/release/transfer step is introduced.
 
 **Do not** set `Worktree mode: waived` because a feature worktree lacks
 `plans/` under default gitignore — keep feature worktrees and pass absolute
@@ -139,9 +139,11 @@ control **`Plan Path`** / **`SDD dir`** in Assignments
 
 ### Atomic coordination writes
 
-The plan/workflow domain writers own the complete read-check-write transaction. File authority uses its same-host exclusive lock and atomic replacement; ACTIVE DB authority uses transactions, CAS and operation receipts. Read-only validators do not authorize raw snapshot edits or replace a mutation.
+The plan/workflow domain writers own the complete read-check-write transaction. File authority uses its same-host exclusive lock and atomic replacement; ACTIVE control DB authority uses transactions, scope CAS and operation receipts, never snapshot lockdirs as proof. All state writes use public domain verbs. Read-only validators do not authorize raw snapshot edits or replace a mutation.
 
-Cross-plan writable tasks require distinct source checkouts and owned paths. If coordination writers cannot share a safe authority, use `Plan parallelism: serial` rather than inventing a distributed lock. Before dispatch, verify the actual source checkout/branch against ordinary row metadata and the leaf Assignment. Never steal another workflow's write or merge claim; completion releases only applicable exclusion for its verified attempt.
+**Cross-plan parallel safety gate** (including waived): dependencies, independent write ownership and L1/L2 checkout isolation must hold. ACTIVE writers use the same control DB transaction/CAS authority; cross-host execution does not bypass that authority or automatically force serial scheduling merely because no shared file lock exists. Pre-activation writers require a shared same-host file lock; otherwise use `Plan parallelism: serial`. An explicit current-turn acceptance of file-route cross-host race is recorded only in append-only `notes.jsonl`, never dual-written into snapshot notes; waiver alone supplies no race authorization.
+
+Before writable dispatch, verify the actual source checkout/branch against ordinary row metadata and the leaf Assignment, not a row holder/session. Never steal another workflow's write or merge claim; direct completion releases only applicable exclusion for its verified attempt. Integration merges always remain serial.
 
 
 <!-- host-hook: phase-2-entry -->
@@ -151,7 +153,7 @@ Cross-plan writable tasks require distinct source checkouts and owned paths. If 
 
 ## 2.4 Per-plan loop（直到全部 Done）
 
-Cross-plan ready work requires distinct source checkouts and safe atomic coordination, even under an explicit worktree waiver. Without a shared safe authority schedule serially; current-turn cross-host risk remains explicit ordinary notes. Integration stays serial. No per-row execution lease/bind/claim qualification exists.
+Cross-plan ready work follows the **Cross-plan parallel safety gate** above, including under an explicit worktree waiver. Integration stays serial. No per-row execution lease/bind/claim qualification exists.
 
 ### Rescheduling checkpoint（主动调度检查点）
 
@@ -193,7 +195,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch and record missing or corrected facts with revisable `prepare`; QA defaults to mandatory, cleanup to allow-residual. No prepare record is required when defaults and recorded metadata suffice.
 2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
-3. **Implement → InReview**（产品编辑在 feature worktree；plans / snapshot / iterations / SDD 经 control root 绝对路径）：
+3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按依赖与 ownership 派发 **独立 ready tasks 并行** 的 per-task 循环（**不是**一次派发 dev 做全部 tasks）：
      1. `mstar sdd workspace <plan-id>` → `{SDD_DIR}`
@@ -201,11 +203,11 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
      3. Dispatch **one** implementer subagent（`references/implementer-prompt.md`：brief 路径 + report 路径；**禁止**贴整份 plan）
      4. Implementer `DONE` → `mstar sdd review-package BASE HEAD` → task diff 文件
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
-     6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；更新 snapshot plan 行 / plan checkbox
-     7. 放行已满足依赖的 next task；不等待无依赖任务，PM 独占共享 progress / snapshot 写入
-   - After each accepted Completion Report, the primary coordinator updates the row through `mstar plan progress` and the main plan. Status is `InProgress`, `InReview` or `Blocked`, never `Done`; paths remain within the resolved plan/SDD area. Leafs never write snapshots/root registers.
+     6. Fix until task review is clean; append `{SDD_DIR}/progress.md`; update the authoritative row through `mstar plan progress` and the authored plan checkbox.
+     7. Release ready dependent tasks without waiting for unrelated tasks; PM alone writes shared progress, and state changes use public verbs.
+   - After each accepted Completion Report, the primary coordinator updates the row through `mstar plan progress` and the main plan. Status is `InProgress`, `InReview` or `Blocked`, never `Done`; paths remain within the resolved plan/SDD area. Leaves never write snapshots/root registers.
 4. **QC → QA gate:** keep the row InReview; run the SDD task reviews, then plan QC tri (inline single-seat exception) and mandatory QA or qualified PM acceptance. Raw reports live in `{SDD_DIR}/review/`, with durable summaries in the main plan. Capture/disclose findings under the effective cleanup configuration.
-5. **Direct completion after the real serial merge:** from the clean recorded integration checkout on `snapshot.branch.integration`, record the actual base SHA and explicitly run `git -C <integration-worktree-path> merge --no-ff --no-edit <reviewed-source-sha>` once. Supply QC/QA/source-review evidence and `integration: {base_sha, result_sha}` to `mstar plan complete`. The engine verifies the actual checkout, merge/source/review ancestry and result reachability, re-witnesses Git at commit, then atomically writes Done/completion evidence and retains source ownership metadata. It releases only applicable write/merge exclusion. No pre-merge state record or ownership-transfer sequence is required.
+5. **Direct completion after the real serial merge:** from the clean recorded integration checkout on the authoritative workflow's `branch.integration` (pre-activation: snapshot), record the actual base SHA and explicitly run `git -C <integration-worktree-path> merge --no-ff --no-edit <reviewed-source-sha>` once. Supply QC/QA/source-review evidence and `integration: {base_sha, result_sha}` to `mstar plan complete`. The engine verifies the actual checkout, merge/source/review ancestry and result reachability, re-witnesses Git at commit, then atomically writes Done/completion evidence and retains source ownership metadata. It releases only applicable write/merge exclusion. No pre-merge state record or ownership-transfer sequence is required.
    - On merge conflict, retain InReview and resolve or explicitly abort Git in that same checkout; do not invent Done. After a completed merge, retry complete with the same actual SHAs, never repeat the merge because a response was lost. Exact operation replay does not re-run Git or rewrite timestamps. Missing scope facts use ordinary prepare; actual Git conflicts must be resolved, not suppressed by state edits.
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
 7. **Next ready row/wave:** continue from step 1; rows may interleave, while all integration writes remain serial.
@@ -218,7 +220,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 ### Same-round plan cleanup（timing lane 1；merge 成功同轮）
 
-After successful real integration and row Done, recover the owned merged feature/track checkout in the same round; an active parent does not make its Done child ineligible. No per-row execution lease is an admission requirement. Guarded ownership/merge/refusal/order semantics live only in mstar-branch-worktree's cleanup section.
+After successful real integration and row Done, recover the owned merged feature/track checkout in the same round; an active parent does not make its Done child ineligible. No per-row execution lease is an admission requirement. Guarded ownership/merge/refusal/order semantics live only in `mstar-branch-worktree`'s cleanup section.
 
 ```text
 mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]
@@ -226,7 +228,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 
 - 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
 - 分支可能仍被该 Done-child worktree 检出 → apply 内部先移 worktree，再 re-probe / re-plan 删分支（**worktree 移除 ≠ 分支删除**；细则 → 契约本体）。
-- Cleanup never releases exclusion or advances state; direct complete owns that transaction. Ownership remains in row source metadata and retained track Assignments. Standalone plans use branch.target as evidence base and require terminal close before physical cleanup.
+- Cleanup never releases exclusion or advances state; direct complete owns that transaction. Ownership remains in row source metadata and retained track Assignments, not presence/absence of historical lease fields. Standalone plans use `branch.target` as evidence base and require terminal close before physical cleanup.
 - **禁止**为让 cleanup 通过而推进/终结父迭代或改 snapshot 状态；受保护行保持 `refuse` 是正确行为，不是失败。
 
 ## 2.5 Dispatch-first（implement 派发约束）
@@ -249,17 +251,17 @@ Iteration Phase 2 附加：
 - PM **NEVER** 在 PM 线程实现产品代码（delegate dev；hotfix 例外见 **`mstar-phase-gates`**）
 - `Subagent invokes issued: 0` 而 Assignment 已写出 → **`dispatch incomplete`**；下一条补发 invoke，禁止 PM 顶替
 - QC 初轮：**SDD → N=3**；**inline → N=1**；plan QC tri 三席 **同条消息 N=3**（非 implement 轨数）
-- **`Findings cleanup: allow-residual`（默认）**：open R# 先登记 project register，且各决策面披露（清单 + severity + 跟踪位置；close 面另含 blocker-defer 标记），`Approve with residuals` 仅当无 unresolved `critical`；`zero-residual` 仍为显式 opt-in —— QC 后可修 Warning/Suggestion → fix→targeted re-review 直至 clean `Approve` 或仅剩真 blocker-defer（`critical` 不属 defer —— 定义与登记/披露职责 → **`mstar-artifacts`**「Findings cleanup modes」）
+- **`Findings cleanup: allow-residual`（默认）**：open finding 经 `mstar plan issue-add` 捕获为 store issue，并在各决策面披露 id / issue severity / 跟踪位置；`zero-residual` 显式 opt-in。处置、blocker-defer 与披露规则 → **`mstar-artifacts`**「Findings cleanup modes」，不使用退役 project register。
 
 ## Feature worktree (per plan)
 
 - Each concurrently active plan uses a **distinct** absolute feature-worktree
   path and dedicated feature branch from `spec_integration_branch`.
-- Row `metadata.worktree_path` MUST differ from the main/control and integration checkouts.
-- Record Worktree path and Working branch on the row through prepare when missing, and include them in writable leaf Assignments before dispatch.
-- Product/source edits run from the feature worktree; plans, iterations,
-  status, and SDD coordination reads/writes run through **absolute control
-  paths** (never relative `.mstar/...` from the feature cwd when L1 is active).
+- Row `metadata.worktree_path` MUST differ from the main/control and registered integration checkouts (ACTIVE workflow view; pre-activation snapshot).
+- Record Worktree path and Working branch on the row through prepare when missing or corrected, and match them to actual checkout facts and writable leaf Assignments before dispatch.
+- Product edits run from the feature worktree; authored plans / iteration package /
+  SDD use absolute control paths, and state uses public verbs against the control
+  authority, never feature-cwd relative `.mstar/...`.
 - Assignment MUST include absolute feature **`Worktree path`** and absolute
   control **`Plan Path`** / **`SDD dir`** before writable implement dispatch.
 - Default **L1**: one writable track per plan. Within-plan multi-writable tracks
@@ -269,19 +271,13 @@ Iteration Phase 2 附加：
 
 Row state writes use coordinator transaction/CAS/receipts and validated source metadata, not a retained per-row execution lease. An InProgress row without a historical lease is not an orphan admission failure. Recovery concerns actual coordinator identity, source facts or transaction conflict.
 
-
 ## Multi-plan parallelism
 
-**Cross-plan parallel safety gate** applies **whether or not** `Worktree mode:
-waived` is in effect — waiver does **not** authorize lockless cross-host parallel.
-
-- Feature implementation may proceed across ready plan IDs with distinct feature checkouts/branches, independent write ownership and safe atomic coordination. Without shared coordination safety, use serial scheduling or an explicitly authorized current-turn cross-host risk disposition recorded in ordinary notes. A waiver never silently authorizes lockless cross-host writes.
-- **Integration merge** into `spec_integration_branch` is **serial** (one at a time),
-  with or without lease gate.
+The **Cross-plan parallel safety gate** above applies whether or not `Worktree mode: waived` is in effect. Feature checkouts/branches and write ownership remain distinct; waiver never silently authorizes lockless cross-host writes. Integration into `spec_integration_branch` stays serial.
 
 ## Serial integration safety
 
-The workflow-wide `integration_merge_lease`, where retained, protects actual concurrent integration writers; it never grants a new per-plan seat. The coordinator verifies the clean recorded integration checkout, performs one explicit merge at a time and supplies the real base/result to direct complete. Existing foreign claims are not stealable by age, idle status or labels. Complete releases the verified attempt's applicable merge claim atomically with Done. A failed/in-flight Git merge remains unresolved until Git is clean and its result is provable; never clear protection or repeat a successful merge to manufacture state.
+Workflow-wide merge exclusion (ACTIVE: `execution_integration_leases`; pre-activation: `integration_merge_lease`) protects actual concurrent integration writers; it never grants a new per-plan seat. The coordinator verifies the clean recorded integration checkout, performs one explicit merge at a time and supplies the real base/result to direct complete. Existing foreign claims are not stealable by age, idle status or labels. Complete releases the verified attempt's applicable merge claim atomically with Done. A failed/in-flight Git merge remains unresolved until Git is clean and its result is provable; never clear protection or repeat a successful merge to manufacture state.
 
 
 ## Waiver
@@ -293,13 +289,7 @@ waives **only**:
   checkout remains required; the primary checkout keeps its recorded branch
   and remains the process-SSOT holder via absolute control-root paths.
 
-It does **not** waive the **cross-plan parallel safety gate**. Under waiver,
-cross-plan **parallel writable** implement still requires same-host exclusive
-write lock on the coordination snapshot path, default **`Plan parallelism:
-serial`**, or current-turn `Cross-host lease race: accepted` + audit
-snapshot plan `notes` / `notes.jsonl`. **Prefer serial scheduling when waived**; parallel under waiver
-only with the race-accepted override (or same-host lock when mutating shared
-state).
+It does **not** waive the **cross-plan parallel safety gate** above. ACTIVE remains DB-arbitrated; pre-activation requires the documented shared file lock, serial scheduling, or explicit current-turn race acceptance + append-only `notes.jsonl` audit. **Prefer serial scheduling when waived**.
 
 Serial policy does not waive checkout isolation, coordinator transaction/CAS or real serial integration safety.
 

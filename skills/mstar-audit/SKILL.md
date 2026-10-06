@@ -131,7 +131,7 @@ Before writing: record `git rev-parse --short HEAD` — every plan stamps the co
 
 When the user selects plans to pursue:
 
-1. PM registers the workflow + plan rows in `{WORKFLOW_DIR}/<id>/snapshot.json` (root `status.json` v2 holds the workflows registry only — see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or manually per `mstar-artifacts`.
+1. PM registers the workflow + plan rows in store.db through public producer verbs (see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or through `mstar workflow register` and public plan verbs per `mstar-artifacts` (file fallback only pre-activation / engine-absent).
 2. Each plan enters the normal state machine: `Todo → InProgress → InReview → Done`.
 3. PM may fast-track Prepare since the audit plan already contains spec, current-state excerpts, and verification gates — but the intent gate and clarify discipline still apply (`mstar-phase-gates`).
 4. Execution follows normal SDD or inline dispatch.
@@ -142,7 +142,7 @@ Advise, do not sell. State findings plainly with evidence, flag uncertainty hone
 
 ## Attribution
 
-Workflow, audit playbook, finding format, and the security deep-dive method are adapted or synthesized from third-party sources — full provenance lives in `ATTRIBUTION.md` at this repo's root. The `execute` / `reconcile` / `--issues` variants of the source skill are not carried over — Morning Star's SDD, `status.json`, and residual tracking replace them.
+Workflow, audit playbook, finding format, and the security deep-dive method are adapted or synthesized from third-party sources — full provenance lives in `ATTRIBUTION.md` at this repo's root. The `execute` / `reconcile` / `--issues` variants of the source skill are not carried over — Morning Star's SDD, store.db issue/catalog authority, and plan workflow replace them.
 
 ## References
 

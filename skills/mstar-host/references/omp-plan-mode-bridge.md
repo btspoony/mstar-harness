@@ -9,10 +9,10 @@ omp session plans, composer todos, and plan-mode UI text are **session UX only**
 | Artifact | SSOT |
 |----------|------|
 | Main plan | `{PLAN_DIR}/<plan-id>-<name>.md` |
-| Plan registry | `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows) |
+| Plan registry | ACTIVE store.db `execution_registry` / `execution_plans` (pre-activation: status.json + snapshot) |
 | Iteration compass | `{ITERATION_DIR}/…` when in formal iteration |
 
-Bootstrap before treating a plan as ready for Execute (read `mstar-conventions` + `mstar-artifacts`; ensure `{HARNESS_DIR}` / `{PLAN_DIR}` exist with process-artifact gitignore entries; mirror the active omp plan into the SSOT main plan path; register the root `workflows[]` entry + snapshot plan row when required by Prepare gates) → core.
+Bootstrap before treating a plan as ready for Execute (read `mstar-conventions` + `mstar-artifacts`; ensure `{HARNESS_DIR}` / `{PLAN_DIR}` exist with process-artifact gitignore entries; mirror the active omp plan into the SSOT main plan path; register store-backed workflow/plan rows through `mstar workflow register` when required by Prepare gates) → core.
 
 **Never** use only the omp session plan / UI todo list as **Plan Path**.
 

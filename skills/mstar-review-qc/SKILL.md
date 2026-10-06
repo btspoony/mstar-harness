@@ -53,7 +53,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 ## PM consolidated 门禁（摘要）
 
-Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / workflow snapshot artifacts. The consolidated decision also discloses the open-findings situation — the issue list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」); capture itself follows **`mstar-project-governance`「Issue capture」**.
+Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-template.md`**. PM **`{SDD_DIR}/review/qc-consolidated.md`** synthesizes tri (or single-seat `qc.md`) into one gate decision for implement fix waves and QA gate, then records the durable summary in the main plan / store.db-backed plan row through public plan verbs (snapshot files only pre-activation). The consolidated decision also discloses the open-findings situation — the issue list + each severity + tracking location (`N/A — none open` when none) — per the **`Findings cleanup`** duties (`mstar-artifacts`「Findings cleanup modes」); capture itself follows **`mstar-project-governance`「Issue capture」**.
 
 ### 覆盖语义（未提及 = 未审查）
 

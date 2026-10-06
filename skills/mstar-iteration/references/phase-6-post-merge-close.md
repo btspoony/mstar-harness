@@ -1,4 +1,4 @@
-# Phase 6: post-merge close（terminal snapshot → unregister → reconcile → cleanup handoff）
+# Phase 6: post-merge close（terminal execution state → unregister → reconcile → cleanup handoff）
 
 > Loaded by `mstar-iteration` SKILL.md when entering Phase 6. **Read `mstar-harness-core` first.** 进入前置：§5.2 exit checklist 全 `[x]` **且 PR 已 merge**（verified merged）。mergeable ≠ merged；引擎无法探测远端 PR 状态 —— merged 与否由 PM 核实后再调用，close verb **不**充当 merge 验证器。
 
@@ -10,9 +10,9 @@
 
 Ordered pipeline（HARD —— 顺序固定，禁止跳步/倒置）：
 
-**§6.1 terminal snapshot write → §6.2 unregister → §6.3 projection reconciliation → §6.4 cleanup handoff。**
+**§6.1 terminal execution transition → §6.2 unregister → §6.3 projection reconciliation → §6.4 cleanup handoff。**
 
-## §6.1 Terminal snapshot write（先写终态）
+## §6.1 Terminal execution transition（先写终态）
 
 ```text
 mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-execution-token> \
@@ -20,28 +20,28 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]   # pre-activation only
 ```
 
-- Close rereads current authoritative state under its transaction/lock, validates identity/shape, returns valid terminal no-op or requires all rows Done and no dangling workflow integration exclusion, then writes completed + ended_at. Per-row execution leases are removed.
-- fail-loud：dangling lease / 非 `Done` 行 / snapshot 缺失或身份不符 → exit 1，**snapshot 字节不变**（无部分写）
-- **`type: plan` 交付证据 consult**：写终态**前** engine 咨询已注册 delivery kind 的证据（`consultDeliveryEvidence`）——`development` 缺 compound 处置 / PR 身份 / 已核实合并记录（或 PR 的 `head`/`target` 不等于注册的 `branch.source`/`branch.target`），或 `verification/report-only` 缺其完成策略的履行记录 → `PHASE6_DELIVERY_*` 拒绝，snapshot 保持 `running`、根条目保持注册（字节不变、可恢复）；补齐用 `mstar workflow evidence --workflow <id> --file <payload.json>`（active：再加 `--session-ref <wire> --expect <全执行令牌> --operation <id>`，在独立获取的身份下；pre-activation：再加 `--session <path>`；与 close 同一 authority 门、幂等；**PR 身份一次写入**，compound/merge 可覆写）。仅 `completed` close 咨询：`failed`/`stopped` 永不要求交付证据（§5）。write path 与 read-only `mstar iteration gate --phase 6` **共享同一实现**，两侧判定不走偏
-- **kind 在注册期显式声明**（§1/§4a）：`workflow register` / `audit promote --delivery-kind`（必填）/ `migrate --delivery-kind`（会产生 ACTIVE 无 kind plan 快照却缺 flag → exit 2；声明是**一个**交付身份，故一次 lift 若产生 2+ 个 ACTIVE standalone plan 同样以 exit 2 拒绝并列出 plan id —— 分批迁移，每批单 plan 声明）——绝不推断、绝不在代码内默认；`development` 需 `--branch-source`/`--branch-target`，`verification/report-only` 需 `--completion-policy`。历史遗留在 **ACTIVE** 无 kind 快照用 `mstar workflow evidence --workflow <id> --declare-kind <kind> [--branch-source <b> --branch-target <b> | --completion-policy <text>] [--session <path>]` 一次性修复（**pre-activation** 重写：DB 创建路线在注册时声明 kind，故不存在 active 形态；二次声明含同值一律拒绝、terminal 快照拒绝；supplied 锚只**填缺失**或与已注册锚同值复述，冲突值拒绝——已注册锚即交付身份，永不覆盖；legacy **terminal** 无 kind 死路按既有 owner amendment 路径）
-- **禁止**为通过 close 释放 lease —— lease release 是独立的 owner 动作，close 从不释放（甚至 caller 自己的）
+- Close rereads current authoritative state under its transaction/lock, validates identity/shape, returns valid terminal no-op or requires all rows Done and no dangling workflow integration exclusion, then writes completed + ended_at. Under ACTIVE authority the terminal state and the DB root unregister commit in the same transaction and a failed transition rolls back whole; only the pre-activation file route rewrites a snapshot under its write lock. Per-row execution leases are removed.
+- dangling lease / 非 `Done` 行 / 缺失或身份不符则拒绝；不提交失败 transition。pre-activation 的相应失败保持 snapshot 字节不变。
+- **`type: plan` 交付证据 consult**：completed close 与只读 Phase-6 gate 共享 `consultDeliveryEvidence`；development 缺 compound disposition / PR 身份 / verified merge，或 report-only 缺完成策略履行，均以 `PHASE6_DELIVERY_*` 拒绝，当前权威保持 running + registered。补齐只经 `mstar workflow evidence`（ACTIVE：session reference + scope token + operation id；pre-activation：session envelope；flags 见 help），不手写状态。PR 身份一次写入，compound / merge 可覆写；failed / stopped 不要求 successful-delivery 证据。
+- **delivery kind 在注册期显式声明**：DB 创建路线注册时声明，不发明 ACTIVE 的补 kind 通道；历史 pre-activation 无 kind snapshot 才用 `mstar workflow evidence --declare-kind` 一次性声明。注册与声明的完整约束 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`，命令形状见 help。
+- **禁止**为通过 close 释放 lease 或伪造 Done —— close 从不释放（甚至 caller 自己的）；ACTIVE 只组合当前权威已记录证据所蕴含的合法 bookkeeping，不夺取外来所有权；exclusion 的释放由 direct complete 在其已验证尝试中完成；pre-activation close 不释放 lease。
 - `--ended-at` 只属于 **pre-activation** 形态（省略时由 CLI 提供当天时间戳；引擎不接受自身时钟读数）；active 形态记录其自身时间戳，带 `--ended-at` 是 usage 拒绝
 
 ## §6.2 Unregister（removal-at-terminal）
 
-同一命令内、**仅在 §6.1 成功后**执行：从根 `{HARNESS_DIR}/status.json` 注销该 lifecycle（`unregisterWorkflow`，幂等）。
+同一命令按先 terminal、再 unregister 的语义关闭 lifecycle：ACTIVE 从 DB 根 register（`execution_registry`）注销，pre-activation 才是根 `status.json`。
 
-- 顺序固定：**snapshot 先 terminal，再注销根条目**；禁止反向
-- unregister 失败 = exit 1 + **partial close** 显式报告；**禁止**回滚到 running —— 重试重读 terminal snapshot 后**只补 unregister**（不改 `ended_at`）
-- fully closed retry：两个文件都不再改动，输出 already-closed 通知
+- **顺序固定**：先有效终态，后注销；ACTIVE 由 DB 事务执行，不手写文件
+- pre-activation unregister 失败显式报告 partial close，重试只补 unregister，不回滚 running / 重写 `ended_at`
+- fully closed retry 不再变更权威目标（ACTIVE：DB 行；pre-activation：两文件），输出 already-closed
 
-## §6.3 Projection reconciliation（snapshot 权威）
+## §6.3 Projection reconciliation（当前执行权威）
 
-把本地状态面对齐到 terminal snapshot（snapshot 行权威，投影跟随）：
+把本地叙事面对齐到 ACTIVE DB 终态与 store issue rollup（pre-activation：terminal snapshot 执行状态）：
 
-1. `{PLAN_DIR}` plan 文件
-2. compass `## Plans` + `{ITERATION_DIR}/README.md` 索引
-3. project roadmap / register
+1. `{PLAN_DIR}` authored plan
+2. compass `## Plans`；迭代 README 仅散文，无状态登记行
+3. store project roadmap 内容与 issue rollup；project register 仅迁移历史，不更新
 
 - **禁止**伪造 `Done` 行、**禁止**为对齐而 close open residual —— reconciliation **不发明** Done/closed，也不为对齐关闭条目或放宽 `zero-residual` 规则；`allow-residual` 下已登记且披露的非阻断 open R# **保持 open**，不随 lifecycle 终结而“随之关闭”（真实 remaining finding 阻塞 `zero-residual` 交付，而不是被静默关闭）
 - **禁止**把新 tracked 产品/文档 commit 夹带进 Phase 6 —— 新发现的产品修复另开授权 workflow
@@ -67,7 +67,7 @@ Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease 
 
 ## Evidence
 
-Phase 6 完成 = `jq -r '.status, .ended_at'` `{HARNESS_DIR}/workflows/<id>/snapshot.json` → `completed` + 日期；根 `{HARNESS_DIR}/status.json` 不含该 id 且 `mstar status validate <root status.json>` exit 0；无 dangling lease；投影一致；host todo `phase-6-post-merge-close` 可勾掉。Phase-6 post-merge close gate（`mstar iteration gate --phase 6 --workflow <id>`，只查本地 close state）exit 0。
+Phase 6 完成 = 保留 ACTIVE `mstar status workflow-close` 的实际 applied / replay 收据，确认 terminal `completed` + `ended_at` 与同事务 unregister；`mstar status validate`（不传显式文件路径）核对当前 DB 根 register 不含该 id；`mstar iteration gate --phase 6 --workflow <id>` exit 0、无 dangling lease、叙事投影一致。当前 ACTIVE read 不返回已注销 workflow 历史，不能把 root absence 单独当终态证明。仅 pre-activation / engine-absent 核对 snapshot / `status.json`；完成后勾 host todo。
 
 ## References
 

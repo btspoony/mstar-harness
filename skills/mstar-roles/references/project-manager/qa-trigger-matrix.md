@@ -38,7 +38,7 @@ Set **`QA gate`** on the **first implement Assignment** (or plan frontmatter) an
 
 **Upgrade rule:** If conditions change mid-round (e.g. QC becomes `Approve with residuals`, UI scope added, an issue captured and left open), change `QA gate` from `pm-acceptance` to `mandatory` before `Done`.
 
-**Findings cleanup note:** Only Assignment **`Findings cleanup: zero-residual`** (explicit opt-in) ties the plan to a clean QC `Approve` with **no open issue** — under it, a clean approval restores the small-feature `pm-acceptance` path when other tier rules allow. The default `allow-residual` carries captured issues, and any open issue linked to the plan (either mode, even blocker-defer) still forces **`QA gate: mandatory`** like the open-issue row above. See `mstar-artifacts` Findings cleanup modes.
+**Findings cleanup note:** Mode semantics → `mstar-artifacts`「Findings cleanup modes」. QA-tier consequence: any open issue linked to the plan, including blocker-defer, forces **`QA gate: mandatory`**; a clean approval with none open permits the small-feature `pm-acceptance` path only when the other tier rules allow.
 
 ## PM acceptance checklist (required before `Done` when `QA gate: pm-acceptance`)
 

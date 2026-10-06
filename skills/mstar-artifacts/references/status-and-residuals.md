@@ -6,8 +6,8 @@ v3 布局把 v1 的「单文件 `status.json`（根 `plans[]` + 根级 `residual
 
 > **Authority split:** ACTIVE execution state is the DB domain, never a file fallback. File shapes describe pre-activation authority only. Ordinary coordinator operations own both transports with their transaction/lock and CAS contracts; surviving retired files are provenance, not live state.
 
-- **根 `{HARNESS_DIR}/status.json`（v2）** — 活跃生命周期登记：`{ "version": 2, "updated_at", "workflows": [...] }`。只登记 **active**（`running` / `paused`）lifecycle；terminal 时先写 snapshot 再从根列表移除（removal-at-terminal）。由 engine `validateStatus`（v2）/ `registerWorkflow` / `unregisterWorkflow` 读写。PM-facing unregister caller：post-merge close `mstar status workflow-close --workflow <id>`（ordering 固定：terminal snapshot → unregister；细序 → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2）。
-- Workflow state: rows plus source metadata/configuration/progress/completion, top-level integration_merge_lease/execution_policy/branch/integration_worktree_path/compass_ref. Per-row execution leases are removed.
+- **ACTIVE root register** — `{HARNESS_DIR}/store.db` (`execution_registry` + `execution_meta.root_updated_at`), read through `mstar status validate`. Pre-activation / engine-absent root `status.json` v2 carries equivalent `version/updated_at/workflows[]`. Terminal workflow state is written before unregister; PM caller: `mstar status workflow-close --workflow <id>` (ordering → `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.2).
+- **ACTIVE workflow / plan state** — store `execution_*` tables, read through `mstar plan show` / `mstar status validate`. `{WORKFLOW_DIR}/<id>/snapshot.json` is only the pre-activation / engine-absent transport: rows with source metadata/configuration/progress/completion, workflow-wide `integration_merge_lease`, policy, branch anchors, integration worktree and compass reference. Per-row execution leases are removed; `<id>` is the plan or iteration workflow id.
 - **`{PROJECT_DIR}/<id>/roadmap.md` + `residuals.json`** — 项目层 legacy 文件：Markdown 是 reviewed import/export 的 transport/history，roadmap 内容权威在 `{HARNESS_DIR}/store.db` 的 `project_roadmaps`（读写规则 → `mstar-project-governance`）；residual **register**（`entries[<plan-id>]` 数组；severity 枚举与 lifecycle 语义逐字保留）是迁移历史，open item 的 SSOT 是 store issue。无归属的流程落到 `_default` 项目。
 
 **Pre-activation trees:** `status.json`（根）与 workflow snapshot 是执行态 SSOT：plan 行状态与 lease 在 snapshot。**Active authority:** the DB execution domain is the SSOT and the retired files refuse read and write（→ transport split above）。**open item 的 SSOT 是 `{HARNESS_DIR}/store.db` 的 issue**（→ § Issue capture above）；project register 是**迁移历史**。  
@@ -262,34 +262,11 @@ Non-blocking open issues — `severity` below `critical` on the §3 axis — may
 
 ---
 
-## Snapshot plan-row fields (`plans[].metadata` standard optional fields)
+## Execution plan-row fields (pre-activation: snapshot `plans[]`)
 
-Snapshot plan rows keep the v1 PlanRow shape verbatim; the standard optional `metadata` keys below are unchanged from v1:
+ACTIVE plan 行与冻结执行输入在 store execution_* 表；读取经 `mstar plan show`，变更经公共 plan/workflow 动词。pre-activation snapshot 保留 v1 PlanRow 形状；完整历史字段表 → **`mstar-engine-legacy`** `references/status-field-history.md`，不在此重复。
 
-| Key | Type | Purpose |
-| --- | --- | --- |
-| `working_branch` | string | Implementation branch; aligns with Assignment **`Working branch`** (SSOT) |
-| `spec_integration_branch` | string | (Multi-plan same **Spec**) integration branch name; created from snapshot `branch.base` / `execution_policy` context; plan branches merge here before final PR (`mstar-conventions`) |
-| `merge_target` | string | Next merge target; multi-plan + Spec → usually `spec_integration_branch`; final PR target is snapshot `branch.target` |
-| `branch_policy` | string | One-line policy per `mstar-harness-core` |
-| `phase` | string | Program/roadmap label |
-| `priority` | `high` \| `medium` \| `low` | PM scheduling |
-| `description` / `scope` | string | One-line scope; pick one key per repo |
-| `gates` | object | Gate summary (`qc`, `qa`, `typecheck`, `tests`, `lint`, …) |
-| `blocked_since` | `YYYY-MM-DD` | When `status` is `Blocked` |
-| `blocked_reason` | string | Block reason |
-| `blocked_by_plan_id` | string | Blocking **`plans[].id`** |
-| `dependency` | string | Other dependencies |
-| `next_action` | string | Next step after unblock/review |
-| `primary_spec` | string | Main spec path (`{KNOWLEDGE_DIR}/…`, `{SPECS_DIR}/…`) |
-| `iteration_compass` | string | Optional `{ITERATION_DIR}/…` |
-| `iteration_refs` | string[] | Optional multiple compass paths |
-| `knowledge_refs` | string[] | Optional knowledge-doc references (e.g. `{KNOWLEDGE_DIR}/…` paths or doc ids) linked from this plan; written by `mstar-compound` Phase 6 / `mstar-compound-refresh` Phase 4; v1 root `status.json` metadata references are legacy read-only |
-| `qc_status` / `tests` / `commits` | string | InReview/Done snapshots; not a substitute for durable plan gate summaries or the project register |
-| `sdd_dir` | string | SDD scratch path, e.g. `{HARNESS_DIR}/sdd/<plan-id>/` (gitignored; `mstar-sdd`) |
-| `sdd_progress` | string | Optional pointer to `{SDD_DIR}/progress.md` ledger |
-| `review_bundle` | string | Optional pointer to `{SDD_DIR}/review/` for current ephemeral QC/QA evidence |
-| `task_commits` | array\<object\> | SDD recovery: `{ "task_id": "T1", "base": "<sha>", "head": "<sha>" }` per completed task — recorded on the snapshot plan row |
+`id/title/file` 与规格/迭代 metadata 是 prepare 冻结输入，不是 catalog 编辑面；catalog 变更不静默刷新在途执行。知识关联载体是 catalog relations（`mstar catalog link`）；`plans[].metadata.knowledge_refs` 仅为 legacy 只读字段，不再写入 snapshot。SDD review bundle 与 durable gate summary 仍是文件产物（→ `references/plan-files-and-reports.md`）。
 
 ### Source scope and concurrent-write exclusion
 
@@ -351,7 +328,7 @@ The selected workflow has one primary coordinator. Every row operation explicitl
 | Operation id | Exact same request replays the recorded receipt; different semantics under the same id refuse |
 | File row revision | `coordination.revision`, absent block = 0; not schema version, date, byte digest or mtime |
 
-ACTIVE actions acquire caller identity independently and revalidate identity/root/store/epoch/row in their transaction. Session/token/operation defaults may be derived for unambiguous own scope; explicit values remain checked constraints. File actions use the workflow coordinator envelope, not row envelopes. Resume is a read-only context lookup, never recovery or permission to replace an owner.
+ACTIVE actions acquire caller identity independently and revalidate identity/root/store/epoch/row in their transaction. Session/token/operation defaults may be derived for unambiguous own scope; explicit values remain checked constraints. File actions use the workflow coordinator envelope, not row envelopes. Resume is a read-only context lookup, never recovery or permission to replace an owner. CLI transport → `mstar-use-cli/references/plan-and-workflow.md`; iteration procedure → `mstar-iteration/references/phase-2-worktree-lease.md`.
 
 ### Stored coordination
 
@@ -418,11 +395,10 @@ The JSON recovery replaces a workflow's recorded coordinator binding when the re
 
 ## General constraints
 
-- Each snapshot `plans[]` row may include optional **`metadata`** (`{}` or omit).
-- A workflow root entry is **active only** (`running` | `paused`); terminal writers unregister the root entry after the snapshot write (removal-at-terminal).
-- **`plans[].id`** keys must align with register `entries` keys and `{SDD_DIR}` plan-id segments. Do not store `residual_findings_plan_id`.
-- **Empty `plan-id` key:** when no open entries remain, **delete** the key from the register (`entries`) — no `"plan-id": []`.
-- **`residual_summary` (optional):** one-line human summary of **open** entries only.
+- ACTIVE plan 行可含 optional **`metadata`**；pre-activation 对应 snapshot `plans[]`。
+- root register 仅登记 active（`running` | `paused`）；terminal writers 先写 workflow 权威状态再 unregister。
+- plan id 与 `execution_plans`、linked issues、`{SDD_DIR}` plan-id segment 对齐；register `entries` key 对齐仅为迁移历史。不要存 `residual_findings_plan_id`。
+- register 的 empty-key / `residual_summary` 规则仅描述迁移读入形状，不产生删除、更新或其它写入义务。
 
 ---
 
@@ -452,34 +428,22 @@ Do not claim an issue “fixed” in chat/plan only without the store update.
 
 PM should capture open items as issues after **`Approve with residuals`**; QA should state each related issue id (open / resolved this round / needs waiver).
 
-### Close in place (the only close path — migrated register records)
+### In-place closure shape of migrated register records
 
 Live items close through the issue verbs and the §4 closure authority (`mstar issue close | waive | duplicate | supersede`; plan-scoped `mstar plan issue-close`); the mechanics below describe the **migrated register record** shape.
 
-After **`closed_at`**, **`closure_note`**, and PM/QA confirm close:
+迁移历史中的 closed record 带 `lifecycle` / `closed_at` / 非空 `closure_note`，原记录与 durable plan summaries 可用于回溯。register 在任何 authority 状态下都已 replacement-retired（`coordination.store`）；不得据此 close/delete 条目或更新 root。活项只走上述 issue domain call，笔记经公共动词 append `notes.jsonl`。
 
-1. Close through the **domain call** on the scoped route — flags and exact payload shapes live in `--help` / the capture contract (→ § Issue capture above), not here. A closed register record carries `lifecycle` / `closed_at` / `closure_note` **in place** in `entries[<plan-id>]` and requires a nonblank evidence-bearing note; hand edits are not an authorized path, and the register itself is replacement-retired as a writer target (`coordination.store`).
-2. Optional: delete the entry from the register instead when the team prefers an empty open list — the closed record's `lifecycle` + `closed_at` is the durable record either way. (A coordinated bucket keeps its entries; close, do not delete.)
-3. Delete empty **`plan-id`** keys; update root `updated_at`; optional milestone entry in the workflow `notes.jsonl`.
+### Historical transition / deletion semantics
 
-Closed records live in the register + durable plan summaries; raw review bundles are ephemeral and not part of the long-term record.
-
-### Short in-place close (transition only)
-
-May set `lifecycle` / `closed_*` on a register record for one PR — same milestone close/delete as above; live items use the issue close verbs.
-
-### Hard delete
-
-- **Forbidden** for **open** entries.
-- Do not delete closed entries; correct via new entry or new R# referencing old `id`.
-- Mistaken open-only entry: PM may delete or mark **`duplicate`** then close.
+旧 register 的 in-place close、empty-key removal 与 delete 规则仅供迁移解释，不是运行写路径。活项修正与关闭使用 issue disposition（重复项用 `duplicate`），不手改或删除迁移记录。
 
 ### Query open and closed (examples)
 
 ```bash
 # Engine-check (read-only): open items in the store, migrated register docs, cleanup gate
 mstar issue list                              # open issues in {HARNESS_DIR}/store.db
-mstar status validate <path-to-residuals-or-root.json>   # migrated register / snapshot / root schema
+mstar status validate                         # automatic ACTIVE root route; explicit root JSON only pre-activation
 mstar status tech-debt                        # open-issue rollup
 mstar status findings-cleanup <plan-id>       # mode gate over the plan's linked open issues
 ```
@@ -537,8 +501,8 @@ Before merge/PR, **`@project-manager`** (or delegate) should verify: plan status
 
 ```bash
 # Engine-check (recommended): validate any v2 artifact / read the store rollup
-mstar status validate .mstar/status.json                  # root v2
-mstar status validate .mstar/workflows/<id>/snapshot.json # snapshot
+mstar status validate                                     # ACTIVE authority + CAS tokens
+mstar plan show <plan-id>                                 # ACTIVE plan row; scope/options from help
 mstar status tech-debt                                    # open-issue rollup
 ```
 v1 trees (root `plans[]` / `residual_findings`) are migrated first: `mstar migrate [--dry-run] [--path <root>]`.

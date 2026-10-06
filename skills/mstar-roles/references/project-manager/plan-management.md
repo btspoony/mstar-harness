@@ -29,18 +29,18 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 **Principle:** process stays local; results are shared with the team. Full rules → `mstar-conventions` SKILL.md「Git 跟踪策略」.
 
 - **Default tracked** under `{HARNESS_DIR}`: `AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**` (resolved specs path; default `{HARNESS_DIR}/specs/`).
-- **Default gitignored** (local session SSOT / coordination): `archived/`, `iterations/`, `plans/`, `sdd/`, `status.json`, `workflows/`, `projects/`.
-- `status.json` (v2 root), workflow snapshots and main plan files remain **local session SSOT** — PM must keep them current on disk, but **do not** default `git add` / `git commit` for cross-clone handoff. Open findings are issues in `{HARNESS_DIR}/store.db` (the run's findings SSOT); the project `residuals.json` register is migration history with no write path. Promote durable decisions into tracked `knowledge/` / `specs/` / `AGENTS.md` (compound) when they must survive clone.
+- **Default gitignored** (local coordination): `store.db`, `archived/`, `iterations/`, `plans/`, `sdd/`, `workflows/`, `projects/`; `status.json` is pre-activation bootstrap only.
+- Under **ACTIVE** execution authority, root registry, workflow/plan rows, sessions, leases and frozen inputs live in `{HARNESS_DIR}/store.db`; read via `mstar status validate` / `mstar plan show`, mutate only through public workflow/plan verbs. `status.json` / snapshot / session files are refused for reads and writes (`execution.consumer-not-ready` / `execution.direct-write-refused`); they are only pre-activation / engine-absent fallback. Keep authored main plan markdown current on disk, but do not default `git add` / `git commit` for cross-clone handoff. Open findings are store issues; project registers are migration history, never write targets. Promote durable decisions into tracked knowledge/specs/`AGENTS.md`.
 - If a project explicitly opts into tracking process artifacts, record that policy in `{HARNESS_DIR}/AGENTS.md` and ensure team alignment.
 
 ## PM Responsibilities
 
-- On plan create/update: sync the workflow snapshot (`workflows/<id>/snapshot.json`) + root `{HARNESS_DIR}/status.json` (`workflows[]`) in the same coordination round.
+- On plan create/update: use `mstar workflow register` / the appropriate `mstar plan` verb to maintain the store-backed registry and workflow/plan rows in the same coordination round; keep the authored main plan aligned. File synchronization is pre-activation fallback only.
 - Before first non-trivial implement dispatch: ensure main plan file exists and `plan_id` is registered.
 - After each Completion Report: update status before next dispatch (`report-to-status` hard gate).
 - On entering `InReview`: ensure review bundle path (`{SDD_DIR}/review/`) and aligned review metadata are set; write durable gate summaries back to the main plan/status artifacts.
 - On `Done`: ensure the plan's findings state is consistent — every confirmed finding captured as an issue linked to it, closures carrying their disposition and evidence (capture contract → `mstar-project-governance`「Issue capture」).
-- At plan commitment: register the workflow through the authorized producer (create-only snapshot + root `workflows[]` entry under one lock) and declare its delivery kind — `development`, or `verification/report-only` with its recorded completion policy:
+- At plan commitment: register the workflow through the authorized producer (ACTIVE: DB registry/workflow/plan rows under a transaction; pre-activation: create-only snapshot + root `workflows[]` under one lock) and declare its delivery kind — `development`, or `verification/report-only` with its recorded completion policy:
   ```text
   mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file plans/<id>.md
     --delivery-kind <development|verification/report-only> [--project <id>]
@@ -69,7 +69,7 @@ If legacy plan directories already exist, reuse them; avoid dual-structure dupli
 
 ## PM Plan / Status NEVER
 
-- **NEVER** let the workflow snapshot / root status and on-disk plan truth drift within the same coordination round—update both or mark `Blocked` until reconciled.
+- **NEVER** let store-backed workflow/plan rows and authored main plan markdown drift within the same coordination round—reconcile through public engine verbs and plan edits or mark `Blocked`; never patch ACTIVE root/snapshot files.
 - **NEVER** skip the `report-to-status` sync after a Completion Report when the next dispatch or gate depends on that state.
 
 ## Stage Transitions

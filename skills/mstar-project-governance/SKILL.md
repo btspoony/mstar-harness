@@ -31,7 +31,7 @@ description: Morning Star 项目治理层：项目 roadmap 内容在 `{HARNESS_D
 - **日常修改**：先读 store 的当前内容与版本；有记录时用 `mstar roadmap export` 导出**独立 Markdown 候选**，无记录时明确创建候选并预期 absent。编辑、复核候选后用 `mstar roadmap replace` 做整份正文的 revision-guarded replacement（同时校验 project 与 roadmap revision）。冲突重新读权威并复核候选，绝不覆盖 live `roadmap.md` 代替写入。export 也可输出 JSON transport，供跨环境 handoff；导出文件不随写入自动同步，也不反向成为权威。具体命令选项与 payload → built `mstar roadmap --help` 及各动词 `--help`，本 skill 不复写 flags。
 - **校验**：engine 统一校验 import/replace 的 Markdown 正文；frontmatter `project_id`（非空且与目标 catalog project 一致）、`title`（非空）、`status`（`active | paused | completed`）、`created_at`（`YYYY-MM-DD`）为 machine-checkable；`milestones` 可选非空字符串列表（空字段按缺省），`residuals_ref` 可选非空字符串（如迁移 register 文件名）。正文宜有 `## Direction` 与目标 task-list（`- [ ]` / `- [x]`）；缺少正文约定只报 warnings，不将 `ok` 翻成 false。目标与 residual 不自动关联；`residuals_ref` 只是迁移文件引用，不恢复 register 写权威。
 
-`projects/<id>/roadmap.md` 的旧 frontmatter / `milestones` 与 body 格式是 import/export/historical Markdown 的表示法，不是文件写作协议，也不是 live milestone 机制（→ 下节）。项目归属和路径解析 → `mstar-conventions`；执行态仍是 workflow snapshot；open findings → 下文 Issue capture。
+`projects/<id>/roadmap.md` 的旧 frontmatter / `milestones` 与 body 格式是 import/export/historical Markdown 的表示法，不是文件写作协议，也不是 live milestone 机制（→ 下节）。项目归属和路径解析 → `mstar-conventions`；ACTIVE 执行态权威在 store.db 的 `execution_*` 表（可重建 workflow 视图）；snapshot 文件只属 pre-activation 回退；open findings → 下文 Issue capture。
 
 ## Milestone（结构化路线目标）
 
@@ -71,7 +71,7 @@ Register 文档形状（`entries[<plan-id>]` 数组 JSON）、**9 个必填字�
 ### 生命周期：open → verified close（in place）
 
 - **open**：缺省状态；`lifecycle` 缺省/`false`/`null` = `open`。
-- **close（唯一关闭路径）**：在 register **in place** 置 `lifecycle`（≠ `open`）+ `closed_at`（`YYYY-MM-DD`）+ `closure_note`；推荐 `closure_evidence`。v1 的 `archived/residuals/` 归档路径与 `status archive-residuals` 已移除（该命令现为报错桩，指向 register 状态变更）。
+- **历史 close 映射（不是写入指令）**：register 的历史关闭记录以 `lifecycle`（≠ `open`）+ `closed_at`（`YYYY-MM-DD`）+ `closure_note` 表示；推荐 `closure_evidence`。v1 的 `archived/residuals/` 与 `status archive-residuals` 已退役（报错桩指向 `mstar plan issue-close` / `mstar issue close | waive | duplicate | supersede`）；register 无条件退役，不得原地改写。
 - **closed 完整性**：`lifecycle` ≠ `open` 时缺 `closed_at` / `closure_note` = violation。
 - **谁更新**：捕获在确认后按 § Issue capture 走 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`），以 issue id 标识；关闭由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）——`QA gate: mandatory` 时 `qa-engineer` 验证后关闭；`pm-acceptance` 时 PM 验收清单完成后关闭。本条的 R# / `lifecycle` 描述只适用于**迁移后的 register 记录**（契约 §7 映射/激活边界），register **不再**是写入目标。
 - close 协议全文 → **`mstar-artifacts`** `references/status-and-residuals.md`（「Residual findings lifecycle」）。

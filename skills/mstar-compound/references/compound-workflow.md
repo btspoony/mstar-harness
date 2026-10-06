@@ -51,9 +51,9 @@ Understand:
 - What the working solution was
 - Why the solution works (root cause)
 - Which files/modules were involved
-- The plan_id if applicable (link to the workflow snapshot plan row)
+- The plan_id if applicable (link to the registered workflow/plan identity)
 
-If `{KNOWLEDGE_DIR}/README.md` exists, scan its index for related existing documents.
+Query the store.db catalog for related existing documents; read `{KNOWLEDGE_DIR}/README.md`, if present, as prose only.
 
 Classify the problem into a track (bug vs knowledge) and category using `references/category-mapping.md`.
 
@@ -92,7 +92,7 @@ date: YYYY-MM-DD
 problem_type: <enum value>
 category: <directory name>
 severity: critical|high|medium|low
-plan_id: <optional, link to the workflow snapshot plan row>
+plan_id: <optional, link to the registered workflow/plan identity>
 tags: [<keywords>]
 ---
 ```
@@ -153,12 +153,10 @@ Read `references/concepts-vocabulary.md` for inclusion rules. Only propose when 
 
 If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the core domain nouns of the area the learning touches; a full repo-wide bootstrap is the job of `mstar-compound-refresh`.
 
-## Phase 6: Update indexes
+## Phase 6: Catalog registration
 
-1. Add a row to `{KNOWLEDGE_DIR}/README.md` index table (create if missing):
-   - Document (link), Source Plan (`plan_id`), Description, Status (`Active`)
-
-2. If `plan_id` was provided, optionally update the workflow snapshot plan row (`workflows/<id>/snapshot.json` → `plans[].metadata`) to reference this doc under `knowledge_refs`.
+1. Register each new knowledge document in the store.db catalog (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`). README is prose, not a register; no index-row obligation.
+2. The knowledge-association carrier is catalog relations (`mstar catalog link`). Snapshot `plans[].metadata.knowledge_refs` is legacy read-only, not a write target.
 
 **iteration-close gate**: `mstar-iteration` §3.2 #5 — **each** new doc in the compound round must complete this phase; do not skip for lightweight captures.
 

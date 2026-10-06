@@ -9,7 +9,7 @@ Before any non-trivial PM action, read in order:
 5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: primary coordinator row operations, declared completion route and evidence — read before first implement dispatch
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
-8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (`status.json` v2 root, workflow snapshots, issue capture pointers); `mstar-artifacts` (InReview waves, review bundle naming)
+8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers; files only pre-activation); `mstar-artifacts` (InReview waves, review bundle naming)
 
 **Not required:** `mstar-coding-behavior` (orchestration-only PM work).
 
@@ -139,11 +139,11 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration/references/phase-3-iteration-close.md` §3.1–§3.5 checklists.
 - **NEVER** treat final plan closure prose as iteration-close — compound, roadmap `delivered`, and compass `status: completed` require Phase 3.
 - **NEVER** declare the iteration delivered at §5.5 exit or PR merge — delivery completes only after Phase 6 post-merge close finishes (`mstar status workflow-close --workflow <id>` terminal snapshot + root unregister + projections reconcile; `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.4).
-- **NEVER** steal an active workflow's actual write/merge exclusion by age, idle status or labels. Ordinary coordinator operations manage exclusion inside their transaction; no leaf claim, per-plan bind or transfer is required.
-- **NEVER** writable-dispatch without validating actual source metadata/checkouts and L1/L2 isolation.
-- **NEVER** run parallel integration merges; use the recorded integration checkout serially and let direct complete verify the actual result.
-- **NEVER** bypass atomic coordination safety for cross-plan writes; use serial scheduling when a safe shared authority is unavailable. Serial policy does not waive checkout isolation.
-- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). No flock → serial scheduling only, not worktree waiver.
+- **NEVER** steal an active workflow's actual write/merge exclusion by age, idle status or labels (no TTL, age, or inactivity authority); override only on explicit current-turn user instruction + audit append-only `notes.jsonl`. Ordinary coordinator operations manage exclusion inside their transaction; no leaf claim, per-plan bind or transfer is required.
+- **NEVER** writable-dispatch without validating actual source metadata/checkouts and L1/L2 isolation (distinct feature worktree per writable track).
+- **NEVER** run or dispatch parallel integration merges into `spec_integration_branch`; the workflow's `integration_merge_lease` serializes the recorded integration checkout, and direct complete verifies the actual result (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
+- **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. The current-turn `Cross-host lease race: accepted` exception + append-only `notes.jsonl` applies **only to pre-activation / engine-absent file routes** lacking a shared exclusive snapshot lock; it never bypasses ACTIVE arbitration. **`Worktree mode: waived`** changes neither gate, and serial policy does not waive checkout isolation.
+- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). Missing flock defaults to serial scheduling on the pre-activation file route, not worktree waiver; missing flock alone is not an ACTIVE arbitration failure.
 
 ---
 
