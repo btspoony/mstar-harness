@@ -6681,7 +6681,8 @@ export async function recoverPrepareCoordinator(
         { prior_session_id: recorded.session_id, stopped_session_ids: [...stoppedSessionIds] },
       );
     }
-    if (stoppedSessionIds.includes(sessionId)) {
+    if (stoppedSessionIds.includes(sessionId)
+      || attestation?.stoppedSessions.some((entry) => entry.sessionId === sessionId)) {
       throw recoveryRefusal(
         "unauthorized",
         "the replacement coordinator is named as stopped; remove the replacement from the stop assertion and retry recovery",
@@ -6715,7 +6716,6 @@ export async function recoverPrepareCoordinator(
     }
     if (ownsInterruptedClaim && (attestation === undefined || attestedAt === undefined || lease === undefined
       || !attestation.stoppedSessions.some((entry) => entry.sessionId === recorded.session_id)
-      || attestation.stoppedSessions.some((entry) => entry.sessionId === sessionId)
       || !Number.isFinite(Date.parse(lease.claimed_at))
       || Date.parse(lease.claimed_at) > Date.parse(attestedAt))) {
       throw recoveryRefusal(
