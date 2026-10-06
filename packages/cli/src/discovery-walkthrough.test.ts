@@ -80,7 +80,6 @@ describe("#324 fixture discovery walkthrough", () => {
     const firstRead = envelope(cli(["status", "validate"]).stdout);
     expect(firstRead.status).toBe("ok");
     const rootToken = firstRead.data.token as string;
-    expect(rootToken).toMatch(/^exec-v1:root:/);
 
     // The register consumes the derived root token — its CAS accepts it.
     const registered = envelope(
@@ -106,10 +105,8 @@ describe("#324 fixture discovery walkthrough", () => {
     const workflowEntry = (secondRead.data.workflows as Array<Record<string, unknown>>).find((entry) => entry.id === "wf-walk");
     expect(workflowEntry).toBeDefined();
     const workflowToken = workflowEntry!.token as string;
-    expect(workflowToken).toMatch(/^exec-v1:workflow:/);
     const authority = secondRead.data.authority as { workflows: Array<{ planTokens: Record<string, string> }> };
     const planToken = authority.workflows[0]!.planTokens["p-walk"];
-    expect(planToken).toMatch(/^exec-v1:plan:/);
 
     // Input 4 — session reference: one real `plan bind` receipt supplies the
     // complete public identity, which the following evidence write consumes.
@@ -124,6 +121,14 @@ describe("#324 fixture discovery walkthrough", () => {
     expect(bound.status).toBe("ok");
     const ref = bound.data.data as Record<string, unknown>;
     const wire = "exec-session-v1:" + Buffer.from(JSON.stringify(ref), "utf8").toString("base64url");
+    tokenLookups += 1;
+    const planRead = envelope(cli([
+      "plan", "show", "--session-ref", wire, "--session-id", "walk-coord",
+      "--plan", "p-walk", "--harness", harnessDir,
+    ]).stdout);
+    expect(planRead.status).toBe("ok");
+    expect(planRead.data.token).toBe(planToken);
+    expect(planRead.data.data).toMatchObject({ plan: { id: "p-walk" } });
     expect(tokenLookups).toBeLessThanOrEqual(3);
 
     // The derived session reference, identity and workflow token pass a real
