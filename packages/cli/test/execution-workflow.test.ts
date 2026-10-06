@@ -118,7 +118,7 @@ function dataOf(result: RunResult): Record<string, unknown> {
 }
 
 function coordinatorIdentity(workflowId = WORKFLOW_ID, sessionId = COORDINATOR_ID): ExecutionIdentity {
-  return { source: "local", sessionId, workflowId, role: "coordinator", planId: null };
+  return { source: "local", sessionId, workflowId, role: "coordinator" };
 }
 
 async function activeFixture(label: string): Promise<Fixture> {
@@ -610,7 +610,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       foreign,
     );
     expect(wrongScope.exitCode).toBe(1);
-    expect(String(jsonOf(wrongScope).code)).toMatch(/^coordination\./);
+    expect(jsonOf(wrongScope).code).toBe("execution.scope-mismatch");
     expect((await storedHeader(fixture)).status).toBe("running");
 
     // The grammar verbs are ACTIVE-ONLY: `--session` is not one of their flags,
@@ -702,8 +702,6 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "wf-legacy-form",
         "--plan-id",
         PLAN_ID,
-        "--plan-title",
-        "Legacy form",
         "--plan-file",
         `plans/${PLAN_ID}.md`,
         "--delivery-kind",
@@ -752,7 +750,6 @@ describe("mstar workflow \u2014 documented invocation", () => {
       sessionId: "coord-unowned-recovered",
       workflowId: WORKFLOW_ID,
       role: "coordinator",
-      planId: null,
     };
     const recovered = runCli([
       "session", "recover",

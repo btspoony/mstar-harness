@@ -96,7 +96,6 @@ describe("status command family", () => {
         workflowId: "wf-close",
         role: "coordinator",
         sessionId: "main-session",
-        planId: null,
       });
       const result = await statusDefinition("status.workflow-close").execute(
         { workflow: "wf-close", harness: dir, sessionRef, expect: "token", operation: "close-1", reason: "wave complete" },
