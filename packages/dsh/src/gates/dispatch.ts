@@ -445,7 +445,7 @@ export function leaseGateViolations(
     return [leaseViolation(
       'lease.dispatch.unverifiable',
       `${join(harnessDir, STATUS_FILE)}: ${selection.kind === 'error' ? selection.message : 'no active workflow'} — the row's recorded scope is unverifiable; STOP before writable dispatch`,
-      'register the workflow through the supported workflow operation, then record the row scope with `mstar plan prepare --worktree-path <abs> --working-branch <name>`',
+      'register the selected workflow using `mstar workflow register --help`; under its recorded coordinator, run `mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <abs> --working-branch <name>` (see `mstar plan prepare --help` for coordinator addressing)',
     )]
   }
   const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)

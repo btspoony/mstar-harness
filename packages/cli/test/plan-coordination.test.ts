@@ -1350,10 +1350,10 @@ interface ReportOnlyFixture extends Fixture {
 }
 
 /**
- * The accepted report-only attempt, driven through the real CLI: the
- * registration producer writes the lifecycle, the coordinator prepares and
- * accepts, and nothing else. No delivery evidence is recorded yet, so each
- * case decides what the completion step is allowed to read.
+ * A report-only row driven through the real CLI: registration records its
+ * lifecycle and the coordinator prepares and starts it. No policy fulfilment
+ * is recorded yet, so each case supplies the explicit outer evidence that
+ * direct completion must consult.
  */
 function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   const fixture = makeFixture();
@@ -1373,10 +1373,9 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   // is a constraint against the document rather than an override of it.
   writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# Plan ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n\n**title:** Plan ${PLAN_ID}\n`);
 
-  // A real feature checkout: `handoff` and `accept` read the pinned source
-  // commit and the branch it was made on. A report-only workflow owns no
-  // delivery branch, so this commit is the inspected source, never a merge
-  // candidate and never an integration target.
+  // The real feature checkout supplies optional report provenance only.
+  // Report-only completion owns no delivery branch and requires no Git proof,
+  // source merge or integration target.
   // The shared fixture already created and registered `feature/plan-a` at this
   // path: reuse that checkout (a second `-b` would collide with the existing
   // branch/worktree registration).
@@ -1543,8 +1542,8 @@ describe("report-only completion", () => {
     expect(refusedStart.exitCode).not.toBe(0);
     expect(snapshotState(fixture)).toEqual(acceptedBytes);
 
-    // Record the fulfilment of the registered policy, then complete from the
-    // accepted handoff — evidence first, Done second, no merge in between.
+    // Explicit registered-policy fulfilment precedes direct row completion;
+    // Done does not imply any source merge or outer close.
     const recorded = recordCompletionEvidence(fixture, REPORT_ONLY_POLICY);
     expect(recorded.exitCode).toBe(0);
     expect(JSON.parse(recorded.stdout)).toMatchObject({ command: "workflow.evidence", status: "ok", exitCode: 0 });
@@ -1646,8 +1645,8 @@ describe("report-only completion", () => {
     });
     expect(readJson(fixture.snapshotPath).completion_policy).toBe(REPORT_ONLY_POLICY);
 
-    // A matching fulfilment replaces it, and the same handoff then completes
-    // and closes through the same evidence consultation.
+    // Correct the missing matching fulfilment through ordinary workflow
+    // evidence, then complete the row and close the report-only workflow.
     expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY, "sdd/plan-a/report-v2.md").exitCode).toBe(0);
     const completed = completeReportOnly(fixture);
     expect(completed.exitCode).toBe(0);
