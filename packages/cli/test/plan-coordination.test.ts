@@ -2009,6 +2009,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     const fixture = makePrepareFixture();
     const peerBefore = readJson(fixture.peerSnapshotPath);
     const rowsBefore = cliPlanRowsOf(fixture);
+    const basis = viewOf(runCli(showPrepareArgs(fixture), fixture.root));
 
     const recovered = runCli(recoverCoordinatorArgs(fixture), fixture.root);
 
@@ -2040,6 +2041,8 @@ describe("prepare coordinator recovery — CLI transport", () => {
       operation_id: "op-cli-recover-1",
       prior_session_id: FIXTURE_COORDINATOR_ID,
       session_id: CLI_RECOVERY_SESSION_ID,
+      snapshot_version_before: basis.snapshotVersion,
+      compass_version: basis.compassVersion,
     });
     // Rows and the sibling workflow are untouched; the old envelope survives.
     expect(cliPlanRowsOf(fixture)).toEqual(rowsBefore);
