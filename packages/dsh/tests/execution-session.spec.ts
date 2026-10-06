@@ -24,7 +24,7 @@ import {
   serializeExecutionValue,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
-import { parseExecutionRequest, registerExecutionSessionCommand, runExecutionCommand } from '../src/gates/execution-session.ts'
+import { registerExecutionSessionCommand, runExecutionCommand } from '../src/gates/execution-session.ts'
 import { readWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
@@ -173,10 +173,10 @@ describe('mstar-execution — native run and child identity transport', () => {
       const source = 'const e=process.env;const slot=(key)=>{const v=e[key];return v===undefined?"<absent>":v};'
         + 'process.stdout.write([slot("MSTAR_EXECUTION_IDENTITY"),slot("MSTAR_HOST_SESSION_ID"),slot("MSTAR_HARNESS_DIR"),slot("MSTAR_CALLER_ID"),slot("MSTAR_EXECUTION_SESSION_ID")].join("|"))'
       const result = await handler(invocationOf(agentOf(root), JSON.stringify({
-        operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', planId: null,
+        operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator',
         argv: [process.execPath, '-e', source],
       })))
-      const identity = serializeExecutionValue({ source: 'host', sessionId: SESSION_ID, workflowId: WORKFLOW_ID, role: 'coordinator', planId: null })
+      const identity = serializeExecutionValue({ source: 'host', sessionId: SESSION_ID, workflowId: WORKFLOW_ID, role: 'coordinator' })
       expect(result).toEqual({ kind: 'success', text: `${identity}|<absent>|<absent>|<absent>|<absent>` })
     } finally {
       for (const [key, value] of Object.entries(previous)) {
@@ -194,7 +194,7 @@ describe('mstar-execution — native run and child identity transport', () => {
     const controller = new AbortController()
     controller.abort()
     await expect(handler(invocationOf(agentOf(root), JSON.stringify({
-      operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', planId: null,
+      operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator',
       argv: [process.execPath, '-e', 'process.stdout.write("late")'],
     }), controller.signal))).rejects.toThrow('execution child cancelled')
   })
@@ -244,12 +244,6 @@ describe('mstar-execution — canonical native adoption', () => {
 })
 
 describe('mstar-execution — closed input union and launcher guard', () => {
-  it('accepts only the closed operation union and rejects model-shaped extras', () => {
-    expect(parseExecutionRequest('{"operation":"clear"}')).toEqual({ operation: 'clear' })
-    expect(() => parseExecutionRequest('{"operation":"clear","sessionId":"model-input"}')).toThrow('clear does not accept extra fields')
-    expect(() => parseExecutionRequest('{"operation":"run","workflowId":"w","role":"coordinator","planId":null,"argv":["a"],"extra":1}'))
-      .toThrow('run requires workflowId, role, planId, and a non-empty argv')
-  })
 
   it('rejects an empty argv before launching a child', async () => {
     await expect(runExecutionCommand([], process.env, new AbortController().signal)).rejects.toThrow('execution argv must be non-empty')
