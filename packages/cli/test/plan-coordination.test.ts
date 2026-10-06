@@ -172,7 +172,7 @@ function planRow(id: string, workingBranch?: string): Record<string, unknown> {
     id,
     plan_id: id,
     title: `Plan ${id}`,
-    file: `.mstar/plans/${id}.md`,
+    file: `plans/${id}.md`,
     status: "Todo",
     metadata,
   };
@@ -191,9 +191,8 @@ interface Fixture {
 
 /**
  * Temporary Git fixture: main worktree + canonical harness + two Todo rows.
- * The harness carries an initialized ACTIVE execution authority (the issue store
- * is the findings authority the completion gate reads). `store: false` leaves
- * the workspace store-less for the catalog-absence case.
+ * The issue store is initialized for findings; ACTIVE authority is explicit.
+ * `store: false` leaves the workspace store-less for the catalog-absence case.
  */
 function makeFixture(options: { store?: boolean; active?: boolean } = {}): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-plan-cli-")));
@@ -211,8 +210,8 @@ function makeFixture(options: { store?: boolean; active?: boolean } = {}): Fixtu
   const worktreePath = join(root, "wt-plana");
   const peerWorktreePath = join(root, "wt-planb");
 
-  writeText(planPath, "# plan a\n");
-  writeText(peerPlanPath, "# plan b\n");
+  writeText(planPath, `---\nplan_id: ${PLAN_ID}\n---\n# plan a\n`);
+  writeText(peerPlanPath, `---\nplan_id: ${PEER_PLAN_ID}\n---\n# plan b\n`);
   writeText(evidencePath, "# evidence\n");
   // REAL checkouts on the branches the snapshot rows record: prepare validates
   // the actual checkout and branch.
@@ -495,13 +494,15 @@ describe("mstar plan — session identity", () => {
 
   test("a rejected address id is never echoed into the bind diagnostic", () => {
     const fixture = makeFixture();
+    const before = snapshotState(fixture);
     const bound = runCli(
       ["plan", "bind", "--coordinator", "--workflow", "  ", "--session-id", "attacker-session"],
       fixture.root,
     );
-    expect(bound.exitCode).toBe(2);
-    expect(jsonOf(bound).code).toBe("command.invalid-input");
+    expect(bound.exitCode).toBe(1);
+    expect(jsonOf(bound)).toMatchObject({ status: "refused", code: "coordination.invalid-input" });
     expect(bound.stdout).not.toContain("attacker-session");
+    expect(snapshotState(fixture)).toEqual(before);
   });
 
   test("a coordinator bootstrap through the legacy file route redirects to the active form", () => {
@@ -628,7 +629,7 @@ describe("mstar plan — linked-control-root", () => {
   });
 
   test("an explicitly unavailable harness refuses instead of reading another one", () => {
-    const fixture = makeFixture();
+    const fixture = makeFixture({ active: true });
     const before = snapshotState(fixture);
     const refused = runCli(
       ["plan", "show", "--workflow", WORKFLOW_ID, "--session-id", FIXTURE_COORDINATOR_ID, "--plan", PLAN_ID, "--harness", join(fixture.root, "absent")],
@@ -1710,7 +1711,7 @@ describe("report-only completion", () => {
 
     const closed = closeReportOnly(fixture);
     expect(closed.exitCode).toBe(1);
-    expect(jsonOf(closed).code).toBe("coordination.store");
+    expect(jsonOf(closed).code).toBe("coordination.row.field");
     // Zero writes: the workflow stays running, registered and byte-identical.
     expect(readJson(fixture.snapshotPath).status).toBe("running");
     expect(snapshotState(fixture)).toEqual(rewritten);
@@ -2054,7 +2055,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     const oldRefused = runCli(showPrepareArgs(fixture), fixture.root);
     expect(oldRefused.exitCode).toBe(1);
     const oldPayload = jsonOf(oldRefused);
-    expect(oldPayload.code).toBe("coordination.session-mismatch");
+    expect(oldPayload.code).toBe("coordination.identity-mismatch");
     const live = runCli(
       ["workflow", "show-prepare", "--session", newEnvelope],
       fixture.root,
