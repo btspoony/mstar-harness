@@ -676,7 +676,7 @@ describe('dispatch gate — worktree L1 integration topology (canonical reader +
 Do the thing, evidence-first.
 `
 
-  it('row metadata worktree_path equals the integration checkout → advisory worktree.l1.lease-equals-integration (critical)', async () => {
+  it('row metadata worktree_path equals the integration checkout → advisory worktree.l1.feature-equals-integration (critical)', async () => {
     const root = tmpRoot('dsh-wt-l1-eq-')
     const { integration } = seedL1Topology(root)
     const app = booted = await bootApp({ root, dispatchBinding: 'qc-specialist' }) // boot INSIDE the git repo — the harness dir is the main-discovery anchor
@@ -688,8 +688,8 @@ Do the thing, evidence-first.
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     const codes = violationCodes(advisories[0])
-    expect(codes).toContain('worktree.l1.lease-equals-integration')
-    const violation = advisories[0]!.result.violations.find((v) => v.code === 'worktree.l1.lease-equals-integration')
+    expect(codes).toContain('worktree.l1.feature-equals-integration')
+    const violation = advisories[0]!.result.violations.find((v) => v.code === 'worktree.l1.feature-equals-integration')
     expect(violation?.severity).toBe('critical')
   })
 
@@ -702,7 +702,7 @@ Do the thing, evidence-first.
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(l1Assignment(integration)), defaultAllow)
 
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('worktree.l1.lease-equals-integration')
+    expect(decision.kind === 'deny' && decision.reason).toContain('worktree.l1.feature-equals-integration')
   })
 
   it('standalone plan without integration fields → main-vs-feature L1 only; valid topology stays silent', async () => {
