@@ -71,6 +71,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import {
   bindExecutionSession,
@@ -175,29 +176,6 @@ function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
-/** The scoped Assignment header block `parseAssignmentFile` accepts. */
-function assignmentText(input: { harness: string; planId: string; planPath: string; worktreePath: string; sddDir: string; branch: string }): string {
-  return [
-    `# Assignment — ${input.planId} independent slice`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${WORKFLOW_ID}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Independent prepared plan for the Phase-2 host adapter cases.",
-    "",
-  ].join("\n");
-}
 
 /* -------------------------------------------------------------- fixture ---- */
 
@@ -212,7 +190,6 @@ type Fixture = {
   /** The ACTIVE arm's DB coordinator session reference; `null` on the legacy arm. */
   coordinator: ExecutionSessionRef | null;
   planPaths: Record<string, string>;
-  assignments: Record<string, string>;
   sddDirs: Record<string, string>;
   worktrees: Record<string, string>;
 };
@@ -225,7 +202,7 @@ const ACTIVE_TS = "2026-09-16T00:00:00Z";
 /**
  * The real repository every arm starts from: one Git main checkout, one real
  * integration checkout, two plan worktrees on their own branches with a real
- * slice commit each, and their Assignment files. No coordination document is
+ * slice commit each. No coordination document is
  * written here — an ACTIVE execution authority is initialized only for an EMPTY
  * execution workspace, so the legacy arm adds its retired file sources on top.
  */
@@ -241,7 +218,6 @@ function makeRepo(): Fixture {
   git(["worktree", "add", "-q", "-b", "integration/wf", integrationPath], root);
 
   const planPaths: Record<string, string> = {};
-  const assignments: Record<string, string> = {};
   const sddDirs: Record<string, string> = {};
   const worktrees: Record<string, string> = {};
   for (const planId of PLAN_IDS) {
@@ -258,8 +234,6 @@ function makeRepo(): Fixture {
     planPaths[planId] = planPath;
     worktrees[planId] = worktreePath;
     sddDirs[planId] = sddDir;
-    assignments[planId] = join(sddDir, "assignment.md");
-    writeText(assignments[planId]!, assignmentText({ harness, planId, planPath, worktreePath, sddDir, branch }));
   }
   setArtifactStore(createFsStore(harness));
 
@@ -272,7 +246,6 @@ function makeRepo(): Fixture {
     coordinatorSession: "",
     coordinator: null,
     planPaths,
-    assignments,
     sddDirs,
     worktrees,
   };
@@ -290,7 +263,7 @@ function makeFixture(): Fixture {
     id: planId,
     plan_id: planId,
     title: `Plan ${planId}`,
-    file: `.mstar/plans/${planId}.md`,
+    file: `plans/${planId}.md`,
     status: "Todo",
     metadata: { project_id: PROJECT_ID },
   }));
@@ -342,7 +315,7 @@ async function buildLegacyFixture(): Promise<Fixture> {
 function activeCoordinatorContext(fixture: Fixture, sessionId: string): ExecutionContext {
   return {
     harnessDir: fixture.harness,
-    caller: { sessionId, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+    caller: { sessionId, role: "coordinator", workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
   };
 }
 
@@ -367,7 +340,7 @@ async function workflowTokenOf(fixture: Fixture): Promise<ExecutionToken> {
  * REAL ACTIVE execution authority: the issue store
  * upgraded to an execution authority, both plans registered in the catalog, one
  * workflow created in `phase-2-execute` holding them with its integration
- * checkout, both plans PREPARED from their real Assignment files through the DB
+ * checkout, both plans configured through ordinary prepare via the DB
  * verb, and the DB coordinator bound under the native session id the observation
  * uses. Nothing is planted as file state on this route.
  */
@@ -405,7 +378,6 @@ async function seedActiveAuthority(fixture: Fixture, sessionId: string): Promise
   // must never be handed to a workflow-scoped verb.
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
-    planId: null,
     role: "coordinator",
     expected: await workflowTokenOf(fixture),
     operationId: `bind-${WORKFLOW_ID}`,
@@ -419,7 +391,7 @@ async function seedActiveAuthority(fixture: Fixture, sessionId: string): Promise
       operation: {
         kind: "prepare",
         config: { worktreePath: fixture.worktrees[planId], workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
-      } as never,
+      },
     });
   }
   return bound.data;

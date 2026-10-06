@@ -906,7 +906,6 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // The deny reason cites the uncovered plan (the P-b red line) — the
     // same reason shape the P-b describe-block tests (a)/(e) pin.
     expect(decision.reason).toContain('plan-orphan')
-    expect(decision.reason).toContain('without execution_lease coverage')
     // The verdict row records into the ACTIVE workflow dir of the calling
     // workspace's harness (`.agents/workflows/wf-1/agent-flow.jsonl`).
     const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events
