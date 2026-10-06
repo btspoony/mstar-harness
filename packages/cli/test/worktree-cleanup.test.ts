@@ -27,6 +27,8 @@ import {
   mutateExecutionWorkflow,
   readExecutionState,
   storeDbPath,
+  type CompletionRecord,
+  type MinimalStoreUpgradeResult,
   type ExecutionToken,
   type StoreContext,
   type WorkflowEntry,
@@ -64,17 +66,17 @@ interface RunResult {
   stderr: string;
 }
 
-interface CommandEnvelope {
+interface CommandEnvelope<T = { decisions?: unknown }> {
   command: string;
   status: "ok" | "refused" | "usage" | "error";
   code: string;
   exitCode: number;
   message?: string;
-  data?: { decisions?: unknown };
+  data?: T;
 }
 
-function envelope(result: RunResult): CommandEnvelope {
-  return JSON.parse(result.stdout) as CommandEnvelope;
+function envelope<T = { decisions?: unknown }>(result: RunResult): CommandEnvelope<T> {
+  return JSON.parse(result.stdout) as CommandEnvelope<T>;
 }
 
 function message(result: RunResult): string {
@@ -256,7 +258,7 @@ const row = (id: string, status: string, extra: Record<string, unknown> = {}): R
   ...extra,
 });
 
-function completedHandoff(sourceBranch: string, worktreePath: string, integrationPath: string): Record<string, unknown> {
+function completedHandoff(sourceBranch: string, worktreePath: string, integrationPath: string) {
   const sha = git(["rev-parse", "HEAD"], worktreePath);
   const resultSha = git(["rev-parse", "HEAD"], integrationPath);
   const baseSha = git(["rev-parse", "HEAD^1"], integrationPath);
@@ -300,15 +302,18 @@ function updateWorkflow(root: string, id: string, update: (snapshot: MutableClea
 }
 
 /** Import the stopped historical workspace through the ordinary public cutover. */
-function upgradeHistoricalWorkspace(root: string): void {
+function upgradeHistoricalWorkspace(root: string): MinimalStoreUpgradeResult {
   const snapshotPath = join(root, "workflows", "wf-1", "snapshot.json");
   const historicalBytes = readFileSync(snapshotPath);
   // These serialized fixtures have no live coordinator or held merge claim.
   // There is no retired current holder that would require a stop attestation.
   const upgraded = runCli(["store", "upgrade", "--operator", "cleanup-fixture", "--harness", root], root);
   expect(upgraded.exitCode, upgraded.stdout).toBe(0);
-  expect(envelope(upgraded).status).toBe("ok");
+  const receipt = envelope<MinimalStoreUpgradeResult>(upgraded);
+  expect(receipt.status, upgraded.stdout).toBe("ok");
+  if (receipt.data === undefined) throw new Error(`missing store upgrade receipt: ${upgraded.stdout}`);
   expect(readFileSync(snapshotPath)).toEqual(historicalBytes);
+  return receipt.data;
 }
 
 
@@ -319,7 +324,7 @@ function upgradeHistoricalWorkspace(root: string): void {
  * worktree + Done unmerged detached branch + one foreign worktree/branch
  * nothing records.
  */
-function basicFixture(prefix: string): {
+function basicFixture(prefix: string, registered = false): {
   root: string;
   mainBranch: string;
   intWt: string;
@@ -415,6 +420,12 @@ function basicFixture(prefix: string): {
       2,
     ),
   );
+  // Root execution reads enumerate registered workflows; orphan snapshots are
+  // still useful to the cleanup inventory but are not root membership.
+  if (registered) {
+    const entry: WorkflowEntry = { id: "wf-1", type: "iteration", started_at: "2026-09-12", dir: "workflows/wf-1" };
+    writeFileSync(join(root, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-12", workflows: [entry] }));
+  }
   return { root: canonicalRoot, mainBranch, intWt: intPath, doneWt: donePath, wipWt: wipPath, dirtyWt: dirtyPath, ignoredWt: ignoredPath, foreignWt: wt(records, "wt-foreign").path };
 }
 
@@ -1061,21 +1072,38 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     }
   });
   test("a completed Done handoff restores historical branch and worktree ownership", async () => {
-    const fx = basicFixture("mstar-cleanup-handoff-");
+    const fx = basicFixture("mstar-cleanup-handoff-", true);
     try {
+      const handoff = completedHandoff("feature/done-a", fx.doneWt, fx.intWt);
       updateWorkflow(fx.root, "wf-1", (snapshot) => {
         const plan = snapshot.plans[0];
         delete plan.metadata;
         plan.coordination = {
           revision: 3,
           session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
-          handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt),
+          handoff,
         };
       });
-      upgradeHistoricalWorkspace(fx.root);
+      expect(upgradeHistoricalWorkspace(fx.root)).toMatchObject({
+        imported: 1,
+        skipped: [],
+        dispositions: [expect.stringMatching(/workflow wf-1 plan plan-a: .*session binding dropped on import/)],
+        authorityState: "active",
+      });
       const imported = await readExecutionState({ harnessDir: fx.root });
       const retained = imported.data.workflows.find((entry) => entry.state.id === "wf-1")!.plans[0]!;
       expect(retained.plan.metadata).toMatchObject({ working_branch: "feature/done-a", worktree_path: fx.doneWt });
+      expect(retained.plan.status).toBe("Done");
+      expect(retained.coordination?.completion).toMatchObject({
+        source_branch: "feature/done-a",
+        worktree_path: fx.doneWt,
+        review_base: handoff.review_base,
+        review_head: handoff.review_head,
+        qc: handoff.qc,
+        qa: handoff.qa,
+        completed_by: handoff.accepted_by,
+        completed_at: handoff.completed_at,
+      });
       expect(retained.coordination?.completion?.source_sha).toBe(git(["rev-parse", "HEAD"], fx.doneWt));
       expect(retained.coordination?.completion?.integration?.result_sha).toBe(git(["rev-parse", "HEAD"], fx.intWt));
 
@@ -1094,10 +1122,10 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
 
   for (const malformed of [false, true]) {
     test(`canonical completion never grants a displaced ${malformed ? "malformed" : "stale"} handoff cleanup ownership`, async () => {
-      const fx = basicFixture("mstar-cleanup-displaced-handoff-");
+      const fx = basicFixture("mstar-cleanup-displaced-handoff-", true);
       try {
         const historicalB = completedHandoff("feature/done-a", fx.doneWt, fx.intWt);
-        const completion = {
+        const completion: CompletionRecord = {
           source_branch: historicalB.source_branch,
           source_sha: historicalB.source_sha,
           worktree_path: historicalB.worktree_path,
@@ -1105,7 +1133,13 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
           review_head: historicalB.review_head,
           qc: historicalB.qc,
           qa: historicalB.qa,
-          integration: historicalB.integration,
+          integration: {
+            target_branch: historicalB.integration.target_branch,
+            worktree_path: historicalB.integration.worktree_path,
+            base_sha: historicalB.integration.base_sha,
+            result_sha: historicalB.integration.result_sha,
+            verified_at: historicalB.integration.verified_at,
+          },
           completed_by: historicalB.accepted_by,
           completed_at: historicalB.completed_at,
         };
@@ -1123,7 +1157,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
           plan.coordination = { revision: 3, completion, handoff };
         });
 
-        upgradeHistoricalWorkspace(fx.root);
+        expect(upgradeHistoricalWorkspace(fx.root)).toMatchObject({ imported: 1, skipped: [], dispositions: [], authorityState: "active" });
         const imported = await readExecutionState({ harnessDir: fx.root });
         const retained = imported.data.workflows.find((entry) => entry.state.id === "wf-1")!.plans[0]!;
         expect(retained.coordination?.completion).toEqual(completion);
@@ -1149,8 +1183,9 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
   }
 
   test("a completed handoff on a non-Done row grants no cleanup ownership", async () => {
-    const fx = basicFixture("mstar-cleanup-handoff-nondone-");
+    const fx = basicFixture("mstar-cleanup-handoff-nondone-", true);
     try {
+      const handoff = completedHandoff("feature/done-a", fx.doneWt, fx.intWt);
       updateWorkflow(fx.root, "wf-1", (snapshot) => {
         const plan = snapshot.plans[0];
         delete plan.metadata;
@@ -1158,15 +1193,26 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         plan.coordination = {
           revision: 3,
           session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
-          handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt),
+          handoff,
         };
       });
-      upgradeHistoricalWorkspace(fx.root);
+      expect(upgradeHistoricalWorkspace(fx.root)).toMatchObject({
+        imported: 1,
+        skipped: [],
+        dispositions: [expect.stringMatching(/workflow wf-1 plan plan-a: .*session binding dropped on import/)],
+        authorityState: "active",
+      });
       const imported = await readExecutionState({ harnessDir: fx.root });
       const retained = imported.data.workflows.find((entry) => entry.state.id === "wf-1")!.plans[0]!;
       expect(retained.plan.status).toBe("InProgress");
       expect(retained.plan.metadata?.working_branch).toBeUndefined();
       expect(retained.plan.metadata?.worktree_path).toBeUndefined();
+      expect(retained.coordination?.completion).toMatchObject({
+        source_sha: handoff.source_sha,
+        qc: handoff.qc,
+        qa: handoff.qa,
+        completed_at: handoff.completed_at,
+      });
       const result = runCli(
         ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows", "--apply"],
         fx.root,
