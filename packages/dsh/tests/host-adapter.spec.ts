@@ -673,7 +673,7 @@ describe('dispatchGate — D4 session hint derivation', () => {
     const adapter = makeAdapter()
 
     const hintRead = adapter.sessionHintFor(sessionAgent('sess-b', app.root))
-    expect(hintRead).toEqual({ kind: 'ok', hint: { cwd: app.root, sessionId: 'sess-b', leaseHolder: 'sess-b', selectedWorkflowId: 'wf-b' } })
+    expect(hintRead).toEqual({ kind: 'ok', hint: { cwd: app.root, sessionId: 'sess-b', selectedWorkflowId: 'wf-b' } })
 
     adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-b', app.root)))
 
@@ -691,7 +691,7 @@ describe('dispatchGate — D4 session hint derivation', () => {
     // A session that never picked → hint without a preference.
     expect(adapter.sessionHintFor(sessionAgent('sess-none', app.root))).toEqual({
       kind: 'ok',
-      hint: { cwd: app.root, sessionId: 'sess-none', leaseHolder: 'sess-none' },
+      hint: { cwd: app.root, sessionId: 'sess-none' },
     })
 
     const result = adapter.dispatchGate(VALID_WRITABLE, subagentExec(VALID_WRITABLE, sessionAgent('sess-none', app.root)))
@@ -713,7 +713,7 @@ describe('dispatchGate — D4 session hint derivation', () => {
       reason: 'store-invalid-json',
       // The STRUCTURAL evidence survives (it is real), only the durable
       // preference is unknown.
-      hint: { cwd: app.root, sessionId: 'sess-x', leaseHolder: 'sess-x' },
+      hint: { cwd: app.root, sessionId: 'sess-x' },
     })
     expect(logged.some((m) => m.startsWith('warn:') && m.includes('store-invalid-json'))).toBe(true)
 

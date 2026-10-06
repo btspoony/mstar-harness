@@ -675,7 +675,7 @@ describe('store cutover — the JSON execution authority still owns phase and re
     expect(state.workflowType).toBe('iteration')
     expect(state.workflowStatus).toBe('paused')
     expect(state.plans).toEqual([{ id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: [] }])
-    expect(state.rowScopes).toEqual([{ planId: 'plan-a', workingBranch: 'dsh:session-1', worktreePath }])
+    expect(state.rowScopes).toEqual([{ planId: 'plan-a', workingBranch: 'feature/store-cutover', worktreePath }])
     expect(state.iterationBaseBranch).toBe('dev')
     expect(state.targetBranch).toBe('main')
     expect(state.pushPolicy).toBe('no-push')

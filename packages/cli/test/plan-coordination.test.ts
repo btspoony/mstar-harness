@@ -917,8 +917,7 @@ interface DeliveryFixture extends Fixture {
 function makeDeliveryFixture(): DeliveryFixture {
   const fixture = makeFixture();
   const baseSha = gitOut(["rev-parse", "HEAD"], fixture.root);
-  rmSync(fixture.worktreePath, { recursive: true, force: true });
-  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  // Reuse the checkout the shared fixture already created and registered.
   writeText(join(fixture.worktreePath, "slice.txt"), "plan a slice\n");
   git(["add", "slice.txt"], fixture.worktreePath);
   gitCommit(fixture.worktreePath, "plan a: slice");
@@ -1378,8 +1377,9 @@ function makeAcceptedReportOnlyFixture(): ReportOnlyFixture {
   // commit and the branch it was made on. A report-only workflow owns no
   // delivery branch, so this commit is the inspected source, never a merge
   // candidate and never an integration target.
-  rmSync(fixture.worktreePath, { recursive: true, force: true });
-  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  // The shared fixture already created and registered `feature/plan-a` at this
+  // path: reuse that checkout (a second `-b` would collide with the existing
+  // branch/worktree registration).
   writeText(join(fixture.worktreePath, "report-only.txt"), "report-only slice\n");
   git(["add", "report-only.txt"], fixture.worktreePath);
   gitCommit(fixture.worktreePath, "plan a: report-only slice");
@@ -2017,6 +2017,72 @@ describe("Prepare workflow amendment", () => {
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   }, 30000);
 });
+
+/* ------------------------------------------------------------------------ *
+ * `mstar workflow recover-coordinator` — JSON Prepare coordinator recovery
+ * (prerequisite contract §3.3)
+ * ------------------------------------------------------------------------ */
+
+/** The replacement coordinator identity the CLI cases state explicitly. */
+const CLI_RECOVERY_SESSION_ID = "recovered-cli-coordinator";
+
+/** The `workflow recover-coordinator` argv one case drives. */
+function recoverCoordinatorArgs(
+  fixture: PrepareFixture,
+  tokens: { snapshot: string; compass: string },
+  overrides: Record<string, unknown> = {},
+): string[] {
+  const flags: Array<[string, string | undefined]> = [
+    ["--session", overrides.priorSession as string | undefined ?? fixture.coordinator],
+    ["--session-id", overrides.sessionId as string | undefined ?? CLI_RECOVERY_SESSION_ID],
+    ["--operation-id", overrides.operationId as string | undefined ?? "op-cli-recover-1"],
+  ];
+  if (overrides.omitReason !== true) {
+    flags.push(["--reason", (overrides.reason as string | undefined) ?? "the prior host session was cancelled"]);
+  }
+  flags.push(["--authorization-ref", (overrides.authorizationRef as string | undefined) ?? "PM-authorization-20260921"]);
+  const argv = ["workflow", "recover-coordinator"];
+  for (const [flag, value] of flags) {
+    if (value === undefined) continue;
+    argv.push(flag, value);
+  }
+  const stopped = overrides.stopped as string[] | undefined ?? ["fixture-coordinator"];
+  for (const id of stopped) argv.push("--stopped", id);
+  if (overrides.json !== false) argv.push("--json");
+  return argv;
+}
+
+/**
+ * The stored top-level `coordination` block of the CLI fixture's workflow,
+ * narrowed by `typeof` before any member is read (the snapshot JSON is
+ * `unknown` at this boundary).
+ */
+function cliCoordinationOf(fixture: PrepareFixture): Record<string, unknown> {
+  const coordination = readJson(fixture.snapshotPath).coordination;
+  // Narrowed above; the block is a plain object when present.
+  return typeof coordination === "object" && coordination !== null && !Array.isArray(coordination)
+    ? (coordination as Record<string, unknown>)
+    : {};
+}
+
+/** The stored coordinator binding of the CLI fixture's workflow. */
+function cliRecordedCoordinator(fixture: PrepareFixture): Record<string, unknown> {
+  const coordinator = cliCoordinationOf(fixture).coordinator;
+  return typeof coordinator === "object" && coordinator !== null && !Array.isArray(coordinator)
+    ? (coordinator as Record<string, unknown>)
+    : {};
+}
+
+/** The stored recovery audit of the CLI fixture's workflow. */
+function cliRecoveryAudit(fixture: PrepareFixture): Array<Record<string, unknown>> {
+  const recoveries = cliCoordinationOf(fixture).identity_recoveries;
+  return Array.isArray(recoveries) ? (recoveries as Array<Record<string, unknown>>) : [];
+}
+
+/** The workflow's plan rows as stored on disk (the preservation witness). */
+function cliPlanRowsOf(fixture: PrepareFixture): unknown {
+  return readJson(fixture.snapshotPath).plans;
+}
 
 describe("prepare coordinator recovery — CLI transport", () => {
   test("prepare coordinator recovery travels through `workflow recover-coordinator` and the old reference refuses", () => {

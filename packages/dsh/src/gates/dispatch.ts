@@ -397,9 +397,8 @@ export function sessionIdOf(exec: ToolExecution): string | undefined {
  * for sdd dispatches (the lease state cannot be confirmed — the status gate
  * already guards the next write); unreadable docs never harden a soft
  * workflow. A missing status.json is NOT a silent fail-open for sdd: the
- * claim-before-InProgress red line needs the row's recorded scope, and a
- * missing root/snapshot cannot confirm it — `lease.dispatch.unverifiable`
- * fires (advisory in warn, deny under hard).
+ * row's recorded scope, and a missing root/snapshot cannot confirm it —
+ * `lease.dispatch.unverifiable` fires (advisory in warn, deny under hard).
  * @param hint - the carrying session's selection hint: it decides WHICH
  *   active lifecycle's snapshot the lease is re-verified against, so a
  *   session that is not bound to the lifecycle holding the plan row stops
@@ -446,7 +445,7 @@ export function leaseGateViolations(
     return [leaseViolation(
       'lease.dispatch.unverifiable',
       `${join(harnessDir, STATUS_FILE)}: ${selection.kind === 'error' ? selection.message : 'no active workflow'} — the row's recorded scope is unverifiable; STOP before writable dispatch`,
-      'create a valid v2 status.json registering an active workflow (first implement dispatch requires a plan row + lease)',
+      'register the workflow through the supported workflow operation, then record the row scope with `mstar plan prepare --worktree-path <abs> --working-branch <name>`',
     )]
   }
   const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)

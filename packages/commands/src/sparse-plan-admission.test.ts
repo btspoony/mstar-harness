@@ -15,6 +15,7 @@ import {
   registerCatalogEntity,
   storeDbPath,
   type ExecutionCaller,
+  type ExecutionIdentity,
   type ExecutionSessionRef,
   type ExecutionToken,
   type StoreContext,
@@ -38,6 +39,11 @@ const COMPASS_REF = "iterations/iter-20260101-plan/delivery-compass.md";
 const WORKTREE = "/srv/worktrees/sparse-plan";
 
 const PROGRESS = { status: "InProgress", summary: "sparse intent", evidence_paths: [] };
+
+/** The trusted coordinator's identity tuple (the one §3.1 shape, no plan scope). */
+function coordinatorTupleOf(sessionId: string): ExecutionIdentity {
+  return { source: "local", sessionId, workflowId: WORKFLOW_ID, role: "coordinator" };
+}
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-sparse-plan-admission-"));
 afterAll(() => {
@@ -93,7 +99,7 @@ async function buildFixture(label: string): Promise<{
   );
 
   const coordinatorCaller: ExecutionCaller = { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID };
-  const coordinatorIdentity = { source: "local" as const, ...coordinatorCaller };
+  const coordinatorIdentity = coordinatorTupleOf(COORDINATOR_ID);
   // The snapshot literal is the engine's own workflow shape; the external type
   // is stricter than the fixture needs, so the cast is local and reasoned.
   const entry: WorkflowEntry = { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` };
@@ -438,7 +444,7 @@ describe("sparse plan intent admission", () => {
       repoRoot,
       { plan: PLAN_ID, operation: "op-sparse-minted", progress: PROGRESS },
       COORDINATOR_ID,
-      coordinatorIdentity(),
+      coordinatorTupleOf(COORDINATOR_ID),
     );
     expect(envelope.status).toBe("ok");
     if (envelope.status !== "ok") throw new Error(envelope.message);

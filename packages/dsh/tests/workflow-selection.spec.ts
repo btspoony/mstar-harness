@@ -203,9 +203,10 @@ describe('workflow selection — binding order: recorded row scope', () => {
       activeWorkflowIds: ['wf-a', 'wf-b'],
     })
   })
+})
 
 describe('workflow selection — binding order: cwd', () => {
-  it('binds a workflow whose control_worktree_path contains the session cwd — `/repo` is not `/repo-other`', async () => {
+  it('binds a workflow whose recorded integration worktree contains the session cwd — `/repo` is not `/repo-other`', async () => {
     const root = await freshRoot('control-cwd')
     const harnessDir = join(root, 'harness')
     const control = join(root, 'repo')
@@ -213,8 +214,8 @@ describe('workflow selection — binding order: cwd', () => {
     await mkdir(join(root, 'repo-other'), { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { control_worktree_path: control }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: join(root, 'elsewhere') }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { integration_worktree_path: control }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: join(root, 'elsewhere') }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
       kind: 'active',
@@ -243,7 +244,7 @@ describe('workflow selection — binding order: cwd', () => {
     await symlink(join(root, 'outside'), join(control, 'esc'))
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { control_worktree_path: control }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { integration_worktree_path: control }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'link') })).toEqual({
       kind: 'active',
@@ -262,8 +263,8 @@ describe('workflow selection — binding order: cwd', () => {
     await mkdir(harnessDir, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { control_worktree_path: ghost }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: sibling }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { integration_worktree_path: ghost }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: sibling }),
     })
     // Trailing separators and `..` segments normalize away on both sides.
     expect(resolveActiveWorkflow(harnessDir, { cwd: `${ghost}/src/` })).toEqual({
@@ -281,15 +282,15 @@ describe('workflow selection — binding order: cwd', () => {
     expect(resolveActiveWorkflow(harnessDir, { cwd: `${root}/ghost-repo-deep/src` }).kind).toBe('error')
   })
 
-  it('a duplicated control root is ambiguous at rung 2 and falls through to the explicit pick', async () => {
+  it('a duplicated integration worktree root is ambiguous at rung 2 and falls through to the explicit pick', async () => {
     const root = await freshRoot('shared-control')
     const harnessDir = join(root, 'harness')
     const control = join(root, 'repo')
     await mkdir(join(control, 'src'), { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { control_worktree_path: control }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: control }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { integration_worktree_path: control }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: control }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
       ...UNBOUND,
@@ -302,22 +303,22 @@ describe('workflow selection — binding order: cwd', () => {
     })
   })
 
-  it('a unique lease/cwd match outranks a stale explicit preference', async () => {
+  it('a unique integration-worktree/cwd match outranks a stale explicit preference', async () => {
     const root = await freshRoot('stale-explicit')
     const harnessDir = join(root, 'harness')
     const control = join(root, 'repo')
     await mkdir(join(control, 'src'), { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { control_worktree_path: join(root, 'elsewhere') }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: control }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { integration_worktree_path: join(root, 'elsewhere') }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: control }),
     })
     expect(
       resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src'), selectedWorkflowId: 'wf-a' }),
     ).toEqual({ kind: 'active', workflowId: 'wf-b', dir: 'workflows/wf-b' })
   })
 
-  it('collects the cwd rung independently after an ambiguous lease rung', async () => {
+  it('collects the integration rung independently when row scope decides nothing', async () => {
     const root = await freshRoot('ambiguous-lease-then-cwd')
     const harnessDir = join(root, 'harness')
     const control = join(root, 'repo')
@@ -326,16 +327,15 @@ describe('workflow selection — binding order: cwd', () => {
     await mkdir(elsewhere, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      // Both entries carry recorded scope whose worktree contains the SAME cwd
-      // area, but only wf-a's control checkout contains it — wf-a must still win
-      // at the control rung.
+      // Neither row scope contains the cwd, so the scope rung decides nothing;
+      // only wf-a's recorded integration worktree does — wf-a wins at rung 2.
       'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', {
-        plans: [planRow(scope())],
-        control_worktree_path: control,
+        plans: [planRow(scope({ worktree_path: elsewhere }))],
+        integration_worktree_path: control,
       }),
       'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
         plans: [planRow(scope({ worktree_path: elsewhere }))],
-        control_worktree_path: elsewhere,
+        integration_worktree_path: elsewhere,
       }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
@@ -343,18 +343,18 @@ describe('workflow selection — binding order: cwd', () => {
       workflowId: 'wf-a',
       dir: 'workflows/wf-a',
     })
-    // A mixed ambiguity (scope match on wf-b, control match on wf-a) is the
-    // same case: the scope rung decides nothing, the control rung does.
+    // A mixed case — wf-b's ROW SCOPE contains the cwd while wf-a's INTEGRATION
+    // worktree does — is decided by the scope rung: the sole scope match wins.
     await seedHarness(harnessDir, {
       'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', {
         plans: [planRow(scope({ worktree_path: join(control, 'src') }))],
-        control_worktree_path: elsewhere,
+        integration_worktree_path: elsewhere,
       }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
       kind: 'active',
-      workflowId: 'wf-a',
-      dir: 'workflows/wf-a',
+      workflowId: 'wf-b',
+      dir: 'workflows/wf-b',
     })
   })
 })
@@ -436,13 +436,16 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
   it('read forwards the hint to the same resolver', async () => {
     const root = await freshRoot('read-hint')
     const harnessDir = join(root, 'harness')
-    await mkdir(harnessDir, { recursive: true })
+    const wtB = join(root, 'repo/.worktrees/wf-b')
+    await mkdir(wtB, { recursive: true })
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [planRow(scope())] }),
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [planRow(scope())] }),
+      'workflows/wf-a/snapshot.json': v2Snapshot('wf-a', { plans: [planRow(scope({ worktree_path: join(root, 'repo/.worktrees/wf-a') }))] }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { plans: [planRow(scope({ worktree_path: wtB }))] }),
     })
-    expect(resolveReadWorkflow(harnessDir, { leaseHolder: 'agent-2' })).toEqual({
+    // The read path resolves the same way the write path does: a distinct
+    // recorded row scope containing the cwd selects wf-b.
+    expect(resolveReadWorkflow(harnessDir, { cwd: join(wtB, 'src') })).toEqual({
       kind: 'active',
       workflowId: 'wf-b',
       dir: 'workflows/wf-b',
@@ -459,7 +462,7 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
       // wf-a has no snapshot at all; wf-b's is torn.
       'workflows/wf-b/snapshot.json': '{"schema_version":1,"id":"wf-b",',
     })
-    expect(resolveActiveWorkflow(harnessDir, { leaseHolder: 'agent-1' })).toEqual({
+    expect(resolveActiveWorkflow(harnessDir, { cwd: '/nowhere' })).toEqual({
       ...UNBOUND,
       activeWorkflowIds: ['wf-a', 'wf-b'],
     })
@@ -481,7 +484,7 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
       'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
       // `readJson` casts arbitrary JSON: a bare `null` is not a snapshot record.
       'workflows/wf-a/snapshot.json': 'null',
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: control }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: control }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
       kind: 'active',
@@ -490,7 +493,7 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
     })
     // The malformed entry is the only cwd candidate → no evidence, no throw.
     await seedHarness(harnessDir, {
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: elsewhere }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: elsewhere }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
       ...UNBOUND,
@@ -499,7 +502,7 @@ describe('workflow selection — binding order: explicit, unique, unbound', () =
     // An array parses the same way — the guard is record-ness, not a null check.
     await seedHarness(harnessDir, {
       'workflows/wf-a/snapshot.json': '[]',
-      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { control_worktree_path: control }),
+      'workflows/wf-b/snapshot.json': v2Snapshot('wf-b', { integration_worktree_path: control }),
     })
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(control, 'src') })).toEqual({
       kind: 'active',
@@ -644,11 +647,9 @@ Do the thing.
       })
       return harnessDir
     }
-    const harnessDir = await seedFor(root, ['wf-a', 'wf-b'], false)
-
-    // Two actives: the cwd rung binds wf-a (its recorded row scope contains the
-    // cwd) — but this row records no scope, so the gate reports it unverifiable
-    // (fail-closed) instead of silently passing.
+    // A single active workflow binds without any hint; its row records no scope,
+    // so the gate reports it unverifiable (fail-closed) instead of passing.
+    const harnessDir = await seedFor(root, ['wf-a'], false)
     expect(resolveActiveWorkflow(harnessDir, { cwd: join(worktree, 'src') })).toEqual({
       kind: 'active',
       workflowId: 'wf-a',
@@ -668,3 +669,4 @@ Do the thing.
       'lease.dispatch.worktree-mismatch',
     )
   })
+})
