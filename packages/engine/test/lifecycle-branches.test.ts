@@ -7,7 +7,7 @@ import { collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "../
 test("ownership includes retained tracks and excludes base/target anchors", () => {
   expect(collectActiveLifecycleBranches([
     { branch: { integration: "iteration/a", base: "main", target: "release" }, plans: [
-      { execution_lease: { working_branch: "feature/a" }, metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } },
+      { metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } },
     ] },
   ])).toEqual(["iteration/a", "feature/a", "feature/track", "feature/retained"]);
 });
@@ -23,11 +23,9 @@ test("unreadable active register shapes fail closed, including null", () => {
 });
 
 test("a running sibling row's branch intent is reported by the scan", () => {
-  // E07 admits a Prepare amendment while a SIBLING row runs: that row keeps its
-  // own branch intent — the branch a `Working branch policy` declaration derives
-  // onto the row's metadata, and the lease of the run holding it. The active
-  // lifecycle scan is how the L1 worktree gate learns those branches, so it must
-  // report them from the recorded row alone and never rewrite what it observed.
+  // E07 admits Prepare amendment while a SIBLING row runs: that row's active
+  // branch intent is recorded in its own metadata. The lifecycle scan feeds
+  // the L1 worktree gate from that row scope, without rewriting observations.
   const root = mkdtempSync(join(tmpdir(), "lifecycle-ownership-"));
   try {
     const harness = join(root, ".mstar");
@@ -60,13 +58,7 @@ test("a running sibling row's branch intent is reported by the scan", () => {
               file: join(harness, "plans", "plan-running.md"),
               status: "InProgress",
               progress: 40,
-              execution_lease: {
-                holder: "11111111-1111-1111-1111-111111111111",
-                claimed_at: "2026-09-16T00:00:00Z",
-                worktree_path: join(root, "wt-running"),
-                working_branch: "feature/plan-running",
-              },
-              metadata: { working_branch: "feature/plan-running" },
+              metadata: { worktree_path: join(root, "wt-running"), working_branch: "feature/plan-running" },
             },
           ],
         },

@@ -901,10 +901,8 @@ function contextOf(f: ExecutionFixture): SddExecutionContext {
   };
 }
 
-function executionLease(f: ExecutionFixture, overrides: Record<string, string> = {}): Record<string, string> {
+function rowMetadata(f: ExecutionFixture, overrides: Record<string, string> = {}): Record<string, string> {
   return {
-    holder: "fullstack-dev-2",
-    claimed_at: "2026-09-07T00:00:00Z",
     worktree_path: f.feature,
     working_branch: f.workingBranch,
     ...overrides,
@@ -1055,11 +1053,11 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("nested feature worktree with a verified lease resolves (L1 + lease binding)", () => {
+  test("nested feature worktree recorded in row metadata resolves (L1 + scope binding)", () => {
     const root = tmpRoot("sdd-ctx-nested-lease-");
     try {
       const f = executionFixture(root, { nested: true });
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }]);
+      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
       const resolved = resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
     } finally {
@@ -1180,7 +1178,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     const root = tmpRoot("sdd-ctx-nested-harness-lease-");
     try {
       const f = executionFixture(root, { nested: true, nestedHarness: true });
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }]);
+      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
       const resolved = resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
 
@@ -1192,7 +1190,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       mkdirSync(subdir);
       const controlBranch = git(["branch", "--show-current"], f.control);
       writeSnapshot(f, "wf-1", [
-        { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f, { worktree_path: subdir, working_branch: controlBranch }) },
+        { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: subdir, working_branch: controlBranch }) },
       ]);
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
@@ -1209,7 +1207,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       const subdir = join(f.primary, "plain-subdir");
       mkdirSync(subdir);
       writeSnapshot(f, "wf-1", [
-        { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f, { worktree_path: subdir, working_branch: "feature/sub" }) },
+        { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: subdir, working_branch: "feature/sub" }) },
       ]);
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
@@ -1223,7 +1221,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     const root = tmpRoot("sdd-ctx-lease-");
     try {
       const f = executionFixture(root);
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }]);
+      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
       const resolved = resolveSddExecutionContext(contextOf(f));
       expect(resolved.featureCwd).toBe(realpathSync(f.feature));
 
@@ -1231,7 +1229,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
  // primary checkout on main) — the L1 gate refuses first: the feature
  // worktree MUST be a distinct checkout from the MAIN worktree.
       writeSnapshot(f, "wf-1", [
-        { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f, { worktree_path: f.primary, working_branch: "main" }) },
+        { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: f.primary, working_branch: "main" }) },
       ]);
       const worktreeErr = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(worktreeErr.exitCode).toBe(1);
@@ -1239,10 +1237,10 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
 
  // Context workingBranch ≠ verified lease branch (lease matches the real
  // checkout; the declared branch is what differs).
-      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }]);
+      writeSnapshot(f, "wf-1", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }]);
       const branchErr = errOf(() => resolveSddExecutionContext({ ...contextOf(f), workingBranch: "feature/other" }));
       expect(branchErr.exitCode).toBe(1);
-      expect(branchErr.message).toContain("sdd.context.lease-branch-mismatch");
+      expect(branchErr.message).toContain("sdd.context.row-branch-mismatch");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1286,7 +1284,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
         { id: PLAN_ID, title: "finished run", file: `plans/${PLAN_ID}.md`, status: "Done" },
       ]);
       writeSnapshot(f, "wf-live", [
-        { id: PLAN_ID, title: "live run", file: `plans/${PLAN_ID}.md`, status: "InProgress", execution_lease: executionLease(f) },
+        { id: PLAN_ID, title: "live run", file: `plans/${PLAN_ID}.md`, status: "InProgress", metadata: rowMetadata(f) },
       ]);
       writeStatusRegister(f, ["wf-live"]);
       expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
@@ -1300,7 +1298,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
           title: "live run",
           file: `plans/${PLAN_ID}.md`,
           status: "InProgress",
-          execution_lease: executionLease(f, { worktree_path: f.primary, working_branch: "main" }),
+          metadata: rowMetadata(f, { worktree_path: f.primary, working_branch: "main" }),
         },
       ]);
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
@@ -1323,7 +1321,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
         title: "claimed twice",
         file: `plans/${PLAN_ID}.md`,
         status: "InProgress",
-        execution_lease: executionLease(f),
+        metadata: rowMetadata(f),
       };
       writeSnapshot(f, "wf-a", [row]);
       writeSnapshot(f, "wf-b", [row]);
@@ -1355,7 +1353,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
           title: "finished",
           file: `plans/${PLAN_ID}.md`,
           status: "Done",
-          execution_lease: executionLease(f, { worktree_path: f.primary, working_branch: "main" }),
+          metadata: rowMetadata(f, { worktree_path: f.primary, working_branch: "main" }),
         },
       ]);
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
@@ -1371,7 +1369,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
           title: "live",
           file: `plans/${PLAN_ID}.md`,
           status: "InProgress",
-          execution_lease: executionLease(f),
+          metadata: rowMetadata(f),
         },
       ]);
       expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
@@ -1509,7 +1507,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     const root = tmpRoot("sdd-ctx-mainbranch-");
     try {
       const f = executionFixture(root);
-      const row = { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) };
+      const row = { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) };
  // Recorded plan header (the fixture plan carries "Main worktree branch:
  // main") — resolves.
       writeSnapshot(f, "wf-1", [row]);
@@ -1533,7 +1531,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     const root = tmpRoot("sdd-ctx-iteration-");
     try {
       const f = executionFixture(root);
-      const row = { id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) };
+      const row = { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) };
  // Aligned, distinct integration checkout (the control worktree is on the
  // integration branch in this fixture) — full checks pass.
       writeSnapshot(f, "wf-iter", [row], {
@@ -2071,7 +2069,7 @@ test("governing active snapshot with both topology keys refuses standalone downg
   const root = tmpRoot("sdd-both-topology-");
   try {
     const f = executionFixture(root);
-    writeSnapshot(f, "wf-a", [{ id: PLAN_ID, status: "InProgress", execution_lease: executionLease(f) }], {
+    writeSnapshot(f, "wf-a", [{ id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f) }], {
       integration_worktree_path: f.control, control_worktree_path: f.control,
     });
     expect(() => resolveSddExecutionContext(contextOf(f))).toThrow("refusing conflicting");

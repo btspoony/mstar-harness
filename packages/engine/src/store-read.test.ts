@@ -1013,7 +1013,6 @@ describe("projection views", () => {
     expect(workflow.plans[0]?.catalogPinRevision).toBe(planRevision);
     expect(workflow.plans[0]?.badges).toEqual([]);
     expect(workflow.plans[0]?.leases.map((lease) => lease.kind)).toEqual(["integration-merge"]);
-    expect(JSON.stringify(envelope)).not.toContain("execution_lease");
 
     const detail = await withStoreRead(context, queryDashboard("workflow-detail", { id: "wf-read" }));
     expect(detail.data).toEqual(workflow);

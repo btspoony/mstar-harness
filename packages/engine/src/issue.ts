@@ -160,37 +160,6 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
       itemsNonblank: true,
     },
   },
-  HandoffEvidence: {
-    source_sha: { required: true, type: "string", description: "Source commit SHA" },
-    review_head: { required: true, type: "string", description: "Review range head SHA" },
-    review_base: { required: true, type: "string", description: "Review range base SHA" },
-    qc: {
-      required: true,
-      type: "object",
-      description: "QC decision, reports and consolidated report",
-      properties: {
-        decision: { required: true, type: "string", description: "QC decision", values: ["Approve", "Approve with residuals"] },
-        reports: {
-          required: true,
-          type: "string[]",
-          description: "QC report paths",
-          minItems: 1,
-          itemsNonblank: true,
-        },
-        consolidated: { required: true, type: "string", description: "Consolidated QC report path" },
-      },
-    },
-    qa: {
-      required: true,
-      type: "object",
-      description: "QA gate, passing decision and report",
-      properties: {
-        gate: { required: true, type: "string", description: "QA gate", values: ["mandatory", "pm-acceptance"] },
-        decision: { required: true, type: "string", description: "QA decision", values: ["pass"] },
-        report: { required: true, type: "string", description: "QA report path" },
-      },
-    },
-  },
 } as const satisfies Record<string, Record<string, PayloadFieldSchema>>;
 
 export type IssuePayloadName = keyof typeof ISSUE_PAYLOAD_SCHEMAS;
@@ -1288,12 +1257,9 @@ export function assertTerminalDisposition(disposition: TerminalDisposition): voi
 }
 
 /**
- * Shared role-to-seat mapping for session-authorized issue paths. The
- * plan-scoped route uses the `plan-pm` mapping; milestone assignment separately
- * validates its session against this seat vocabulary.
+ * Shared role-to-seat mapping for session-authorized issue paths.
  */
 const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
-  "plan-pm": "project-manager",
   coordinator: "project-manager",
 };
 

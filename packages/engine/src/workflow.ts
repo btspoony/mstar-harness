@@ -19,8 +19,7 @@
  *   key survives only as a read alias in `readWorkflowSnapshot`),
  *   `legacy_metadata?` (catch-all for unmapped v1 root-metadata keys),
  *   `compass_ref?` (relative pointer to the iteration delivery compass).
- * - Lease shape delegation: `validateExecutionLease` /
- *   `validateIntegrationMergeLease` unchanged (`lease.ts`).
+ * - Mutex shape: `validateIntegrationMergeLease` unchanged (`lease.ts`).
  * - Writer: whole-rewrite under `withStatusWriteLock(snapshotPath)` - the
  *   `.status-write.lockdir` lands inside `workflows/<id>/` (dirname of the
  *   snapshot), no harness-root pollution.
@@ -150,7 +149,6 @@ export type WorkflowBranchAnchors = {
 };
 
 /**
- * v3 workflow snapshot (`workflows/<id>/snapshot.json`) - final schema
  * v3 workflow snapshot (`workflows/<id>/snapshot.json`). Plan rows carry
  * ordinary coordinator-managed metadata; `integration_merge_lease` is the
  * workflow-wide serial merge mutex.
@@ -259,11 +257,8 @@ export type WorkflowSnapshot = {
   legacy_metadata?: Record<string, unknown>;
   compass_ref?: string;
   /**
-   * Snapshot-level coordination block ( - scoped plan-PM coordination).
-   * Present only on a coordinated lifecycle: it carries the workflow's
-   * coordinator binding (session id + canonical envelope path). The block
-   * is validated strictly (`validateSnapshotCoordination`) and may only be
-   * changed by the locked coordination writer.
+   * Workflow-level coordinator identity and recovery evidence. Plan rows
+   * carry ordinary prepared/progress/completion data.
    */
   coordination?: SnapshotCoordination;
   /**
@@ -311,7 +306,7 @@ export function isStandaloneReportOnlyWorkflow(snapshot: WorkflowSnapshot): bool
 }
 
 /** Classify row coordination validation: standalone delivery vs integration delivery. */
-export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
+function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
   }
@@ -442,22 +437,15 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
 }
 
 /**
- * Validate a v3 workflow snapshot document ( - final schema):
- * enum/type/id checks, `schema_version: 1`, required timestamps, `plans[]`
- * rows validated by the legacy `validatePlanRow` with row-level
- * `execution_lease` shape delegated to `validateExecutionLease`,
- * `integration_merge_lease` shape delegated to
- * `validateIntegrationMergeLease`, `execution_policy` keys accepted-but-
- * opaque. Integration worktree path: the canonical member is
- * `integration_worktree_path`; the v1 `control_worktree_path` key is a
- * read-only alias whose presence keeps this STRICT validation a failing
- * gate carrying the medium `workflow.snapshot.legacy-control-worktree-path`
- * migration diagnostic (read acceptance is not write permission - the
- * canonical reader is the only consumer that normalizes it, in memory);
- * both keys present is `workflow.snapshot.conflicting-worktree-paths`
- * (high), even when the values are equal. Terminal invariant: `status` ∈
- * completed|failed|stopped ⇒ `ended_at` present AND no row carries
- * `execution_lease` AND no `integration_merge_lease` (no dangling leases).
+ * Validate a v3 workflow snapshot:
+ * enum/type/id checks, `schema_version: 1`, required timestamps, plans[]
+ * rows with validated ordinary metadata/coordination, and a validated
+ * workflow-level integration merge mutex. Integration worktree path: the
+ * canonical member is `integration_worktree_path`; the v1
+ * `control_worktree_path` key is a read-only alias whose presence keeps this
+ * strict validation a failing gate carrying the migration diagnostic.
+ * Both keys present is `workflow.snapshot.conflicting-worktree-paths`.
+ * Terminal invariant: `ended_at` is present and no integration mutex remains.
  */
 export function validateWorkflowSnapshot(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -954,8 +942,8 @@ function assertCoordinatedSnapshotWriter(
  * `phase` + `updated_at` are taken from the incoming snapshot (spec §C4 line
  * 152). The stored document remains the source for every other field, while
  * semantic identity, scope, state and authority fields are checked against
- * their stored values before projection. Documentary content and provenance
- * metadata are not sealed by this writer.
+ * their stored values before projection. Documentary content may vary, while
+ * row execution scope metadata remains write-protected.
  */
 function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
   if (!isPlainObject(stored)) {
@@ -1042,7 +1030,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
     }
     const incomingMetadata = isPlainObject(row.metadata) ? row.metadata : {};
     const storedMetadata = isPlainObject(prior.metadata) ? prior.metadata : {};
-    for (const field of ["iteration_refs", "spec_integration_branch", "merge_target"] as const) {
+    for (const field of ["iteration_refs", "spec_integration_branch", "merge_target", "worktree_path", "working_branch"] as const) {
       if (incomingMetadata[field] !== undefined && !isDeepStrictEqual(incomingMetadata[field], storedMetadata[field])) {
         throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} metadata.${field}`, { field: `plans.metadata.${field}`, plan_id: row.id });
       }
@@ -1291,17 +1279,6 @@ export function isCloseTimestamp(value: string): boolean {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value.slice(0, 10);
 }
 
-/** A lifecycle cannot close while its serial integration mutex is held. */
-function assertIntegrationMergeClaimReleased(snapshot: WorkflowSnapshot, workflowId: string, outcome: CloseWorkflowOutcome): WorkflowSnapshot {
-  if (snapshot.integration_merge_lease !== undefined) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `workflow ${workflowId} cannot become ${outcome} while it holds the integration merge mutex; complete or reconcile the integration attempt first`,
-      { workflow_id: workflowId, status: outcome },
-    );
-  }
-  return snapshot;
-}
 
 /**
  * Complete the latest snapshot under its write lock. Never releases leases.
@@ -1320,15 +1297,9 @@ function assertIntegrationMergeClaimReleased(snapshot: WorkflowSnapshot, workflo
  *   WITHOUT any successful-delivery precondition - no row-`Done` requirement, no
  *   delivery-evidence consultation (a failure close is never treated as a
  *   delivery; the Phase-6 gate passes such a snapshot by the same rule). Instead
- *   the close settles the workflow's OWN held claims whose holder a recorded
- *   stop fact (the identity-recovery attestation) has already taken out of its
- *   live recorded sessions, in the SAME locked whole-snapshot write
- *   (`settleStoppedFileClaims`); a claim a LIVE holder still holds, and a claim
- *   whose holder no recorded stop or transfer accounts for, EACH refuse the
- *   outcome with that holder named - the file authority never infers another
- *   session's stop (§4.2, R11's "a genuinely running foreign lease needs that
- *   holder's stop/transfer fact"). The refusal is raised BEFORE the write, so a
- *   refused close spends no byte.
+ *   a terminal failed/stopped close does not reinterpret an integration
+ *   mutex as released. The mutex must be completed/reconciled first; the
+ *   lifecycle close refuses before its write if it remains held.
  *
  * A valid terminal snapshot is returned unchanged - including `failed`/`stopped`
  * (idempotent preservation: nothing is rewritten, not even the timestamp). Two
@@ -1387,7 +1358,6 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
     // (not the normalized view) carries the `coordination` block, exactly as
     // the replacement door reads it.
     assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "close");
-    let next: WorkflowSnapshot = snapshot;
     if (outcome === "completed") {
       if (snapshot.plans.some((row) => row.status !== "Done")) {
         throw new Error("refusing to close workflow: every plan row must be Done");
@@ -1400,9 +1370,15 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
         throw new Error(`refusing to close workflow: ${detail}`);
       }
     }
-    next = assertIntegrationMergeClaimReleased(snapshot, workflowId, outcome);
-    const closed: WorkflowSnapshot = { ...next, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
-    // Strict terminal validation refuses both lease kinds without deleting them.
+    if (snapshot.integration_merge_lease !== undefined) {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `workflow ${workflowId} cannot become ${outcome} while it holds the integration merge mutex; complete or reconcile the integration attempt first`,
+        { workflow_id: workflowId, status: outcome },
+      );
+    }
+    const closed: WorkflowSnapshot = { ...snapshot, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
+    // Strict terminal validation refuses the integration mutex without deleting it.
     await validateAndPutWorkflowSnapshot(store, closed, snapshotPath);
     return closed;
   });

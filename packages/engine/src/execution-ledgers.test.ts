@@ -107,7 +107,7 @@ type Fixture = {
 };
 
 function coordinatorCaller(): ExecutionCaller {
-  return { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WF, planId: null };
+  return { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WF };
 }
 
 function callerContext(harnessDir: string, caller: ExecutionCaller): ExecutionContext {
@@ -150,7 +150,6 @@ async function notesFixture(label: string): Promise<Fixture> {
   const workflow = created.data.workflows[0]!;
   const bound = await bindExecutionSession(callerContext(harnessDir, caller), {
     workflowId: WF,
-    planId: null,
     role: "coordinator",
     expected: workflow.workflowToken,
     operationId: `bind-${label}`,
@@ -505,7 +504,6 @@ describe("execution-ledgers: stale authority, scope and target trust", () => {
       workflowId: WF,
       role: "coordinator",
       sessionId: COORDINATOR_ID,
-      planId: null,
     };
     const refusal = await refusalOf(() => appendWorkflowNote(context, session, note("note-1", "body")));
     expect(refusal.code).toBe("execution-ledgers.target-untrusted");

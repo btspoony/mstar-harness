@@ -673,9 +673,8 @@ export function implementerSessionStickyRules(input: StickyRulesInput): StickyRu
  * where feature source edits happen, and which branch the feature checkout
  * must be on. All paths normalized absolute (canonicalized on resolve);
  * `planFile` / `sddDir` must resolve within the control harness and match
- * `planId`; the feature branch/worktree must match the verified lease when
- * an active workflow supplies one (standalone non-iteration contexts remain
- * possible under the existing branch policy — no new global lease mandate).
+ * `planId`; the feature branch/worktree must match active row metadata when
+ * an active workflow supplies it (standalone contexts use branch policy).
  * A declared control root is authoritative: it is never re-inferred from
  * the feature cwd (mstar-branch-worktree «Harness path SSOT»).
  */

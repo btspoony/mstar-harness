@@ -33,7 +33,7 @@ async function fixture(label: string): Promise<StoreContext> {
     delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" },
   } as unknown as WorkflowSnapshot;
   await createExecutionWorkflow(
-    { ...context, caller: { sessionId: `creator-${label}`, role: "coordinator", workflowId, planId: null } },
+    { ...context, caller: { sessionId: `creator-${label}`, role: "coordinator", workflowId } },
     { entry, snapshot, expected: initialized.token, operationId: `create-${label}` },
   );
   return context;
@@ -53,7 +53,6 @@ describe("execution-cleanup-read", () => {
       worktree_path: "/tmp/wf-registered",
       working_branch: "feature/wf-registered",
     });
-    expect(result.selected.plans[0]).not.toHaveProperty("execution_lease");
     expect(result.workflows.map((row) => row.id)).toContain("wf-registered");
   });
 
@@ -84,7 +83,7 @@ describe("execution-cleanup-read", () => {
     const context = await fixture("missing-plan");
     await expect(readExecutionAuthority(context, { workflowId: "wf-missing-plan", planId: "plan-not-recorded" })).rejects.toMatchObject({
       code: "coordination.plan-not-found",
-      message: expect.stringContaining("List valid plan ids with mstar plan show --workflow wf-missing-plan"),
+      message: expect.stringContaining("Select an existing plan id from workflow wf-missing-plan"),
     });
   });
 
@@ -162,7 +161,7 @@ describe("execution-cleanup-read", () => {
       delivery_kind: "development", branch: { source: `feature/${secondWorkflow}`, target: "main" },
     } as unknown as WorkflowSnapshot;
     await createExecutionWorkflow(
-      { ...context, caller: { sessionId: "creator-retained-pair-second", role: "coordinator", workflowId: secondWorkflow, planId: null } },
+      { ...context, caller: { sessionId: "creator-retained-pair-second", role: "coordinator", workflowId: secondWorkflow } },
       { entry, snapshot, expected: current.token, operationId: "create-retained-pair-second" },
     );
     const store = db(context);

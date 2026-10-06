@@ -719,14 +719,11 @@ export function l2PreDispatchCheck(input: L2PreDispatchInput, opts: BranchProbeO
 }
 
 /**
- * L1 hard rule (main control root vs feature): `execution_lease.worktree_path`
- * MUST be a Git checkout DISTINCT from the MAIN worktree (the process-SSOT
- * control root) — the same checkout, a plain subdirectory, or a symlink
- * alias of the main checkout is refused (checkout identity via the
- * canonical per-worktree git dir; probe failure fails closed). Both-empty
- * stays a match (nothing recorded, per the lease validator contract); one
- * empty has nothing to compare and passes (the lease validator's
- * absolute-path requirement owns empty lease paths).
+ * L1 hard rule (main control root vs feature): the path recorded in
+ * `plans[].metadata.worktree_path` MUST be a Git checkout DISTINCT from the
+ * MAIN worktree (the process-SSOT control root). Same checkout, subdirectory
+ * and symlink aliases fail closed. Both-empty is invalid; one empty leaves
+ * comparison to the metadata/scope validator.
  */
 export function assertControlVsFeaturePath(
   controlWorktreePath: string,
@@ -739,7 +736,7 @@ export function assertControlVsFeaturePath(
       violation(
         "critical",
         "worktree.control-feature.same",
-        `main control root and feature/lease worktree path are both empty \u2014 execution_lease.worktree_path MUST be a distinct checkout from the main worktree`,
+        `main control root and feature worktree path are both empty — metadata.worktree_path MUST be a distinct checkout from the main worktree`,
         "record a distinct feature worktree path",
       ),
     );
@@ -753,7 +750,7 @@ export function assertControlVsFeaturePath(
       violation(
         "critical",
         "worktree.control-feature.same",
-        `main control root "${controlWorktreePath}" and feature/lease worktree path "${featureWorktreePath}" are not distinct Git checkouts \u2014 a plain subdirectory or symlink alias of the main checkout is not isolation; execution_lease.worktree_path MUST be a distinct checkout`,
+        `main control root "${controlWorktreePath}" and feature worktree path "${featureWorktreePath}" are not distinct Git checkouts — a plain subdirectory or symlink alias of the main checkout is not isolation; metadata.worktree_path MUST be a distinct checkout`,
         "use a distinct feature worktree for the plan's product edits (git worktree add <path> <branch>)",
       ),
     );

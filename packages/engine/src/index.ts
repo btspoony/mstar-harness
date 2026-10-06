@@ -5,9 +5,9 @@
  * OpenCode plugin consume it in-process. `core` is the shared type/version
  * base, `path` implements harness path resolution + scaffold + gitignore
  * checks, `status` implements the status.json schema, residual lifecycle,
- * findings-cleanup gate and the tech-debt rollup port, `lease` implements
- * the execution/merge lease state machines + same-host status write lock,
- * `dispatch` implements the Assignment field contract, default-branch
+ * findings-cleanup gate and the tech-debt rollup port, `lease` implements the
+ * workflow integration merge mutex + same-host status write lock, `dispatch`
+ * implements the Assignment field contract, default-branch
  * gate, QC seat mapping and tri-identity/anti-recursion prechecks, `lint`
  * implements marker/TDD-triple/plan-quality/frontmatter/STRATEGY checks and
  * ephemeral/provenance citation discovery,
@@ -117,25 +117,8 @@ export {
   validateStatusV2,
   validateWorkflowEntry,
 } from "./status.js";
-export type {
-  ClaimLeaseFields,
-  ExecutionLease,
-  ExecutionLeaseLocations,
-  IntegrationMergeLease,
-  LeaseTransition,
-  LeaseVerifyResult,
-} from "./lease.js";
-export {
-  canSteal,
-  claimLease,
-  planExecutionLeaseLocations,
-  releaseLease,
-  sameHolderResume,
-  validateExecutionLease,
-  validateIntegrationMergeLease,
-  verifyPlanExecutionLease,
-  withStatusWriteLock,
-} from "./lease.js";
+export type { IntegrationMergeLease } from "./lease.js";
+export { validateIntegrationMergeLease, withStatusWriteLock } from "./lease.js";
 export type {
   CloseWorkflowOptions,
   DeclareWorkflowDeliveryKindOptions,
@@ -537,8 +520,6 @@ export {
   CoordinationError,
   EXECUTION_PIN_CONFLICT_CODE,
   ExecutionPinConflictError,
-  amendPrepareWorkflow,
-  assertExecutionCatalogPin,
   bindPlanSession,
   executionInputHash,
   mutatePlanCoordination,
@@ -546,42 +527,33 @@ export {
   readExecutionCatalogPin,
   readPlanCoordination,
   readSessionEnvelope,
-  replaceCoordinatedArtifact,
   resolvePlanScope,
   resolveProcessHarnessDir,
-  recoverPrepareCoordinator,
-  showPrepareCoordinatorRecovery,
   showPrepareWorkflow,
+  writeCoordinatedArtifact,
 } from "./coordination.js";
 export type {
   BindPlanSessionInput,
   CatalogExecutionPin,
   CatalogPinAbsence,
-  CoordinatedReplacement,
+  CompletionEvidence,
+  CompletionRecord,
   CoordinationRequest,
   CoordinationResult,
   CoordinationRole,
   CoordinationSession,
+  CoordinatedReplacement,
   ExecutionCatalogPinState,
-  HandoffEvidence,
+  IntegrationResultInput,
   PlanCoordinationOperation,
   PlanCoordinationView,
+  PlanPrepareConfig,
+  PlanProgress,
   PlanScopeInput,
-  PrepareCoordinationRequest,
-  PrepareCoordinatorRecoveryBlocker,
-  PrepareCoordinatorRecoveryReceipt,
-  PrepareCoordinatorRecoveryView,
-  PreparePlanAppend,
-  PreparePlanFileCorrection,
-  PrepareWorkflowPatch,
-  PrepareWorkflowResult,
-  PrepareWorkflowView,
-  ProgressCoordinationRequest,
-  RecoverPrepareCoordinatorResult,
-  ResidualAddCoordinationRequest,
-  ResidualCloseCoordinationRequest,
+  PreparedCoordination,
   ResidualInput,
   ResolvedPlanScope,
+  RowCoordination,
   VersionedArtifact,
 } from "./coordination.js";
 // Recovery-first resolution and the file-route close: the ONE resolution path a
@@ -623,15 +595,8 @@ export {
   upgradeStore,
 } from "./store-db.js";
 export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
-// Execution authority: the canonical value form and `exec-v1` version tokens
-// (§3.1), the one-transaction ownership boundary, the create-only empty
-// execution initializer (§3/§4.1) and the create-only workflow/registry/sealed
-// input verb (§3), plus C4's session surface — the trusted-caller
-// coordinator/plan-pm bind and the session-authorized plan read (§2.3/§3).
-// ADDITIVE export and the ONLY reachable surface for consumers: the token
-// grammar and the transaction primitive stay module-scoped for the domain
-// modules that compose with them, and no coordination-mutation, registration
-// or coordinator-recovery verb is defined here.
+// Coordinator-only execution authority: version tokens, registration,
+// current coordinator binding and required workflow/plan reads.
 export type {
   ExecutionCaller,
   ExecutionContext,
@@ -662,17 +627,9 @@ export {
   executionContextFor,
   resumeExecutionSession,
 } from "./execution-session.js";
-// §3 the DB plan-operation surface: ONE entry point for the whole closed
-// `CoordinationOperation` union — prepare, progress, residual-add,
-// residual-close, handoff, accept, return, integration-start,
-// integration-accept, complete and reconcile — each with exactly one DB
-// transition behind it. Published only once the union was complete, so nothing
-// here is a stub: the legacy-only `repair-delivery-source` is refused, and no
-// registration API is part of this surface.
-// ADDITIVE export and the ONLY reachable surface for consumers: the internal
-// dispatch frame and the individual transition bodies stay module-scoped.
+// Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
-export { mutateExecutionPlan } from "./execution-coordination.js";
+export { bindExecutionPlanSession, mutateExecutionPlan } from "./execution-coordination.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
@@ -682,7 +639,7 @@ export { mutateExecutionPlan } from "./execution-coordination.js";
 // ADDITIVE export: the per-kind transition bodies and the pinned-witness
 // helpers stay module-scoped.
 export type { WorkflowExecutionOperation } from "./execution-workflow.js";
-export { mutateExecutionWorkflow, recoverExecutionCoordinator, recoverExecutionPlanSession, workflowExecutionPolicyViolations } from "./execution-workflow.js";
+export { mutateExecutionWorkflow, recoverExecutionCoordinator, workflowExecutionPolicyViolations } from "./execution-workflow.js";
 export type {
   CaptureInput,
   ClosureEvidence,

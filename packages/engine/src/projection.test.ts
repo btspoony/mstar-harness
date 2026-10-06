@@ -363,7 +363,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
   const f = await fixture(name);
   const initialized = await initializeExecutionAuthority(f.context);
   await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op(`${name}-catalog`));
-  const caller: ExecutionCaller = { sessionId: `${name}-coordinator`, role: "coordinator", workflowId, planId: null };
+  const caller: ExecutionCaller = { sessionId: `${name}-coordinator`, role: "coordinator", workflowId };
   await createExecutionWorkflow({ ...f.context, caller }, {
     entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
     snapshot: {
@@ -394,7 +394,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       { kind: "plan", id: planId, title: "Active plan", rootKind: "plans", relativePath: `${planId}.md` },
       op("active-plan"),
     );
-    const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId, planId: null };
+    const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId };
     await createExecutionWorkflow({ ...f.context, caller }, {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: {
@@ -687,7 +687,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const workflowId = "wf-plan-moved";
     const planId = "plan-original";
     await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op("plan-moved-catalog"));
-    const caller: ExecutionCaller = { sessionId: "coord-plan-moved", role: "coordinator", workflowId, planId: null };
+    const caller: ExecutionCaller = { sessionId: "coord-plan-moved", role: "coordinator", workflowId };
     await createExecutionWorkflow({ ...f.context, caller }, {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: { schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT, plans: [{ id: planId, title: "Plan", file: `${planId}.md`, status: "Todo" }], delivery_kind: "development", branch: { source: "feature/moved", target: "main" } } as unknown as WorkflowSnapshot,
@@ -723,7 +723,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const workflowId = "wf-row-moved";
     const planId = "plan-row-moved";
     await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op("row-moved-catalog"));
-    const caller: ExecutionCaller = { sessionId: "coord-row-moved", role: "coordinator", workflowId, planId: null };
+    const caller: ExecutionCaller = { sessionId: "coord-row-moved", role: "coordinator", workflowId };
     await createExecutionWorkflow({ ...f.context, caller }, {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: { schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT, plans: [{ id: planId, title: "Plan", file: `${planId}.md`, status: "Todo" }], delivery_kind: "development", branch: { source: "feature/row-moved", target: "main" } } as unknown as WorkflowSnapshot,
