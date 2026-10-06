@@ -1,108 +1,128 @@
 /**
  * CLI `workflow recover-coordinator` — the FILE-route recovery consumer
- * contract against a real held integration-merge claim.
+ * regression over the supported registered/bound workflow fixture.
  *
- * The operator's stop attestation is the trust boundary (the engine validates
- * it and performs the authority discrimination; the CLI only reads the
- * absolute JSON document and passes it through). These cases drive the real
- * engine entry over real snapshot/envelope fixtures:
+ * The fixture establishes the ordinary prerequisites through the real
+ * producers — initialized store, registered status entry, locked compass, plan
+ * documents, integration worktree, phase-1 snapshot and a REAL `plan bind
+ * --coordinator` recorded binding — then plants the workflow's held
+ * integration-merge claim the way the engine's own prepare-recovery suite
+ * does. Recovery is then exercised twice against that ONE fixture:
  *
- * - a workflow whose snapshot still holds an integration merge claim naming a
- *   holder that is no longer a recorded session refuses recovery WITHOUT the
- *   operator stop document, naming the document it needs;
- * - the SAME recovery WITH a correct document (naming that exact prior holder
- *   stopped, attested after its claim, operator authorization matching)
- *   succeeds and settles;
- * - a mixed invocation that also carries the attestation on the ACTIVE
- *   authority is refused before either engine verb runs.
+ * - without the operator stop document the engine refuses, naming the stop
+ *   attestation it needs, and nothing moves;
+ * - the SAME fixture retries with the correct full document (naming the exact
+ *   recorded prior holder stopped after its claim, operator authorization
+ *   matching) and succeeds: the replacement binding is recorded, the audit
+ *   names the prior holder, and the held claim is gone.
  *
- * No engine internals are re-implemented here; the deeper engine matrix (exact
- * identity/time bounds, schema-8 cutover orphans) is owned by the engine
- * suites — this file only proves the CLI admits, refuses and forwards.
+ * The operator stop attestation is the trust boundary (the engine validates
+ * the document and performs the authority discrimination; the CLI only reads
+ * the absolute JSON file and passes it through). The deeper engine matrix
+ * (exact identity/time bounds, schema-8 cutover orphans) stays with the engine
+ * suites — this file proves the CLI admits, refuses and forwards.
  */
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { WORKFLOW_SNAPSHOT_FILE, initializeStore } from "@mstar-harness/engine";
-import { executeCommand } from "./definitions.js";
+import { executeCommand } from "../definitions.js";
 import type { InvocationContext } from "../types.js";
 
 const WORKFLOW_ID = "wf-recovery-fixture";
 const PLAN_ID = "plan-recovery";
-const PRIOR_HOLDER = "prior-holder-session";
+const PRIOR_HOLDER = "prior-coordinator-session";
 const CALLER_SESSION = "caller-recovery-session";
+const INTEGRATION_BRANCH = "integration/wf-recovery-fixture";
+const AUTHORIZATION_REF = "PM-authorization-fixture";
 
 const roots: string[] = [];
-function scratch(): string {
-  const root = mkdtempSync(join(tmpdir(), "mstar-recover-coordinator-"));
-  roots.push(root);
-  return root;
-}
 
-/** One temp Git workspace whose FILE snapshot still holds a merge claim. */
-function heldClaimFixture(): { root: string; harness: string; priorEnvelope: string; claimHolderAt: string } {
-  const root = scratch();
+/** One temp Git workspace with the ordinary prerequisites and a REAL binding. */
+async function boundRecoveryFixture(): Promise<{
+  root: string;
+  harness: string;
+  priorEnvelope: string;
+  snapshotPath: string;
+  claimHolderAt: string;
+}> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-recover-coordinator-")));
+  roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = join(root, ".mstar");
   const workflowDir = join(harness, "workflows", WORKFLOW_ID);
+  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
+  const integrationPath = join(root, "wt-integration");
+  const claimHolderAt = "2026-09-30T00:00:00.000Z";
+
+  // The ordinary FILE prerequisites: locked compass, plan documents, the
+  // integration worktree the policy names, and the registered status entry.
   mkdirSync(join(harness, "plans"), { recursive: true });
   mkdirSync(join(workflowDir, "sessions"), { recursive: true });
-  const store = initializeStore({ harnessDir: harness });
-  store.close();
-  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n`);
-  const claimHolderAt = "2026-09-30T00:00:00.000Z";
-  writeFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+  mkdirSync(join(harness, "iterations", WORKFLOW_ID), { recursive: true });
+  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeFileSync(join(harness, "iterations", WORKFLOW_ID, "delivery-compass.md"), [
+    "---",
+    `iteration_id: ${WORKFLOW_ID}`,
+    "status: locked",
+    "iteration_base_branch: main",
+    `spec_integration_branch: ${INTEGRATION_BRANCH}`,
+    "target_branch: main",
+    `plans:\n  - ${PLAN_ID}`,
+    "---",
+    "",
+    "# Compass",
+    "",
+  ].join("\n"));
+  execFileSync("git", ["worktree", "add", "-q", "-b", INTEGRATION_BRANCH, integrationPath], { cwd: root });
+  writeFileSync(join(harness, "status.json"), JSON.stringify({
+    version: 2,
+    updated_at: "2026-09-30T00:00:00.000Z",
+    workflows: [{ id: WORKFLOW_ID, status: "running", type: "plan", started_at: claimHolderAt, dir: `workflows/${WORKFLOW_ID}` }],
+  }));
+  writeFileSync(snapshotPath, JSON.stringify({
     schema_version: 1,
     id: WORKFLOW_ID,
     type: "plan",
     status: "running",
+    phase: "phase-1-prepare",
     started_at: claimHolderAt,
     updated_at: claimHolderAt,
-    delivery_kind: "development",
-    project: "_default",
-    branch: { source: `feature/${PLAN_ID}`, target: "main" },
-    plans: [{ id: PLAN_ID, plan_id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo", metadata: {} }],
-    integration_merge_lease: {
-      holder: PRIOR_HOLDER,
-      claimed_at: claimHolderAt,
-      source_branch: `feature/${PLAN_ID}`,
-      target_branch: "main",
-    },
+    compass_ref: `iterations/${WORKFLOW_ID}/delivery-compass.md`,
+    branch: { base: "main", integration: INTEGRATION_BRANCH, target: "main" },
+    execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
+    plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
   }, null, 2));
-  const priorEnvelope = join(workflowDir, "sessions", `coordinator-${PRIOR_HOLDER}.json`);
-  writeFileSync(priorEnvelope, JSON.stringify({
-    schema_version: 1,
-    role: "coordinator",
-    session_id: PRIOR_HOLDER,
-    workflow_id: WORKFLOW_ID,
-    harness_root: harness,
-  }, null, 2));
-  return { root, harness, priorEnvelope, claimHolderAt };
-}
 
-/** One caller attestation naming the prior holder stopped after its claim. */
-function attestationDocument(root: string, authorizationRef: string, attestedAt: string): string {
-  const path = join(root, "attestation.json");
-  writeFileSync(path, JSON.stringify({
-    version: 1,
-    attestedAt,
-    operator: { actor: "fixture-operator", authorizationRef },
-    consumers: [{
-      entryId: "mstar-cli",
-      kind: "coordinator",
-      entrypoint: "packages/cli/src/index.ts",
-      runtime: "bun",
-      runtimeVersion: "1.4.0",
-      version: "0.0.0-test",
-      current: true,
-      disposition: "reloaded",
-    }],
-    stoppedSessions: [{ sessionId: PRIOR_HOLDER, host: "omp", state: "stopped" }],
-  }, null, 2));
-  return path;
+  // The issue store is a prerequisite of the workspace, not of this verb.
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
+
+  // The REAL producer: `plan bind --coordinator` records the predecessor's
+  // binding and writes its coordinator envelope.
+  const bound = await executeCommand("plan.bind", {
+    coordinator: true,
+    workflow: WORKFLOW_ID,
+    sessionId: PRIOR_HOLDER,
+    json: true,
+  }, invocation(root));
+  if (bound.status !== "ok") throw new Error(`fixture bind failed: ${bound.message}`);
+
+  // The workflow's held integration-merge claim, planted the way the engine's
+  // own prepare-recovery suite does: the recorded predecessor is its holder.
+  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
+  snapshot.integration_merge_lease = {
+    holder: PRIOR_HOLDER,
+    claimed_at: claimHolderAt,
+    source_branch: `feature/${PLAN_ID}`,
+    target_branch: "main",
+  };
+  writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+
+  return { root, harness, priorEnvelope: join(workflowDir, "sessions", `coordinator-${PRIOR_HOLDER}.json`), snapshotPath, claimHolderAt };
 }
 
 function invocation(cwd: string): InvocationContext {
@@ -121,77 +141,127 @@ function invocation(cwd: string): InvocationContext {
   };
 }
 
-function recoveryInput(fixture: { root: string; harness: string; priorEnvelope: string }, attestation?: string) {
+function recoveryInput(fixture: { priorEnvelope: string; harness: string }, attestation?: string) {
   return {
     session: fixture.priorEnvelope,
     operationId: "recover-1",
     reason: "the recorded coordinator stopped holding a merge claim",
-    authorizationRef: "fixture-authorization",
+    authorizationRef: AUTHORIZATION_REF,
     stopped: [PRIOR_HOLDER],
     harness: fixture.harness,
     ...(attestation === undefined ? {} : { attestation }),
   };
 }
 
-test("a FILE recovery over a held merge claim requires the operator stop document", async () => {
-  const fixture = heldClaimFixture();
-  try {
-    // The snapshot still holds the claim: the engine refuses without the
-    // operator attestation and names the document it needs.
-    const result = await executeCommand("workflow.recover-coordinator", recoveryInput(fixture), invocation(fixture.root));
-    expect(result).toMatchObject({ status: "refused" });
-    expect(String(result.message)).toContain("workflow recover-coordinator --attestation");
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
+/** The operator stop document naming the exact prior holder, attested after its claim. */
+function writeAttestation(fixture: { root: string; claimHolderAt: string }, overrides: Record<string, unknown> = {}): string {
+  const path = join(fixture.root, "attestation.json");
+  writeFileSync(path, JSON.stringify({
+    version: 1,
+    attestedAt: "2026-10-01T00:00:00.000Z",
+    operator: { actor: "fixture-operator", authorizationRef: AUTHORIZATION_REF },
+    consumers: [{
+      entryId: "mstar-cli",
+      kind: "coordinator",
+      entrypoint: "packages/cli/src/index.ts",
+      runtime: "bun",
+      runtimeVersion: "1.4.0",
+      version: "0.0.0-test",
+      current: true,
+      disposition: "reloaded",
+    }],
+    stoppedSessions: [{ sessionId: PRIOR_HOLDER, host: "omp", state: "stopped" }],
+    ...overrides,
+  }, null, 2));
+  return path;
+}
 
-test("the SAME recovery with a correct document succeeds and settles the claim", async () => {
-  const fixture = heldClaimFixture();
+test("the same bound fixture refuses recovery without the operator document and settles with it", async () => {
+  const fixture = await boundRecoveryFixture();
   try {
-    const attestationPath = attestationDocument(fixture.root, "fixture-authorization", "2026-10-01T00:00:00.000Z");
+    // WITHOUT the operator document the engine refuses and names the stop
+    // attestation it needs; nothing about the held claim moves.
+    const refused = await executeCommand("workflow.recover-coordinator", recoveryInput(fixture), invocation(fixture.root));
+    expect(refused.status).toBe("refused");
+    expect(String(refused.message)).toContain("stop attestation");
+    const before = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as Record<string, unknown>;
+    expect(before.integration_merge_lease).toMatchObject({ holder: PRIOR_HOLDER });
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(false);
+
+    // The SAME fixture retries with the correct full document and succeeds.
+    const attestationPath = writeAttestation(fixture);
     const result = await executeCommand(
       "workflow.recover-coordinator",
       recoveryInput(fixture, attestationPath),
       invocation(fixture.root),
     );
-    expect(result.status, result.status === "refused" ? result.message : "").toBe("ok");
+    expect(result.status, result.status !== "ok" ? JSON.stringify(result) : "").toBe("ok");
 
-    // The real effects: a coordinator envelope exists for the replacement
-    // session, and the snapshot records the identity recovery naming the prior
-    // holder as stopped — the stop fact the close path later reads.
-    const workflowDir = join(fixture.harness, "workflows", WORKFLOW_ID);
-    expect(existsSync(join(workflowDir, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(true);
-    const snapshot = JSON.parse(readFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), "utf8")) as {
-      coordination?: { identity_recoveries?: Array<{ stopped_session_ids?: string[] }> };
+    // Authoritative readback: the replacement binding is recorded, the audit
+    // names the prior holder, and the held claim is gone.
+    const after = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+      integration_merge_lease?: unknown;
+      coordination?: {
+        coordinator?: { session_id?: string; session_file?: string };
+        identity_recoveries?: Array<{ stopped_session_ids?: string[]; prior_session_id?: string }>;
+      };
     };
-    const recoveries = snapshot.coordination?.identity_recoveries ?? [];
-    expect(recoveries.some((entry) => (entry.stopped_session_ids ?? []).includes(PRIOR_HOLDER))).toBe(true);
+    expect(after.integration_merge_lease).toBeUndefined();
+    expect(after.coordination?.coordinator?.session_id).toBe(CALLER_SESSION);
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(true);
+    const recovery = (after.coordination?.identity_recoveries ?? []).find((entry) => entry.prior_session_id === PRIOR_HOLDER);
+    expect(recovery?.stopped_session_ids).toContain(PRIOR_HOLDER);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
 
-test("the operator authorization must match the document, and a missing file is a usage error", async () => {
-  const fixture = heldClaimFixture();
+test("an operator authorization mismatch refuses with its specific cause on the valid fixture", async () => {
+  const fixture = await boundRecoveryFixture();
   try {
-    // A mismatched authorizationRef is refused by the engine, not silently
-    // accepted by the CLI.
-    const mismatched = attestationDocument(fixture.root, "other-authorization", "2026-10-01T00:00:00.000Z");
+    // The document's operator authorization does not match the request's
+    // authorizationRef: the engine refuses with the field named.
+    const mismatched = writeAttestation(fixture, {
+      operator: { actor: "fixture-operator", authorizationRef: "other-authorization" },
+    });
+    const before = readFileSync(fixture.snapshotPath, "utf8");
     const refused = await executeCommand(
       "workflow.recover-coordinator",
       recoveryInput(fixture, mismatched),
       invocation(fixture.root),
     );
     expect(refused.status).toBe("refused");
+    expect(String(refused.message)).toContain("authorization");
+    expect((refused.details as { field?: string } | undefined)?.field).toBe("attestation.operator.authorizationRef");
+    // The refusal wrote nothing: the held claim and the binding are unchanged.
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
-    // A relative or absent document path never reaches the engine.
+test("a relative attestation path is a usage error naming the field, and an absent absolute file is refused", async () => {
+  const fixture = await boundRecoveryFixture();
+  try {
+    // The adapter's absolute-path boundary names the field without a flag
+    // prefix; the document is never read from a relative value.
     const usage = await executeCommand(
       "workflow.recover-coordinator",
-      { ...recoveryInput(fixture), attestation: "attestation.json" },
+      recoveryInput(fixture, "attestation.json"),
       invocation(fixture.root),
     );
-    expect(usage).toMatchObject({ status: "usage", message: "--attestation must be an absolute path" });
+    expect(usage.status).toBe("usage");
+    expect(String(usage.message)).toContain("attestation must be an absolute path");
+
+    // A genuinely absent absolute document is an engine-surfaced refusal, not
+    // a usage error: the path is admitted and the read fails.
+    const absent = await executeCommand(
+      "workflow.recover-coordinator",
+      recoveryInput(fixture, join(fixture.root, "absent", "attestation.json")),
+      invocation(fixture.root),
+    );
+    expect(absent.status).toBe("refused");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -288,31 +288,43 @@ test("workflow.evidence publishes the delivery evidence file contract and recove
   expect(String(attestation!.help)).toContain("ActivationAttestation");
 });
 
-test("workflow.recover-coordinator declares both transports and refuses a mixed invocation", async () => {
+test("workflow.recover-coordinator is FILE-only, names the ACTIVE pointer, and refuses on a real ACTIVE authority", async () => {
   const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
   if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
   const keys = recovery.cli.options.map((option) => option.key);
-  for (const key of ["session", "operationId", "authorizationRef", "stopped", "workflow", "expect", "operation", "priorSession", "unowned", "attestation"]) {
+  // The FILE transports only: no second ACTIVE recovery alias.
+  for (const key of ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation"]) {
     expect(keys).toContain(key);
   }
-  const help = String(recovery.cli.options.find((option) => option.key === "attestation")!.help);
-  expect(help).toContain("ActivationAttestation");
+  for (const removed of ["workflow", "expect", "operation", "priorSession", "unowned"]) {
+    expect(keys).not.toContain(removed);
+  }
+  // The published pointer names the supported ACTIVE verb and its inputs.
+  expect(recovery.description).toContain("mstar session recover");
 
-  // A FILE-route invocation that also carries the ACTIVE attestation is refused
-  // before either engine verb runs (the transports are disjoint).
-  const root = mkdtempSync(join(tmpdir(), "mstar-recover-mixed-"));
+  // A real ACTIVE execution authority refuses the FILE verb and names the
+  // supported session recovery.
+  const root = mkdtempSync(join(tmpdir(), "mstar-recover-active-"));
   try {
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.close();
+    await initializeExecutionAuthority({ harnessDir: harness });
     const sessionPath = join(root, "coordinator.json");
-    writeFileSync(sessionPath, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "prior", workflow_id: "wf-mixed", harness_root: harness }));
+    writeFileSync(sessionPath, JSON.stringify({
+      schema_version: 1,
+      role: "coordinator",
+      session_id: "prior",
+      workflow_id: "wf-active",
+      harness_root: harness,
+    }));
     const envelope = await executeCommand("workflow.recover-coordinator", {
       session: sessionPath,
       operationId: "recover-1",
-      reason: "mixed transports",
+      reason: "active authority",
       authorizationRef: "auth-1",
       stopped: ["prior"],
-      attestation: sessionPath,
       harness,
     }, {
       cwd: root,
@@ -327,8 +339,8 @@ test("workflow.recover-coordinator declares both transports and refuses a mixed 
         async openBrowser() { throw new Error("browser is unavailable in this test"); },
       },
     });
-    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    expect(String(envelope.message)).toContain("not an activation attestation");
+    expect(envelope.status).toBe("refused");
+    expect(String(envelope.message)).toContain("mstar session recover");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -79,8 +79,12 @@ function outputPath(value: string | undefined, cwd: string): string | undefined 
   return value === undefined ? undefined : path.resolve(cwd, value);
 }
 function jsonFile<T>(value: string, flag: string): T {
+  // The absolute-path boundary is decided BEFORE the read: a relative value is
+  // caller input, and its own diagnostic must not be masked by the I/O error
+  // handling below.
+  const absolute = absoluteFile(value, flag);
   let text: string;
-  try { text = readFileSync(absoluteFile(value, flag), "utf8"); }
+  try { text = readFileSync(absolute, "utf8"); }
   catch (error) {
     const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
     const kind = flag === "--attestation" ? "attestation" : "operator-file";
@@ -181,10 +185,38 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
   }
 }
 
+/**
+ * The operator stop attestation `store upgrade --attestation <absolute-json>`
+ * reads: the full `ActivationAttestation` the engine validates before any
+ * schema change. Published under its own document-contract key — the
+ * `--attestation` option stays a plain path string, never an inline JSON
+ * field.
+ */
+const attestationDocumentSchema = z.object({
+  version: z.literal(1),
+  attestedAt: z.string().min(1),
+  operator: z.object({ actor: z.string().min(1), authorizationRef: z.string().min(1) }),
+  consumers: z.array(z.object({
+    entryId: z.string().min(1),
+    kind: z.enum(["cli", "host-plugin", "hook", "coordinator"]),
+    entrypoint: z.string().min(1),
+    runtime: z.enum(["bun", "node"]),
+    runtimeVersion: z.string().min(1),
+    version: z.string().min(1),
+    current: z.boolean(),
+    disposition: z.enum(["reloaded", "upgraded", "excluded:not-this-control-root", "excluded:no-store-access", "excluded:superseded-binary"]),
+  })).min(1),
+  stoppedSessions: z.array(z.object({
+    sessionId: z.string().min(1),
+    host: z.string().min(1),
+    state: z.enum(["stopped", "reloaded"]),
+  })),
+});
+
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const verb = id.slice("store.".length) as (typeof verbs)[number];
   const optionFlags: Record<keyof StoreInput, string> = {
-    harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <file>", out: "--out <path>",
+    harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
     operator: "--operator <name>",
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
@@ -195,13 +227,22 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     activate: ["harness", "manifest", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
+  const optionHelp: Partial<Record<keyof StoreInput, string>> = {
+    attestation: "absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does \u2014 the same `mstar store upgrade --operator <name> --attestation <absolute-json>` call retries after a refusal",
+  };
   const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
-  const options = optionKeys.map((key) => ({ key, flags: optionFlags[key], required: false }));
+  const options = optionKeys.map((key) => ({
+    key,
+    flags: optionFlags[key],
+    required: false,
+    ...(optionHelp[key] === undefined ? {} : { help: optionHelp[key] }),
+  }));
   return {
     id,
     cli: { path: ["store", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
+    ...(verb === "upgrade" ? { payloads: { existingActivationAttestation: { schema: attestationDocumentSchema } } } : {}),
     output: commandEnvelopeSchema,
     effects: ({
       init: ["read", "write"],

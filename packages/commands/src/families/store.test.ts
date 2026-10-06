@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WORKFLOW_SNAPSHOT_FILE, initializeStore } from "@mstar-harness/engine";
+import { WORKFLOW_SNAPSHOT_FILE, initializeStore, openStore } from "@mstar-harness/engine";
 import type { InvocationContext } from "../types.js";
 import { getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
@@ -128,47 +128,127 @@ test("default registration removes only staged protocol faces and keeps independ
   expect(ids.has("store.execution.export")).toBe(true);
 });
 
-test("store.upgrade reads the operator's --attestation document and passes it to the engine", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-attestation-"));
+test("a held retired schema-8 claim refuses the upgrade without the operator document and settles on the attested retry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-retired-claim-"));
   try {
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
-    legacyWorkspace(harness);
+    // The schema-8 store the cutover migrates: one retired plan-PM session
+    // holding both a row lease and the workflow's integration mutex.
+    const workflowId = "retired-claim-workflow";
+    const planId = `${workflowId}-plan`;
+    const sessionId = "retired-plan-holder";
+    const initialized = await initializeStore({ harnessDir: harness });
+    try {
+      initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(
+        workflowId,
+        JSON.stringify({ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }),
+      );
+      initialized.db.prepare(
+        "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)",
+      ).run(
+        workflowId,
+        planId,
+        JSON.stringify({
+          id: planId,
+          title: "Retired claim plan",
+          file: `${planId}.md`,
+          status: "InProgress",
+          metadata: { worktree_path: join(root, "wt-retired"), working_branch: `feature/${planId}` },
+        }),
+        JSON.stringify({
+          prepared: { qa_gate: "mandatory", findings_cleanup: "allow-residual", prepared_by: "host-coord", prepared_at: "2026-10-04T00:00:00Z" },
+          completion: { source_branch: `feature/${planId}`, completed_by: "host-coord", completed_at: "2026-10-04T03:00:00Z" },
+        }),
+      );
+      initialized.db.prepare(
+        "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
+      ).run(
+        workflowId,
+        planId,
+        JSON.stringify({
+          holder: sessionId,
+          holder_session_id: sessionId,
+          holder_role: "plan-pm",
+          claimed_at: "2026-10-04T00:00:00Z",
+          worktree_path: join(root, "wt-retired"),
+          working_branch: `feature/${planId}`,
+          status: "held",
+        }),
+      );
+      initialized.db.prepare(
+        "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
+      ).run(
+        workflowId,
+        JSON.stringify({
+          holder: sessionId,
+          plan_id: planId,
+          claimed_at: "2026-10-04T00:30:00Z",
+          source_branch: `feature/${planId}`,
+          target_branch: "main",
+          status: "held",
+        }),
+      );
+    } finally {
+      initialized.close();
+    }
+
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    // The published contract: the document schema lives under its own key and
+    // the option help names the absolute path, the optionality and the retry.
+    expect(definition.payloads?.existingActivationAttestation).toBeDefined();
+    const help = String(definition.cli.options.find((option) => option.key === "attestation")!.help);
+    expect(help).toContain("absolute");
+    expect(help).toContain("retry");
+
+    // WITHOUT the operator document the cutover refuses, keeps schema 8 and
+    // leaves every held claim byte intact.
+    const refused = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator" }),
+      invocation(root),
+    );
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-attestation-missing" });
+
+    // The SAME command with the full, exact-holder document is the supported
+    // retry: the attestation names this retired holder stopped AFTER its claim.
     const attestationPath = join(root, "attestation.json");
     writeFileSync(attestationPath, JSON.stringify({
       version: 1,
-      attestedAt: "2026-10-04T00:00:00.000Z",
+      attestedAt: "2026-10-04T04:00:00Z",
       operator: { actor: "fixture-operator", authorizationRef: "fixture-authorization" },
       consumers: [{
-        entryId: "mstar-cli",
+        entryId: "coordinator-cli",
         kind: "coordinator",
         entrypoint: "packages/cli/src/index.ts",
-        runtime: "bun",
-        runtimeVersion: "1.4.0",
+        runtime: "node",
+        runtimeVersion: "24.18.0",
         version: "0.0.0-test",
         current: true,
         disposition: "reloaded",
       }],
-      stoppedSessions: [{ sessionId: "fixture-coordinator", host: "omp", state: "stopped" }],
+      stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
     }));
-    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
-    if (definition === undefined) throw new Error("missing store.upgrade definition");
-
-    // The published CLI surface exposes the option.
-    expect(definition.cli.options.some((option) => option.key === "attestation")).toBe(true);
-    // The file path must be absolute (the adapter reads the source).
-    const relative = await definition.execute(
-      definition.input.parse({ harness, operator: "fixture-operator", attestation: "attestation.json" }),
-      invocation(root),
-    );
-    expect(relative).toMatchObject({ status: "usage", message: "--attestation must be an absolute path" });
-
     const result = await definition.execute(
       definition.input.parse({ harness, operator: "fixture-operator", attestation: attestationPath }),
       invocation(root),
     );
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active" });
+    expect(result.status, result.status !== "ok" ? JSON.stringify(result) : "").toBe("ok");
+
+    // Authoritative readback: schema 9, the retired claim is settled and the
+    // protected business state survives the cutover.
+    const store = await openStore({ harnessDir: harness }, "read");
+    try {
+      expect(store.schemaVersion).toBe(9);
+      expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 0 });
+      expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
+      const state = JSON.parse(
+        (store.db.prepare("select state_json from execution_plans where plan_id = ?").get(planId) as { state_json: string }).state_json,
+      ) as Record<string, unknown>;
+      expect(state).toMatchObject({ status: "Done", metadata: { working_branch: `feature/${planId}` } });
+    } finally {
+      store.close();
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
