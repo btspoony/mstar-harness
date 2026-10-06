@@ -129,6 +129,7 @@ async function seedExecutionAuthority(harnessDir: string, workflows: readonly Wo
     })
     token = receipt.token
   }
+  await sealStoreForReaders(harnessDir)
 }
 
 /** The retired files a real cutover leaves behind: a root `status.json` naming
@@ -263,6 +264,7 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     await seedRetiredRegister(harnessDir, 'wf-file-stale', 'plan-file')
 
     const source = await readExecutionWorkflowSource({ harnessDir })
+    if (source.kind === 'unavailable') throw new Error(`${source.code}: ${source.message}`)
     expect(source.kind).toBe('active')
     if (source.kind !== 'active') return
     expect(source.workflowId).toBe('wf-db')

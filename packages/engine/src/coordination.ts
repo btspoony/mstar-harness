@@ -1535,13 +1535,14 @@ export async function readPlanCoordination(
   sessionPath: string,
   planId: string,
   cwd: string = process.cwd(),
+  controlRoot?: string,
 ): Promise<PlanCoordinationView> {
   const anchor = entryAnchor(sessionPath);
   assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
   if (!isNonEmptyString(planId)) throw invalidInput("planId is required to select a plan");
   const session = anchor.session;
   const targetPlanId = safePlanId(planId, "planId");
-  const rootResolution = resolveIntentRoot({ cwd }, { root: anchor.harnessRoot, source: "session.envelope" });
+  const rootResolution = resolveIntentRoot({ cwd, controlRoot }, { root: anchor.harnessRoot, source: "session.envelope" });
   if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
   const harnessRoot = rootResolution.root;
   localStore(harnessRoot);

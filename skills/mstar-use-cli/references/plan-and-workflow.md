@@ -19,6 +19,8 @@ ACTIVE writes derive the caller's current own coordinator reference, scope token
 
 A reference is a lookup, not bearer authorization. Copying another reference never acquires its identity. Row scope comes from explicit `--plan` and the coordinator's selected workflow, not prepared Assignment bytes.
 
+For file `plan show`, `--harness` supplies the explicit control root and must agree with the coordinator envelope. Carry it when workspace discovery conflicts with a nonstandard harness; omission retains normal discovery and conflict refusals. It never changes the bound workflow or opens a different store. The public reader's optional fourth argument, `readPlanCoordination(sessionPath, planId, cwd, controlRoot?)`, has the same constraint.
+
 ## Public parameter shapes
 
 The same coordinator owns all retained plan verbs:

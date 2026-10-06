@@ -301,7 +301,7 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       if (input.session !== undefined) {
         const sessionPath = absolutePath(input.session, "session");
         pinSessionStore(sessionPath);
-        return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd));
+        return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd, input.harness));
       }
       if (context.sessionId === undefined) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active plan show requires runtime session identity (${IDENTITY_SUPPLIES}).` });

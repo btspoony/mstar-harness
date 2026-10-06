@@ -815,6 +815,12 @@ test("retained track ownership refuses main and ordinary progress repairs retire
     const session = bound.data.session_file;
     const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", root], root));
     if (shown.status !== "ok" || typeof shown.data?.revision !== "number") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
+    const foreignRoot = join(root, "foreign-control");
+    mkdirSync(foreignRoot);
+    const beforeForeignRead = readFileSync(snapshot, "utf8");
+    expectOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", foreignRoot], root), "refused", "coordination.scope-mismatch", 1);
+    expect(readFileSync(snapshot, "utf8")).toBe(beforeForeignRead);
+    expect(existsSync(join(foreignRoot, "store.db"))).toBe(false);
     const corrected = commandOutput(runCli([
       "plan", "progress", "--session", session, "--plan", "plan-a", "--harness", root, "--expect", String(shown.data.revision),
       "--progress", JSON.stringify({ status: "InProgress", summary: "retire the mistaken main track", evidence_paths: [], track_branches: [] }),
