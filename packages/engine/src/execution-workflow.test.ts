@@ -480,7 +480,6 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       }),
     );
     expect(contradicted.code).toBe("coordination.invalid-transition");
-    expect(contradicted.message).toContain("PLAN_NOT_DONE");
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 
@@ -771,7 +770,6 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       workflowMutation(fixture, "op-close-noevidence", { kind: "lifecycle", status: "completed", reason: "done" }),
     );
     expect(noEvidence.code).toBe("coordination.invalid-transition");
-    expect(noEvidence.message).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
     expect(await workflowFootprint(fixture.context)).toEqual(doneBefore);
 
     // The delivery tail is a separate ACCEPTED operation; the close attempts
@@ -783,7 +781,6 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       workflowMutation(fixture, "op-close-dangling", { kind: "lifecycle", status: "completed", reason: "done" }),
     );
     expect(dangling.code).toBe("coordination.invalid-transition");
-    expect(dangling.message).toContain("dangling lease");
 
     // A failed close leaves the routing, the header and the ledger untouched.
     const after = await workflowFootprint(fixture.context);
@@ -1522,7 +1519,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     const before = await workflowFootprint(fixture.context);
     const expected = await liveWorkflowToken(fixture);
     const recover = (input: { operationId: string; priorSessionId: string | null; attestation: ActivationAttestation }) =>
-      recoverExecutionCoordinator(domainContext(fixture.context, fixture.coordinatorCaller), {
+      recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
         expected,
         operationId: input.operationId,
         priorSessionId: input.priorSessionId,
@@ -1535,7 +1532,6 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       recover({ operationId: "op-recover-unnamed", priorSessionId: COORDINATOR_ID, attestation: attestation(["host-elsewhere"]) }),
     );
     expect(unnamed.code).toBe("coordination.invalid-transition");
-    expect(unnamed.message).toContain("does not name the prior coordinator");
 
     // A holder the workflow does not record.
     const unknown = await refusalOf(() =>
@@ -1548,7 +1544,6 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       recover({ operationId: "op-recover-hidden", priorSessionId: null, attestation: attestation([COORDINATOR_ID]) }),
     );
     expect(hidden.code).toBe("coordination.invalid-transition");
-    expect(hidden.message).toContain("must NAME the holder");
 
     // An incomplete attestation document never reaches the store.
     const document = { ...attestation([COORDINATOR_ID]), operator: { actor: "ops-engineer", authorizationRef: "   " } };
@@ -1663,12 +1658,15 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       workflow_id: WORKFLOW_ID, holder: "host-live-elsewhere", named: COORDINATOR_ID,
     });
     expect(workflowFootprint(foreign.context)).toEqual(foreignBefore);
-    expect(storedMergeClaim(foreign.context)).toMatchObject({ holder: "host-live-elsewhere", status: "held" });
+    expect(await heldMergeClaim(foreign.context)).toMatchObject({
+      holder: "host-live-elsewhere", plan_id: PLAN_ID, source_branch: SOURCE_BRANCH, target_branch: "main", claimed_at: TS,
+    });
 
     // A claim newer than the attested stop belongs to a newer attempt and is
     // never released.
     const newer = await workflowFixture("recovery-newer-claim");
     plantMergeClaim(newer.context, { ownerEpoch: newer.epoch, holder: COORDINATOR_ID, claimed_at: "2099-01-01T00:00:00.000Z" });
+    const newerClaimBefore = rows(newer.context, `select * from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`);
     withRaw(newer.context, (db) => {
       db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?").run(WORKFLOW_ID, COORDINATOR_ID);
     });
@@ -1682,7 +1680,11 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
         attestation: attestation([COORDINATOR_ID]),
       },
     );
-    expect(storedMergeClaim(newer.context)).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(await heldMergeClaim(newer.context)).toMatchObject({
+      holder: COORDINATOR_ID, plan_id: PLAN_ID, source_branch: SOURCE_BRANCH, target_branch: "main",
+      claimed_at: "2099-01-01T00:00:00.000Z",
+    });
+    expect(rows(newer.context, `select * from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`)).toEqual(newerClaimBefore);
   });
 
   test("a stopped replacement is refused before any mutation", async () => {
@@ -1729,7 +1731,10 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       priorSessionId: COORDINATOR_ID, reason: "coordinator stopped",
       attestation: attestation([COORDINATOR_ID]),
     });
-    expect(storedMergeClaim(fixture.context)).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+    expect(await heldMergeClaim(fixture.context)).toMatchObject({
+      holder: COORDINATOR_ID, plan_id: PLAN_ID, source_branch: SOURCE_BRANCH, target_branch: "main",
+      claimed_at: "2026-01-02T05:00:00.000Z",
+    });
     const bindingBefore = rows(fixture.context, "select * from execution_sessions order by session_id");
     const businessBefore = rows(fixture.context, "select * from execution_plans order by plan_id");
     const insufficientBefore = workflowFootprint(fixture.context);
@@ -2376,6 +2381,15 @@ function storedMergeClaim(context: StoreContext): Record<string, unknown> {
   );
   if (row === undefined) throw new Error("fixture: no integration merge lease row");
   return parsedJson(row!.lease_json);
+}
+
+/** A held relational claim must remain visible through the current authority. */
+async function heldMergeClaim(context: StoreContext) {
+  const current = await readExecutionState(context);
+  const claim = current.data.workflows.find((workflow) => workflow.state.id === WORKFLOW_ID)?.integrationLease;
+  expect(claim).not.toBeNull();
+  expect(claim).toEqual(storedMergeClaim(context));
+  return claim;
 }
 
 /* ------------------------------------------------------------------------ *

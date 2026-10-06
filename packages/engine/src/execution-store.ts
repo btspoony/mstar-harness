@@ -2466,10 +2466,15 @@ export function readPlanOperationReplay<T>(
   tx: ExecutionTransaction,
   input: { operationId: string; requestHash: string; workflowId: string; planId: string },
 ): ExecutionReceipt<T> | null {
-  return readOperationReplay<T>(tx, {
+  const replay = readOperationReplay<T>(tx, {
     ...input,
     token: { kind: "plan", key: [input.workflowId, input.planId] },
   });
+  if (replay === null) return null;
+  // The persisted read envelope uses operationRecovery; ordinary plan actions
+  // expose recovery on both the first result and the recorded-receipt replay.
+  const { operationRecovery, ...receipt } = replay;
+  return { ...receipt, ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }) };
 }
 
 /**

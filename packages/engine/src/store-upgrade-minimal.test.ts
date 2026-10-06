@@ -650,6 +650,7 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
   // projection, a completed handoff, a plan session and a header self-amendment.
   const plans = snapshot.plans as Array<Record<string, unknown>>;
   const plan = plans[0]!;
+  const originalOwnership = { ...(plan.execution_lease as Record<string, unknown>) };
   plan.coordination = {
     revision: 1,
     prepared: {
@@ -707,11 +708,20 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
     ) as Record<string, unknown>;
     expect(Object.keys(coordination).sort()).toEqual(["completion", "prepared"]);
     expect((coordination.prepared as Record<string, unknown>)).toMatchObject({ qa_gate: "mandatory", prepared_by: "host-coord" });
-    expect((coordination.completion as Record<string, unknown>)).toMatchObject({ source_branch: `feature/${workflowId}`, completed_by: "host-coord" });
+    expect((coordination.completion as Record<string, unknown>)).toMatchObject({
+      source_branch: `feature/${workflowId}`, source_sha: "c".repeat(40),
+      worktree_path: join(ROOT, "legacy-worktree"), completed_by: "host-coord",
+    });
     const state = JSON.parse(
       (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string }).state_json,
     ) as Record<string, unknown>;
-    expect(state).toMatchObject({ status: "Done", metadata: { worktree_path: join(ROOT, "legacy-worktree"), working_branch: `feature/${workflowId}` } });
+    expect(state).toMatchObject({
+      status: "Done",
+      metadata: {
+        worktree_path: originalOwnership.worktree_path,
+        working_branch: originalOwnership.working_branch,
+      },
+    });
     const header = JSON.parse(
       (store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json,
     ) as Record<string, unknown>;

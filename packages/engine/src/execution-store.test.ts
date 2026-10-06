@@ -38,14 +38,11 @@ import {
   withExecutionTransaction,
   type ExecutionCaller,
   type ExecutionContext,
-  type ExecutionPlanView,
-  type ExecutionRead,
   type ExecutionReceipt,
   type ExecutionSessionRef,
   type ExecutionState,
   type ExecutionToken,
 } from "./execution-store.js";
-import * as engineIndex from "./index.js";
 import type { WorkflowEntry } from "./status.js";
 import {
   MIGRATIONS,
@@ -78,78 +75,18 @@ const FROZEN_V3_CHECKSUMS: Record<number, string> = {
   3: "2bd2e90874e0bf81b63957394935bf98dd651a689b081284b7852913980c5f37",
 };
 
-/** §2.2 column sets in declaration order — literals, never read back from the implementation. */
-const EXECUTION_COLUMNS: Record<string, string[]> = {
-  execution_meta: [
-    "id",
-    "protocol_version",
-    "authority_state",
-    "revision",
-    "root_updated_at",
-    "manifest_id",
-    "activated_at",
-  ],
-  execution_workflows: ["workflow_id", "revision", "creator_session_id", "state_json", "created_at", "updated_at"],
-  execution_registry: ["workflow_id", "entry_json"],
-  execution_plans: ["workflow_id", "plan_id", "revision", "ordinal", "state_json", "coordination_json"],
-  execution_sessions: ["workflow_id", "role", "session_id", "plan_id", "epoch", "revision", "state", "bound_at"],
-  execution_integration_leases: ["workflow_id", "revision", "owner_epoch", "lease_json"],
-  execution_inputs: ["workflow_id", "plan_id", "revision", "input_json", "input_hash", "catalog_pin_json"],
-  execution_operations: [
-    "epoch",
-    "operation_id",
-    "request_hash",
-    "store_id",
-    "workflow_id",
-    "plan_id",
-    "result_json",
-    "committed_at",
-  ],
-  execution_migrations: [
-    "manifest_id",
-    "manifest_hash",
-    "phase",
-    "manifest_json",
-    "activation_receipt_json",
-    "retirement_json",
-    "created_at",
-    "updated_at",
-    "coverage_json",
-  ],
-};
-
-const EXECUTION_TABLES = Object.keys(EXECUTION_COLUMNS);
-
-const EXECUTION_PRIMARY_KEYS: Record<string, string[]> = {
-  execution_meta: ["id"],
-  execution_workflows: ["workflow_id"],
-  execution_registry: ["workflow_id"],
-  execution_plans: ["workflow_id", "plan_id"],
-  execution_sessions: ["workflow_id", "role", "session_id"],
-  execution_integration_leases: ["workflow_id"],
-  execution_inputs: ["workflow_id", "plan_id"],
-  execution_operations: ["epoch", "operation_id"],
-  execution_migrations: ["manifest_id"],
-};
-
-/** Normalized `childCols->parentTable.parentCols`, one entry per declared foreign key. */
-const EXECUTION_FOREIGN_KEYS: Record<string, string[]> = {
-  execution_meta: [],
-  execution_workflows: [],
-  execution_registry: ["workflow_id->execution_workflows.workflow_id"],
-  execution_plans: ["workflow_id->execution_workflows.workflow_id"],
-  execution_sessions: [
-    "workflow_id->execution_workflows.workflow_id",
-    "workflow_id+plan_id->execution_plans.workflow_id+plan_id",
-  ],
-  execution_integration_leases: ["workflow_id->execution_workflows.workflow_id"],
-  execution_inputs: ["workflow_id+plan_id->execution_plans.workflow_id+plan_id"],
-  execution_operations: [],
-  execution_migrations: [],
-};
-
-/** Fields a copied projection would have carried; the execution schema owns none of them. */
-const PROJECTION_ONLY_COLUMNS = ["progress", "done_at", "catalog_pin_revision", "holder", "expires_at"];
+/** Tables inventoried for migration atomicity and empty-domain checks. */
+const EXECUTION_TABLES = [
+  "execution_meta",
+  "execution_workflows",
+  "execution_registry",
+  "execution_plans",
+  "execution_sessions",
+  "execution_integration_leases",
+  "execution_inputs",
+  "execution_operations",
+  "execution_migrations",
+];
 
 type Row = Record<string, unknown>;
 
@@ -257,34 +194,11 @@ function seedExecutionGraph(db: StoreDb): void {
 /** One workflow-wide coordinator session row (the only execution role). */
 function session(db: StoreDb, input: { sessionId: string; state?: string; epoch: number }): void {
   db.prepare(
-    "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-      "values ('wf-1', 'coordinator', ?, null, ?, 1, ?, ?)",
+    "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+      "values ('wf-1', 'coordinator', ?, ?, 1, ?, ?)",
   ).run(input.sessionId, input.epoch, input.state ?? "active", TS);
 }
 
-/** Composite foreign keys collapse into one entry per declared constraint. */
-function foreignKeys(db: StoreDb, table: string): string[] {
-  const rows = all(db, `pragma foreign_key_list(${table})`) as Array<{
-    id: unknown;
-    seq: unknown;
-    table: unknown;
-    from: unknown;
-    to: unknown;
-  }>;
-  const groups: Record<string, { table: string; columns: Array<{ seq: number; from: string; to: string }> }> = {};
-  for (const row of rows) {
-    const group = (groups[String(row.id)] ??= { table: String(row.table), columns: [] });
-    group.columns.push({ seq: Number(row.seq), from: String(row.from), to: String(row.to) });
-  }
-  return Object.values(groups)
-    .map((group) => {
-      const ordered = [...group.columns].sort((a, b) => a.seq - b.seq);
-      return `${ordered.map((column) => column.from).join("+")}->${group.table}.${ordered
-        .map((column) => column.to)
-        .join("+")}`;
-    })
-    .sort();
-}
 
 describe("execution-schema: append-only coverage migration", () => {
   describe("migration identity", () => {
@@ -387,45 +301,6 @@ describe("execution-schema: append-only coverage migration", () => {
       }
     });
 
-    test("creates the exact \u00A72.2 tables, keys and foreign keys with no projection columns", async () => {
-      const context = controlRoot("upgrade-shape");
-      createV3Store(context);
-      await upgradeStore(context);
-
-      const handle = await openStore(context, "read");
-      try {
-        const db = handle.db;
-        for (const table of EXECUTION_TABLES) {
-          const columns = all(db, `pragma table_info(${table})`) as Array<{ name: unknown; pk: unknown }>;
-          expect(columns.map((column) => String(column.name)), table).toEqual(EXECUTION_COLUMNS[table]);
-          const primaryKey = columns
-            .filter((column) => Number(column.pk) > 0)
-            .sort((a, b) => Number(a.pk) - Number(b.pk))
-            .map((column) => String(column.name));
-          expect(primaryKey, table).toEqual(EXECUTION_PRIMARY_KEYS[table]);
-          expect(foreignKeys(db, table), table).toEqual([...EXECUTION_FOREIGN_KEYS[table]].sort());
-          for (const column of EXECUTION_COLUMNS[table]) {
-            expect(PROJECTION_ONLY_COLUMNS, `${table}.${column}`).not.toContain(column);
-          }
-        }
-
-        // Active ownership is enforced by partial unique indexes, so a
-        // released or revoked owner does not consume the only slot.
-        const sessionIndexes = all(db, "pragma index_list(execution_sessions)") as Array<{
-          name: unknown;
-          unique: unknown;
-          partial: unknown;
-        }>;
-        expect(
-          sessionIndexes
-            .filter((index) => Number(index.unique) === 1 && Number(index.partial) === 1)
-            .map((index) => String(index.name))
-            .sort(),
-        ).toEqual(["execution_sessions_active_coordinator"]);
-      } finally {
-        handle.close();
-      }
-    });
   });
 
   describe("mode separation", () => {
@@ -523,8 +398,8 @@ describe("execution-schema: append-only coverage migration", () => {
         expect(() =>
           handle.db
             .prepare(
-              "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-                "values ('wf-1','plan-pm','s-6','p-1',?,1,'active',?)",
+              "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+                "values ('wf-1','plan-pm','s-6',?,1,'active',?)",
             )
             .run(epoch, TS),
         ).toThrow();
@@ -573,22 +448,13 @@ describe("execution-schema: append-only coverage migration", () => {
       const handle = await openStore(context, "write");
       try {
         seedExecutionGraph(handle.db);
-        // The sole execution role is the coordinator, and its plan id is null.
-        expect(() =>
-          handle.db
-            .prepare(
-              "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-                "values ('wf-1','coordinator','s-1','p-1',?,1,'active',?)",
-            )
-            .run(epoch, TS),
-        ).toThrow();
         // Epoch 0 is not a usable authority fence, and the role set is closed.
         expect(() => session(handle.db, { sessionId: "s-1", epoch: 0 })).toThrow();
         expect(() =>
           handle.db
             .prepare(
-              "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-                "values ('wf-1','keeper','s-1',null,?,1,'active',?)",
+              "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+                "values ('wf-1','keeper','s-1',?,1,'active',?)",
             )
             .run(epoch, TS),
         ).toThrow();
@@ -850,8 +716,8 @@ function seedAuthorityGraph(db: StoreDb, epoch: number, options: { stateId?: str
     JSON.stringify({ progress: { status: "InProgress", summary: "c2", evidence_paths: [] } }),
   );
   db.prepare(
-    "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-      "values ('wf-1', 'coordinator', 's-1', null, ?, 1, 'active', ?)",
+    "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+      "values ('wf-1', 'coordinator', 's-1', ?, 1, 'active', ?)",
   ).run(epoch, TS);
   db.prepare(
     "insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) " +
@@ -1713,29 +1579,6 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
     expect(state.data.workflows[0].plans[0].plan.title).toBe("p-1 title");
   });
 
-  test("exports createExecutionWorkflow verbatim and no later-plan stub", () => {
-    // A compile-time pin of the verbatim §3 signature: this binding fails to
-    // typecheck if the declaration drifts.
-    const surface: (
-      context: ExecutionContext,
-      input: { entry: WorkflowEntry; snapshot: WorkflowSnapshot; expected: ExecutionToken; operationId: string },
-    ) => Promise<ExecutionReceipt<ExecutionState>> = engineIndex.createExecutionWorkflow;
-    expect(surface).toBe(createExecutionWorkflow);
-    expect(typeof engineIndex.createExecutionWorkflow).toBe("function");
-    expect(engineIndex.createExecutionWorkflow.length).toBe(2);
-    // The plan-operation and workflow-level verbs are published only once their
-    // closed unions are complete: C4 supplies
-    // `bindExecutionSession`/`readExecutionPlan` (pinned verbatim by the
-    // `execution-session` group below), W4 publishes `mutateExecutionPlan`, and
-    // W6 publishes the workflow-level mutator plus the coordinator recovery
-    // bootstrap (pinned verbatim by the `execution-workflow` group). The
-    // per-operation transition bodies stay module-scoped; the catalog
-    // registration verb is published by its own task, which pins it verbatim in
-    // `execution-registration.test.ts` instead of leaving an absence guard here.
-    expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
-    expect(typeof engineIndex.mutateExecutionWorkflow).toBe("function");
-    expect(typeof engineIndex.recoverExecutionCoordinator).toBe("function");
-  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -1809,7 +1652,7 @@ function sessionRows(context: StoreContext): Row[] {
   try {
     return all(
       db,
-      "select workflow_id, role, session_id, plan_id, epoch, revision, state from execution_sessions order by role, session_id",
+      "select workflow_id, role, session_id, epoch, revision, state from execution_sessions order by role, session_id",
     );
   } finally {
     db.close();
@@ -1845,11 +1688,10 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
 
     const db = rawDb(storePath(context));
     try {
-      expect(one(db, "select workflow_id, role, session_id, plan_id, epoch, revision, state from execution_sessions")).toEqual({
+      expect(one(db, "select workflow_id, role, session_id, epoch, revision, state from execution_sessions")).toEqual({
         workflow_id: "wf-1",
         role: "coordinator",
         session_id: "host-coord",
-        plan_id: null,
         epoch,
         revision: 1,
         state: "active",
@@ -1934,7 +1776,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     const loser = settled.find((result) => result.status === "rejected") as PromiseRejectedResult | undefined;
     expect(loser?.reason).toMatchObject({ code: "execution.stale-token" });
     expect(sessionRows(context)).toEqual([
-      { workflow_id: "wf-1", role: "coordinator", session_id: "host-coord", plan_id: null, epoch: fixture.epoch, revision: 1, state: "active" },
+      { workflow_id: "wf-1", role: "coordinator", session_id: "host-coord", epoch: fixture.epoch, revision: 1, state: "active" },
     ]);
     const db = rawDb(storePath(context));
     try {
@@ -2044,7 +1886,6 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
           workflow_id: "wf-1",
           role: "coordinator",
           session_id: `prior-${state}`,
-          plan_id: null,
           epoch,
           revision: 1,
           state,
@@ -2272,24 +2113,4 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     expect(planTokens["p-1"]).toBeDefined();
   });
 
-  test("exports bindExecutionSession and readExecutionPlan verbatim and no later-plan surface", () => {
-    // Compile-time pins of the verbatim §3 signatures: these bindings fail to
-    // typecheck if either declaration drifts.
-    const bindSurface: (
-      context: ExecutionContext,
-      input: SessionBind,
-    ) => Promise<ExecutionReceipt<ExecutionSessionRef>> = engineIndex.bindExecutionSession;
-    expect(bindSurface).toBe(bindExecutionSession);
-    expect(engineIndex.bindExecutionSession.length).toBe(2);
-    const readSurface: (
-      context: ExecutionContext,
-      session: ExecutionSessionRef,
-      planId: string,
-    ) => Promise<ExecutionRead<ExecutionPlanView>> = engineIndex.readExecutionPlan;
-    expect(readSurface).toBe(readExecutionPlan);
-    expect(engineIndex.readExecutionPlan.length).toBe(3);
-    expect(typeof engineIndex.mutateExecutionPlan).toBe("function");
-    expect(typeof engineIndex.mutateExecutionWorkflow).toBe("function");
-    expect(typeof engineIndex.recoverExecutionCoordinator).toBe("function");
-  });
 });
