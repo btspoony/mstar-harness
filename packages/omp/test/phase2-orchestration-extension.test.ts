@@ -225,7 +225,7 @@ function makeRepo(): Fixture {
     const sddDir = join(harness, "sdd", planId);
     const branch = `feature/${planId}`;
     const worktreePath = join(root, `wt-${planId}`);
-    writeText(planPath, `# Plan ${planId}\n`);
+    writeText(planPath, `# Plan ${planId}\n\n**plan_id:** ${planId}\n`);
     mkdirSync(sddDir, { recursive: true });
     git(["worktree", "add", "-q", "-b", branch, worktreePath], root);
     writeText(join(worktreePath, "slice.txt"), `${planId} slice\n`);
@@ -569,6 +569,8 @@ async function createHarness(options: {
   cwd: string;
   /** Simulate an unavailable native snapshot (null is never "no jobs"). */
   snapshotUnavailable?: boolean;
+  /** Observe the real projection at the host's snapshot boundary. */
+  onSnapshot?: (snapshot: AsyncJobSnapshot) => void;
   mode?: ExtensionMode;
 }): Promise<Harness> {
   const settings = Settings.isolated({});
@@ -599,7 +601,12 @@ async function createHarness(options: {
     undefined,
     settings,
     undefined,
-    () => (options.snapshotUnavailable === true ? null : snapshotOfJobs(options.jobs)),
+    () => {
+      if (options.snapshotUnavailable === true) return null;
+      const snapshot = snapshotOfJobs(options.jobs);
+      options.onSnapshot?.(snapshot);
+      return snapshot;
+    },
   );
 
   const session = (): SessionManager => runner.sessionManager;
@@ -967,11 +974,24 @@ describe("phase2 host adapter", () => {
   test("native completion does not duplicate", async () => {
     const { fixture, session } = await buildActiveFixture();
     const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
+    const deliveredIds: string[] = [];
+    const recordDelivery = (jobId: string): void => {
+      deliveredIds.push(jobId);
+    };
+    jobs.registerDeliverySink(OWNER, recordDelivery);
+    let onSnapshot: ((snapshot: AsyncJobSnapshot) => void) | undefined;
+    const harness = await createHarness({
+      sessionManager: session,
+      jobs,
+      cwd: fixture.root,
+      onSnapshot: (snapshot) => onSnapshot?.(snapshot),
+    });
     expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     // Baseline: a running job is reminded about exactly once.
     const settle = startJob(jobs, "job-1", "background compile");
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(1);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(1);
 
@@ -980,6 +1000,8 @@ describe("phase2 host adapter", () => {
     // this coordinator turn also produced tool results before `agent_end`.
     settle();
     await awaitSettled(jobs, "job-1");
+    await awaitDeliveryDrain(jobs);
+    expect(deliveredIds).toEqual(["job-1"]);
     await harness.emitToolResult("tool-settled");
     await harness.emitBeforeAgentStart("continue after native delivery");
     await harness.emitAgentEnd();
@@ -988,7 +1010,8 @@ describe("phase2 host adapter", () => {
 
     // Same when a delivery is queued or in flight: never duplicated.
     const parkedDelivery = Promise.withResolvers<void>();
-    const stopSink = jobs.registerDeliverySink(OWNER, async () => {
+    const stopSink = jobs.registerDeliverySink(OWNER, async (jobId) => {
+      recordDelivery(jobId);
       // Parked on purpose: the host's delivery state stays pending until this
       // sub-case is done, which is exactly the condition to test.
       await parkedDelivery.promise;
@@ -1005,26 +1028,41 @@ describe("phase2 host adapter", () => {
     parkedDelivery.resolve();
     await awaitDeliveryDrain(jobs);
     stopSink();
+    jobs.registerDeliverySink(OWNER, recordDelivery);
+    expect(deliveredIds).toEqual(["job-1", "job-2"]);
     expect(snapshotOfJobs(jobs).delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
 
-    // The decision consumes exactly the terminal ids it sampled: a job that
-    // settles after that sample is covered by the host's own delivery, so the
-    // same turn stays silent instead of nudging a second time.
+    // Completion before sampling is covered above. For the race, first observe
+    // the real host snapshot containing the running job, then release its real
+    // completion promise. Starting agent_end alone does not mean it has sampled:
+    // the adapter awaits the engine ownership probe before reading native jobs.
     const beforeRace = harness.advisories().length;
     const settleThree = startJob(jobs, "job-3", "third background compile");
+    const sampledRace = Promise.withResolvers<AsyncJobSnapshot>();
+    onSnapshot = sampledRace.resolve;
     const inFlight = harness.emitAgentEnd();
+    const raceSnapshot = await sampledRace.promise;
+    onSnapshot = undefined;
+    expect(raceSnapshot.running.map((job) => job.id)).toEqual(["job-3"]);
+    expect(raceSnapshot.recent.some((job) => job.id === "job-3")).toBe(false);
+    expect(raceSnapshot.delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
     settleThree();
     await awaitSettled(jobs, "job-3");
     await inFlight;
+    await awaitDeliveryDrain(jobs);
+    expect(deliveredIds).toEqual(["job-1", "job-2", "job-3"]);
 
     const afterRace = harness.advisories().length;
     expect(afterRace - beforeRace).toBe(1);
     expect(snapshotOfJobs(jobs).recent.some((job) => job.id === "job-3")).toBe(true);
+    expect(reminderKeys(harness)).toHaveLength(afterRace);
     // The settle is native delivery's, so the next turn must not nudge a second
     // time — under a second-snapshot consumption it would (that id would have
     // been consumed by the race turn and the settled state would look new).
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(afterRace);
+    expect(reminderKeys(harness)).toHaveLength(afterRace);
+    expect(snapshotOfJobs(jobs).delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
 
     // Nothing delivered at all is still a real opportunity: reminded once, then
     // bounded by the latch. Exact counts, so a silent no-op cannot pass.
@@ -1033,6 +1071,7 @@ describe("phase2 host adapter", () => {
     expect(harness.advisories()).toHaveLength(afterRace + 1);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(afterRace + 1);
+    expect(reminderKeys(harness)).toHaveLength(afterRace + 1);
 
     // No completion text is ever reproduced by the plugin notice.
     for (const advisory of harness.advisories()) {
