@@ -7,7 +7,7 @@ description: "Morning Star Git branch authorization, control/integration/source 
 
 **首次 Read 本 skill 前：必须先 Read `mstar-harness-core`（SKILL.md）。** 冲突时 **以 `mstar-harness-core` 为准**。
 
-**Spec 多 plan 命名**（`iteration_base_branch`、`spec_integration_branch`、`target_branch` PR 门禁）→ **`mstar-conventions`**。**L1/L2 worktree 分层**（迭代 integration worktree vs feature、plan 内并行轨）→ 下文 **「Worktree isolation layers」**；**L2** 同仓并行可写派发前清单 → **`references/parallel-writable-pre-dispatch.md`**；迭代 lease claim/merge 细则 → **`mstar-iteration`** `references/phase-2-worktree-lease.md`（勿在本 skill 重复完整协议表）。merge 后 worktree/分支回收（cleanup）守卫契约 → 下文 **「Worktree / branch cleanup」**。下文为分支、三写域、QC/QA 检出对齐与 merge 后 cleanup 主文。
+Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree isolation layers below; L2 pre-dispatch → references/parallel-writable-pre-dispatch.md. Ordinary source metadata, coordinator operations and actual serial integration → mstar-iteration/references/phase-2-worktree-lease.md. Cleanup ownership/merge/refusal rules remain solely in Worktree / branch cleanup below; no per-row claim protocol.
 
 ## Scope（摘要）
 
@@ -112,7 +112,7 @@ Two complementary **worktree** isolation layers coexist. Do **not** conflate the
 **Stacking rules**
 
 - Default **L1** capacity is **one writable track per plan**. If one plan runs **≥2** concurrent writable tracks, each track **also** satisfies **L2**; L1 does **not** replace L2.
-- **L1** applies under iteration commands with Phase 2 worktree/lease defaults (unless explicit `Worktree mode: waived` this turn). Single-plan waves without iteration leases still require **L2** when **≥2** parallel writable tracks share one repo.
+- L1 applies to iteration Phase 2 source/integration isolation unless an explicit applicable Worktree mode: waived exception exists. Any single-plan wave with multiple writable tracks still satisfies L2; source metadata, not a per-row lease, supplies row checkout facts.
 - Cross-plan **integration merge** into `spec_integration_branch` remains **serial** (snapshot top-level `integration_merge_lease`) even when L1 feature implementation runs in parallel.
 
 ### Main-worktree control root, integration worktree, feature worktree (iteration / L1)
@@ -154,10 +154,10 @@ Default process artifacts are **gitignored** (`mstar-conventions`「Git 跟踪�
 
 1. **Control root** — always the **primary checkout** (main worktree), derived from Git (`readMainWorktree`); never a PM-designated alternative checkout, never recorded in the snapshot. Its attached branch is recorded once as **`Main worktree branch: <branch>`** in the main plan header before the lifecycle writes, and PM passes it unchanged in writable Assignments. `branch.base` is the creation/merge anchor — not a residency fact.
 2. **Integration worktree** — one dedicated linked checkout on `spec_integration_branch`, distinct from the main worktree, recorded once in snapshot `integration_worktree_path`; sole merge cwd for the iteration.
-3. **Feature worktree (per plan)** — one distinct subdirectory under the sibling root **`../<repo>.worktrees/`**, outside the checkout, per active `plan_id` (e.g. `../<repo>.worktrees/<plan-id>-<slug>`). The root is `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. From that repo root, create with `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<plan-id>-<slug> -b <branch>`. This keeps linked checkouts out of the repository scan/edit surface. In-repo `.worktrees/` remains a legal manual/override location; recorded absolute lease and cleanup paths are location-agnostic. Assignment **`Worktree path`** must match lease `worktree_path`.
+3. **Feature worktree (per plan)** — one distinct subdirectory under sibling root **`../<repo>.worktrees/`**, outside the checkout, per active plan_id (e.g. `../<repo>.worktrees/<plan-id>-<slug>`). Root is `<parent-of-repo-root>/{repo-basename}.worktrees/`, with repo root the realpath of Git top-level. Create from that root with `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<plan-id>-<slug> -b <branch>`. In-repo .worktrees remains a legal explicit override; registered absolute source and cleanup paths are location-agnostic. Assignment Worktree path/Working branch must match row metadata.worktree_path/metadata.working_branch and actual checkout facts; missing/corrected source scope uses ordinary prepare, never a holder or claim.
 4. **L2 track worktrees (within-plan)** — additional distinct directories per parallel implement track under the **same** plan (see **`references/parallel-writable-pre-dispatch.md`**), each with its own PM-approved **`Working branch`**.
 
-> **Engine check (when available):** run `mstar worktree check <plan-id> --workflow <id>` (L1) / `mstar worktree check --l2 --tracks <json>` (L2) (or `import { l1PreDispatchCheck, l2PreDispatchCheck, readMainWorktree, assertMainWorktreeResidency, assertControlVsFeaturePath, assertBranchAlignment } from "@mstar-harness/engine"` in a host hook) to verify the L1/L2 isolation rules above (main residency vs recorded `Main worktree branch`; main/integration/feature pairwise checkout distinctness — lease worktree ≠ main control root ≠ integration; checked-out branch matches `Working branch`). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
+> **Engine check:** mstar worktree check <plan-id> --workflow <id> (L1) / mstar worktree check --l2 --tracks <json> (L2), or the existing engine L1/L2/residency/branch validators, verifies main residency against the recorded Main worktree branch; source metadata checkout, main/control and recorded integration are pairwise distinct, and actual branch matches registered/assigned Working branch. These are factual isolation checks, not per-row session/lease/seal admission. Workflow-wide integration exclusion and serial real merge proof remain distinct requirements.
 
 ## 同仓并发写入与 Git worktree（强制）
 
