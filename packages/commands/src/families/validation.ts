@@ -308,6 +308,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree");
         const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
         if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
+        const observedMainBranch = mainBranch.stdout.trim();
         const rowMetadata = isPlainRecord(rows[0].metadata) ? rows[0].metadata : {};
         const lifecycleBranches = new Set<string>();
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
@@ -328,11 +329,28 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           workflowType: snapshot.type,
           integrationWorktreePath: integrationPath === undefined ? "" : path.resolve(integrationPath),
           integrationBranch: typeof integrationBranch === "string" ? integrationBranch : "",
-          mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
+          mainWorktree: { root: primary, branch: observedMainBranch },
           expectedMainBranch: input.mainBranch ?? String(snapshot.branch?.base ?? ""),
           lifecycleBranches: [...lifecycleBranches],
           rowWorktreePath: String(rowMetadata.worktree_path ?? ""), rowWorkingBranch: String(rowMetadata.working_branch ?? ""), planId: plan,
         });
+        if (
+          observedMainBranch === (input.mainBranch ?? String(snapshot.branch?.base ?? "")) &&
+          Array.isArray(rowMetadata.track_branches) && rowMetadata.track_branches.includes(observedMainBranch)
+        ) {
+          for (const violation of gate.violations) {
+            if (violation.code !== "worktree.main.residency-switched") continue;
+            const recovery =
+              `workflow "${workflow}" plan "${plan}" records the main branch "${observedMainBranch}" as a retained track. ` +
+              "Use its workflow coordinator's ordinary mstar plan show --session <coordinator-envelope> --plan <plan-id> " +
+              "to read the current revision and progress, then mstar plan progress --session <coordinator-envelope> " +
+              "--plan <plan-id> --expect <observed-revision> --progress <JSON> with the current status, summary, " +
+              "evidence_paths and corrected complete track_branches. Keep all live tracks; use [] only when no tracks remain. " +
+              "If the track is live, move it to a distinct feature branch and report that real branch; do not clear live ownership or switch main merely to satisfy this check.";
+            violation.fix = recovery;
+            violation.message += ` Recovery: ${recovery}`;
+          }
+        }
         const gateResult = gateData(gate);
         const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
         return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");
