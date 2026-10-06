@@ -107,14 +107,12 @@ assert.ok(existsSync(MANIFEST_PATH), `generated manifest not found at ${MANIFEST
 const WORKFLOW_ID = "wf-r3-parity";
 const PLAN_ID = "20260921-r3-parity-plan";
 const COORDINATOR_ID = "coord-r3";
-const PLAN_PM_ID = "planpm-r3";
 const BRANCH = "feature/r3-parity";
 const WIRE_PREFIX = "exec-session-v1:";
 
 const OMP_WORKFLOW_ID = "wf-r3-omp-fixture";
 const OMP_PLAN_ID = "20260921-r3-omp-plan";
 const OMP_COORDINATOR_ID = "coord-r3-omp";
-const OMP_PLAN_SESSION_ID = "planpm-r3-omp";
 
 /** Ambient variables that would otherwise leak the real environment (or a real
  * launcher identity) into a spawned child. */
@@ -198,31 +196,6 @@ async function makeActiveWorkspace(label) {
   return { root, harness };
 }
 
-/** The header block the engine's Assignment parser accepts (the DB prepare
- * seals it). Same shape the reviewed CLI transport fixtures use. */
-function assignmentText(input) {
-  return [
-    `# Assignment \u2014 ${input.planId}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Body.",
-    "",
-  ].join("\n");
-}
-
 /* ------------------------------------------------------------------------ *
  * Spawning the BUILT CLI
  * ------------------------------------------------------------------------ */
@@ -268,9 +241,6 @@ function coordinatorIdentity() {
   return { source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator", planId: null };
 }
 
-function planPmIdentity() {
-  return { source: "local", sessionId: PLAN_PM_ID, workflowId: WORKFLOW_ID, role: "plan-pm", planId: PLAN_ID };
-}
 
 /** A canonical plain copy of an engine-returned session reference (the engine's
  * canonical-value rule accepts only plain objects, so a reference that travels
@@ -371,22 +341,13 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-r3");
   const evidencePath = join(sddDir, "evidence.md");
-  const assignmentPath = join(sddDir, "assignment.md");
   writeText(planPath, `# R3 parity plan\n\n**plan_id:** ${PLAN_ID}\n`);
   writeText(evidencePath, "# evidence\n");
-  mkdirSync(worktreePath, { recursive: true });
-  writeText(
-    assignmentPath,
-    assignmentText({
-      harness: fixture.harness,
-      workflowId: WORKFLOW_ID,
-      planId: PLAN_ID,
-      planPath,
-      worktreePath,
-      branch: BRANCH,
-      sddDir,
-    }),
-  );
+  // A REAL checkout on the branch prepare records: prepare validates the actual
+  // checkout and branch.
+  execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
+  const startPath = join(fixture.root, "progress-start.json");
+  writeText(startPath, `${JSON.stringify({ status: "InProgress", summary: "r3 start record", evidence_paths: [fixture.evidencePath] })}\n`);
   const progressPath = join(fixture.root, "progress.json");
   writeJson(progressPath, { status: "InReview", summary: "r3 assembled-package regression", evidence_paths: [evidencePath] });
 
@@ -477,8 +438,14 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         coordinatorWire,
         "--plan",
         PLAN_ID,
-        "--assignment",
-        assignmentPath,
+        "--worktree-path",
+        fixture.worktreePath,
+        "--working-branch",
+        BRANCH,
+        "--qa-gate",
+        "mandatory",
+        "--findings-cleanup",
+        "allow-residual",
         "--expect",
         prePrepareToken,
         "--operation",
@@ -495,76 +462,53 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(prepared.command, "plan.prepare");
   assert.equal(prepared.status, "ok");
   assert.equal(prepared.data.data.plan.id, PLAN_ID);
-  assert.equal(prepared.data.data.coordination.prepared.assignment_path, assignmentPath);
+  assert.equal(prepared.data.data.coordination.prepared.prepared_by, COORDINATOR_ID);
 
-  // --- bind: the plan seat claims the row's execution lease ----------------
-  const postPrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
-  const planBound = ok(
-    runCli(
-      fixture,
-      [
-        "plan",
-        "bind",
-        "--execution",
-        "--workflow",
-        WORKFLOW_ID,
-        "--plan",
-        PLAN_ID,
-        "--expect",
-        postPrepareToken,
-        "--operation",
-        "bind-plan-pm",
-        "--harness",
-        fixture.harness,
-        "--session-id",
-        PLAN_PM_ID,
-      ],
-      planPmIdentity(),
-    ),
-    "plan bind --plan",
-  );
-  assert.equal(planBound.command, "plan.bind");
-  assert.equal(planBound.status, "ok");
-  assert.equal(planBound.data.operationId, "bind-plan-pm");
-  assert.equal(planBound.data.data.role, "plan-pm");
-  assert.equal(planBound.data.data.planId, PLAN_ID);
-  assert.equal(planBound.data.data.sessionId, PLAN_PM_ID);
-  const planPmWire = encodeExecutionSessionRef(planBound.data.data);
-  assert.ok(planPmWire.startsWith(WIRE_PREFIX));
-
-  // --- read: the session-authorized view of the prepared row ---------------
+  // --- read: the coordinator's view of the prepared row --------------------
   const viewed = ok(
     runCli(
       fixture,
-      ["plan", "show", "--session-ref", planPmWire, "--plan", PLAN_ID, "--harness", fixture.harness, "--session-id", PLAN_PM_ID],
-      planPmIdentity(),
+      ["plan", "show", "--session-ref", coordinatorWire, "--plan", PLAN_ID, "--harness", fixture.harness, "--session-id", COORDINATOR_ID],
+      coordinatorIdentity(),
     ),
     "plan show",
   );
   assert.equal(viewed.command, "plan.show");
   assert.equal(viewed.status, "ok");
   assert.equal(viewed.data.data.plan.id, PLAN_ID);
-  assert.equal(viewed.data.data.session.sessionId, PLAN_PM_ID);
-  assert.equal(viewed.data.data.coordination.prepared.assignment_path, assignmentPath);
+  assert.equal(viewed.data.data.session.sessionId, COORDINATOR_ID);
+  assert.equal(viewed.data.data.coordination.prepared.prepared_by, COORDINATOR_ID);
 
   // --- read-only resume: an existing reference resumes under this identity --
   const resumed = ok(
-    runCli(fixture, ["plan", "bind", "--execution", "--resume-ref", planPmWire, "--session-id", PLAN_PM_ID], planPmIdentity()),
+    runCli(fixture, ["plan", "bind", "--execution", "--resume-ref", coordinatorWire, "--session-id", COORDINATOR_ID], coordinatorIdentity()),
     "plan bind --resume-ref",
   );
   assert.equal(resumed.command, "plan.bind");
   assert.equal(resumed.status, "ok");
-  assert.equal(resumed.data.data.sessionId, PLAN_PM_ID);
+  assert.equal(resumed.data.data.sessionId, COORDINATOR_ID);
   // A resume is a read: it returns a session reference, not an operation receipt.
   assert.equal(resumed.data.operationId, undefined);
   assert.equal(resumed.data.replayed, undefined);
 
-  // --- write: the plan-owned progress mutation, then its exact retry -------
+  // --- write: the coordinator's progress mutations, then an exact retry -----
+  // The ordinary start record first: prepare preserves row status.
+  const startArgs = [
+    "plan", "progress", "--session-ref", coordinatorWire, "--plan", PLAN_ID,
+    "--file", startPath,
+    "--expect", await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID }),
+    "--operation", "progress-start", "--harness", fixture.harness, "--session-id", COORDINATOR_ID,
+  ];
+  const started = ok(runCli(fixture, startArgs, coordinatorIdentity()), "plan progress start");
+  assert.equal(started.data.data.plan.status, "InProgress");
+
   const progressArgs = [
     "plan",
     "progress",
     "--session-ref",
-    planPmWire,
+    coordinatorWire,
+    "--plan",
+    PLAN_ID,
     "--file",
     progressPath,
     "--expect",
@@ -574,9 +518,9 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
     "--harness",
     fixture.harness,
     "--session-id",
-    PLAN_PM_ID,
+    COORDINATOR_ID,
   ];
-  const progressed = ok(runCli(fixture, progressArgs, planPmIdentity()), "plan progress");
+  const progressed = ok(runCli(fixture, progressArgs, coordinatorIdentity()), "plan progress");
   assert.equal(progressed.command, "plan.progress");
   assert.equal(progressed.status, "ok");
   assert.equal(progressed.data.operationId, "progress-1");
@@ -584,7 +528,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(progressed.data.data.plan.status, "InReview");
   assert.equal(progressed.data.data.coordination.progress.status, "InReview");
 
-  const retried = ok(runCli(fixture, progressArgs, planPmIdentity()), "plan progress (retry)");
+  const retried = ok(runCli(fixture, progressArgs, coordinatorIdentity()), "plan progress (retry)");
   assert.equal(retried.data.replayed, true, "an identical retry must replay the recorded receipt, not re-commit");
   assert.equal(retried.data.operationId, "progress-1");
   assert.equal(retried.data.data.plan.status, "InReview");
@@ -594,7 +538,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(authority.data.workflow.id, WORKFLOW_ID);
   assert.equal(authority.data.plan.id, PLAN_ID);
   assert.equal(authority.data.plan.status, "InReview");
-  assert.equal(authority.data.session.sessionId, PLAN_PM_ID);
+  assert.equal(authority.data.session.sessionId, COORDINATOR_ID);
   assert.equal(authority.data.coordination.progress.summary, "r3 assembled-package regression");
   assert.equal(authority.data.coordination.prepared.prepared_by, COORDINATOR_ID);
   assert.equal(progressed.data.storeId, authority.storeId, "the CLI's reported store disagrees with the authority read");
@@ -792,11 +736,10 @@ test("committed ZCode hook keeps the pre-activation document gate intact", () =>
 
 test("H2's OMP source fixture recipe executes on the built engine under real Node", async () => {
   // NOT a native-host test: no OMP host process is started. This reuses the
-  // reviewed `phase2-launches` seed recipe (a real populated DB: catalog plan
-  // registration, a `phase-2-execute` workflow holding the plan with its lease
-  // scope, a prepared Assignment through the DB verb, and coordinator +
-  // plan-pm session binds) against the BUILT engine generation, so the OMP
-  // consumer's DB route is proven on the assembled package rather than on
+  // populated DB (catalog plan registration, a `phase-2-execute` workflow
+  // holding the plan with its recorded row scope, a prepared row through the DB
+  // verb, and one coordinator bind) against the BUILT engine generation, so the
+  // OMP consumer's DB route is proven on the assembled package rather than on
   // source.
   const fixture = await makeActiveWorkspace("mstar-r3-omp");
   const rootToken = (await readExecutionAuthority({ harnessDir: fixture.harness })).token;
@@ -804,23 +747,10 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
   const integrationPath = join(fixture.root, "integration-wt");
   const worktreePath = join(fixture.root, "wt-omp");
   mkdirSync(integrationPath, { recursive: true });
-  mkdirSync(worktreePath, { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
   const planPath = join(fixture.harness, "plans", `${OMP_PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", OMP_PLAN_ID);
-  const assignmentPath = join(sddDir, "assignment.md");
   writeText(planPath, `# Plan ${OMP_PLAN_ID}\n\n**plan_id:** ${OMP_PLAN_ID}\n`);
-  writeText(
-    assignmentPath,
-    assignmentText({
-      harness: fixture.harness,
-      workflowId: OMP_WORKFLOW_ID,
-      planId: OMP_PLAN_ID,
-      planPath,
-      worktreePath,
-      branch: BRANCH,
-      sddDir,
-    }),
-  );
 
   await registerCatalogEntity(
     { harnessDir: fixture.harness },
@@ -830,7 +760,7 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
 
   const coordinatorContext = {
     harnessDir: fixture.harness,
-    caller: { sessionId: OMP_COORDINATOR_ID, role: "coordinator", workflowId: OMP_WORKFLOW_ID, planId: null },
+    caller: { sessionId: OMP_COORDINATOR_ID, role: "coordinator", workflowId: OMP_WORKFLOW_ID },
   };
   const created = await createExecutionWorkflow(coordinatorContext, {
     entry: { id: OMP_WORKFLOW_ID, type: "iteration", started_at: "2026-09-23T00:00:00Z", dir: `workflows/${OMP_WORKFLOW_ID}` },
@@ -870,31 +800,17 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
   assert.equal(bound.data.role, "coordinator");
   assert.equal(bound.data.sessionId, OMP_COORDINATOR_ID);
 
-  // The canonical workflow directory the launcher's journal lives in must exist.
-  mkdirSync(join(fixture.harness, "workflows", OMP_WORKFLOW_ID), { recursive: true });
   const prepared = await mutateExecutionPlan(coordinatorContext, {
     operationId: `prepare-${OMP_PLAN_ID}`,
     session: plainRef(bound.data),
     expected: await tokenOf(fixture.harness, { workflowId: OMP_WORKFLOW_ID, planId: OMP_PLAN_ID }),
     planId: OMP_PLAN_ID,
-    operation: { kind: "prepare", assignmentPath },
+    operation: {
+      kind: "prepare",
+      config: { worktreePath, workingBranch: BRANCH, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+    },
   });
-  assert.equal(prepared.data.coordination.prepared.assignment_path, assignmentPath);
   assert.equal(prepared.data.coordination.prepared.prepared_by, OMP_COORDINATOR_ID);
-
-  const planContext = {
-    harnessDir: fixture.harness,
-    caller: { sessionId: OMP_PLAN_SESSION_ID, role: "plan-pm", workflowId: OMP_WORKFLOW_ID, planId: OMP_PLAN_ID },
-  };
-  const planBound = await bindExecutionSession(planContext, {
-    workflowId: OMP_WORKFLOW_ID,
-    planId: OMP_PLAN_ID,
-    role: "plan-pm",
-    expected: await tokenOf(fixture.harness, { workflowId: OMP_WORKFLOW_ID, planId: OMP_PLAN_ID }),
-    operationId: `bind-${OMP_PLAN_SESSION_ID}`,
-  });
-  assert.equal(planBound.data.role, "plan-pm");
-  assert.equal(planBound.data.planId, OMP_PLAN_ID);
 
   const workflowRead = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: OMP_WORKFLOW_ID });
   const entry = workflowRead.data.workflows.find((candidate) => candidate.state.id === OMP_WORKFLOW_ID);
@@ -905,7 +821,7 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
 
   const planRead = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: OMP_WORKFLOW_ID, planId: OMP_PLAN_ID });
   assert.equal(planRead.data.plan.id, OMP_PLAN_ID);
-  assert.equal(planRead.data.session.sessionId, OMP_PLAN_SESSION_ID);
+  assert.equal(planRead.data.coordination.prepared.prepared_by, OMP_COORDINATOR_ID);
 
   // The populated fixture is a real SQLite authority, not an in-memory stub.
   const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: true });
@@ -915,17 +831,11 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
       .all(OMP_WORKFLOW_ID);
     assert.deepEqual(
       sessions.map((row) => [row.role, row.session_id]),
-      [
-        ["coordinator", OMP_COORDINATOR_ID],
-        ["plan-pm", OMP_PLAN_SESSION_ID],
-      ],
+      [["coordinator", OMP_COORDINATOR_ID]],
+      "one workflow holds exactly one coordinator session",
     );
-    const leases = db.prepare("select plan_id from execution_leases where workflow_id = ?").all(OMP_WORKFLOW_ID);
-    assert.deepEqual(
-      leases.map((row) => row.plan_id),
-      [OMP_PLAN_ID],
-      "the plan-pm bind must claim the row's execution lease",
-    );
+    const leases = db.prepare("select count(*) as n from execution_leases where workflow_id = ?").get(OMP_WORKFLOW_ID);
+    assert.equal(leases.n, 0, "no per-plan execution lease row exists");
   } finally {
     db.close();
   }

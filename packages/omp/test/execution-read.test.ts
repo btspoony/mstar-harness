@@ -84,9 +84,7 @@ const LEFTOVER_SNAPSHOT = JSON.stringify({
       title: "leftover",
       file: "plans/plan-leftover.md",
       status: "Todo",
-      execution_lease: {
-        holder: "leftover-holder",
-        claimed_at: "2026-01-01",
+      metadata: {
         worktree_path: "/tmp/leftover",
         working_branch: "feature/leftover",
       },

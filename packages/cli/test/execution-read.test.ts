@@ -213,7 +213,7 @@ function plantLeftoverSnapshot(fixture: Fixture): string {
         title: "file",
         file: "plans/file.md",
         status: "Done",
-        execution_lease: { lease_id: "lease-from-the-file", holder: "holder-from-the-file", plan_id: "plan-from-the-file" },
+        metadata: { worktree_path: "/tmp/file-worktree", working_branch: "feature/file" },
       },
     ],
     integration_merge_lease: { lease_id: "merge-from-the-file", holder: "holder-from-the-file", status: "held" },

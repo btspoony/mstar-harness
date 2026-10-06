@@ -392,7 +392,7 @@ function basicFixture(prefix: string): {
         integration_worktree_path: intPath,
         plans: [
           row("plan-a", "Done", { metadata: { working_branch: "feature/done-a", worktree_path: donePath } }),
-          row("plan-b", "InProgress", { execution_lease: lease(wipPath, "feature/wip") }),
+          row("plan-b", "InProgress", { metadata: { worktree_path: wipPath, working_branch: "feature/wip" } }),
           row("plan-c", "Done", { metadata: { working_branch: "feature/dirty", worktree_path: dirtyPath } }),
           row("plan-d", "Done", { metadata: { working_branch: "feature/unmerged" } }),
           row("plan-e", "Done", { metadata: { working_branch: "feature/ignored", worktree_path: ignoredPath } }),
@@ -1240,12 +1240,12 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       const snapshotPath = join(fx.root, "workflows", "wf-1", "snapshot.json");
       const doc = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<Record<string, unknown>> };
       doc.plans[0]!.status = "InProgress";
-      doc.plans[0]!.execution_lease = lease(fx.doneWt, "feature/done-a");
+      doc.plans[0]!.metadata = { worktree_path: fx.doneWt, working_branch: "feature/done-a" };
       writeFileSync(snapshotPath, JSON.stringify(doc, null, 2));
 
       const applied = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(applied.exitCode).toBe(0); // refusal, not a mutation failure: nothing was attempted
-      expect(decisionRows(applied).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.active-lease`);
+      expect(decisionRows(applied).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.non-terminal`);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
       expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).not.toBe("");
     } finally {
@@ -1549,8 +1549,7 @@ function scopeFixture(prefix: string): {
         branch: { base: "feature/a1-track-1", target: mainBranch },
         plans: [
           row("plan-b1", "InProgress", {
-            execution_lease: lease(wtB, "feature/b-work"),
-            metadata: { track_branches: ["feature/a1-ambiguous", "feature/b-track"] },
+            metadata: { worktree_path: wtB, working_branch: "feature/b-work", track_branches: ["feature/a1-ambiguous", "feature/b-track"] },
           }),
         ],
       },
@@ -2007,46 +2006,6 @@ function activeStoreEpoch(db: DatabaseSync): number {
   return row.epoch;
 }
 
-/**
- * A foreign HELD/RELEASED plan execution lease for a retained sibling, expressed
- * as the raw rows no public producer can write for a holder this process does
- * not own. A holder session row is planted only for a held claim (the reader's
- * ownership invariant demands it); a released claim is a tombstone without one.
- */
-function plantExecutionLease(
-  fx: ActiveFixture,
-  input: { workflowId: string; planId: string; holder: string; worktreePath: string; branch: string; status: "held" | "released" },
-): void {
-  const db = activeRawStore(fx);
-  try {
-    const epoch = activeStoreEpoch(db);
-    if (input.status === "held") {
-      db.prepare(
-        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-          "values (?, 'plan-pm', ?, ?, ?, 1, 'active', ?)",
-      ).run(input.workflowId, input.holder, input.planId, epoch, ACTIVE_TS);
-    }
-    db.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)").run(
-      input.workflowId,
-      input.planId,
-      epoch,
-      JSON.stringify({
-        holder: input.holder,
-        holder_session_id: input.holder,
-        holder_role: "plan-pm",
-        claimed_at: ACTIVE_TS,
-        worktree_path: input.worktreePath,
-        working_branch: input.branch,
-        plan_worktree_path: input.worktreePath,
-        plan_branch: input.branch,
-        status: input.status,
-      }),
-    );
-  } finally {
-    db.close();
-  }
-}
-
 /** A foreign HELD/RELEASED integration merge claim for a retained sibling. */
 function plantIntegrationLease(
   fx: ActiveFixture,
@@ -2166,7 +2125,6 @@ describe("mstar worktree cleanup — ACTIVE execution authority", () => {
       await registerActiveWorkflow(fx, "wf-b", planWorkflowDoc("wf-b", main, [row("plan-b", "InProgress", { metadata: { working_branch: "feature/b" } })]));
       await stopActiveWorkflow(fx, "wf-a");
 
-      plantExecutionLease(fx, { workflowId: "wf-b", planId: "plan-b", holder: "foreign-holder", worktreePath: wtB, branch: "feature/a", status: "held" });
       plantIntegrationLease(fx, { workflowId: "wf-b", holder: "foreign-holder", sourceBranch: "feature/a", targetBranch: main, planId: "plan-b", status: "held" });
 
       const held = activeCleanup(fx, "wf-a");
@@ -2179,9 +2137,7 @@ describe("mstar worktree cleanup — ACTIVE execution authority", () => {
       // Released tombstones are not active claims: the same target becomes eligible.
       const db = activeRawStore(fx);
       try {
-        db.prepare("update execution_leases set lease_json = json_set(lease_json, '$.status', 'released') where workflow_id = 'wf-b' and plan_id = 'plan-b'").run();
         db.prepare("update execution_integration_leases set lease_json = json_set(lease_json, '$.status', 'released') where workflow_id = 'wf-b'").run();
-        db.prepare("delete from execution_sessions where workflow_id = 'wf-b' and role = 'plan-pm' and session_id = 'foreign-holder'").run();
       } finally {
         db.close();
       }
