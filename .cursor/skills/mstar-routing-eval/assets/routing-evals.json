@@ -722,7 +722,7 @@
         "missing Context Loaded declaration",
         "sticky without implementer-session.json or host_agent_id",
         "resume task reviewer session",
-        "parallel SDD implementer dispatches",
+        "parallel SDD implementer dispatches with unmet task dependencies, missing per-task reviewers, shared/non-isolated task workspaces, or bypassed serialized mstar plan progress updates",
         "bulk inline Assignment with full plan pasted instead of per-task briefs",
         "skip per-task L2 review because implementer session is sticky",
         "assignment uses non-English field keys"
