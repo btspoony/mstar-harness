@@ -12,7 +12,7 @@
  *     (repair-escape advisory + host-hook failure result);
  *  2. dispatch gate — valid / read-only assignments pass, missing-field
  *     Assignment is denied under hard;
- *  3. lease gate — SDD dispatch against a mismatched execution_lease warns
+ *  3. row-scope gate — SDD dispatch against a mismatched worktree warns
  *     (default) and denies (hard);
  *  4. skill-lint gate — broken SKILL.md write flagged;
  *  5. seam gates — broken DESIGN.md write flagged;
@@ -29,6 +29,7 @@
  * CLI real-run outcome is documented in task-5-report.md.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -43,7 +44,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, seedHarness, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedFileWorkflow, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
@@ -167,25 +168,55 @@ const stepPayload = (messages: UserMessage[]) => ({
 const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
   decision.messages.at(-1)
 
-/** The snapshot plan row with a valid execution_lease (v3 lease home). */
-const LEASE_PLAN = {
-  id: 'e2e-lease-plan',
-  title: 'E2E lease plan',
-  status: 'InProgress',
-  execution_lease: {
-    workingBranch: 'e2e-agent',
-    claimed_at: '2026-08-08',
-    worktree_path: '/dsh-e2e/lease-worktree',
-    working_branch: 'feature/e2e-lease',
-  },
+const LEASE_PLAN_ID = 'e2e-lease-plan'
+const LEASE_BRANCH = 'feature/e2e-lease'
+
+/** The SDD writable Assignment the row-scope gate re-verifies, parameterised by
+ * the real feature checkout the row records. */
+function sddAssignment(worktreePath: string): string {
+  return `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Plan Path**: plans/${LEASE_PLAN_ID}.md
+**Worktree path**: ${worktreePath}
+**Working branch**: ${LEASE_BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+
+Do the thing, evidence-first.
+`
 }
 
-/** Seed the v2 lease tree: v2 root + active workflow snapshot carrying the leased plan row. */
-async function seedLeaseTree(harnessDir: string): Promise<void> {
-  await seedHarness(harnessDir, {
-    'status.json': v2RootWithWorkflow(),
-    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [LEASE_PLAN]),
+/**
+ * Build the real topology the row-scope gate re-verifies and seed the plan row
+ * through the public producers: the app root is a git repo on `main`, plus a
+ * dedicated integration checkout and the plan's feature worktree. The row's
+ * recorded scope names the feature checkout, so a scope-bearing row has real
+ * checkouts rather than absolute-looking placeholders. Returns the feature
+ * path the Assignment must name to match.
+ */
+async function seedScopedRow(app: BootResult): Promise<string> {
+  const root = app.root
+  execFileSync('git', ['init', '-q', '-b', 'main', root])
+  execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'])
+  const integrationPath = join(root, 'integration-checkout')
+  const featurePath = join(root, 'feature-checkout')
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', LEASE_BRANCH, featurePath])
+  await seedFileWorkflow(app.harnessDir, 'wf-1', [{
+    id: LEASE_PLAN_ID,
+    title: 'E2E scoped plan',
+    file: `plans/${LEASE_PLAN_ID}.md`,
+    status: 'InProgress',
+    metadata: { worktree_path: featurePath, working_branch: LEASE_BRANCH },
+  }], {
+    type: 'iteration',
+    branch: { base: 'main', integration: 'integration/fixture' },
+    integration_worktree_path: integrationPath,
   })
+  return featurePath
 }
 
 /* ===========================================================================
@@ -302,12 +333,12 @@ describe('dispatch gate — full session dispatch decisions', () => {
     expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
   })
 
-  it('SDD assignment with a MATCHING lease → silent allow (the lease gate positive control)', async () => {
+  it('SDD assignment with a matching recorded row scope → silent allow', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
-    await seedLeaseTree(app.harnessDir)
+    const feature = await seedScopedRow(app)
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-valid.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(feature)), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -315,16 +346,16 @@ describe('dispatch gate — full session dispatch decisions', () => {
 })
 
 /* ===========================================================================
- * 4. Lease gate — SDD dispatch against a mismatched execution_lease
+ * 4. Row-scope gate — SDD dispatch against a mismatched source worktree
  * ========================================================================== */
 
 describe('lease gate — SDD dispatch lease violation', () => {
   it('mismatched Worktree path → advisory lease.dispatch.worktree-mismatch, dispatch allowed (warn default)', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    await seedLeaseTree(app.harnessDir)
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, dispatchBinding: 'qc-specialist' })
+    await seedScopedRow(app)
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-mismatch.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(join(app.root, 'not-the-feature-checkout'))), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
@@ -332,10 +363,10 @@ describe('lease gate — SDD dispatch lease violation', () => {
   })
 
   it('mismatched Worktree path under hard → deny with lease.dispatch.worktree-mismatch', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    await seedLeaseTree(app.harnessDir)
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
+    await seedScopedRow(app)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-mismatch.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(join(app.root, 'not-the-feature-checkout'))), defaultAllow)
 
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('lease.dispatch.worktree-mismatch')

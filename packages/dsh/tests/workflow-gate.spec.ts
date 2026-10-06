@@ -15,10 +15,11 @@
  * Ralph has no `meta.name`, so P-a/P-c never apply to it (including the
  * malformed-args fold-in: ralph without `objective` → pass + one warn).
  *
- * Task 3 — P-b lease attribution: the calling workspace's status.json is
+ * Task 3 — P-b row-scope attribution: the calling workspace's status.json is
  * read through the contained resolver path (agent session cwd → harness
- * dir); any plan `InProgress` lacking `execution_lease` coverage (engine
- * `verifyPlanExecutionLease`) makes writable fan-out uncovered — deny
+ * dir); any plan `InProgress` lacking a recorded row scope
+ * (`metadata.worktree_path` / `metadata.working_branch`) makes writable
+ * fan-out uncovered — deny
  * under `hard` (reason cites the plan id), advisory + warn under
  * `warn`/`ask`, allow for read-only workspaces / no harness dir / no
  * active plans. A status read failure is fail-open + ONE warn (a broken

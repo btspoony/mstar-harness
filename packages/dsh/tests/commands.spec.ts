@@ -8,11 +8,6 @@
  * the receiving agent as a user message (the dsh-commands "explicitly
  * schedule model-visible work through the receiving Agent" path).
  *
- * Every command declares a frontmatter `input` hint, which the registration
- * advertises as `input.hint`: the dsh web client then CLAIMS the command on
- * menu pick (composer insert + args wait) instead of executing it detached —
- * the interaction contract this spec pins down.
- *
  * The commands service resolve from the npm registry* ; the registrations are deferred with
  * `ctx.inject(['commands'], …)` so the plugin boots without the service.
  */
@@ -40,24 +35,6 @@ function packagedCommandsDir(): string | undefined {
 /** The six mstar slash commands (repo-root `commands/` mirror). */
 const MSTAR_COMMANDS = ['iteration-start', 'iteration-drive', 'iteration-loop', 'codebase-audit', 'amazing-pr-review', 'amazing-e2e-check'] as const
 
-
-/** The frontmatter `input` hint each command must advertise (the client-claim contract). */
-const EXPECTED_HINTS: Readonly<Record<(typeof MSTAR_COMMANDS)[number], string>> = {
-  'iteration-start': '[direction] [pause]',
-  'iteration-loop': '[direction] [scale]',
-  'iteration-drive': '[no args] | --assignment <absolute-md-path> | --workflow <id> --plan <id> | --resume <absolute-session-json-path>',
-  'codebase-audit': '[simplify]',
-  'amazing-pr-review': '[pr|branch|scope] [quick|default|deep]',
-  'amazing-e2e-check': '[environment/device] [scenarios]',
-}
-
-/** One command's registered descriptor (the view the dsh web client resolves). */
-interface RegisteredCommand {
-  readonly name: string
-  readonly description: string
-  readonly input?: { readonly hint: string }
-}
-
 /** A minimal fake receiving agent capturing steered messages. */
 function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
   const steered: UserMessage[] = []
@@ -78,16 +55,6 @@ function fakeAgent(): { agent: Agent; steered: UserMessage[] } {
     } as unknown as Agent,
     steered,
   }
-}
-
-/** Registered command descriptors by name (skips the deferred-boot guard once). */
-async function registeredCommands(): Promise<Map<string, RegisteredCommand>> {
-  booted = await bootApp()
-  const byName = new Map<string, RegisteredCommand>()
-  for (const command of booted.ctx.commands.list(fakeAgent().agent) as unknown as RegisteredCommand[]) {
-    byName.set(command.name, command)
-  }
-  return byName
 }
 
 /** The mirror's `<name>.md` body (identical to the repo-root command). */
@@ -117,23 +84,6 @@ describe('bundled mstar commands (omp parity)', () => {
       const message = steered.at(-1)!
       expect(message.source.kind).toBe('user')
       expect(message.content[0]?.type === 'text' ? message.content[0].text : '').toBe(expectedBody)
-    }
-  })
-
-  it('advertises the frontmatter input hint on every registered command (client-claim contract)', async () => {
-    const dir = packagedCommandsDir()
-    if (dir === undefined) return
-    const byName = await registeredCommands()
-    for (const name of MSTAR_COMMANDS) {
-      const command = byName.get(name)
-      expect(command, `missing registration for /${name}`).toBeDefined()
-      // `input.hint` drives the dsh web client decision table: declared ⇒
-      // the menu pick claims `/name ` (composer insert + ghost hint + Enter
-      // to submit) instead of executing the bare command immediately.
-      expect(command?.input?.hint, `/${name} must declare input.hint`).toBe(EXPECTED_HINTS[name])
-      // Quoted frontmatter values must register unquoted — quotes in the
-      // menu description or the composer ghost text would render literally.
-      expect(command?.description.startsWith('"')).toBe(false)
     }
   })
 

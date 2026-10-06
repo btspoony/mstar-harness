@@ -157,11 +157,12 @@ async function corruptStore(harnessDir: string): Promise<void> {
 /**
  * The retired register the ACTIVE-authority admission seams are FORBIDDEN to
  * answer from: the same root `status.json` + snapshot layout as
- * {@link seedRetiredRegister}, whose plan row carries a VALID engine-shaped
- * `execution_lease` naming a worktree and branch the Assignment does not, plus
- * — when given — a top-level `integration_merge_lease`. Any verdict derived
- * from these bytes is therefore unmistakable: a worktree/branch mismatch or a
- * no-steal `lease.merge.snapshot-mismatch`, never the authority's own refusal.
+ * {@link seedRetiredRegister}, whose plan row records an ordinary source scope
+ * (`metadata.worktree_path` / `metadata.working_branch`) naming a worktree and
+ * branch the Assignment does not, plus — when given — a top-level
+ * `integration_merge_lease`. Any verdict derived from these bytes is therefore
+ * unmistakable: a worktree/branch mismatch or a no-steal
+ * `lease.merge.snapshot-mismatch`, never the authority's own refusal.
  */
 async function seedRetiredLease(
   harnessDir: string,
@@ -181,9 +182,7 @@ async function seedRetiredLease(
           title: `${planId} title`,
           file: `plans/${planId}.md`,
           status: 'InProgress',
-          execution_lease: {
-            holder: 'dsh-retired-holder',
-            claimed_at: '2026-09-21T00:00:00Z',
+          metadata: {
             worktree_path: leaseWorktree,
             working_branch: 'feature/retired-lease',
           },
@@ -341,12 +340,13 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     expect(await readExecutionWorkflowSource({ harnessDir })).toEqual({ kind: 'files' })
 
     // …and the SYNC dispatch gate still reads those documents: with no store at
-    // all there is no authority verdict to make (§2.1), so the lease gate keeps
-    // its legacy file verdict — the `InProgress` row without a lease is an
-    // orphan. The authority guard is keyed on the authority, not on the gate.
+    // all there is no authority verdict to make (§2.1), so the gate keeps its
+    // legacy file verdict — the `InProgress` row records no source scope of its
+    // own, so its recorded-scope re-verify cannot be confirmed. The authority
+    // guard is keyed on the authority, not on the gate.
     const prompt = retiredPlanAssignment('plan-file', await tempDir('execution-files-worktree'))
     const verdict = booted!.ctx.dshHostAdapter.dispatchGate(prompt, toolExec('subagent', { prompt }), true, { kind: 'ok' })
-    expect(verdict.violations.map((violation) => violation.code)).toContain('lease.verify.orphan')
+    expect(verdict.violations.map((violation) => violation.code)).toContain('lease.dispatch.unverifiable')
   })
 
   it('refuses a retired coordination-document write by its canonical and symlinked paths', async () => {
@@ -488,9 +488,10 @@ describe('execution-dsh-read — the DSh source reads the authority, never the r
     const { app, harnessDir } = await appWithRoot('execution-sync-gate')
     const retiredWorktree = await tempDir('execution-retired-worktree')
     await seedExecutionAuthority(harnessDir, [{ id: 'wf-db', planId: 'plan-db' }])
-    // The retired bytes carry BOTH leases (the plan row's `execution_lease` and
-    // the snapshot's top-level `integration_merge_lease`): each seam's file
-    // route would produce its OWN unmistakable verdict from them.
+    // The retired bytes carry BOTH a recorded row scope (the plan row's
+    // `metadata`) and the snapshot's top-level `integration_merge_lease`):
+    // each seam's file route would produce its OWN unmistakable verdict from
+    // them.
     await seedRetiredLease(
       harnessDir,
       'wf-file-stale',
