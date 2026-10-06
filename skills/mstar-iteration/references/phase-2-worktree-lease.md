@@ -232,16 +232,16 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
      6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；经 `mstar plan progress` 更新权威行并更新 authored plan checkbox
      7. 放行已满足依赖的 next task；不等待无依赖任务，PM 独占共享 progress，状态只经公共动词
-   - **两条路线**：每次 Completion Report 后的 row 更新只经 `mstar plan progress`（ACTIVE：session reference + 完整 plan token + operation id；pre-activation：session envelope + revision），并更新主 plan。只允许 `InProgress` / `InReview` / `Blocked` 子集；不授权 `Todo` / `Done` / lease 删除，也不手写 snapshot / 根 register。
-4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/snapshot）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或删除 `execution_lease`。**Scoped route**：QA 证据齐备后的写点是 `mstar plan handoff`（active：`--session-ref <plan-wire> --file <abs-json> --expect <plan-execution-token> --operation <id>`；pre-activation：`--session <plan-session> --file <abs-json> --expect <revision>`），随后 **STOP**（row 保持 `InReview`、保留 lease）——`Done` 与 lease 释放不是 plan 会话的动作。
-5. **Plan complete — serial merge back**：两条路线均由 coordinator 执行以下公共动词序列；从 integration worktree 固定 merge attempt，merge 失败保持 `InReview` + lease，不标 `Done`。成功经 `mstar plan complete` 原子设置 Done、持久化工作分支 / worktree metadata、删除两类 lease（ACTIVE：DB 事务；pre-activation：动词内部文件写），同轮打开 cleanup 资格。plan 会话不得执行此步骤。
+   - **两条路线**：每次 Completion Report 后的 row 更新只经 `mstar plan progress`（ACTIVE：session reference + 完整 plan token + operation id；pre-activation：session envelope + revision），并更新主 plan。只允许 `InProgress` / `InReview` / `Blocked` 子集；不授权 `Todo` / `Done` / lease 释放或字段移除，也不手写 snapshot / 根 register。
+4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/snapshot）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或释放 / 移除 `execution_lease`。**Scoped route**：QA 证据齐备后的写点是 `mstar plan handoff`（active：`--session-ref <plan-wire> --file <abs-json> --expect <plan-execution-token> --operation <id>`；pre-activation：`--session <plan-session> --file <abs-json> --expect <revision>`），随后 **STOP**（row 保持 `InReview`、保留 lease）——`Done` 与 lease 释放不是 plan 会话的动作。
+5. **Plan complete — serial merge back**：两条路线均由 coordinator 执行以下公共动词序列；从 integration worktree 固定 merge attempt，merge 失败保持 `InReview` + lease，不标 `Done`。成功经 `mstar plan complete` 原子设置 Done、持久化工作分支 / worktree metadata，并处置两类 lease：ACTIVE 经 `applyCompletionFrame` 在同一原子 DB 事务内**释放**（release）execution lease 与 integration merge lease；UPDATE 保留 `status: released` tombstone、revision、owner epoch 与释放证据，公共 view 仍返回 released 行供审计读回；pre-activation / engine-absent 文件协议才在动词内部移除 snapshot 中的 lease 字段。同轮打开 cleanup 资格。plan 会话不得执行此步骤。
 
    **Coordinator 序列**。每一写点使用当前 scope 的 CAS：ACTIVE `--session-ref <coordinator-wire> --expect <完整执行令牌> --operation <id>`；pre-activation `--session <coordinator-session> --expect <revision>`。完整形状 → **`plan-scoped-pm.md`** §6。
 
    1. `mstar plan accept …` — 所有权移交（`submitted → accepted`；**不是**合并验收，worktree/branch 不变）。
    2. `mstar plan integration-start …` — 在干净、检出当前权威 `branch.integration` 的 integration checkout 上固定 `base_sha` + source pin，且**先于** Git；拒绝外来 merge lease。
    3. **coordinator 显式执行唯一 Git 动作**（参数数组、字符串直传、不拼接 shell）：`git -C <integration-worktree-path> merge --no-ff --no-edit <pinned-source-sha>` — 无 squash / rebase / 按分支名合并；CLI 状态动词**从不**代跑 merge。
-   4. `mstar plan integration-accept …` → `mstar plan complete …` — 验证证据后**一次原子完成**：`status: Done`、保留 `metadata.working_branch` / `metadata.worktree_path` 与既有 track branches、删除该行 `execution_lease` **与** coordinator 的 `integration_merge_lease`。
+   4. `mstar plan integration-accept …` → `mstar plan complete …` — 验证证据后**一次原子完成**：`status: Done`、保留 `metadata.working_branch` / `metadata.worktree_path` 与既有 track branches；ACTIVE 在同一 DB 事务内释放该行 execution lease **与** coordinator 的 integration merge lease，保留 released tombstone 与审计证据；pre-activation / engine-absent 文件协议则移除 snapshot 中的 `execution_lease` 与 `integration_merge_lease` 字段。
 
    **Plan 会话不执行以上任何一步**（`accept` / `integration-*` / `complete` 对 plan session 被拒绝）。失败恢复**只用** `mstar plan reconcile …`（同一传输的 CAS）：回退到 `accepted` + 释放本次 merge lease（`retry-ready`）／已具备唯一合并证据则补记证据并原子完成（`completed`，**不重复 merge**）；`integrating` 且存在 `MERGE_HEAD`、冲突或脏树 → `coordination.integration-unresolved`，全部状态与 lease 保留；无法证明的图 → `coordination.integration-diverged`。**禁止**传调用方成功标志、**禁止**重复 merge。
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
@@ -255,7 +255,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 ### Same-round plan cleanup（timing lane 1；merge 成功同轮）
 
-integration merge 成功且 plan 行 `Done`、`execution_lease` 已删除的**同一轮**，即可回收该 plan/track 的 feature worktree + 已合并分支 —— **父迭代仍在运行不影响资格**：不存在「父须终结」的一刀切，这是 cleanup 的明确设计而非遗漏。命令与守卫契约本体（ownership、合并证据、refusals、apply 顺序）→ **`mstar-branch-worktree`**「Worktree / branch cleanup」（唯一 home；本节只放 call site）：
+integration merge 成功且 plan 行 `Done`、execution lease 已释放（ACTIVE 保留 released tombstone；pre-activation / engine-absent 移除 snapshot 字段）的**同一轮**，即可回收该 plan/track 的 feature worktree + 已合并分支 —— **父迭代仍在运行不影响资格**：不存在「父须终结」的一刀切，这是 cleanup 的明确设计而非遗漏。命令与守卫契约本体（ownership、合并证据、refusals、apply 顺序）→ **`mstar-branch-worktree`**「Worktree / branch cleanup」（唯一 home；本节只放 call site）：
 
 ```text
 mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]
@@ -263,7 +263,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 
 - 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
 - 分支可能仍被该 Done-child worktree 检出 → apply 内部先移 worktree，再 re-probe / re-plan 删分支（**worktree 移除 ≠ 分支删除**；细则 → 契约本体）。
-- **lease 释放不在 cleanup 范围内**：两条路线均由 coordinator 的 `mstar plan complete` 原子完成 Done 与两类 lease 删除；cleanup 不替 owner 释放，也不依赖已删除 lease 判断归属（归属保留在行 metadata / track Assignments）。standalone plan 无 integration 时以 `branch.target` 为证据 base，且须先 terminal close。
+- **lease 释放不在 cleanup 范围内**：coordinator 的 `mstar plan complete` 原子完成 Done 与两类 lease 处置（ACTIVE：同一 DB 事务内释放并保留 released tombstone；pre-activation / engine-absent：文件协议移除 snapshot 字段）；cleanup 不替 owner 释放，也不依赖 lease 行 / 字段消失判断归属（归属保留在行 metadata / track Assignments）。standalone plan 无 integration 时以 `branch.target` 为证据 base，且须先 terminal close。
 - **禁止**为让 cleanup 通过而推进/终结父迭代或改 snapshot 状态；受保护行保持 `refuse` 是正确行为，不是失败。
 
 ## 2.5 Dispatch-first（implement 派发约束）
