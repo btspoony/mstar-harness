@@ -1121,10 +1121,11 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
 
   // L1 hard rules — the feature cwd and the control checkout must not nest
   // UNLESS the feature is a distinct Git checkout: a real linked worktree
-  // nested inside the control checkout (the documented .worktrees layout)
-  // is a distinct checkout and passes; the same checkout, a plain
-  // subdirectory, or a symlink alias of it is refused (checkout identity
-  // via the canonical per-worktree git dir; probe failure fails closed).
+  // in the sibling <parent-of-repo>/{repo-basename}.worktrees/ location
+  // (the documented default) is a distinct checkout and passes; the same
+  // checkout, a plain subdirectory, or a symlink alias of it is refused
+  // (checkout identity via isDistinctCheckout; no name special-case;
+  // probe failure fails closed).
   //
   // control-inside-feature is checked FIRST (physical, unchanged): a
   // harness declared inside the feature cwd is diagnosed here, before any

@@ -431,7 +431,7 @@ The Phase-2 diagnostic path stays deduplicated by code per generation — at mos
 ## Git and final evidence
 
 - Git work follows `mstar-branch-worktree` and Assignment **Working branch** / **Branch policy**.
-- omp may offer task isolation / worktrees (`task.isolation`, `~/.omp/wt`) — that is **host-level** task isolation **outside** the Morning Star convention; Morning Star **`Worktree path`** stays `<repoRoot>/.worktrees/` (record it + leases when L1 gates apply).
+- omp may offer task isolation / worktrees (`task.isolation`, `~/.omp/wt`) — that is **host-level** task isolation **outside** the Morning Star convention; Morning Star **`Worktree path`** defaults to a subdirectory of `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level (record the canonical absolute path + leases when L1 gates apply).
 - Completion reports cite concrete commands, artifacts, and commit lines when required.
 
 ## Gotchas

@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs, { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
@@ -134,15 +134,10 @@ async function setupReviewWorktree(input: Input, invocation: InvocationContext):
   const existing = new Set((await git(invocation, ["for-each-ref", "--format=%(refname:short)", "refs/heads"], repoRoot)).split(/\r?\n/).filter(Boolean));
   const seed = mode === "pr" ? prNumber : Math.abs([...headSpec].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 1_000_003, 7)) || 1;
   const reviewBranch = pickReviewBranchName(existing, seed, new Date().toISOString().slice(0, 10).replace(/-/g, ""));
-  const worktreePath = path.resolve(input.targetPath ?? path.join(repoRoot, ".worktrees", `review-${reviewBranch}${mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`}`));
-  if (input.targetPath === undefined) {
-    fs.mkdirSync(path.join(repoRoot, ".worktrees"), { recursive: true });
-    if (await gitProbe(invocation, ["check-ignore", ".worktrees/"], repoRoot) === "") {
-      const exclude = path.resolve(repoRoot, await git(invocation, ["rev-parse", "--git-path", "info/exclude"], repoRoot));
-      const contents = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-      if (!contents.split("\n").some((line) => line.trim() === ".worktrees/")) fs.appendFileSync(exclude, `${contents === "" || contents.endsWith("\n") ? "" : "\n"}.worktrees/\n`);
-    }
-  }
+  const repoReal = realpathSync(repoRoot);
+  const defaultRoot = path.join(path.dirname(repoReal), `${path.basename(repoReal)}.worktrees`);
+  const worktreePath = path.resolve(input.targetPath ?? path.join(defaultRoot, `review-${reviewBranch}${mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`}`));
+  if (input.targetPath === undefined) fs.mkdirSync(defaultRoot, { recursive: true });
   const origin = await gitProbe(invocation, ["remote", "get-url", "origin"], repoRoot);
   let fetched = true;
   if (origin) {

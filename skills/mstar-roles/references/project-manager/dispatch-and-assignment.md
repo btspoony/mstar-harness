@@ -109,7 +109,7 @@ The **`**You are a leaf executor. You MUST NOT:**`** section (previously just pr
 **plan_id**: <plan-id or N/A + scope label>
 **Plan scope**: <inherited from the dispatching PM (`plan_id` + absolute `Plan Path`) — read-only for the leaf: no plan selection/preparation, workflow-snapshot or root-register writes, no lease release, and no session path / session reference / `--expect` token / operation id> | N/A
 **Review range / Diff basis**: <reproducible basis; merge-base = `metadata.target_branch` or PM-specified ref — not assumed `origin/main`>
-**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `<repoRoot>/.worktrees/<plan-id>-<slug>` (L2 tracks: `<track-slug>`); must ≠ the main worktree (control root) ≠ `integration_worktree_path`>
+**Worktree path**: <absolute feature implementer path when L1/L2 isolation used; default `../<repo>.worktrees/<plan-id>-<slug>` relative to the realpath of the Git top-level, with `<repo>` its basename (L2 tracks: `<track-slug>`); must ≠ the main worktree (control root) ≠ `integration_worktree_path`>
 **Main worktree branch**: <recorded residency branch of the primary checkout (main worktree), from the main plan header — passed unchanged; never a lifecycle-owned branch>
 **QA gate**: mandatory | pm-acceptance | report-only — see `references/project-manager/qa-trigger-matrix.md`
 **QA gate reason**: <tier label, e.g. hotfix-inline | small-feature-clean-qc | mandatory-medium-feature>
