@@ -99,7 +99,6 @@ async function seedExecutionAuthority(harnessDir: string, workflows: readonly Wo
         sessionId: `host-${workflow.id}`,
         role: 'coordinator',
         workflowId: workflow.id,
-        planId: null,
       } satisfies ExecutionCaller,
     }
     const receipt = await createExecutionWorkflow(context, {
