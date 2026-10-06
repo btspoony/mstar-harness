@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, test } from "bun:test";
 import { initializeExecutionAuthority } from "./execution-store.js";
-import { initializeStore, openStore, upgradeStore, type StoreContext } from "./store-db.js";
+import { MIGRATIONS, initializeStore, openStore, upgradeStore, type StoreContext } from "./store-db.js";
+import { historicalStore } from "./store-migration-fixtures.js";
 import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
@@ -81,21 +82,30 @@ function mut(operationId: string, actor = "project-manager"): MutationContext {
 
 test("origin-dependent issue reads refuse schema 7 and work after safe upgrade", async () => {
   const context = ctx("origin-schema-gate-");
-  await initializeStore(context).then((handle) => handle.close());
-  const created = await captureIssue(context, baseInput({ occurrenceKey: "schema-origin" }), mut("schema-origin-capture"));
-  const old = await openStore(context, "write");
-  old.db.exec("alter table provenance drop column origin; delete from schema_version where version=8");
+  const old = historicalStore(context.harnessDir, 7);
+  const issueId = "I-000001";
+  old.prepare(
+    "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','proj-a','Project','projects','proj-a/roadmap.md','now','now')",
+  ).run();
+  old.prepare(
+    "insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values(?,'proj-a','Preexisting issue','bug','high','impact','acceptance','now','now','schema-origin')",
+  ).run(issueId);
+  old.prepare("insert into provenance(issue_id,kind,target,source_hash) values(?,'plan','plan-a','historical-source')").run(issueId);
   old.close();
 
-  await expect(getIssue(context, created.issueId)).rejects.toMatchObject({
+  await expect(getIssue(context, issueId)).rejects.toMatchObject({
     name: "IssueError",
     code: "issue.schema-outdated",
     message: expect.stringContaining("mstar store upgrade --operator <name>"),
   });
 
-  expect(await upgradeStore(context)).toEqual({ schemaVersion: 8 });
-  const detail = await getIssue(context, created.issueId);
+  expect(await upgradeStore(context)).toEqual({ schemaVersion: MIGRATIONS.length });
+  const detail = await getIssue(context, issueId);
   expect(detail.disposition).toBe("open");
+  expect(detail.title).toBe("Preexisting issue");
+  expect(detail.provenance).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "plan", target: "plan-a", sourceHash: "historical-source" }),
+  ]));
 });
 
 /** Observation half of `baseInput`; a recurrence differs only in these fields. */

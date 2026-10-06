@@ -810,7 +810,7 @@ describe("execution-registration", () => {
 /* ------------------------------------------------------------------------ *
  * Frozen catalog coexistence
  * ------------------------------------------------------------------------ */
-describe("execution-registration — frozen input remains authoritative after catalog edits", () => {
+describe("execution-registration \u2014 frozen input remains authoritative after catalog edits", () => {
   test("catalog edits do not move the accepted plan input, pin, binding, or replay receipt across a source reopen", async () => {
     const fixture = await activeFixture("frozen-catalog-reopen");
     const receipt = await registerPlanWorkflow(fixture, "op-frozen-source");

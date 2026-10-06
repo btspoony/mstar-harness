@@ -383,7 +383,7 @@ function assertKeyShape(kind: ExecutionKind, key: readonly string[]): void {
     if (!isNonEmptyString(part)) throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
   }
   if (kind === "session" && key[1] !== "coordinator") {
-    throw tokenRefusal(`a session token key carries role coordinator as its second part — got ${JSON.stringify(key[1])}`);
+    throw tokenRefusal(`a session token key carries role coordinator as its second part \u2014 got ${JSON.stringify(key[1])}`);
   }
 }
 
@@ -2343,7 +2343,7 @@ export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: 
  */
 export function readWorkflowSessionRows(tx: ExecutionTransaction, workflowId: string, role: "coordinator"): SessionRow[] {
   if (role !== "coordinator") {
-    throw new CoordinationError("coordination.identity-mismatch", `this authority holds only coordinator session rows — got ${String(role)}`, {
+    throw new CoordinationError("coordination.identity-mismatch", `this authority holds only coordinator session rows \u2014 got ${String(role)}`, {
       role,
     });
   }
@@ -2363,7 +2363,7 @@ export function revokeSessionRow(
   if (input.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `this authority revokes only coordinator session rows — got ${String(input.role)}`,
+      `this authority revokes only coordinator session rows \u2014 got ${String(input.role)}`,
       { role: input.role },
     );
   }
@@ -2705,7 +2705,7 @@ export async function bindExecutionSession(
         throw new ExecutionError(
           "execution.operation-conflict",
           `operation id ${JSON.stringify(bind.operationId)} is already committed on this store epoch for a different request. ` +
-            `An operation id is an idempotency key, not a reusable slot — retry the committed request unchanged, or express the ` +
+            `An operation id is an idempotency key, not a reusable slot \u2014 retry the committed request unchanged, or express the ` +
             `new effect under a new operation id. Nothing was bound.`,
           { operation_id: bind.operationId, recorded_fingerprint: recorded.requestHash, requested_fingerprint: requestHash },
         );
@@ -2725,7 +2725,7 @@ export async function bindExecutionSession(
     if (view.state.status !== "running") {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `workflow ${bind.workflowId} is ${String(view.state.status)} — a coordinator session binds only to a running lifecycle`,
+        `workflow ${bind.workflowId} is ${String(view.state.status)} \u2014 a coordinator session binds only to a running lifecycle`,
         { workflow_id: bind.workflowId, status: view.state.status },
       );
     }
@@ -2754,7 +2754,7 @@ export async function bindExecutionSession(
         detail:
           `workflow ${bind.workflowId} records session ${JSON.stringify(bind.sessionId)} in state ${mine.state} at epoch ` +
           `${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or epoch-invalidated binding is never revived ` +
-          `by a normal bind — run recoverExecutionCoordinator, which takes the workflow token, an operation id, a reason and the ` +
+          `by a normal bind \u2014 run recoverExecutionCoordinator, which takes the workflow token, an operation id, a reason and the ` +
           `prior holder ${JSON.stringify(bind.sessionId)} with its stop/reload attestation. Nothing was bound.`,
         workflowId: bind.workflowId,
         sessionId: bind.sessionId,
@@ -2777,7 +2777,7 @@ export async function bindExecutionSession(
           `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted caller is ` +
           `${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity` +
           (recorded === undefined
-            ? `, and this workflow records NO coordinator session row to recover — its supported route is recoverExecutionCoordinator ` +
+            ? `, and this workflow records NO coordinator session row to recover \u2014 its supported route is recoverExecutionCoordinator ` +
               `with priorSessionId: null, a reason and a valid activation attestation`
             : `, or through recoverExecutionCoordinator naming the recorded coordinator ${JSON.stringify(recorded.ref.sessionId)} ` +
               `(epoch ${recorded.ref.epoch}) with stop attestation`) +
@@ -2803,7 +2803,7 @@ export async function bindExecutionSession(
           code: "coordination.identity-mismatch",
           detail:
             `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` +
-            `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator naming the recorded coordinator ` +
+            `unset, so first-bind adoption is unavailable \u2014 use recoverExecutionCoordinator naming the recorded coordinator ` +
             `${JSON.stringify(recorded.ref.sessionId)} (epoch ${recorded.ref.epoch}) with its stop/reload attestation, the current ` +
             `workflow token, an operation id, a reason and a valid activation attestation. Nothing was bound.`,
           workflowId: bind.workflowId,
@@ -2852,7 +2852,7 @@ function sessionBindRefusal(input: {
     needed:
       input.holder === null
         ? `the supported route for a workflow with no recorded coordinator row: recoverExecutionCoordinator with priorSessionId: null, ` +
-          `a non-empty reason and a valid activation attestation, or — while the workflow is still unbound — a bind by the creating identity`
+          `a non-empty reason and a valid activation attestation, or \u2014 while the workflow is still unbound \u2014 a bind by the creating identity`
         : `the supported coordinator recovery: run recoverExecutionCoordinator naming the RECORDED coordinator ` +
           `${JSON.stringify(input.holder)} (epoch ${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own ` +
           `live reference while it is current`,

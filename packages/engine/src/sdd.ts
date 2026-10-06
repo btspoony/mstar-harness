@@ -1195,7 +1195,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       contextViolation(
         "high",
         "sdd.context.workflow-plan-ambiguous",
-        `plan "${planId}" appears in multiple registered active workflows (${match.workflowIds.join(", ")}) — resolve the duplicate registration before dispatch`,
+        `plan "${planId}" appears in multiple registered active workflows (${match.workflowIds.join(", ")}) \u2014 resolve the duplicate registration before dispatch`,
       ),
     ]);
   }
@@ -1267,7 +1267,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
             "on the normal plan route, SDD execution requires a registered running workflow row (plan-workflow-lifecycle contract \u00a76 S2; a retained terminal snapshot's row is history, never registration evidence): " +
             "register it with `mstar workflow register --workflow <id> --plan-id <id> --plan-title <title> --plan-file <path> " +
             `--delivery-kind <${WORKFLOW_DELIVERY_KINDS.join("|")}> ...` +
-            "` (`registerPlanWorkflow`), then retry — registration is create-only and preserves prior state; " +
+            "` (`registerPlanWorkflow`), then retry \u2014 registration is create-only and preserves prior state; " +
             "re-running the same register command completes an interrupted registration without duplicating identity",
           "register the plan workflow, then retry the execution",
         ),

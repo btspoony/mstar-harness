@@ -1406,7 +1406,7 @@ function assertEngineIssuedSession(harnessDir: string, sessionPath: string, sess
   }
   if (canonicalizeNearestExisting(sessionPath) !== canonicalizeNearestExisting(binding.session_file)) {
     throw refuseAuthority(
-      `Session envelope ${sessionPath} is not the workflow's bound session file ${binding.session_file} — issue authorization follows the recorded path exactly`,
+      `Session envelope ${sessionPath} is not the workflow's bound session file ${binding.session_file} \u2014 issue authorization follows the recorded path exactly`,
     );
   }
 }

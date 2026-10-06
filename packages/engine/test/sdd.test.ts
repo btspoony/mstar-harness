@@ -1197,7 +1197,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
         ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch,
       }));
       expect(err.exitCode).toBe(1);
-      expect(errCodes(err)).toContain("sdd.context.feature-in-control");
+      expect(err.message).toContain("sdd.context.feature-in-control");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

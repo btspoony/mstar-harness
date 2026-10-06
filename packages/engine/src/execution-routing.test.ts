@@ -429,9 +429,10 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
     const fx = workspace("exec-routing-entry-");
     try {
       await activeExecution(fx);
-      plantLeftovers(fx, PLANTED_ID);
+      const leftovers = plantLeftovers(fx, PLANTED_ID);
       const sessionPath = plantSessionEnvelope(fx);
       const statusPath = join(fx.harnessDir, "status.json");
+      const statusBefore = readFileSync(statusPath, "utf8");
 
       // mutatePlanCoordination: an unknown operation, an invalid revision and
       // an unexpected request key all sit BEHIND the veto.
@@ -479,8 +480,8 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
         ),
       ).toMatchObject({ code: "execution.direct-write-refused" });
 
-      // The PM-adjudicated authoritative read wrappers carry the SAME verdict at
-      // their OWN entry boundary, ahead of their scope work.
+      // Authoritative read wrappers carry the SAME verdict at their own entry
+      // boundary, ahead of payload validation and scope work.
       const reads = [
         () => showPrepareWorkflow({ sessionPath, unexpected: 1 } as never),
         () => readPlanCoordination(sessionPath, 42 as never),
@@ -489,6 +490,8 @@ describe("execution-entry-boundary \u2014 the veto is decided before any payload
       for (const read of reads) {
         expect(await refusalOf(read)).toMatchObject({ code: "execution.consumer-not-ready" });
       }
+      expect(readFileSync(statusPath, "utf8")).toBe(statusBefore);
+      expect(readFileSync(leftovers.snapshotPath, "utf8")).toBe(leftovers.json);
 
     } finally {
       rmSync(fx.root, { recursive: true, force: true });

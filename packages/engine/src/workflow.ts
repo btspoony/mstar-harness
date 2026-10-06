@@ -231,6 +231,7 @@ export function deriveLifecyclePhase(snapshot: WorkflowSnapshot): LifecyclePhase
   for (const row of rows) {
     const planId = typeof row.id === "string" && row.id !== "" ? row.id : "(unnamed row)";
     if (row.status !== undefined && row.status !== "Todo") ownership.push(`plan ${planId} status=${String(row.status)}`);
+    if (row.progress !== undefined && row.progress !== 0) ownership.push(`plan ${planId} progress=${String(row.progress)}`);
     if (isPlainObject(row.coordination) && row.coordination.progress !== undefined) ownership.push(`plan ${planId} progress`);
   }
   if (ownership.length === 0) {

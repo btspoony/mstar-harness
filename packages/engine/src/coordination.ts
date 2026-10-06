@@ -1530,15 +1530,15 @@ function planScopeOfMetadata(row: PlanRow, snapshot: WorkflowSnapshot): PlanCoor
   };
 }
 
-/** Read the explicitly selected row as the workflow coordinator. */
+/** Read the explicitly selected row; the authority veto precedes plan payload validation. */
 export async function readPlanCoordination(
   sessionPath: string,
   planId: string,
   cwd: string = process.cwd(),
 ): Promise<PlanCoordinationView> {
-  if (!isNonEmptyString(planId)) throw invalidInput("planId is required to select a plan");
   const anchor = entryAnchor(sessionPath);
   assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
+  if (!isNonEmptyString(planId)) throw invalidInput("planId is required to select a plan");
   const session = anchor.session;
   const targetPlanId = safePlanId(planId, "planId");
   const rootResolution = resolveIntentRoot({ cwd }, { root: anchor.harnessRoot, source: "session.envelope" });
@@ -3938,8 +3938,8 @@ export type PrepareWorkflowView = Readonly<{
   /**
    * The STAGE signal of this lifecycle: `true` while it is a registered running
    * workflow that no execution ownership has moved off Prepare — every row still
-   * Todo, no row progress/lease/coordination block, no merge lease, no
-   * non-Prepare label. It is not a verdict on any one patch: the amendment decides
+   * Todo, no row or coordination progress, no integration merge lease, no
+   * non-Prepare label. Preparation alone is not execution. The amendment decides
    * per addressed component (§4.1/E07), so a local repair of one row is admitted
    * while `allowed` is `false` and `blockers` names the sibling fact that put the
    * stage elsewhere.
@@ -4340,8 +4340,8 @@ function prepareAdmission(
  * document, and no non-Prepare label is recorded.
  *
  * Ownership is read through the ONE phase authority (`deriveLifecyclePhase`,
- * E06a): "some row left Todo / reports progress / carries a lease or a
- * coordination block, or the workflow carries a merge lease" IS the set of facts
+ * E06a): "some row left Todo / reports row or coordination progress, or the
+ * workflow carries an integration merge lease" IS the set of facts
  * that moves the derived phase off Prepare. The refusal vocabulary is unchanged —
  * ownership facts answer `execution-started`, and a recorded label that is not
  * Prepare answers `not-prepare`.
