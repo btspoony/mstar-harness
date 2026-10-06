@@ -21,6 +21,10 @@ import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
+// Type-only: the activation validator itself lives in store-activation.ts, which
+// imports this module; a runtime import here would be a cycle. The value is
+// validated by the caller before it reaches a migration.
+import type { ActivationAttestation } from "./store-activation.js";
 
 /** Minimum Bun runtime floor (contract §8). */
 export const MIN_BUN_VERSION = "1.4.0";
@@ -928,8 +932,12 @@ alter table execution_migrations add column coverage_json text;
  * invoked with — the one supported authorization a cutover may act on.
  */
 export type MigrationContext = {
-  /** The operator's stop evidence, when the upgrade supplied it (§ operator barrier). */
-  attestation?: { attestedAt: string; stoppedSessions: ReadonlyArray<{ sessionId: string }> };
+  /**
+   * The operator's FULL validated activation attestation, when the upgrade
+   * supplied one. It is the one supported authorization a cutover may act on:
+   * a migration never treats an unattested stopped id as authority.
+   */
+  attestation?: ActivationAttestation;
 };
 
 export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
@@ -1034,6 +1042,12 @@ alter table provenance add column origin text not null default 'scoped' check (o
  * readable provenance rather than a second live authority.
  */
 export const MIGRATION_9_SQL = `
+create table execution_session_cutover as
+  select workflow_id, plan_id, session_id from execution_sessions where role = 'plan-pm';
+create table execution_lease_cutover as
+  select workflow_id, plan_id, owner_epoch, lease_json from execution_leases;
+create table execution_integration_cutover as
+  select workflow_id, lease_json from execution_integration_leases;
 delete from execution_sessions where role = 'plan-pm';
 create table execution_sessions_coordinator(
   workflow_id text not null references execution_workflows(workflow_id),
@@ -1051,7 +1065,6 @@ drop table execution_sessions;
 alter table execution_sessions_coordinator rename to execution_sessions;
 create unique index execution_sessions_active_coordinator
   on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
-create table execution_lease_cutover as select workflow_id, plan_id, owner_epoch, lease_json from execution_leases;
 drop table execution_leases;
 `;
 
@@ -1248,48 +1261,97 @@ function normalizeExecutionState(db: StoreDb, context: MigrationContext): void {
 
 /**
  * The per-plan integration merges the removed plan-PM seat left held are an
- * UNSUPPORTED orphan once their holder rows are gone: they can never be released
- * through the surviving API. This pass settles exactly the claims the operator's
- * existing stop evidence names as stopped, in the SAME cutover that retires the
- * holder rows, so the store never retains an unreachable mutex:
+ * UNSUPPORTED orphan once their holder rows retire: they can never be released
+ * through the surviving API. This pass settles exactly those claims in the SAME
+ * cutover that retires the holder rows, so the store never keeps an unreachable
+ * mutex — and it REFUSES, keeping every byte of the schema-8 store, when an
+ * orphan it cannot account for is present. The whole migration batch rolls back,
+ * so the operator retries the same public `store upgrade --attestation <file>`
+ * once their stop evidence is complete.
  *
- * - a claim whose `plan_id` names a plan whose plan-PM session row was still
- *   present at the start of this cutover (a legacy seat holder);
- * - whose `holder` is NAMED in the operator's stop attestation;
- * - whose `claimed_at` does not postdate that attestation.
+ * An orphan is a held claim whose `holder` names a plan-PM session this cutover
+ * retires. It is settled only when the operator's FULL validated attestation:
  *
- * A claim held by a workflow's still-live coordinator, a claim with no stop
- * evidence, and a claim taken after the attestation are all left exactly as they
- * are — never silently rewritten, never released on an arbitrary stopped id.
+ * - NAMES that exact holder in `stoppedSessions` with state stopped/reloaded;
+ * - is a real document (version, operator authorization, at least one current
+ *   consumer) — the caller validated it before the transaction;
+ * - attests at or after the claim (`claimed_at <= attestedAt`);
+ *
+ * and the retired session/lease identity matches EXACTLY: same workflow, same
+ * plan, same holder. The claim becomes a released tombstone naming the stopped
+ * holder; the holder is never made a coordinator and the claim is never moved to
+ * another identity.
  */
 function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationContext): void {
-  const attestation = context.attestation;
-  if (attestation === undefined) return;
-  const stopped = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
-  const rows = db
-    .prepare("select workflow_id, lease_json from execution_integration_leases")
+  const retired = db
+    .prepare("select workflow_id, plan_id, session_id from execution_session_cutover")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; session_id?: unknown }>;
+  const holders = new Map<string, { workflowId: string; planId: string }>();
+  for (const row of retired) {
+    if (typeof row.session_id !== "string" || row.session_id === "") continue;
+    holders.set(row.session_id, { workflowId: String(row.workflow_id ?? ""), planId: String(row.plan_id ?? "") });
+  }
+  const leases = db
+    .prepare("select workflow_id, plan_id, lease_json from execution_lease_cutover")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; lease_json?: unknown }>;
+  const leaseOwners = new Set<string>();
+  for (const row of leases) {
+    const raw: unknown = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
+    if (!isRecord(raw)) continue;
+    const holder = raw.holder;
+    if (typeof holder === "string" && holder !== "") {
+      leaseOwners.add(`${String(row.workflow_id ?? "")}/${String(row.plan_id ?? "")}/${holder}`);
+    }
+  }
+  const claims = db
+    .prepare("select workflow_id, lease_json from execution_integration_cutover")
     .all() as Array<{ workflow_id?: unknown; lease_json?: unknown }>;
-  const retired = new Set(
-    (db.prepare("select workflow_id, plan_id from execution_lease_cutover").all() as Array<{ workflow_id?: unknown; plan_id?: unknown }>)
-      .filter((row) => row.plan_id !== null && row.plan_id !== undefined)
-      .map((row) => String(row.plan_id)),
-  );
   const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
-  for (const row of rows) {
+  const attestation = context.attestation;
+  for (const row of claims) {
     const workflowId = String(row.workflow_id ?? "");
     const raw: unknown = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
     if (!isRecord(raw)) {
       throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
     }
-    const claim = raw as Record<string, unknown>;
+    const claim = raw;
     if (claim.status === "released") continue;
     const holder = claim.holder;
     const planId = claim.plan_id;
-    if (typeof holder !== "string" || holder === "" || typeof planId !== "string" || planId === "") continue;
-    if (!stopped.has(holder)) continue;
-    if (!retired.has(planId)) continue;
-    const claimedAt = typeof claim.claimed_at === "string" && claim.claimed_at !== "" ? claim.claimed_at : null;
-    if (claimedAt === null || claimedAt > attestation.attestedAt) continue;
+    if (typeof holder !== "string" || holder === "") continue;
+    const seat = holders.get(holder);
+    // Not a retired plan-PM holder's claim: a coordinator's or a foreign claim is
+    // left exactly where it is.
+    if (seat === undefined) continue;
+    const exactIdentity =
+      seat.workflowId === workflowId &&
+      typeof planId === "string" &&
+      planId === seat.planId &&
+      leaseOwners.has(`${workflowId}/${seat.planId}/${holder}`);
+    if (!exactIdentity) {
+      throw new StoreError(
+        "store.upgrade-attestation-missing",
+        `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder} whose plan/lease identity does not match ` +
+          `the retired record; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's complete stop attestation, ` +
+          `or resolve the mismatched historical facts, then retry.`,
+      );
+    }
+    const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
+    const settled =
+      attestation !== undefined &&
+      attested !== undefined &&
+      (attested.state === "stopped" || attested.state === "reloaded") &&
+      typeof claim.claimed_at === "string" &&
+      claim.claimed_at !== "" &&
+      claim.claimed_at <= attestation.attestedAt;
+    if (!settled) {
+      throw new StoreError(
+        "store.upgrade-attestation-missing",
+        `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder}, and this cutover has no valid, current ` +
+          `stop attestation for it; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's full activation ` +
+          `attestation (version, operator authorization, a current consumer) naming ${holder} as stopped at or after the claim.`,
+      );
+    }
     const tombstone = {
       ...claim,
       status: "released",
@@ -1442,6 +1504,8 @@ function applyPendingMigrations(
       // they never survive the batch, so a rolled-back or committed store holds
       // exactly the version's declared schema.
       db.exec("drop table if exists execution_lease_cutover");
+      db.exec("drop table if exists execution_session_cutover");
+      db.exec("drop table if exists execution_integration_cutover");
       db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
         migration.version,
         migration.name,

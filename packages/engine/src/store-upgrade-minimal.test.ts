@@ -6,6 +6,7 @@ import { initializeStore, MIGRATIONS, openStore, storeDbPath, type StoreContext 
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { readExecutionState } from "./execution-store.js";
+import { ACTIVATION_PROTOCOL_VERSION } from "./store-activation.js";
 import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 
@@ -355,8 +356,13 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
   }
 
   const retiredAttestation = {
+    version: ACTIVATION_PROTOCOL_VERSION,
     attestedAt: "2026-10-04T04:00:00Z",
-    stoppedSessions: [{ sessionId }],
+    operator: { actor: "ops-engineer", authorizationRef: "compass D29 / schema-8 cutover" },
+    consumers: [
+      { entryId: "coordinator-omp", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js", runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded" },
+    ],
+    stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
   };
   await upgradeStoreMinimal({
     context,
@@ -508,6 +514,79 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
       (store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json,
     ) as Record<string, unknown>;
     expect(header).not.toHaveProperty("self_amendments");
+  } finally {
+    store.close();
+  }
+});
+
+test("an unattested retired plan-PM integration mutex refuses the upgrade and keeps schema 8", async () => {
+  const { context } = legacyWorkspace("schema8-unattested-orphan");
+  const workflowId = "wf-schema8-unattested-orphan";
+  const planId = `${workflowId}-plan`;
+  const sessionId = "session-schema8-unattested-orphan";
+  const initialized = await initializeStore(context);
+  try {
+    initialized.db.exec(`
+      delete from schema_version where version = 9;
+      create table execution_sessions_v8(
+        workflow_id text not null references execution_workflows(workflow_id),
+        role text not null check (role in ('coordinator','plan-pm')),
+        session_id text not null,
+        plan_id text,
+        epoch integer not null check (epoch > 0),
+        revision integer not null check (revision > 0),
+        state text not null check (state in ('active','suspended','revoked')),
+        bound_at text not null,
+        primary key (workflow_id, role, session_id),
+        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
+        check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
+      );
+      drop table execution_sessions;
+      alter table execution_sessions_v8 rename to execution_sessions;
+      create unique index execution_sessions_active_coordinator
+        on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+      create unique index execution_sessions_active_plan_pm
+        on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
+      create table execution_leases(
+        workflow_id text not null, plan_id text not null, revision integer not null check (revision > 0),
+        owner_epoch integer not null check (owner_epoch > 0), lease_json text not null,
+        primary key (workflow_id, plan_id),
+        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+      );
+    `);
+    initialized.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
+      .run(workflowId, JSON.stringify({ schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04", delivery_kind: "development", branch: { source: `feature/${planId}`, target: "main" } }), "2026-10-04", "2026-10-04");
+    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify({ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }));
+    initialized.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)")
+      .run(workflowId, planId, JSON.stringify({ id: planId, title: "Unattested orphan plan", file: `${planId}.md`, status: "Todo" }), JSON.stringify({}));
+    initialized.db.prepare("insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')")
+      .run(workflowId, sessionId, planId);
+    initialized.db.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)")
+      .run(workflowId, planId, JSON.stringify({ holder: sessionId, claimed_at: "2026-10-04T00:00:00Z", worktree_path: join(ROOT, "orphan-worktree"), working_branch: `feature/${planId}`, status: "held" }));
+    initialized.db.prepare("insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)")
+      .run(workflowId, JSON.stringify({ holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z", source_branch: `feature/${planId}`, target_branch: "main", status: "held" }));
+  } finally {
+    initialized.close();
+  }
+
+  // No attestation, and then an attestation that does not name this holder: both
+  // refuse, and the store is left at schema 8 with every byte intact.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan" }))
+    .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+  const wrongHolder = {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt: "2026-10-04T04:00:00Z",
+    operator: { actor: "ops-engineer", authorizationRef: "compass D29 / schema-8 cutover" },
+    consumers: [{ entryId: "coordinator-omp", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js", runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded" }],
+    stoppedSessions: [{ sessionId: "some-other-session", host: "omp", state: "stopped" }],
+  };
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan-2", attestation: wrongHolder }))
+    .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+  const store = await openStore(context, "read");
+  try {
+    expect(store.schemaVersion).toBe(MIGRATIONS.length - 1);
+    expect(store.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 1 });
+    expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 1 });
   } finally {
     store.close();
   }

@@ -7,7 +7,7 @@ import { withStatusWriteLock } from "./lease.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
-import { canonicalPath, isPathWithin } from "./store-activation.js";
+import { canonicalPath, isPathWithin, validateActivationAttestation } from "./store-activation.js";
 import { projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
 import { initializeStore, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
 
@@ -310,10 +310,16 @@ export async function upgradeStoreMinimal(input: {
   context: StoreContext;
   operator: string;
   operationId: string;
-  /** The operator's stop evidence for the plan-PM holders this cutover retires. */
-  attestation?: MigrationContext["attestation"];
+  /**
+   * The operator's FULL activation attestation for the plan-PM holders this
+   * cutover retires, validated here before any schema change: a migration never
+   * treats a thin or unattested stop id as authority.
+   */
+  attestation?: unknown;
 }): Promise<MinimalImportResult & { schemaVersion: number; authorityState: "active" }> {
-  const { context, attestation } = input;
+  const { context } = input;
+  const attestation: MigrationContext["attestation"] =
+    input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
   const dbPath = storeDbPath(context);
   let schemaVersion: number;
   mkdirSync(dirname(dbPath), { recursive: true });
