@@ -100,7 +100,7 @@ export type ExecutionIdentityScope = Readonly<{
 }>;
 
 function isRole(value: unknown): value is ExecutionIdentityRole {
-  return value === "coordinator" || value === "plan-pm";
+  return value === "coordinator";
 }
 
 function isSource(value: unknown): value is "host" | "local" {

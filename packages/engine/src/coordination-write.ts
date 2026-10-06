@@ -286,16 +286,12 @@ export function assertExactKeys(value: Record<string, unknown>, allowed: readonl
  * Stored coordination shapes (spec §C2 / §D)
  * ------------------------------------------------------------------ */
 
-/** Row/progress status a plan session may report (`progress` op). */
+/** Coordinator progress reported for the explicitly addressed row. */
 export type PlanProgressStatus = "InProgress" | "InReview" | "Blocked";
-
-/** Progress payload a plan session reports on its own row. */
 export type PlanProgress = {
   status: PlanProgressStatus;
   summary: string;
-  /** Canonical absolute artifacts inside the plan's own plan/SDD area. */
   evidence_paths: string[];
-  /** L2 track branches reported for this plan (never main/integration). */
   track_branches?: string[];
 };
 
@@ -344,10 +340,6 @@ export type CoordinationIdentityRecovery = {
 export type SnapshotCoordination = {
   coordinator: CoordinatorBinding;
   identity_recoveries?: CoordinationIdentityRecovery[];
-};
-export type PlanProgressStatus = "InProgress" | "InReview" | "Blocked";
-export type PlanProgress = {
-  status: PlanProgressStatus; summary: string; evidence_paths: string[]; track_branches?: string[];
 };
 export type RowCoordination = {
   revision: number;
@@ -542,7 +534,7 @@ export function validateCoordinationIdentityRecovery(
 export function validateSnapshotCoordination(value: unknown, what = "coordination"): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
   const violations: ValidationResult[] = [];
-  const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
+  const allowed = ["coordinator", "identity_recoveries"];
   const extra = Object.keys(value).filter((key) => !allowed.includes(key));
   if (extra.length > 0) {
     violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
@@ -570,105 +562,4 @@ export function evidenceRefOf(filePath: string): EvidenceRef {
 }
 
 
-/* ------------------------------------------------------------------------ *
- * §R11/A21 file-authority claim ownership — the holder identity one held
- * claim names and the stop FACTS this authority records about it
- * ------------------------------------------------------------------------ */
 
-/**
- * §R11/A21 how the FILE authority classifies one HELD claim's holder, decided
- * by the terminal failed/stopped close before it settles or refuses that claim.
- */
-export type FileClaimHolderState =
-  /** A live recorded session identity of this workflow: its claim is never released. */
-  | "live"
-  /** A holder this workflow's own recorded stop attestation names: its claim is settled. */
-  | "stop-attested"
-  /** No available record establishes a stop: the close refuses it, never releases it. */
-  | "unresolved";
-
-/**
- * §R11/A21 how the FILE authority classifies a HELD claim's holder — the mirror
- * of the DB route's `heldLeaseHolderIsLive` (`execution-coordination.ts`), which
- * asks the holder's own `execution_sessions` row at the current epoch instead.
- *
- * The file authority has no session table, no epoch and no heartbeat: its
- * durable session record is the workflow's own role-typed binding, and a
- * claim's holder is resolved through exactly those identities — the
- * workflow-level `coordination.coordinator` binding (role `coordinator`) and the
- * `coordination.session` binding of the plan row(s) the claim's scope carries
- * (role `plan-pm`, THAT plan). The activation import resolves a held lease the
- * same way (`insertExecutionLease`, which calls the coordinator a transfer moved
- * the claim to, otherwise the plan's own plan session) and calls a holder that
- * resolves to NEITHER an orphan claim with "no owner to import".
- *
- * So the identity is a PAIR, exactly as the DB route keys it: the role the
- * binding is stored as (its LOCATION — the workflow block or that plan's row)
- * plus the session id it names — never a bare session-id set (the DB route's
- * own L2 finding: one session id can carry a live coordinator identity and a
- * stopped plan identity at the same time), and never a session of another
- * workflow or another plan. A holder this workflow still records is `live`, and
- * that answer precedes every other: a recorded binding is never released on an
- * attestation naming the same session id (a false refusal is the conservative
- * side of this rule; a release is not).
- *
- * A holder that resolves to none of those identities is NOT thereby proven
- * stopped — the absence of a binding is not a stop fact, which is exactly why
- * the activation import refuses such a holder as an orphan instead of adopting
- * it. So the file authority settles a claim only on a recorded STOP FACT: the
- * workflow's `coordination.identity_recoveries[].stopped_session_ids`
- * attestation — written only by the coordinator-identity recovery transition,
- * after the operator authenticated the prior holder and asserted its stop or
- * reload — naming that holder (`stop-attested`). Without it the holder is
- * `unresolved` and the close refuses it, naming the stop/transfer it needs.
- * §4.2 still holds: a `claimed_at` age, a heartbeat, a stale-session guess or
- * the caller's own assertion is not a stop fact.
- */
-export function fileClaimHolderState(
-  input: Readonly<{
-    /** The session id the held claim names (`execution_lease.holder` / `integration_merge_lease.holder`). */
-    holder: string;
-    /**
-     * The workflow's `coordination` block — the role `coordinator` identity and
-     * the recorded identity-recovery attestations.
-     */
-    coordination: unknown;
-    /**
-     * The plan `coordination` blocks the claim's scope carries: the addressed
-     * plan row's own block for a row claim, every plan row's for a workflow-wide
-     * claim (the DB route's integration half decides against ANY active session
-     * of the workflow, because that record names no holder role).
-     */
-    planCoordinations: readonly unknown[];
-  }>,
-): FileClaimHolderState {
-  if (!isNonEmptyString(input.holder)) return "unresolved";
-  const coordinator = isPlainObject(input.coordination) ? input.coordination.coordinator : undefined;
-  if (isPlainObject(coordinator) && coordinator.session_id === input.holder) return "live";
-  const boundToPlan = input.planCoordinations.some((block) => {
-    const planSession = isPlainObject(block) ? block.session : undefined;
-    return isPlainObject(planSession) && planSession.session_id === input.holder;
-  });
-  if (boundToPlan) return "live";
-  return recordedStoppedSessions(input.coordination).has(input.holder) ? "stop-attested" : "unresolved";
-}
-
-/**
- * §R11/A21 the stop facts this file authority records: every session id the
- * workflow's own `coordination.identity_recoveries` names among the holders an
- * operator attested stopped or reloaded (the recovery transition's
- * `stopped_session_ids`). Malformed entries contribute nothing — a stop fact is
- * read, never guessed — so an unreadable audit yields the conservative
- * `unresolved` answer rather than a release.
- */
-function recordedStoppedSessions(coordination: unknown): ReadonlySet<string> {
-  const recoveries = isPlainObject(coordination) ? coordination.identity_recoveries : undefined;
-  const stopped = new Set<string>();
-  if (!Array.isArray(recoveries)) return stopped;
-  for (const entry of recoveries) {
-    const ids = isPlainObject(entry) ? entry.stopped_session_ids : undefined;
-    if (!Array.isArray(ids)) continue;
-    for (const id of ids) if (isNonEmptyString(id)) stopped.add(id);
-  }
-  return stopped;
-}
