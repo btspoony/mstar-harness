@@ -27,24 +27,24 @@ import { dirname as dirname7, isAbsolute as isAbsolute6, join as join9, resolve 
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
-import { createHash as createHash7 } from "node:crypto";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync12, realpathSync as realpathSync5 } from "node:fs";
+import { createHash as createHash6 } from "node:crypto";
 import {
   copyFileSync,
-  existsSync as existsSync12,
+  existsSync as existsSync13,
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync6,
   readFileSync as readFileSync13,
   readdirSync as readdirSync9,
-  realpathSync as realpathSync5,
+  realpathSync as realpathSync6,
   renameSync as renameSync2,
   rmSync as rmSync2,
   statSync as statSync5,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename9, dirname as dirname9, join as join17, relative as relative4, resolve as resolve12, sep as sep9 } from "node:path";
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync13, realpathSync as realpathSync6 } from "node:fs";
+import { basename as basename9, dirname as dirname9, join as join18, relative as relative4, resolve as resolve13, sep as sep9 } from "node:path";
 import {
   existsSync as existsSync14,
   lstatSync as lstatSync4,
@@ -12286,6 +12286,81 @@ var init_catalog_registration = __esm(() => {
     supersedes: true
   };
 });
+function gitProbeTimeoutMs() {
+  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "")
+    return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+function parseMainWorktree(out) {
+  const tokens = out.split("\x00");
+  const first = tokens.findIndex((t) => t.startsWith("worktree "));
+  if (first === -1)
+    return null;
+  const rawPath = tokens[first].slice("worktree ".length);
+  if (rawPath.trim() === "")
+    return null;
+  let branch = null;
+  let detached = false;
+  for (let i = first + 1;i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("worktree "))
+      break;
+    if (token === "bare")
+      return null;
+    if (token === "detached")
+      detached = true;
+    else if (token.startsWith("branch ")) {
+      const ref = token.slice("branch ".length).trim();
+      if (ref === "")
+        return null;
+      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+    }
+  }
+  if (detached)
+    branch = "";
+  if (branch === null)
+    return null;
+  try {
+    return { root: realpathSync5(rawPath), branch };
+  } catch {
+    return null;
+  }
+}
+function readMainWorktree(cwd) {
+  const start = cwd ?? process.cwd();
+  try {
+    const stdout = execFileSync3("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: gitProbeTimeoutMs()
+    });
+    return parseMainWorktree(stdout);
+  } catch {
+    return null;
+  }
+}
+var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var QC_ALIGNMENT_FIELDS;
+var init_worktree = __esm(() => {
+  QC_ALIGNMENT_FIELDS = [
+    { key: "planId", label: "plan_id" },
+    { key: "reviewRange", label: "Review range" },
+    { key: "diffBasis", label: "Diff basis" }
+  ];
+});
+var MSTAR_REVIEW_V1_PAYLOAD_SCHEMA;
+var init_qcreview_schema = __esm(() => {
+  MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
+    schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
+    verdict: { required: true, type: "string", description: "Harness PR verdict." },
+    summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
+    findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
+    tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated." },
+    target: { required: false, type: "object", description: "Optional target identity." }
+  };
+});
 function resolveRelativePath(raw, label) {
   if (typeof raw !== "string" || raw.trim() === "")
     return { ok: false, reason: `${label} must be a nonblank relative path` };
@@ -12455,7 +12530,7 @@ __export(exports_store_activation, {
   withExecutionMaintenanceLock: () => withExecutionMaintenanceLock
 });
 function sha256Bytes3(bytes) {
-  return createHash7("sha256").update(bytes).digest("hex");
+  return createHash6("sha256").update(bytes).digest("hex");
 }
 function readIfExists(path2) {
   try {
@@ -12470,7 +12545,7 @@ function scalar2(db, sql) {
 }
 function writeTextAtomic(path2, text4) {
   mkdirSync6(dirname9(path2), { recursive: true });
-  const tmp = join17(dirname9(path2), `.${basename9(path2)}.${process.pid}.tmp`);
+  const tmp = join18(dirname9(path2), `.${basename9(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync4(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -12547,15 +12622,15 @@ function sameExecution(a, b) {
   return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
 }
 function canonicalPath(value) {
-  let current = resolve12(value);
+  let current = resolve13(value);
   const trailing = [];
   for (;; ) {
     try {
-      return join17(realpathSync5(current), ...[...trailing].reverse());
+      return join18(realpathSync6(current), ...[...trailing].reverse());
     } catch {
       const parent = dirname9(current);
       if (parent === current)
-        return resolve12(value);
+        return resolve13(value);
       trailing.push(basename9(current));
       current = parent;
     }
@@ -12589,7 +12664,7 @@ async function assertAuthorityCurrent(context, handle) {
   refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
 }
 async function withExecutionMaintenanceLock(context, fn) {
-  const key = join17(canonicalPath(dirname9(storeDbPath(context))), ".execution-maintenance", "execution-migration");
+  const key = join18(canonicalPath(dirname9(storeDbPath(context))), ".execution-maintenance", "execution-migration");
   mkdirSync6(dirname9(key), { recursive: true });
   return withStatusWriteLock(key, fn, { timeoutMs: executionMaintenanceLockWaitMs() });
 }
@@ -12625,7 +12700,7 @@ function retainedBodyPath(root, absolute, what) {
   return segments.join("/");
 }
 function checkpointRetainedBody(root, relativeBodyPath, selection) {
-  const absolute = join17(root, ...relativeBodyPath.split("/"));
+  const absolute = join18(root, ...relativeBodyPath.split("/"));
   let info;
   try {
     info = lstatSync3(absolute);
@@ -12655,7 +12730,7 @@ function checkpointRetainedBody(root, relativeBodyPath, selection) {
 function readRetainedBodyCheckpoints(context) {
   const root = canonicalPath(dirname9(storeDbPath(context)));
   const paths = [];
-  if (existsSync12(join17(root, ...ENGINE_STATUS_BODY.split("/")))) {
+  if (existsSync13(join18(root, ...ENGINE_STATUS_BODY.split("/")))) {
     paths.push({ path: ENGINE_STATUS_BODY, selection: true });
   }
   const workflowsDir = resolveWorkflowDir(root, { harnessDir: root });
@@ -12668,23 +12743,23 @@ function readRetainedBodyCheckpoints(context) {
   const unfinished = [];
   const workflowEntries = entries.filter((candidate) => {
     if (candidate.isSymbolicLink()) {
-      throw new StoreActivationError("store.activation-stale", `${join17(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so the live retained set cannot be enumerated through it. Nothing was frozen.`);
+      throw new StoreActivationError("store.activation-stale", `${join18(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so the live retained set cannot be enumerated through it. Nothing was frozen.`);
     }
     return candidate.isDirectory();
   });
   for (const entry of workflowEntries.sort((a, b) => a.name < b.name ? -1 : 1)) {
-    const dir = join17(workflowsDir, entry.name);
+    const dir = join18(workflowsDir, entry.name);
     const prefix = retainedBodyPath(root, dir, `the workflow body dir of ${entry.name}`);
-    if (existsSync12(join17(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
+    if (existsSync13(join18(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
       unfinished.push(`${prefix}/${AGENT_FLOW_COMPACTION_JOURNAL}`);
       continue;
     }
     for (const file of RETAINED_WORKFLOW_BODIES) {
-      const absolute = join17(dir, file);
-      if (existsSync12(absolute))
+      const absolute = join18(dir, file);
+      if (existsSync13(absolute))
         paths.push({ path: retainedBodyPath(root, absolute, `the retained body ${file}`), selection: false });
     }
-    const historyDir = join17(dir, AGENT_FLOW_HISTORY_DIR);
+    const historyDir = join18(dir, AGENT_FLOW_HISTORY_DIR);
     let chunks = [];
     try {
       chunks = readdirSync9(historyDir, { withFileTypes: true });
@@ -12692,8 +12767,8 @@ function readRetainedBodyCheckpoints(context) {
       chunks = [];
     }
     for (const chunk of chunks.filter((candidate) => AGENT_FLOW_HISTORY_CHUNK.test(candidate.name)).sort((a, b) => a.name < b.name ? -1 : 1)) {
-      const absolute = join17(historyDir, chunk.name);
-      if (existsSync12(absolute))
+      const absolute = join18(historyDir, chunk.name);
+      if (existsSync13(absolute))
         paths.push({ path: retainedBodyPath(root, absolute, `the history chunk ${chunk.name}`), selection: false });
     }
   }
@@ -12853,7 +12928,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join17(dirname9(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join18(dirname9(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -12871,8 +12946,8 @@ async function takeVerifiedBackup(context, options) {
     } catch {
       walPending = false;
     }
-    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve12(options.out);
-    if (existsSync12(targetPath)) {
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve13(options.out);
+    if (existsSync13(targetPath)) {
       if (!options.reuseMatchingIdentity) {
         throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a recorded recovery point.`);
       }
@@ -12937,7 +13012,7 @@ async function backupStoreUnderExclusion(context, options = {}) {
 }
 async function backupStore(context, options = {}) {
   const root = canonicalPath(dirname9(storeDbPath(context)));
-  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join17(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
+  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join18(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
 }
 async function assertBackupDescribesStore(context, receipt, reviewed) {
   const stale = (detail) => {
@@ -13093,7 +13168,7 @@ function currentRegisterSources(context) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isSymbolicLink() || !entry.isDirectory())
       continue;
-    const absolutePath = join17(projectsRoot, entry.name, "residuals.json");
+    const absolutePath = join18(projectsRoot, entry.name, "residuals.json");
     let info;
     try {
       info = lstatSync3(absolutePath);
@@ -13118,7 +13193,7 @@ function revalidateSources(context, manifest, mode) {
     }
   }
   for (const reviewedSource of manifest.sources) {
-    const live = readIfExists(join17(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    const live = readIfExists(join18(catalogRootDir(context, "projects"), reviewedSource.relativePath));
     if (live === undefined && !retired.has(reviewedSource.relativePath)) {
       changed(`register ${reviewedSource.relativePath} is gone.`);
     }
@@ -13131,7 +13206,7 @@ function readReceiptRows(db, where, param) {
 async function appliedReceiptFor(context, manifest) {
   const handle = await openStore(context, "read");
   try {
-    if (resolve12(manifest.controlRoot) !== resolve12(context.harnessDir)) {
+    if (resolve13(manifest.controlRoot) !== resolve13(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
     }
     const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
@@ -13280,7 +13355,7 @@ async function activateStore(context, receipt, attestation) {
       throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
     }
     manifest = JSON.parse(appliedRow.manifest_json);
-    if (resolve12(manifest.controlRoot) !== resolve12(context.harnessDir)) {
+    if (resolve13(manifest.controlRoot) !== resolve13(context.harnessDir)) {
       throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
     }
     if (meta.revision !== receipt.storeRevision) {
@@ -13397,10 +13472,10 @@ function retirementReceiptOfRow(row, replayed) {
 }
 function finalizeDisclosure(ledgerPath, ledger, receipt) {
   writeLedger(ledgerPath, ledger);
-  writeTextAtomic(join17(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+  writeTextAtomic(join18(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
 }
 function retireRegister(context, ledgerPath, ledger, item) {
-  const livePath = join17(catalogRootDir(context, "projects"), item.relativePath);
+  const livePath = join18(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
     mkdirSync6(dirname9(item.archivePath), { recursive: true });
@@ -13449,7 +13524,7 @@ function selectReviewedSection(live, item) {
   return best;
 }
 function retireSection(context, ledgerPath, ledger, item) {
-  const livePath = join17(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const livePath = join18(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
   const live = readIfExists(livePath)?.toString("utf8");
   if (live === undefined) {
     throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. Nothing was retired.`);
@@ -13526,8 +13601,8 @@ async function retireStoreSources(context, activationReceipt) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join17(dirname9(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
-    const ledgerPath = join17(archiveDir, "ledger.json");
+    const archiveDir = join18(dirname9(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join18(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes3(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
       activationHash: activationReceipt.activationHash,
@@ -13572,7 +13647,7 @@ async function retireStoreSources(context, activationReceipt) {
         project: register.project,
         relativePath: register.relativePath,
         sha256: register.sha256,
-        archivePath: join17(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        archivePath: join18(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
       sections: sections.map((section) => ({
@@ -13587,7 +13662,7 @@ async function retireStoreSources(context, activationReceipt) {
         reviewedRows: section.rows,
         retiredRows: null,
         removedLines: null,
-        archivePath: join17(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        archivePath: join18(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
         expectedLiveSha256: null,
         state: "pending"
       })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
@@ -13648,7 +13723,7 @@ async function retireStoreSources(context, activationReceipt) {
         storeId: meta.storeId,
         epoch: meta.epoch,
         archiveDir,
-        markerPath: join17(archiveDir, "MARKER.md"),
+        markerPath: join18(archiveDir, "MARKER.md"),
         registers: retiredRegisters,
         sections: retiredSections,
         resumed
@@ -13679,7 +13754,7 @@ async function retireStoreSources(context, activationReceipt) {
       storeId: meta.storeId,
       epoch: meta.epoch,
       archiveDir,
-      markerPath: join17(archiveDir, "MARKER.md"),
+      markerPath: join18(archiveDir, "MARKER.md"),
       registers: retiredRegisters,
       sections: retiredSections,
       resumed,
@@ -13739,81 +13814,6 @@ var init_store_activation = __esm(() => {
   };
   SESSION_STATES = { stopped: true, reloaded: true };
 });
-function gitProbeTimeoutMs() {
-  const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "")
-    return DEFAULT_PROBE_TIMEOUT_MS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
-}
-function parseMainWorktree(out) {
-  const tokens = out.split("\x00");
-  const first = tokens.findIndex((t) => t.startsWith("worktree "));
-  if (first === -1)
-    return null;
-  const rawPath = tokens[first].slice("worktree ".length);
-  if (rawPath.trim() === "")
-    return null;
-  let branch = null;
-  let detached = false;
-  for (let i = first + 1;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith("worktree "))
-      break;
-    if (token === "bare")
-      return null;
-    if (token === "detached")
-      detached = true;
-    else if (token.startsWith("branch ")) {
-      const ref = token.slice("branch ".length).trim();
-      if (ref === "")
-        return null;
-      branch = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
-    }
-  }
-  if (detached)
-    branch = "";
-  if (branch === null)
-    return null;
-  try {
-    return { root: realpathSync6(rawPath), branch };
-  } catch {
-    return null;
-  }
-}
-function readMainWorktree(cwd) {
-  const start = cwd ?? process.cwd();
-  try {
-    const stdout = execFileSync3("git", ["-C", start, "worktree", "list", "--porcelain", "-z"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: gitProbeTimeoutMs()
-    });
-    return parseMainWorktree(stdout);
-  } catch {
-    return null;
-  }
-}
-var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
-var QC_ALIGNMENT_FIELDS;
-var init_worktree = __esm(() => {
-  QC_ALIGNMENT_FIELDS = [
-    { key: "planId", label: "plan_id" },
-    { key: "reviewRange", label: "Review range" },
-    { key: "diffBasis", label: "Diff basis" }
-  ];
-});
-var MSTAR_REVIEW_V1_PAYLOAD_SCHEMA;
-var init_qcreview_schema = __esm(() => {
-  MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
-    schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
-    verdict: { required: true, type: "string", description: "Harness PR verdict." },
-    summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
-    findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
-    tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated." },
-    target: { required: false, type: "object", description: "Optional target identity." }
-  };
-});
 function errorCode(error) {
   if (error !== null && typeof error === "object" && "code" in error) {
     const code2 = error.code;
@@ -13856,7 +13856,14 @@ var FROZEN_METADATA_FIELDS;
 var PROTECTED_SOURCE_BRANCHES;
 var GIT_OBJECT_ID;
 var UNFINISHED_GIT_OPERATIONS;
+var PREPARE_PATCH_KEYS;
+var PREPARE_APPEND_KEYS;
+var PREPARE_CORRECTION_KEYS;
+var PREPARE_APPEND_METADATA_KEYS;
+var PREPARE_APPEND_AUTHORITY_METADATA_KEYS;
 var PLAN_PARALLELISM_VALUES;
+var AMENDMENT_MINIMUM;
+var RECOVERY_INPUT_KEYS;
 var init_coordination = __esm(() => {
   init_core();
   init_coordination_write();
@@ -13873,7 +13880,6 @@ var init_coordination = __esm(() => {
   init_status();
   init_store();
   init_store_db();
-  init_store_activation();
   init_issue();
   init_worktree();
   init_workflow();
@@ -13911,7 +13917,48 @@ var init_coordination = __esm(() => {
     ["rebase-merge", "rebase"],
     ["rebase-apply", "rebase"]
   ];
+  PREPARE_PATCH_KEYS = [
+    "mainWorktreeBranch",
+    "appendPlans",
+    "correctPlanFiles",
+    "integrationWorktreePath",
+    "planParallelism"
+  ];
+  PREPARE_APPEND_KEYS = ["id", "title", "file", "metadata"];
+  PREPARE_CORRECTION_KEYS = ["id", "expectedFile", "file"];
+  PREPARE_APPEND_METADATA_KEYS = [
+    "primary_spec",
+    "spec_refs",
+    "iteration_compass",
+    "iteration_refs",
+    "working_branch",
+    "spec_integration_branch",
+    "merge_target"
+  ];
+  PREPARE_APPEND_AUTHORITY_METADATA_KEYS = ["catalog_pin"];
   PLAN_PARALLELISM_VALUES = ["serial", "parallel"];
+  AMENDMENT_MINIMUM = {
+    "coordination.prepare-amendment.duplicate-plan": "a plan id this workflow does not already hold, or the removal of that entry from the patch",
+    "coordination.prepare-amendment.invalid-plan": "an addressed existing unstarted row named by that plan's own registered file",
+    "coordination.prepare-amendment.invalid-patch": "a patch whose addressed fields are well formed",
+    "coordination.prepare-amendment.compass-mismatch": "an addressed plan, checkout or branch the reviewed compass declares",
+    "coordination.prepare-amendment.execution-started": "the addressed fact's own execution state settled, or that entry removed from the patch",
+    "coordination.prepare-amendment.invalid-worktree": "an existing distinct checkout of this repository on branch.integration",
+    "coordination.not-in-git": "a readable main worktree of the caller's checkout, or a patch whose components read no checkout fact",
+    "coordination.scope-mismatch": "a call from the main worktree of the branch the patch declares"
+  };
+  RECOVERY_INPUT_KEYS = [
+    "cwd",
+    "harnessDir",
+    "identity",
+    "priorSessionPath",
+    "priorSessionId",
+    "operationId",
+    "reason",
+    "authorizationRef",
+    "stoppedSessionIds",
+    "attestation"
+  ];
 });
 function parsedInstant(value) {
   if (typeof value !== "string" || value === "")
