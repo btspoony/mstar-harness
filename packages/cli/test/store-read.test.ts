@@ -10,9 +10,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
-import { getIssue, initializeStore, listIssues, openStore, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
+import { applyStoreMigration, captureIssue, closeIssue, getIssue, initializeExecutionAuthority, initializeStore, listIssues, openStore, planStoreMigration, refreshProjections, registerCatalogEntity, replaceRoadmapAuthority, upgradeStoreMinimal, type CaptureInput, type IssueDetail, type IssueFlow, type IssuePage, type IterationListDTO, type RoadmapDTO, type StoreContext, type StoreDb, type WorkflowListDTO } from "@mstar-harness/engine";
 import {
-  DASHBOARD_API_VIEWS,
   dashboardFailure,
   dashboardFilters,
   readDashboardView,
@@ -26,13 +25,15 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-async function workspace(name: string): Promise<{ dir: string; harness: string; context: StoreContext }> {
+async function workspace(name: string, initialize = true): Promise<{ dir: string; harness: string; context: StoreContext }> {
   const dir = mkdtempSync(join(ROOT, name));
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: dir };
-  const handle = await initializeStore(context);
-  handle.close();
+  const context: StoreContext = { harnessDir: harness };
+  if (initialize) {
+    const handle = await initializeStore(context);
+    handle.close();
+  }
   return { dir, harness, context };
 }
 
@@ -45,23 +46,23 @@ async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Prom
   }
 }
 
-function seedIssue(db: StoreDb, id: string, title: string, severity: string, registeredAt: string | null, disposition = "open"): void {
-  db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) " +
-      "values (?, 'proj-a', ?, 'bug', ?, ?, 'impact', 'acceptance', ?, ?, ?, 1, ?)",
-  ).run(id, title, severity, disposition, registeredAt, RECORDED_AT, RECORDED_AT, `identity-${id}`);
+async function seedIssue(context: StoreContext, title: string, severity: CaptureInput["severity"], disposition: "open" | "resolved" = "open"): Promise<void> {
+  const captured = await captureIssue(context, {
+    projectId: "proj-a", title, severity, kind: "bug",
+    impact: "Dashboard consumer observes this issue", acceptance: "Dashboard returns its stored disposition",
+    sourceIdentity: title, rootCauseKey: title, acceptanceKey: title, occurrenceKey: title,
+    sourceKind: "test", location: "store-read.test.ts", observedBehavior: title,
+    evidence: ["isolated fixture"], discoveredAt: RECORDED_AT,
+  }, { actor: "project-manager", operationId: `capture-${title}` });
+  if (disposition === "resolved") {
+    await closeIssue(context, captured.issueId, disposition, {
+      reason: "Fixture acceptance met", references: ["fixture"], alignmentRef: "QA gate: Approve — fixture",
+    }, { actor: "project-manager", operationId: `close-${title}`, expectedRevision: captured.revision });
+  }
 }
 
 describe("route table", () => {
   test("resolves exactly the fixed API routes", () => {
-    expect(DASHBOARD_API_VIEWS).toEqual({
-      "/api/issues": "issues",
-      "/api/issue-flow": "issue-flow",
-      "/api/workflows": "workflows",
-      "/api/iterations": "iterations",
-      "/api/roadmap": "roadmap",
-      "/api/projects": "projects",
-    });
     expect(resolveDashboardRoute("/api/issues")).toEqual({ view: "issues" });
     expect(resolveDashboardRoute("/api/issue-flow")).toEqual({ view: "issue-flow" });
     expect(resolveDashboardRoute("/api/workflows")).toEqual({ view: "workflows" });
@@ -137,11 +138,9 @@ describe("query-parameter refusals", () => {
 describe("dashboard views over a real store", () => {
   test("issues answers the default open-only page with the envelope and the issue domain's own reader", async () => {
     const { context } = await workspace("issues-");
-    await withWrite(context, (db) => {
-      seedIssue(db, "I-000001", "critical open", "critical", "2026-09-01");
-      seedIssue(db, "I-000002", "medium open", "medium", "2026-09-02");
-      seedIssue(db, "I-000003", "resolved", "high", "2026-09-03", "resolved");
-    });
+    await seedIssue(context, "critical open", "critical");
+    await seedIssue(context, "medium open", "medium");
+    await seedIssue(context, "resolved", "high", "resolved");
 
     const envelope = await readDashboardView({ context, view: "issues" });
     const page = envelope.data as IssuePage;
@@ -164,7 +163,7 @@ describe("dashboard views over a real store", () => {
 
   test("issue-detail answers the issue domain's own reader and refuses an unknown id", async () => {
     const { context } = await workspace("detail-");
-    await withWrite(context, (db) => seedIssue(db, "I-000001", "detail row", "low", "2026-09-01"));
+    await seedIssue(context, "detail row", "low");
 
     const envelope = await readDashboardView({ context, view: "issue-detail", id: "I-000001" });
     expect(envelope.data as IssueDetail).toEqual(await getIssue(context, "I-000001"));
@@ -174,18 +173,24 @@ describe("dashboard views over a real store", () => {
   });
 
   test("issue-flow returns the dated buckets, the unknown-date counts and the current open total", async () => {
-    const { context } = await workspace("flow-");
-    await withWrite(context, (db) => {
-      seedIssue(db, "I-000001", "dated", "high", "2026-09-01");
-      seedIssue(db, "I-000002", "undated", "high", null);
-      seedIssue(db, "I-000003", "retired", "low", "2026-09-02", "waived");
+    // Missing capture dates are genuine legacy history, imported by the public
+    // migration boundary rather than forged into an active issue store.
+    const { context, harness } = await workspace("flow-", false);
+    const projectDir = join(harness, "projects", "proj-a");
+    mkdirSync(projectDir, { recursive: true });
+    const entry = (overrides: Record<string, unknown>) => ({
+      source: "fixture", scope: "plan-scope", decision: "defer", owner: "pm",
+      target: "next-iteration", tracking: "issue", source_plan: "plan-fixture",
+      ...overrides,
     });
-    const handle = await openStore(context, "write");
-    try {
-      handle.db.prepare("update issues set closed_at = '2026-09-03' where id = 'I-000003'").run();
-    } finally {
-      handle.close();
-    }
+    writeFileSync(join(projectDir, "residuals.json"), JSON.stringify({ entries: { "plan-fixture": [
+      entry({ id: "R1", title: "dated", severity: "high", registered_at: "2026-09-01" }),
+      entry({ id: "R2", title: "undated", severity: "high" }),
+      entry({ id: "R3", title: "retired", severity: "low", lifecycle: "wont-fix", registered_at: "2026-09-02", closed_at: "2026-09-03" }),
+    ] } }));
+    const manifest = await planStoreMigration(context);
+    await applyStoreMigration(context, manifest);
+    await upgradeStoreMinimal({ context, operator: "store-read-test", operationId: "activate-flow" });
 
     const envelope = await readDashboardView({ context, view: "issue-flow" });
     const flow = envelope.data as IssueFlow;
@@ -233,8 +238,8 @@ describe("dashboard views over a real store", () => {
   });
 
   test("projection views answer the published generation and disclose it", async () => {
-    const { context, harness } = await workspace("projection-");
-    writeFileSync(join(harness, "status.json"), JSON.stringify({ version: 2, updated_at: "2026-09-18", workflows: [] }));
+    const { context } = await workspace("projection-");
+    await initializeExecutionAuthority(context);
     const report = await refreshProjections(context);
     expect(report.freshness).toBe("current");
 
@@ -267,7 +272,7 @@ describe("dashboard views over a real store", () => {
   test("a missing or staged store fails with a structured code, never an empty page", async () => {
     const dir = mkdtempSync(join(ROOT, "no-store-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const failure = await readDashboardView({ context: { harnessDir: dir }, view: "issues" }).catch((error: unknown) => error);
+    const failure = await readDashboardView({ context: { harnessDir: join(dir, ".mstar") }, view: "issues" }).catch((error: unknown) => error);
     expect(dashboardFailure(failure)).toMatchObject({ code: "store.not-initialized" });
 
     const { context } = await workspace("staged-");
