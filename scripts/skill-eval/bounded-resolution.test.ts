@@ -461,7 +461,7 @@ function scriptFor(caseId: string, fixtureText?: string): { events: string; fina
       };
       return {
         events: turn([invocation("a", ["cat", "store/fixture.json"])]),
-        final: `AUTHORIZATION-REQUIRED: need authorization\navailable facts: holder ${lease.holder}; integration merge lease boundary; source ${lease.source_branch} -> target ${lease.target_branch}\noutcome: stopped at foreign lease holder ${lease.holder}; serial integration remains protected\n`,
+        final: `AUTHORIZATION-REQUIRED: need authorization\noutcome: stopped at foreign lease holder ${lease.holder}; serial integration remains protected\nprotection: held by the integration merge lease boundary\nsource ${lease.source_branch} -> target ${lease.target_branch}\n`,
       };
     }
     case "bounded-res-negative-four-lookups":
@@ -895,7 +895,7 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
   test("rejects a protected-integration stop that names the wrong source/target despite a valid holder and no writes", async () => {
     const io = memoryIo();
     seedRun(io, manifest);
-    const wrongBoundary = "AUTHORIZATION-REQUIRED: need authorization\navailable facts: holder session-foreign-fixture; integration merge lease boundary; source feature/other -> target integration/other\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+    const wrongBoundary = "AUTHORIZATION-REQUIRED: need authorization\noutcome: stopped at foreign lease holder session-foreign-fixture\nprotection: held by the integration merge lease boundary\nsource feature/other -> target integration/other\n";
     const result = await executeManifest({
       manifestPath: RUN_MANIFEST_PATH,
       split: "dev",
@@ -909,6 +909,7 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     const lease = Object.values(result.state.units).find((u) => u.caseId === "bounded-res-lease-boundary")!;
     expect(lease.grade).toBe("fail");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-integration-boundary")!.grade).toBe("fail");
     expect(lease.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
