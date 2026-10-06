@@ -81,6 +81,7 @@ import {
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
+  deliveryRouteOf,
   releaseStoppedMergeClaim,
   resolveSparseOwnSession,
   type ExecutionMutationIntent,
@@ -157,6 +158,7 @@ import {
 } from "./workflow.js";
 import { assertBranchAlignment, isDistinctCheckout, readMainWorktree } from "./worktree.js";
 import type { PlanRow } from "./status.js";
+import type { IntegrationMergeLease } from "./lease.js";
 
 /* ------------------------------------------------------------------------ *
  * §3 the closed workflow-operation union
@@ -1567,13 +1569,12 @@ function recoverCoordinatorRequestHash(
  *    boundary, and without it this transition would be the silent takeover it
  *    must never be.
  *
- * The atomic effect: the prior session row is revoked, the caller's own row is
- * rebound active at the current epoch (fresh, or reactivated from its own
- * non-active row), the workflow header revision advances once and an immutable
- * operation receipt records the prior holder, the reason and the attestation.
- * The coordinator holds no per-plan claim to adopt: the removed plan-PM seat's
- * leases are gone with its table, and the workflow's own integration merge
- * claim is settled by the close/completion transitions that own it.
+ * Initial recovery revokes the predecessor and binds the caller atomically.
+ * A claim continuation preserves the current binding and requires the receipt
+ * that created its current epoch/revision/bound_at, the revoked predecessor and
+ * the exact registered held attempt with applicable renewed stop evidence.
+ * Both record a fresh workflow operation; only that predecessor's claim may be
+ * settled. Operator evidence does not establish observed process termination.
  */
 export async function recoverExecutionCoordinator(
   context: ExecutionContext,
@@ -1666,6 +1667,7 @@ export async function recoverExecutionCoordinator(
     }
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    let continuation = false;
     if (priorSessionId === null) {
       if (rows.length > 0) {
         throw invalidWorkflowTransition(
@@ -1691,10 +1693,10 @@ export async function recoverExecutionCoordinator(
       // claim still names that predecessor — so the continuation settles the
       // claim without rebinding.
       if (live !== undefined && live.ref.sessionId !== priorSessionId) {
-        const continuation =
+        continuation =
           live.ref.sessionId === caller.sessionId &&
-          hasCoordinatorRecoveryChain(tx, workflowId, caller.sessionId, priorSessionId) &&
-          priorRow !== undefined && priorRow.state === "revoked";
+          prior.state === "revoked" &&
+          hasCoordinatorRecoveryChain(tx, workflowId, live, priorSessionId);
         if (!continuation) {
           throw new CoordinationError(
             "coordination.duplicate-holder",
@@ -1704,8 +1706,8 @@ export async function recoverExecutionCoordinator(
             { workflow_id: workflowId, holder: live.ref.sessionId, named: priorSessionId },
           );
         }
-        // The claim continuation is settled after the shared revoke/bind below;
-        // the binding is already the caller's and must not change.
+        // Qualification for the exact remaining claim is checked below before
+        // any mutation; this path never rebinds the current coordinator.
       }
       // The stop evidence is the trust boundary: the engine cannot observe a
       // dead process, so a named holder that nobody attested stopped is
@@ -1721,24 +1723,32 @@ export async function recoverExecutionCoordinator(
     }
 
     const now = new Date().toISOString();
-    if (priorSessionId !== null && priorSessionId !== caller.sessionId) {
-      revokeSessionRow(tx, { workflowId, role: "coordinator", sessionId: priorSessionId });
-    }
-    const revision = bindRecoveredSession(tx, {
-      workflowId,
-      role: "coordinator",
-      sessionId: caller.sessionId,
-      epoch: tx.epoch,
-      now,
-    });
-    settleStoppedIntegrationClaim(tx, {
+    const claim = recoverableIntegrationClaim(tx, {
       workflowId,
       priorSessionId,
       callerId: caller.sessionId,
       attestedAt: attestation.attestedAt,
-      stoppedSessionIds: attestation.stoppedSessions.map((session) => session.sessionId),
       at: now,
+      required: continuation,
     });
+    let revision: number;
+    if (continuation) {
+      revision = live!.revision;
+    } else {
+      if (priorSessionId !== null && priorSessionId !== caller.sessionId) {
+        revokeSessionRow(tx, { workflowId, role: "coordinator", sessionId: priorSessionId });
+      }
+      revision = bindRecoveredSession(tx, {
+        workflowId,
+        role: "coordinator",
+        sessionId: caller.sessionId,
+        epoch: tx.epoch,
+        now,
+      });
+    }
+    if (claim !== null) {
+      releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: caller.sessionId, at: now });
+    }
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data: {
@@ -1782,75 +1792,81 @@ function readCoordinatorRows(tx: ExecutionTransaction, workflowId: string): Sess
 }
 
 /**
- * §4.2/§E the ONE ownership a coordinator recovery may settle beyond the session
- * binding: the workflow's integration merge claim when the recovery has already
- * authenticated the exact named prior holder against live stop evidence.
- *
- * The boundary is deliberately narrow, because a lease is a LIVE concurrency
- * exclusion, not bookkeeping:
- *
- * - the claim's holder must BE the named prior holder the recovery revoked — a
- *   foreign claim, the caller's own claim, or any other session's claim is left
- *   exactly where it is;
- * - the claim must have been taken at or before this recovery — a claim that
- *   appeared after the recovery began is a NEWER attempt and belongs to whoever
- *   holds it;
- * - `releaseStoppedMergeClaim` re-checks liveness at THIS instant, so a holder
- *   that is still active is never released.
- *
- * The claim is released, never transferred: the released tombstone keeps its
- * prior holder and epoch, and row/business state is untouched. This is the
- * supported recovery for a coordinator that crashed mid-integration — no
- * plan-PM seat, reconcile, or transfer verb is reintroduced. (A legacy per-plan
- * holder's mutex is settled by the store cutover, not this coordinator
- * bootstrap.)
+ * Select only the named predecessor's actual registered attempt, with an
+ * applicable operator stop instant. An initial replacement can leave a newer
+ * claim intact; a continuation must have a selected claim before any writes.
  */
-function settleStoppedIntegrationClaim(
+function recoverableIntegrationClaim(
   tx: ExecutionTransaction,
-  input: { workflowId: string; priorSessionId: string | null; callerId: string; attestedAt: string; stoppedSessionIds: readonly string[]; at: string },
-): void {
-  const { workflowId, priorSessionId, callerId, attestedAt, stoppedSessionIds, at } = input;
-  // The prior holder must be NAMED by the operator's stop evidence, the caller
-  // must not be one of the attested-stopped sessions, and the claimed instant must
-  // not postdate the stop attestation (a claim taken after the holder was observed
-  // stopped belongs to a newer attempt). Timestamps compare as PARSED instants,
-  // never as strings: offset spellings and precision differ across producers.
-  if (priorSessionId === null || priorSessionId === callerId) return;
-  if (!stoppedSessionIds.includes(priorSessionId) || stoppedSessionIds.includes(callerId)) return;
-  const graph = readExecutionStateGraph(tx);
-  const claim = graph.data.workflows.find((workflow) => workflow.state.id === workflowId)?.integrationLease ?? null;
-  if (claim === null || claim.holder !== priorSessionId) return;
-  const claimedAt = isNonEmptyString(claim.claimed_at) ? Date.parse(claim.claimed_at) : null;
-  const attestedAtInstant = Date.parse(attestedAt);
-  const recoveredAtInstant = Date.parse(at);
-  if (claimedAt === null || !Number.isFinite(claimedAt)) return;
-  if (!Number.isFinite(attestedAtInstant) || !Number.isFinite(recoveredAtInstant)) return;
-  if (claimedAt > attestedAtInstant || attestedAtInstant > recoveredAtInstant) return;
-  releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: callerId, at });
+  input: { workflowId: string; priorSessionId: string | null; callerId: string; attestedAt: string; at: string; required: boolean },
+): IntegrationMergeLease | null {
+  const { workflowId, priorSessionId, callerId, attestedAt, at } = input;
+  const workflow = readExecutionStateGraph(tx).data.workflows.find((candidate) => candidate.state.id === workflowId);
+  const claim = workflow?.integrationLease ?? null;
+  const row = claim === null ? undefined : workflow?.plans.find((candidate) => candidate.plan.id === claim.plan_id);
+  const metadata = row?.plan.metadata;
+  const snapshot = workflow === undefined ? undefined : {
+    ...workflow.state,
+    plans: workflow.plans.map((candidate) => candidate.plan),
+  } as WorkflowSnapshot;
+  const target = snapshot === undefined ? undefined :
+    deliveryRouteOf(snapshot) === "integration" ? snapshot.branch?.integration : snapshot.branch?.target;
+  const claimedAt = claim === null ? NaN : Date.parse(claim.claimed_at);
+  const stopAt = Date.parse(attestedAt);
+  const recoveryAt = Date.parse(at);
+  const cause =
+    claim === null ? "no held integration claim remains" :
+    priorSessionId === null || priorSessionId === callerId || claim.holder !== priorSessionId ? `the claim belongs to ${claim.holder}, not the named predecessor` :
+    row === undefined ? `claim plan ${claim.plan_id} is not registered in this workflow` :
+    !isPlainObject(metadata) || metadata.working_branch !== claim.source_branch ? `claim source ${claim.source_branch} does not match its registered row scope` :
+    !isNonEmptyString(target) || target !== claim.target_branch ? `claim target ${claim.target_branch} does not match the registered target ${String(target)}` :
+    !Number.isFinite(claimedAt) || !Number.isFinite(stopAt) || !Number.isFinite(recoveryAt) ? "claim or stop time is not a finite instant" :
+    claimedAt > stopAt ? "the claim was taken after the attested stop" :
+    stopAt > recoveryAt ? "the attested stop is in the future" : null;
+  if (cause === null) return claim;
+  if (!input.required) return null;
+  throw invalidWorkflowTransition(
+    `workflow ${workflowId} cannot renew predecessor recovery: ${cause}. The current binding and claim are unchanged. ` +
+      `Read this workflow's actual claim and plan scope. With no claim, resume ordinary plan operations using the current binding; ` +
+      `a current or foreign holder finishes its own attempt through plan complete. Correct this row's source scope through ` +
+      `plan prepare when needed, or retry mstar session recover with a new operation id and full stop evidence whose instant ` +
+      `covers the named predecessor's claim and is not in the future. For an absent claim plan, use the documented store execution ` +
+      `restore-preview --backup <valid-pre-corruption-backup> --out <preview>, then store execution restore --preview <preview> ` +
+      `--operator <name> --authorization <ref>; do not hand-edit state.`,
+    {
+      workflow_id: workflowId, session_id: callerId, prior_session_id: priorSessionId,
+      claim: claim ?? null, registered_source: isPlainObject(metadata) ? metadata.working_branch ?? null : null,
+      registered_target: target ?? null, attested_at: attestedAt, recovered_at: at, cause,
+    },
+  );
 }
 
-/**
- * Whether an immutable successful coordinator-recovery receipt records the
- * chain: the CURRENT binding (sessionId) was created by a recovery from the
- * named predecessor. This is the trust anchor for the claim-continuation path —
- * without a matching receipt, an arbitrary session id is never accepted.
- */
+/** The successful receipt must have created this exact current binding. */
 function hasCoordinatorRecoveryChain(
   tx: ExecutionTransaction,
   workflowId: string,
-  sessionId: string,
+  current: SessionRow,
   priorSessionId: string,
 ): boolean {
-  const rows = tx.db
-    .prepare("select result_json from execution_operations where workflow_id = ? and plan_id is null order by epoch desc, committed_at desc")
-    .all(workflowId) as Array<{ result_json?: unknown }>;
-  for (const row of rows) {
-    const raw: unknown = typeof row.result_json === "string" ? (JSON.parse(row.result_json) as unknown) : undefined;
-    if (!isPlainObject(raw)) continue;
+  const binding = tx.db.prepare(
+    "select bound_at from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ? and epoch = ?",
+  ).get(workflowId, current.ref.sessionId, tx.epoch) as { bound_at: string } | undefined;
+  if (binding === undefined) return false;
+  const token = executionToken("session", tx.storeId, tx.epoch, [workflowId, "coordinator", current.ref.sessionId], current.revision);
+  const receipts = tx.db.prepare(
+    "select result_json from execution_operations where workflow_id = ? and plan_id is null and store_id = ? and epoch = ? and committed_at = ?",
+  ).all(workflowId, tx.storeId, tx.epoch, binding.bound_at) as Array<{ result_json: string }>;
+  for (const receipt of receipts) {
+    const raw: unknown = JSON.parse(receipt.result_json);
+    if (!isPlainObject(raw) || raw.token !== token || raw.storeId !== tx.storeId || raw.epoch !== tx.epoch) continue;
     const data = raw.data;
     const recovery = raw.recovery;
     if (!isPlainObject(data) || !isPlainObject(recovery)) continue;
-    if (data.sessionId === sessionId && data.role === "coordinator" && recovery.prior_session_id === priorSessionId) return true;
+    if (
+      data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId &&
+      data.sessionId === current.ref.sessionId && data.role === "coordinator" &&
+      recovery.prior_session_id === priorSessionId
+    ) return true;
   }
   return false;
 }
