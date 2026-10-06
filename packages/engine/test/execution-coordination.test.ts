@@ -37,6 +37,7 @@ import {
   type ExecutionPlanCall,
 } from "../src/execution-coordination.js";
 import { captureIssue, getIssue, type CaptureInput } from "../src/issue.js";
+import { mutateExecutionWorkflow } from "../src/execution-workflow.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import {
   bindExecutionSession,
@@ -246,6 +247,29 @@ function completionEvidence(context: StoreContext, sourceSha: string): {
     qc: { decision: "Approve", reports, consolidated },
     qa: { gate: "mandatory", decision: "pass", report: qa },
   };
+}
+
+/** The raw stored JSON text of one plan's coordination block and one workflow's operations. */
+function storedCoordinationText(context: StoreContext, planId: string): string {
+  const [row] = rows(
+    context,
+    `select coordination_json from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${planId}'`,
+  );
+  return String(row!.coordination_json);
+}
+
+function storedOperationReceipts(context: StoreContext): string {
+  const [row] = rows(
+    context,
+    `select group_concat(operation_id || '=' || result_json, '|') as joined from execution_operations where workflow_id = '${WORKFLOW_ID}'`,
+  );
+  return String(row!.joined ?? "");
+}
+
+/** The raw stored JSON of the addressed workflow header. */
+function storedWorkflowState(context: StoreContext): string {
+  const [row] = rows(context, `select state_json from execution_workflows where workflow_id = '${WORKFLOW_ID}'`);
+  return String(row!.state_json);
 }
 
 /** The recorded completion block of a coordination view, or a failed assertion. */
@@ -846,12 +870,24 @@ async function realStandaloneFixture(
     state.branch = { source: `feature/${OWN_PLAN}`, target: "main" };
     if (deliveryKind === "verification/report-only") {
       state.completion_policy = "acceptance report";
-      state.delivery = { completion: { policy: "acceptance report", evidence: "report.md" } };
     }
     delete state.integration_worktree_path;
     handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
   } finally {
     handle.close();
+  }
+  if (deliveryKind === "verification/report-only") {
+    // Record the explicit matching fulfilment through the ordinary public
+    // workflow evidence action, never a raw injection.
+    const workflow = (await readExecutionState(context)).data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
+    if (workflow === undefined) throw new Error("fixture: workflow not registered");
+    await mutateExecutionWorkflow(domainContext(context, fixture.coordinatorCaller), {
+      operationId: `delivery-${label}`,
+      session: fixture.coordinator,
+      expected: workflow.workflowToken,
+      workflowId: WORKFLOW_ID,
+      operation: { kind: "delivery", delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } } },
+    } as Parameters<typeof mutateExecutionWorkflow>[1]);
   }
   return { ...fixture, sourceSha, worktree };
 }
@@ -996,7 +1032,8 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     // Replay: identical request, Git/evidence left intact on the first attempt
     // then made UNAVAILABLE. The recorded receipt is served byte-stably.
     rmSync(fixture.integrationPath, { recursive: true, force: true });
-    const doneSnapshot = readJson(planRow(context, OWN_PLAN).coordination);
+    const storedBefore = storedCoordinationText(context, OWN_PLAN);
+    const receiptsBefore = storedOperationReceipts(context);
     const replayToken = await planTokenOf(fixture, OWN_PLAN);
     const afterFirst = footprint(context);
     const replay = await planCall(fixture, OWN_PLAN, "complete-int", replayToken, {
@@ -1005,10 +1042,11 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       integration: { base_sha: baseSha, result_sha: resultSha },
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
+    // Byte-stable: the stored coordination JSON and every operation receipt are
+    // exactly what the first attempt committed.
+    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedBefore);
+    expect(storedOperationReceipts(context)).toBe(receiptsBefore);
     expect(replay.data.coordination?.completion).toEqual(receipt.data.coordination?.completion);
-    expect(completionOf2(replay.data.coordination).completed_at).toBe(completion?.completed_at);
-    expect(readJson(planRow(context, OWN_PLAN).coordination)).toEqual(doneSnapshot);
-    // Replay is a read: no new plan revision or operation row.
     expect(footprint(context)).toEqual(afterFirst);
   }, 30000);
 
@@ -1044,12 +1082,16 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
 
     // The development replay is a recorded-receipt read even after the source
     // checkout is removed: no Git is re-run.
+    const storedBefore = storedCoordinationText(context, OWN_PLAN);
+    const storedWorkflowBefore = storedWorkflowState(context);
     rmSync(fixture.worktree, { recursive: true, force: true });
     const replay = await planCall(fixture, OWN_PLAN, "complete-sa", await planTokenOf(fixture, OWN_PLAN), {
       kind: "complete",
       evidence,
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
+    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedBefore);
+    expect(storedWorkflowState(context)).toBe(storedWorkflowBefore);
     expect(replay.data.coordination?.completion).toEqual(receipt.data.coordination?.completion);
   }, 30000);
 
@@ -1058,8 +1100,9 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     const { context } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-ro", undefined);
     await progressPlan(fixture, OWN_PLAN, "progress-ro", "InProgress");
-    // The report-only completion carries no source Git fields: the route consumes
-    // the already-recorded fulfilment and verifies nothing in Git.
+    // Remove the source checkout: the report-only route must consult no Git at
+    // all, and its completion must carry null source facts.
+    rmSync(fixture.worktree, { recursive: true, force: true });
     const evidence = reportOnlyEvidence(context);
     const before = footprint(context);
     const contaminatedToken = await planTokenOf(fixture, OWN_PLAN);
@@ -1079,17 +1122,24 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     } as CoordinationOperation);
     expect(receipt.data.plan.status).toBe("Done");
     const completion = receipt.data.coordination?.completion;
-    expect(completion?.source_sha).toBeNull();
+    // Every source field is null on this route: no Git is consulted or invented.
+    expect(completion).toMatchObject({
+      source_branch: null,
+      source_sha: null,
+      worktree_path: null,
+      review_base: null,
+      review_head: null,
+    });
     expect(completion?.integration).toBeUndefined();
 
     // Replay is byte-stable and does not require the registered fulfilment twice.
-    const snapshotAfter = readJson(planRow(context, OWN_PLAN).coordination);
+    const storedAfter = storedCoordinationText(context, OWN_PLAN);
     const replay = await planCall(fixture, OWN_PLAN, "complete-ro", await planTokenOf(fixture, OWN_PLAN), {
       kind: "complete",
       evidence,
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
-    expect(readJson(planRow(context, OWN_PLAN).coordination)).toEqual(snapshotAfter);
+    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedAfter);
   }, 30000);
 
   test("a report-only row whose registered fulfilment is missing refuses with its own cause", async () => {
@@ -1290,7 +1340,8 @@ describe("execution-issue-authority: the store is the capture authority", () => 
     const { context } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-bucket-own", undefined);
     await preparePlan(fixture, PEER_PLAN, "prepare-bucket-peer", undefined);
-    // Give each row a DIFFERENT own project id, and the workflow header a third.
+    // Give each row a DIFFERENT own project id, and the WORKFLOW HEADER a third
+    // (project B), so a header-derived bucket would be distinguishable.
     withRaw(context, (db) => {
       for (const [planId, projectId] of [
         [OWN_PLAN, "proj-row-a"],
@@ -1307,6 +1358,12 @@ describe("execution-issue-authority: the store is the capture authority", () => 
           planId,
         );
       }
+      const [workflow] = db
+        .prepare("select state_json from execution_workflows where workflow_id = ?")
+        .all(WORKFLOW_ID) as Array<{ state_json?: unknown }>;
+      const header = JSON.parse(String(workflow!.state_json)) as Record<string, unknown>;
+      header.project = "proj-header-b";
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(header), WORKFLOW_ID);
     });
 
     const token = await planTokenOf(fixture, OWN_PLAN);
@@ -1320,8 +1377,33 @@ describe("execution-issue-authority: the store is the capture authority", () => 
     const [issue] = await linkedPlanIssues(context, OWN_PLAN);
     expect(issue).toBeDefined();
     const detail = await getIssue(context, issue!.id);
-    // The issue carries the ADDRESSED row's own project, never the sibling's.
+    // The issue carries the ADDRESSED row's own project, never the sibling's or
+    // the conflicting header's project B.
     expect(detail.projectId).toBe("proj-row-a");
+    expect(detail.provenance.some((entry) => entry.kind === "plan" && entry.target === OWN_PLAN)).toBe(true);
+    expect(detail.provenance.some((entry) => entry.target === PEER_PLAN)).toBe(false);
+
+    // Close that same issue through the ordinary residual-close, under its own
+    // current revision and the row's current plan token; the provenance is retained.
+    const closeToken = await planTokenOf(fixture, OWN_PLAN);
+    const closed = await residualCloseExecutionPlan(domainContext(context, fixture.coordinatorCaller), {
+      operationId: "residual-bucket-close",
+      session: fixture.coordinator,
+      expected: closeToken,
+      planId: OWN_PLAN,
+      operation: {
+        kind: "residual-close",
+        issueId: issue!.id,
+        disposition: "resolved",
+        evidence: { reason: "fixed", references: ["review/qc1.md"] },
+        expectedIssueRevision: detail.revision,
+      },
+    });
+    expect(closed.replayed).toBe(false);
+    const after = await getIssue(context, issue!.id);
+    expect(after.disposition).toBe("resolved");
+    expect(after.projectId).toBe("proj-row-a");
+    expect(after.provenance.some((entry) => entry.kind === "plan" && entry.target === OWN_PLAN)).toBe(true);
   }, 30000);
 });
 

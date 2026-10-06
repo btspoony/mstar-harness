@@ -3199,9 +3199,11 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     // A mistaken config naming a branch the ACTUAL checkout is not on refuses and
     // leaves the valid prior config alone.
     const activeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const refusedBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() => reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" })),
     ).toMatch(/^coordination\.(git-proof|scope-mismatch|invalid-input)$/);
+    expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
 
     // The real correction: switch the disposable feature checkout onto the new
     // branch, then prepare that actual scope while the row stays active.
@@ -3213,6 +3215,8 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     expect((row.metadata as Record<string, unknown>).working_branch).toBe("feature/plan-a-v2");
     // A config revision never resets the row's own status or progress.
     expect(row.status).toBe("InProgress");
+    const afterRevision = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(afterRevision.row.coordination?.progress).toMatchObject({ summary: "start" });
 
     // A Done row is not revisable configuration any more.
     updatePlanRow(fixture, PLAN_ID, (current) => ({ ...current, status: "Done" }));

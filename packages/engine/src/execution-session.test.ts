@@ -317,7 +317,10 @@ describe("execution session recovery (S2/E03)", () => {
     expect(foreign.recovery).toMatchObject({ outcome: "unresolved", commitState: "none", applied: [] });
     expect(foreign.recovery.unresolved).toHaveLength(1);
     expect(foreign.recovery.unresolved[0]).toMatchObject({ component: "session", path: "session" });
-    expect(foreign.recovery.unresolved[0]?.needed).toContain(FOREIGN_COORDINATOR_ID);
+    // The supported, ownership-preserving recovery names the RECORDED HOLDER
+    // (stop/recovery with its attestation), never the foreign caller.
+    expect(foreign.recovery.unresolved[0]?.needed).toContain(COORDINATOR_ID);
+    expect(foreign.recovery.unresolved[0]?.needed).not.toContain(FOREIGN_COORDINATOR_ID);
     // The holder is left exactly where it was, and keeps working.
     expect(footprint(fixture.context)).toEqual(before);
     const holder = await resumeExecutionSession(domainContext(fixture.context, fixture.coordinatorCaller), fixture.coordinator.data);
