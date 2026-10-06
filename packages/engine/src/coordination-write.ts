@@ -411,8 +411,8 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
   const allowed = ["qa_gate", "findings_cleanup", "prepared_by", "prepared_at"];
   const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) =>
     invalid("coordination.row.prepared-field", `${what} has unexpected key: ${key}`));
-  if (!["mandatory", "pm-acceptance"].includes(String(value.qa_gate))) violations.push(invalid("coordination.row.prepared-field", `${what}.qa_gate is invalid`));
-  if (!["zero-residual", "allow-residual"].includes(String(value.findings_cleanup))) violations.push(invalid("coordination.row.prepared-field", `${what}.findings_cleanup is invalid`));
+  if (value.qa_gate !== "mandatory" && value.qa_gate !== "pm-acceptance") violations.push(invalid("coordination.row.prepared-field", `${what}.qa_gate is invalid`));
+  if (value.findings_cleanup !== "zero-residual" && value.findings_cleanup !== "allow-residual") violations.push(invalid("coordination.row.prepared-field", `${what}.findings_cleanup is invalid`));
   for (const key of ["prepared_by", "prepared_at"]) if (!isNonEmptyString(value[key])) violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
   return violations;
 }
@@ -437,15 +437,17 @@ function validateCompletionRecord(value: unknown, what: string, route: RowValida
   if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {
     violations.push(invalid("coordination.row.completion-field", `${what}.worktree_path must be an absolute source checkout${reportOnly ? " or null" : ""}`));
   }
-  if (!isPlainObject(value.qc) || !["Approve", "Approve with residuals"].includes(String(value.qc.decision)) || !Array.isArray(value.qc.reports) || value.qc.reports.length === 0) {
+  if (!isPlainObject(value.qc) || (value.qc.decision !== "Approve" && value.qc.decision !== "Approve with residuals") || !Array.isArray(value.qc.reports) || value.qc.reports.length === 0) {
     violations.push(invalid("coordination.row.completion-field", `${what}.qc must record approved QC reports`));
   } else {
+    for (const key of Object.keys(value.qc)) if (!["decision", "reports", "consolidated"].includes(key)) violations.push(invalid("coordination.row.completion-field", `${what}.qc has unexpected key: ${key}`));
     for (const [index, report] of value.qc.reports.entries()) violations.push(...validateEvidenceRef(report, `${what}.qc.reports[${index}]`));
     violations.push(...validateEvidenceRef(value.qc.consolidated, `${what}.qc.consolidated`));
   }
-  if (!isPlainObject(value.qa) || !["mandatory", "pm-acceptance"].includes(String(value.qa.gate)) || value.qa.decision !== "pass") {
+  if (!isPlainObject(value.qa) || (value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance") || value.qa.decision !== "pass") {
     violations.push(invalid("coordination.row.completion-field", `${what}.qa must record passing acceptance evidence`));
   } else {
+    for (const key of Object.keys(value.qa)) if (!["gate", "decision", "report"].includes(key)) violations.push(invalid("coordination.row.completion-field", `${what}.qa has unexpected key: ${key}`));
     violations.push(...validateEvidenceRef(value.qa.report, `${what}.qa.report`));
   }
   if (route !== "integration" && value.integration !== undefined) {

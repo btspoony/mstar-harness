@@ -71,6 +71,7 @@ import {
   integrationDiverged,
   integrationUnresolved,
   missingDecision,
+  projectBucketOf,
   readCompletionEvidence,
   requireProgressStatus,
   rowCoordinationOf,
@@ -887,13 +888,6 @@ function findPlanRow(snapshot: WorkflowSnapshot, planId: string): { row: PlanRow
   return matches[0];
 }
 
-/** Project bucket of a plan row — `metadata.project_id` else `_default`. */
-function projectIdOf(row: PlanRow): string {
-  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
-  const declared = metadata.project_id;
-  if (isNonEmptyString(declared)) return safePlanId(declared, "metadata.project_id");
-  return _DEFAULT_PROJECT;
-}
 
 
 /** Resolve recorded row source facts; no Assignment bytes or preparation ceremony. */
@@ -910,7 +904,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   assertSnapshotPath(harnessRoot, workflowId, snapshotPath);
   const snapshot = readSnapshot(dirname(snapshotPath));
   const { row } = findPlanRow(snapshot, planId);
-  const projectId = projectIdOf(row);
+  const projectId = projectBucketOf(row);
   if (!isNonEmptyString(row.file)) throw invalidInput(`plan ${planId} has no registered file; supply its canonical plan file through workflow registration or Prepare amendment`);
   const plan = resolveRegisteredPlanFile({ harnessRoot, planId, file: row.file });
   const recorded = planScopeOfMetadata(row, snapshot);
@@ -1520,7 +1514,7 @@ function planScopeOfMetadata(row: PlanRow, snapshot: WorkflowSnapshot): PlanCoor
   if (worktreePath === null && workingBranch === null) return null;
   const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
   return {
-    projectId: projectIdOf(row),
+    projectId: projectBucketOf(row),
     worktreePath,
     workingBranch,
     sourceBranch: isNonEmptyString(branch.source) ? branch.source : null,
@@ -1554,7 +1548,7 @@ export async function readPlanCoordination(
   assertCoordinatorBinding(session, sessionPath, snapshot);
   const scope = planScopeOfMetadata(row, snapshot);
   return {
-    ...buildView(harnessRoot, session.workflow_id, projectIdOf(row), planScopeOfMetadata(row, snapshot), snapshot, row, session, sessionPath),
+    ...buildView(harnessRoot, session.workflow_id, projectBucketOf(row), planScopeOfMetadata(row, snapshot), snapshot, row, session, sessionPath),
     catalog_pin: await readExecutionCatalogPin({ harnessRoot, workflowId: session.workflow_id, planId: targetPlanId, row }),
   };
 }
@@ -2269,7 +2263,7 @@ async function assertRecordedSourceCheckout(scope: ResolvedPlanScope, snapshot: 
   if (canonicalTarget(main.root) === checkoutRoot || checkoutRoot === canonicalTarget(snapshot.integration_worktree_path ?? scope.harnessRoot)) {
     throw invalidInput("the plan source must not be the primary or integration checkout; select its owned feature worktree with plan prepare");
   }
-  if (PROTECTED_SOURCE_BRANCHES[workingBranch] || workingBranch === snapshot.branch?.target || workingBranch === snapshot.branch?.integration) {
+  if (PROTECTED_SOURCE_BRANCHES[workingBranch] === true || workingBranch === snapshot.branch?.target || workingBranch === snapshot.branch?.integration) {
     throw invalidInput("the plan source branch must differ from protected target and integration branches; revise workingBranch with plan prepare", { working_branch: workingBranch });
   }
   const actual = gitRead(worktreePath, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -2842,7 +2836,7 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
     throw invalidInput("expectedRevision belongs to the request, not the operation");
   }
   const kind = operation.kind;
-  if (IMPLEMENTED_OPERATIONS[kind] !== true) {
+  if (typeof kind !== "string" || IMPLEMENTED_OPERATIONS[kind] !== true) {
     throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
       operation: kind,
     });
@@ -6414,7 +6408,6 @@ function createRecoveryEnvelope(session: CoordinationSession): { path: string; c
       existing.role !== session.role ||
       existing.session_id !== session.session_id ||
       existing.workflow_id !== session.workflow_id ||
-      existing.plan_id !== session.plan_id ||
       existing.harness_root !== session.harness_root
     ) {
       throw recoveryRefusal(
@@ -6446,7 +6439,6 @@ function reclaimRecoveryEnvelope(path: string, expected: CoordinationSession): v
     current.role !== expected.role ||
     current.session_id !== expected.session_id ||
     current.workflow_id !== expected.workflow_id ||
-    current.plan_id !== expected.plan_id ||
     current.harness_root !== expected.harness_root
   ) return;
   try {

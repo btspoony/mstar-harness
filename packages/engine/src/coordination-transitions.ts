@@ -19,6 +19,7 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { _DEFAULT_PROJECT } from "./project.js";
+import { assertSafePathComponent } from "./path-component.js";
 
 export type CoordinationRole = "coordinator";
 export type CoordinationSeat = { role: CoordinationRole; sessionId: string };
@@ -27,8 +28,15 @@ export function summarize(violations: readonly { message: string }[]): string {
   return violations.map((violation) => violation.message).join("; ");
 }
 
-export function projectBucketOf(snapshot: WorkflowSnapshot): string {
-  return isNonEmptyString(snapshot.project_id) ? snapshot.project_id : _DEFAULT_PROJECT;
+export function projectBucketOf(row: PlanRow): string {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  if (!isNonEmptyString(metadata.project_id)) return _DEFAULT_PROJECT;
+  try {
+    assertSafePathComponent(metadata.project_id, "metadata.project_id");
+  } catch (error) {
+    throw new CoordinationError("coordination.invalid-input", error instanceof Error ? error.message : String(error), { field: "metadata.project_id" });
+  }
+  return metadata.project_id;
 }
 
 export function rowStatusOf(row: PlanRow): string {
@@ -168,8 +176,8 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
   if (!isPlainObject(value.qc)) throw new CoordinationError("coordination.invalid-input", "completion evidence requires qc");
   assertExactKeys(value.qc, ["decision", "reports", "consolidated"], "completion evidence qc");
   const qc = value.qc;
-  if (!["Approve", "Approve with residuals"].includes(String(qc.decision))) {
-    throw new CoordinationError("coordination.invalid-input", "complete requires qc.decision Approve or Approve with residuals; fix rejected findings and publish approved QC first");
+  if (qc.decision !== "Approve" && qc.decision !== "Approve with residuals") {
+    throw new CoordinationError("coordination.invalid-input", "qc.decision must be the string Approve or Approve with residuals; correct the completion evidence and retry plan complete");
   }
   if (!Array.isArray(qc.reports) || qc.reports.length === 0 || !qc.reports.every(isNonEmptyString)) {
     throw new CoordinationError("coordination.invalid-input", "qc.reports must name at least one report");
@@ -177,8 +185,8 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
   if (!isNonEmptyString(qc.consolidated)) throw new CoordinationError("coordination.invalid-input", "qc.consolidated must name the plan QC decision report");
   if (!isPlainObject(value.qa)) throw new CoordinationError("coordination.invalid-input", "completion evidence requires a QA or PM acceptance report");
   assertExactKeys(value.qa, ["gate", "decision", "report"], "completion evidence qa");
-  if (!["mandatory", "pm-acceptance"].includes(String(value.qa.gate)) || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
-    throw new CoordinationError("coordination.invalid-input", "qa evidence requires gate mandatory or pm-acceptance, decision pass and the acceptance report");
+  if ((value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance") || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
+    throw new CoordinationError("coordination.invalid-input", "qa evidence requires string gate mandatory or pm-acceptance, decision pass and the acceptance report; correct the completion evidence and retry plan complete");
   }
   const qaGate = value.qa.gate as ValidatedCompletionEvidence["qa_gate"];
   const qaReport = value.qa.report;
