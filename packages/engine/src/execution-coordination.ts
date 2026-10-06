@@ -1762,7 +1762,7 @@ function completeInTransaction(
     // own claim for this plan and source. A live foreign holder refuses with the
     // ordinary recovery route; a claim left by a stopped owner is settled by
     // `releaseStoppedMergeClaim`, never silently here.
-    requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch, at);
+    requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch);
   }
   // §4.1 the authoritative findings gate on THIS transaction's handle: an issue
   // captured after the preflight refuses the completion instead of being judged
@@ -1789,7 +1789,6 @@ function requireOwnMergeClaim(
   planId: string,
   sourceBranch: string,
   targetBranch: string,
-  at: string,
 ): void {
   const lease = witness.view.integrationLease;
   if (lease === null) return;
@@ -1814,27 +1813,28 @@ function requireOwnMergeClaim(
       "coordination.identity-mismatch",
       `plan ${planId} merge lease is held by the LIVE coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
         `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released; resume that holder's own binding, ` +
-        `or run recoverExecutionCoordinator naming it with stop attestation, then retry this completion`,
+        `then retry this completion`,
       { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
     );
   }
-  // §4.2 the claim names a session this epoch does NOT hold active, the claim
-  // itself matches this attempt (plan/source/target) and the caller IS the
-  // workflow's current live coordinator (`liveSession` admitted it to reach this
-  // frame, and there is exactly one coordinator row). That is a merge claim left
-  // by a STOPPED predecessor in the session the caller has recovered: ordinary
-  // completion releases it as this attempt's own, recording the predecessor on
-  // the release, because otherwise the recovered coordinator could never finish
-  // the row and the only alternatives would be a terminal close or a re-merge.
-  // No new claim/transfer verb is introduced: the release helper records that
-  // provenance on the tombstone.
-  releaseIntegrationMergeLease(tx, {
-    workflowId: witness.workflowId,
-    claim: lease,
-    releasedBy: witness.session.sessionId,
-    reason: `recovered-predecessor:${lease.holder}`,
-    now: at,
-  });
+  // §4.2 the claim matches this attempt but names a session this epoch does NOT
+  // hold active. That is NOT by itself authority to take it: a revoked, suspended,
+  // epoch-invalidated or simply unrelated old row is not "the predecessor this
+  // coordinator recovered". The ONLY recorded linkage that authorises replacing
+  // such a holder is the workflow-wide recovery transition, which requires the
+  // operator's stop/reload attestation naming THIS holder and, once accepted,
+  // revokes it and settles its matching claim itself (guarded by
+  // `claimed_at <= recovery instant`, so a newer attempt's claim survives). A row
+  // that is merely non-active — or a claim taken after the stop — is refused
+  // here, with the supported route named, instead of being released on a guess.
+  throw new CoordinationError(
+    "coordination.merge-lease-stopped-owner",
+    `plan ${planId} merge lease is held by ${JSON.stringify(lease.holder)}, whose coordinator session is not active at epoch ` +
+      `${tx.epoch}. This completion does not take over a stopped owner's claim: run recoverExecutionCoordinator naming the recorded ` +
+      `holder ${JSON.stringify(lease.holder)} with its stop/reload attestation — that transition revokes the holder and settles its ` +
+      `matching claim — then retry this completion as the recovered coordinator.`,
+    { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId, holder_epoch: lease.claimed_at ?? null },
+  );
 }
 
 /* ------------------------------------------------------------------------ *
