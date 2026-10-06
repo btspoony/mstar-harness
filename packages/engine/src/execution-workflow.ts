@@ -78,12 +78,9 @@ import {
   PLAN_PARALLELISM_VALUES,
   gitRead,
   prepareAmendmentComponent,
-  revalidateGitProofWitness,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
-  applyEntailedCompletion,
-  completionFrameFor,
   readEntailedCompletions,
   releaseStoppedMergeClaim,
   resolveSparseOwnSession,
@@ -709,9 +706,6 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
       );
     }
   }
-  for (const proof of evidence.completions ?? []) {
-    if (proof.gitWitness !== undefined) revalidateGitProofWitness(proof.gitWitness);
-  }
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1151,13 +1145,12 @@ export async function mutateExecutionWorkflow(
  * so a close that refuses leaves both the routing and the terminal state
  * exactly where they were.
  *
- * §R5/§R10 a terminal `completed` close composes the bookkeeping its owned rows'
- * recorded evidence entails (E10) — the report-only fulfilment, the row `Done`
- * delta and the ownership release — BEFORE the terminal decision, through the
- * same completion rules the plan route's `complete` applies. Everything
- * therefore commits on ONE handle in ONE transaction: a crash leaves either the
- * whole close or none of it, and the terminal decision judges the rows this
- * transaction just completed.
+ * §R5/§R10 a terminal `completed` close composes the ONE report-only fulfilment
+ * its owned rows' recorded evidence entails (E10) BEFORE the terminal decision.
+ * A row `Done` is NOT composed here: the plan's own `complete` is the single
+ * place that happens, so this close never completes a row in a sibling step.
+ * Everything therefore commits on ONE handle in ONE transaction: a crash leaves
+ * either the whole close or none of it.
  *
  * §R11/A21 a `failed`/`stopped` close composes no row bookkeeping at all (no
  * successful-delivery precondition): it settles the workflow's own stopped
@@ -1190,7 +1183,7 @@ function applyWorkflowOperation(input: {
   }
   const composed =
     !residueRepair && operation.kind === "lifecycle" && operation.status === "completed"
-      ? composeEntailedCompletions({ tx, witness, read, evidence, at })
+      ? composeEntailedCompletions({ tx, read, evidence })
       : { completions: [] as readonly EntailedRowCompletion[], fulfilment: null };
   // §R11/A21 the failed/stopped close settles the workflow's OWN merge claim:
   // it goes when its holder's session is not active at this epoch, and stays
@@ -1243,54 +1236,30 @@ function applyWorkflowOperation(input: {
 }
 
 /**
- * §R5/§R10 the row completions and the report-only fulfilment one terminal
- * `completed` close composes, applied inside the close's own transaction. Each
- * proof is matched to the row the transaction reads RIGHT NOW: a row that
- * already records `Done` in that read composes nothing (a sibling operation in
- * the window is never rewritten), and a row the preflight proved is completed
- * here through the same rules `complete` applies.
+ * §R5/§R10 the report-only fulfilment one terminal `completed` close composes,
+ * applied inside the close's own transaction. Each proof is matched to the row
+ * the transaction reads RIGHT NOW: a proof whose row this transaction no longer
+ * finds contributes nothing. A row completion is NOT composed here — the plan's
+ * own `complete` operation is the single place a row becomes `Done` — so this
+ * only carries the recorded fulfilment forward.
  */
 function composeEntailedCompletions(input: {
   tx: ExecutionTransaction;
-  witness: ExecutionWorkflowWitness;
   read: ResolvedWorkflowWrite;
   evidence: WorkflowEvidence;
-  at: string;
 }): { completions: readonly EntailedRowCompletion[]; fulfilment: { policy: string; evidence: string } | null } {
-  const { tx, witness, read, evidence, at } = input;
+  const { tx, read, evidence } = input;
   const proofs = evidence.completions ?? [];
   const pinned = evidence.pinned;
   if (proofs.length === 0 || pinned === undefined) return { completions: [], fulfilment: null };
   let fulfilment: { policy: string; evidence: string } | null = null;
   const applied: EntailedRowCompletion[] = [];
   for (const proof of proofs) {
-    // Each proof is matched to the row this transaction reads RIGHT NOW, and the
-    // ownership facts are read with it: a row another step of THIS transaction
-    // just completed is skipped, and a release composed for an earlier row is
-    // already visible to the next one instead of being re-derived from a stale
-    // sibling view.
+    // Each proof is matched to the row this transaction reads RIGHT NOW: a row
+    // another step of THIS transaction already removed composes nothing.
     const current = readExecutionWorkflowWitness(tx, read);
     const row = current.view.plans.find((candidate) => candidate.plan.id === proof.planId);
     if (row === undefined) continue;
-    if (proof.completesRow && rowStatusOf(row.plan as unknown as PlanRow) === "Done") continue;
-    const snapshot = {
-      ...(current.view.state as unknown as Record<string, unknown>),
-      plans: current.view.plans.map((plan) => plan.plan as unknown as PlanRow),
-      ...(current.view.integrationLease === null ? {} : { integration_merge_lease: current.view.integrationLease }),
-    } as unknown as WorkflowSnapshot;
-    applyEntailedCompletion({
-      tx,
-      frame: completionFrameFor({
-        workflow: current.view,
-        planId: proof.planId,
-        sessionId: witness.session.sessionId,
-      }),
-      snapshot,
-      pinned,
-      proof,
-      at,
-      what: "close",
-    });
     if (proof.fulfilment !== null) fulfilment = proof.fulfilment;
     applied.push(proof);
   }
