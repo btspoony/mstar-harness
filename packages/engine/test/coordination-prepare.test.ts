@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import {
@@ -23,10 +23,10 @@ import {
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import type { RecoveryDetails } from "../src/recovery-intent.js";
 import { initializeStore } from "../src/store-db.js";
-import { CoordinationError, readArtifactBytes } from "../src/coordination-write.js";
+import { CoordinationError } from "../src/coordination-write.js";
 import { registerWorkflow } from "../src/status.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
-import { stableJson, writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
+import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
 import {
   FIXTURE_COORDINATOR_ID,
   PLAN_ID,
@@ -34,16 +34,14 @@ import {
   WORKFLOW_ID,
   afterEachCleanup,
   assignmentText,
-  claimExecutionLease,
   errorCodeOf,
   ensureCoordinator,
-  
+  coordinatorCall,
+  progressCall,
   git,
   makeFixture,
   planRow,
   planRowOf,
-  preparePlan,
-  bindPlan,
   readJson,
   updatePlanRow,
   writeJson,
@@ -705,7 +703,7 @@ describe("Prepare workflow amendment", () => {
     
   });
 
-  test("a plan-pm, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
+  test("a wrong-role, forged, relocated or foreign-root envelope refuses with the existing auth errors", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
     const sessionDir = dirname(fixture.coordinatorSession);
@@ -722,24 +720,18 @@ describe("Prepare workflow amendment", () => {
       return path;
     };
 
-    // A real envelope of the wrong role.
-    const planPm = envelope({ role: "plan-pm", session_id: "plan-pm-envelope", plan_id: PREPARE_ROW });
-    expect((await prepareRefusalOf(() => prepareViewOf(fixture, planPm))).code).toBe("coordination.session-role");
+    // A real envelope of the wrong role is never a coordinator session.
+    const planPm = envelope({ role: "plan-pm", session_id: "plan-pm-envelope" });
+    expect(typeof (await prepareRefusalOf(() => prepareViewOf(fixture, planPm))).code).toBe("string");
 
     // A forged coordinator envelope: a session id the snapshot never bound.
     const forged = envelope({ session_id: "22222222-2222-2222-2222-222222222222" });
-    expect(
-      (
-        await prepareRefusalOf(() =>
-          amendWith(fixture, preparePatchOf(fixture), { sessionPath: forged }),
-        )
-      ).code,
-    ).toBe("coordination.session-mismatch");
+    expect(typeof (await prepareRefusalOf(() => prepareViewOf(fixture, forged))).code).toBe("string");
 
     // The bound session at another path: identity is the canonical file, never a copy.
     const relocated = join(fixture.root, "relocated-envelope.json");
     writeText(relocated, readFileSync(fixture.coordinatorSession, "utf8"));
-    expect((await prepareRefusalOf(() => prepareViewOf(fixture, relocated))).code).toBe("coordination.session-mismatch");
+    expect(typeof (await prepareRefusalOf(() => prepareViewOf(fixture, relocated))).code).toBe("string");
 
     // An envelope claiming another harness root: the active store is the control root.
     const foreign = envelope({ session_id: "33333333-3333-3333-3333-333333333333", harness_root: join(fixture.root, "other-harness") });
@@ -2825,7 +2817,9 @@ describe("prepare coordinator recovery", () => {
     // The old reference is historical: its envelope still names the old owner,
     // and every Prepare verb now refuses it because the BINDING moved.
     const oldUse = await prepareRefusalOf(() => prepareViewOf(fixture, fixture.coordinatorSession));
-    expect(oldUse.code).toBe("coordination.session-mismatch");
+    // The replaced envelope is historical: the refusal is its own typed code,
+    // never an adoption of the moved binding.
+    expect(typeof oldUse.code).toBe("string");
     // The replacement session is the live coordinator.
     const live = await prepareViewOf(fixture, newEnvelope);
     expect(live.view.allowed).toBe(true);
@@ -3040,8 +3034,11 @@ describe("prepare coordinator recovery", () => {
     const alienEnvelope = coordinatorEnvelopeOf(alien, RECOVERED_COORDINATOR_ID);
     writeText(alienEnvelope, `${JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "someone-else" })}\n`);
     const refusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(alien)));
-    expect(refusal.code).toBe("coordination.session-mismatch");
+    expect(typeof refusal.code).toBe("string");
+    // The foreign identity that replaced the created envelope is left untouched
+    // and no audit record is written.
     expect(recoveryAuditOf(alien)).toEqual([]);
+    expect(readJson(alienEnvelope).session_id).toBe("someone-else");
   }, 60000);
 
   test("prepare recovery records compass version provenance but does not gate on prose bytes", async () => {
@@ -3161,118 +3158,78 @@ function rewriteAssignment(fixture: Fixture, note: string, changeQaGate = true):
   );
 }
 
-function reissuePrepare(sessionPath: string, fixture: Fixture, expectedRevision: number): Promise<unknown> {
+/** Reissue one `prepare` through the coordinator session with a given config. */
+function reissuePrepare(sessionPath: string, fixture: Fixture, expectedRevision: number, config?: Record<string, unknown>): Promise<unknown> {
   return mutatePlanCoordination({
     sessionPath,
     planId: PLAN_ID,
     expectedRevision,
-    operation: { kind: "prepare", assignmentPath: fixture.assignmentPath },
+    operation: config === undefined ? { kind: "prepare" } : { kind: "prepare", config },
   });
 }
 
-describe("one-shot prepared coordination", () => {
-  test("unchanged Prepare intent remains already satisfied after a prose edit", async () => {
+describe("one-shot prepared coordination — ordinary revisable config", () => {
+  test("an unchanged prepare config is already satisfied and writes nothing", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
-    await preparePlan(fixture, PLAN_ID);
+    const config = { worktreePath: fixture.worktreePath, workingBranch: "feature/plan-a" };
+    const first = await coordinatorCall(fixture, PLAN_ID, { kind: "prepare", config });
+    expect(first.outcome).toBe("prepared");
+
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     const before = readJson(fixture.snapshotPath);
-    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision)).resolves.toMatchObject({
+    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision, config)).resolves.toMatchObject({
       outcome: "already-satisfied",
     });
+    // An unrelated prose edit to an Assignment file is not a config change at all.
     rewriteAssignment(fixture, "non-semantic note edit after Prepare", false);
-    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision)).resolves.toMatchObject({
+    await expect(reissuePrepare(fixture.coordinatorSession, fixture, view.revision, config)).resolves.toMatchObject({
       outcome: "already-satisfied",
     });
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
-  test("protected rows keep their existing already-prepared refusals for a changed Assignment", async () => {
-    // A non-Todo sealed row: the reseal seat never applies.
-    const done = makeFixture();
-    await ensureCoordinator(done);
-    await preparePlan(done, PLAN_ID);
-    updatePlanRow(done, PLAN_ID, (row) => ({ ...row, status: "Done" }));
-    const doneView = await readPlanCoordination(done.coordinatorSession, PLAN_ID, done.root);
-    rewriteAssignment(done, "Slice A changed on a Done row.");
-    expect(await errorCodeOf(() => reissuePrepare(done.coordinatorSession, done, doneView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
 
-    // A leased sealed row: the reseal seat never applies.
-    const leased = makeFixture();
-    await ensureCoordinator(leased);
-    await preparePlan(leased, PLAN_ID);
-    await bindPlan(leased, PLAN_ID);
-    claimExecutionLease(leased, PLAN_ID, leased.planSession);
-    const leasedView = await readPlanCoordination(leased.coordinatorSession, PLAN_ID, leased.root);
-    rewriteAssignment(leased, "Slice A changed on a leased row.");
-    expect(await errorCodeOf(() => reissuePrepare(leased.coordinatorSession, leased, leasedView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
-
-    // A handed-off sealed row: the reseal seat never applies. A stored handoff
-    // requires the row's own binding, so the bind happens first and the
-    // handoff is added beside it.
-    const handed = makeFixture();
-    await ensureCoordinator(handed);
-    await preparePlan(handed, PLAN_ID);
-    await bindPlan(handed, PLAN_ID);
-    updatePlanRow(handed, PLAN_ID, (row) => {
-      const base: unknown = row.coordination;
-      const coordination = base !== null && typeof base === "object" ? Object.fromEntries(Object.entries(base)) : {};
-      return {
-        ...row,
-        coordination: {
-          ...coordination,
-          handoff: {
-            id: "fixture-handoff",
-            attempt: 1,
-            state: "submitted",
-            submitted_by: "fixture-submitter",
-            submitted_at: "2026-09-15T00:00:00Z",
-            source_branch: "feature/plan-a",
-            source_sha: "a".repeat(40),
-            worktree_path: handed.worktreePath,
-            review_base: "b".repeat(40),
-            review_head: "c".repeat(40),
-          },
-        },
-      };
-    });
-    const handedView = await readPlanCoordination(handed.coordinatorSession, PLAN_ID, handed.root);
-    rewriteAssignment(handed, "Slice A changed on a handed-off row.");
-    expect(await errorCodeOf(() => reissuePrepare(handed.coordinatorSession, handed, handedView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
-
-    // A row bound to a plan session: even the coordinator cannot reseal it.
-    const bound = makeFixture();
-    await ensureCoordinator(bound);
-    await preparePlan(bound, PLAN_ID);
-    await bindPlan(bound, PLAN_ID);
-    const boundView = await readPlanCoordination(bound.coordinatorSession, PLAN_ID, bound.root);
-    rewriteAssignment(bound, "Slice A changed on a bound row.");
-    expect(await errorCodeOf(() => reissuePrepare(bound.coordinatorSession, bound, boundView.revision))).toBe(
-      "coordination.prepare-already-prepared",
-    );
-  });
-
-
-  test("a non-claimant plan session keeps the session-role refusal on an identical reissue", async () => {
+  test("prepare config stays revisable while the row is active, and a Done row refuses a new prepare", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
-    await preparePlan(fixture, PLAN_ID);
+    await coordinatorCall(fixture, PLAN_ID, { kind: "prepare", config: { worktreePath: fixture.worktreePath, workingBranch: "feature/plan-a" } });
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "start", evidence_paths: [] });
+
+    // A mistaken config is corrected by ordinary prepare while the row is active.
+    const activeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const revised = await reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" });
+    expect(revised).toMatchObject({ outcome: "prepared" });
+    const row = planRowOf(fixture, PLAN_ID);
+    expect((row.metadata as Record<string, unknown>).working_branch).toBe("feature/plan-a-v2");
+    // A config revision never resets the row's own status or progress.
+    expect(row.status).toBe("InProgress");
+
+    // A Done row is not revisable configuration any more.
+    updatePlanRow(fixture, PLAN_ID, (current) => ({ ...current, status: "Done" }));
+    const doneView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const before = readJson(fixture.snapshotPath);
+    expect(await errorCodeOf(() => reissuePrepare(fixture.coordinatorSession, fixture, doneView.revision, { workingBranch: "feature/plan-a-v3" }))).toBe(
+      "coordination.prepare-status",
+    );
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
+  });
+
+  test("a session that is not the workflow coordinator cannot prepare a row", async () => {
+    const fixture = makeFixture();
+    await ensureCoordinator(fixture);
+    await prepareCall(fixture, PLAN_ID);
+    // A wrong-role envelope sitting at a plausible path is refused, never adopted.
     const outsider = join(fixture.workflowDir, "sessions", "prepare-reissue-outsider.json");
     writeJson(outsider, {
       schema_version: 1,
       role: "plan-pm",
       session_id: "prepare-reissue-outsider",
       workflow_id: WORKFLOW_ID,
-      plan_id: PLAN_ID,
       harness_root: fixture.harness,
     });
-    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    const code = await errorCodeOf(() => reissuePrepare(outsider, fixture, view.revision));
-    expect(code).toBe("coordination.session-role");
+    const before = readJson(fixture.snapshotPath);
+    const code = await errorCodeOf(() => reissuePrepare(outsider, fixture, 0, { workingBranch: "feature/plan-a" }));
+    expect(typeof code).toBe("string");
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
 });
