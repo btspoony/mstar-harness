@@ -894,8 +894,8 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
               violation(
                 "high",
                 "PHASE6_DANGLING_LEASE",
-                "The workflow still carries a held integration merge lease \u2014 close never releases leases",
-                "Release the integration merge lease with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+                "The workflow still carries a held integration merge mutex; completed close cannot release it, and failed/stopped close requires recorded coordinator stop evidence",
+                "If the mutex holder stopped, run `mstar workflow recover-coordinator` with explicit stop attestation, close the lifecycle as failed or stopped, then re-run `mstar iteration gate --phase 6 --workflow <id>`",
               ),
             );
           }

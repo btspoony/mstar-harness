@@ -195,6 +195,8 @@ export type L1PreDispatchInput = {
   rowWorktreePath: string;
   /** `plans[].metadata.working_branch` — the plan's Working branch. */
   rowWorkingBranch: string;
+  /** Workflow id for a direct coordinator `plan prepare` recovery instruction. */
+  workflowId?: string;
   /** Plan id (`status.json.plans[].id` / `{SDD_DIR}` segment) — message context. */
   planId: string;
 };
@@ -448,7 +450,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
         "high",
         "worktree.l1.feature-scope-missing",
         `metadata.worktree_path is empty for plan "${planId}" — no registered feature worktree to dispatch against`,
-        "record the absolute feature worktree path in the plan row metadata",
+        `use the coordinator's ordinary \`plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan-id ${planId}\` operation to record the absolute feature worktree path and branch`,
       ),
     );
   }
@@ -458,7 +460,7 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
         "high",
         "worktree.l1.feature-branch-missing",
         `metadata.working_branch is empty for plan "${planId}"`,
-        "record the working branch in the plan row metadata",
+        `use the coordinator's ordinary \`plan prepare --workflow ${input.workflowId ?? "<workflow-id>"} --plan-id ${planId}\` operation to record the feature branch`,
       ),
     );
   }

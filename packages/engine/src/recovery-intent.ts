@@ -99,19 +99,14 @@ export type RecoveryDetails = Readonly<{
 export type SemanticSelection = readonly string[];
 
 /**
- * Plan-coordination operations. The envelope is `CoordinationRequest`
- * (`{ sessionPath, planId?, expectedRevision, operation }`).
+ * Direct coordinator plan operations. The addressed workflow and plan are
+ * explicit; operation semantics select the operation's actual payload.
  *
- * Deliberately NOT selected (design §4.2 a/b): `sessionPath` and
- * `expectedRevision` are transport addressing and the row CAS generation — a
- * stale revision alone says nothing about whether the requested effect is
- * still valid, so a replay must not see it as a changed intent.
- * `expectedIssueRevision` (residual-close) IS selected: it is an
- * entity-level constraint on the read set the effect depends on, exactly like
- * an explicitly supplied `expectedFile`.
+ * Deliberately NOT selected: `sessionPath` and `expectedRevision` are
+ * transport addressing and row-CAS freshness, not business intent.
  */
 export const PLAN_OPERATION_SEMANTICS: Readonly<Record<PlanCoordinationOperation["kind"], SemanticSelection>> = {
-  prepare: ["planId", "operation.kind", "operation.assignmentPath"],
+  prepare: ["planId", "operation.kind", "operation.config"],
   progress: ["planId", "operation.kind", "operation.progress"],
   "residual-add": ["planId", "operation.kind", "operation.entries"],
   "residual-close": [
@@ -122,15 +117,7 @@ export const PLAN_OPERATION_SEMANTICS: Readonly<Record<PlanCoordinationOperation
     "operation.evidence",
     "operation.expectedIssueRevision",
   ],
-  handoff: ["planId", "operation.kind", "operation.evidence"],
-  accept: ["planId", "operation.kind", "operation.handoffId"],
-  return: ["planId", "operation.kind", "operation.handoffId", "operation.reason"],
-  "integration-start": ["planId", "operation.kind", "operation.handoffId"],
-  "integration-accept": ["planId", "operation.kind", "operation.handoffId"],
-  complete: ["planId", "operation.kind", "operation.handoffId"],
-  "repair-delivery-source": ["planId", "operation.kind", "operation.handoffId"],
-  reconcile: ["planId", "operation.kind", "operation.handoffId"],
-  release: ["planId", "operation.kind", "operation.reason"],
+  complete: ["planId", "operation.kind", "operation.evidence", "operation.integration"],
 };
 
 /**

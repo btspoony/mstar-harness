@@ -1369,14 +1369,18 @@ describe("coordinated-writer — coordinated close authorization", () => {
       writeFileSync(file, JSON.stringify({ session_id: `s-${file === sessionFile ? 1 : 2}` }) + "\n");
     }
     const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
+    const { identityRecoveries, ...snapshotOverrides } = overrides;
     const snapshot = validSnapshot({
       id,
       type: "plan",
       status: "running",
       ended_at: undefined,
-      coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
+      coordination: {
+        coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" },
+        ...(Array.isArray(identityRecoveries) ? { identity_recoveries: identityRecoveries } : {}),
+      },
       ...registeredDelivery,
-      ...overrides,
+      ...snapshotOverrides,
     });
     writeFileSync(path, JSON.stringify(snapshot, null, 4) + "\n");
     setArtifactStore(createFsStore(root));
@@ -1409,6 +1413,57 @@ describe("coordinated-writer — coordinated close authorization", () => {
     expect(closed).toEqual({ ...JSON.parse(JSON.stringify(snapshot)), status: "completed", ended_at: endedAt, updated_at: endedAt });
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
   });
+  test("failed close settles only a mutex holder recorded as stopped by coordinator recovery", async () => {
+    const stopped = "prior-integration-session";
+    const integrationMergeLease = {
+      holder: stopped,
+      claimed_at: "2026-09-21T09:00:00Z",
+      plan_id: id,
+      source_branch: "feature/source",
+      target_branch: "main",
+    };
+    const audit = recoveryEntry({
+      workflow_id: id,
+      prior_session_id: stopped,
+      session_id: "s-1",
+      stopped_session_ids: [stopped],
+    });
+    const { dir, path, sessionFile } = fixture({
+      integration_merge_lease: integrationMergeLease,
+      identityRecoveries: [audit],
+    });
+    const closed = await closeWorkflow(id, dir, { endedAt, outcome: "failed", sessionPath: sessionFile });
+    expect(closed.status).toBe("failed");
+    expect(closed.integration_merge_lease).toBeUndefined();
+    expect(closed.coordination?.identity_recoveries).toEqual([audit]);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(closed);
+
+    const retried = await closeWorkflow(id, dir, { endedAt: "2027-01-01", outcome: "failed" });
+    expect(retried.ended_at).toBe(endedAt);
+    expect(retried.coordination?.identity_recoveries).toEqual([audit]);
+  });
+
+  test.each([
+    ["unattested", []],
+    ["live holder", [recoveryEntry({ workflow_id: id, stopped_session_ids: ["some-other-session"] })]],
+  ])("failed close refuses a held integration mutex with %s evidence and writes nothing", async (_label, identityRecoveries) => {
+    const { dir, path, sessionFile } = fixture({
+      integration_merge_lease: {
+        holder: "prior-integration-session",
+        claimed_at: "2026-09-21T09:00:00Z",
+        plan_id: id,
+        source_branch: "feature/source",
+        target_branch: "main",
+      },
+      identityRecoveries,
+    });
+    const before = readFileSync(path, "utf8");
+    await expect(
+      closeWorkflow(id, dir, { endedAt, outcome: "failed", sessionPath: sessionFile }),
+    ).rejects.toThrow(/recover the coordinator with explicit stop attestation/);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
 
   test("refuses a coordinated close while any plan row is not Done and leaves the bytes unchanged", async () => {
     const { dir, path, sessionFile } = fixture({ plans: [legacyRow({ status: "InProgress" })] });

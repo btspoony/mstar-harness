@@ -536,18 +536,14 @@ export type {
   BindPlanSessionInput,
   CatalogExecutionPin,
   CatalogPinAbsence,
-  CompletionEvidence,
-  CompletionRecord,
   CoordinationRequest,
   CoordinationResult,
   CoordinationRole,
   CoordinationSession,
   CoordinatedReplacement,
   ExecutionCatalogPinState,
-  IntegrationResultInput,
   PlanCoordinationOperation,
   PlanCoordinationView,
-  PlanPrepareConfig,
   PlanProgress,
   PlanScopeInput,
   PreparedCoordination,
@@ -556,6 +552,14 @@ export type {
   RowCoordination,
   VersionedArtifact,
 } from "./coordination.js";
+export type {
+  CompletionEvidence,
+  CompletionRecord,
+  IntegrationResultInput,
+  PlanPrepareConfig,
+  QaGate,
+  FindingsCleanupMode,
+} from "./coordination-write.js";
 // Recovery-first resolution and the file-route close: the ONE resolution path a
 // sparse caller enters (trusted root → associated target, S2/E02), the durable
 // authority verdict a DB-route caller re-asserts before it commits, and the file
@@ -594,6 +598,7 @@ export {
   storeDbPath,
   upgradeStore,
 } from "./store-db.js";
+export { rowValidationRoute } from "./workflow.js";
 export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
 // Coordinator-only execution authority: version tokens, registration,
 // current coordinator binding and required workflow/plan reads.

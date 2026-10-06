@@ -811,6 +811,38 @@ describe("execution-registration", () => {
 /* ------------------------------------------------------------------------ *
  * Frozen catalog coexistence
  * ------------------------------------------------------------------------ */
+describe("execution-registration — frozen input remains authoritative after catalog edits", () => {
+  test("catalog edits do not move the accepted plan input, pin, binding, or replay receipt across a source reopen", async () => {
+    const fixture = await activeFixture("frozen-catalog-reopen");
+    const receipt = await registerPlanWorkflow(fixture, "op-frozen-source");
+    const frozenBefore = await sealedInput(fixture.context, PLAN_ID);
+    const bindingBefore = await bindingOf(fixture.context, WORKFLOW_ID);
+    expect(frozenBefore?.input_hash).toMatch(/^[0-9a-f]{64}$/);
+
+    await updateCatalogEntity(
+      fixture.context,
+      { kind: "plan", id: PLAN_ID },
+      { title: "Catalog title changed after acceptance" },
+      1,
+      { operationId: "op-frozen-catalog-edit", actor: "project-manager" },
+    );
+    expect((await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity).toMatchObject({
+      title: "Catalog title changed after acceptance",
+      revision: 2,
+    });
+    expect(bindingBefore?.catalog_revision).toBe(1);
+
+    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(frozenBefore);
+    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(bindingBefore);
+
+    const reopened = await openStore(fixture.context, "read");
+    reopened.close();
+    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(frozenBefore);
+    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(bindingBefore);
+    expect(await registerPlanWorkflow(fixture, "op-frozen-source")).toEqual(receipt);
+  });
+});
+
 
 
 /* ------------------------------------------------------------------------ *

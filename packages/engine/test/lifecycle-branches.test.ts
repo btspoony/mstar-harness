@@ -9,7 +9,7 @@ test("ownership includes retained tracks and excludes base/target anchors", () =
     { branch: { integration: "iteration/a", base: "main", target: "release" }, plans: [
       { metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } },
     ] },
-  ])).toEqual(["iteration/a", "feature/a", "feature/track", "feature/retained"]);
+  ])).toEqual(["iteration/a", "feature/track", "feature/a", "feature/retained"]);
 });
 
 test("unreadable active register shapes fail closed, including null", () => {

@@ -1222,7 +1222,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       expectedMainBranch,
       lifecycleBranches: collectActiveLifecycleBranches(match.activeSnapshots),
       rowWorktreePath,
-      rowWorkingBranch,
+      workflowId: snapshot.id,
       planId,
     });
     if (!l1.ok) throwGateFail(l1.violations);
@@ -1231,7 +1231,8 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
         contextViolation(
           "high",
           "sdd.context.row-worktree-mismatch",
-          `SddExecutionContext.featureCwd "${canonicalFeatureCwd}" does not match row metadata.worktree_path "${rowWorktreePath}"`,
+          `SddExecutionContext.featureCwd "${canonicalFeatureCwd}" does not match row metadata.worktree_path "${rowWorktreePath}" (plan "${planId}")`,
+          `Run coordinator \`plan prepare --workflow ${match.snapshot.id} --plan-id ${planId}\` to correct recorded row scope, or set featureCwd to the recorded worktree`,
         ),
       ]);
     }
@@ -1241,6 +1242,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
           "high",
           "sdd.context.row-branch-mismatch",
           `SddExecutionContext.workingBranch "${workingBranch}" does not match row metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`,
+          `Run coordinator \`plan prepare --workflow ${match.snapshot.id} --plan-id ${planId}\` to correct recorded row scope, or set workingBranch to the recorded branch`,
         ),
       ]);
     }

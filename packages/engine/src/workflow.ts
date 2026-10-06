@@ -306,7 +306,7 @@ export function isStandaloneReportOnlyWorkflow(snapshot: WorkflowSnapshot): bool
 }
 
 /** Classify row coordination validation: standalone delivery vs integration delivery. */
-function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
+export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): RowValidationRoute {
   if (isStandaloneDevelopmentWorkflow(snapshot) && snapshot.plans[0]?.id === row.id) {
     return "standalone-development";
   }
@@ -1296,10 +1296,10 @@ export function isCloseTimestamp(value: string): boolean {
  * - `failed`/`stopped` (#270/R11/A21): an explicit terminal intent, recorded
  *   WITHOUT any successful-delivery precondition - no row-`Done` requirement, no
  *   delivery-evidence consultation (a failure close is never treated as a
- *   delivery; the Phase-6 gate passes such a snapshot by the same rule). Instead
- *   a terminal failed/stopped close does not reinterpret an integration
- *   mutex as released. The mutex must be completed/reconciled first; the
- *   lifecycle close refuses before its write if it remains held.
+ * delivery; the Phase-6 gate passes such a snapshot by the same rule). A
+ * failed/stopped close may settle the workflow mutex only when coordinator
+ * recovery records that the exact mutex holder stopped; live or unattested
+ * holders remain protected.
  *
  * A valid terminal snapshot is returned unchanged - including `failed`/`stopped`
  * (idempotent preservation: nothing is rewritten, not even the timestamp). Two
@@ -1370,15 +1370,26 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
         throw new Error(`refusing to close workflow: ${detail}`);
       }
     }
+    let closeBase = snapshot;
     if (snapshot.integration_merge_lease !== undefined) {
-      throw new CoordinationError(
-        "coordination.invalid-transition",
-        `workflow ${workflowId} cannot become ${outcome} while it holds the integration merge mutex; complete or reconcile the integration attempt first`,
-        { workflow_id: workflowId, status: outcome },
-      );
+      const stoppedHolder = snapshot.integration_merge_lease.holder;
+      const attestedStopped =
+        outcome !== "completed" &&
+        (snapshot.coordination?.identity_recoveries ?? []).some((recovery) =>
+          recovery.stopped_session_ids.includes(stoppedHolder),
+        );
+      if (!attestedStopped) {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `workflow ${workflowId} cannot become ${outcome} while the integration merge mutex holder is live or lacks recorded stop evidence; use \`mstar workflow recover-coordinator\` with explicit stop attestation, then close as failed or stopped`,
+          { workflow_id: workflowId, status: outcome, holder: stoppedHolder },
+        );
+      }
+      const { integration_merge_lease: _settled, ...withoutMutex } = snapshot;
+      closeBase = withoutMutex;
     }
-    const closed: WorkflowSnapshot = { ...snapshot, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
-    // Strict terminal validation refuses the integration mutex without deleting it.
+    const closed: WorkflowSnapshot = { ...closeBase, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
+    // Strict terminal validation enforces that the mutex is settled before close.
     await validateAndPutWorkflowSnapshot(store, closed, snapshotPath);
     return closed;
   });
