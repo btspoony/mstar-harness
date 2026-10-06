@@ -184,8 +184,19 @@ export function projectLegacySnapshot(raw: unknown): WorkflowSnapshot {
   snapshot.plans = plans.map((plan) => {
     if (!isPlainObject(plan)) return plan;
     const row: Record<string, unknown> = { ...plan };
-    row.coordination = projectLegacyRowCoordination(row);
+    const coordination = projectLegacyRowCoordination(row);
+    row.coordination = coordination;
     const scope = projectLegacyLeaseScope(row);
+    const completion = coordination.completion;
+    // Source ownership comes from the accepted completion, not a displaced
+    // handoff. Current configuration and established lease scope still win;
+    // separate rows retain separate claims.
+    if (plan.status === "Done" && isPlainObject(completion) &&
+        isNonEmptyString(completion.source_branch) && isNonEmptyString(completion.worktree_path)) {
+      const metadata = isPlainObject(plan.metadata) ? plan.metadata : {};
+      if (!isNonEmptyString(metadata.working_branch) && scope.working_branch === undefined) scope.working_branch = completion.source_branch;
+      if (!isNonEmptyString(metadata.worktree_path) && scope.worktree_path === undefined) scope.worktree_path = completion.worktree_path;
+    }
     if (Object.keys(scope).length > 0) {
       const metadata = isPlainObject(row.metadata) ? row.metadata : {};
       row.metadata = { ...metadata, ...scope };

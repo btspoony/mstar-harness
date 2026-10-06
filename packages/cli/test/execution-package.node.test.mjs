@@ -9,9 +9,9 @@
  *    package's declared `bin` entrypoint, built with `bun build --target node`.
  *    It is spawned as a subprocess under the runtime running this test and is
  *    driven through the ACTIVE execution transport: `workflow register`
- *    (write/creation), `plan bind --coordinator` and `plan bind --plan`
- *    (bind), `plan prepare` (write), `plan show` (read), `plan bind
- *    --resume-ref` (read-only resume) and a `plan progress` write plus its
+ *    (write/creation), `plan bind --coordinator` (bind), `plan prepare`
+ *    (write), `plan show` (read), `plan bind --resume-ref`
+ *    (read-only resume) and a `plan progress` write plus its
  *    exact retry. Nothing asserts the CLI's own claim alone: the authority is
  *    re-read through the engine's public readers and through `node:sqlite`
  *    directly.
@@ -425,7 +425,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   const coordinatorWire = encodeExecutionSessionRef(claimed.data.data);
   assert.ok(coordinatorWire.startsWith(WIRE_PREFIX), `unexpected session reference ${coordinatorWire}`);
 
-  // --- write: prepare seals the reviewed Assignment ------------------------
+  // --- write: prepare records ordinary revisable execution configuration ----
   const prePrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
   const prepared = ok(
     runCli(
@@ -475,7 +475,6 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(viewed.command, "plan.show");
   assert.equal(viewed.status, "ok");
   assert.equal(viewed.data.data.plan.id, PLAN_ID);
-  assert.equal(viewed.data.data.session.sessionId, COORDINATOR_ID);
   assert.equal(viewed.data.data.coordination.prepared.prepared_by, COORDINATOR_ID);
 
   // --- read-only resume: an existing reference resumes under this identity --
@@ -537,7 +536,10 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   assert.equal(authority.data.workflow.id, WORKFLOW_ID);
   assert.equal(authority.data.plan.id, PLAN_ID);
   assert.equal(authority.data.plan.status, "InReview");
-  assert.equal(authority.data.session.sessionId, COORDINATOR_ID);
+  const workflowAuthority = await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID });
+  const currentWorkflow = workflowAuthority.data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
+  assert.ok(currentWorkflow, "the addressed workflow remains in the authority");
+  assert.deepEqual(plainRef(currentWorkflow.coordinator), plainRef(claimed.data.data));
   assert.equal(authority.data.coordination.progress.summary, "r3 assembled-package regression");
   assert.equal(authority.data.coordination.prepared.prepared_by, COORDINATOR_ID);
   assert.equal(progressed.data.storeId, authority.storeId, "the CLI's reported store disagrees with the authority read");
@@ -791,7 +793,6 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
   const workflowToken = await tokenOf(fixture.harness, { workflowId: OMP_WORKFLOW_ID });
   const bound = await bindExecutionSession(coordinatorContext, {
     workflowId: OMP_WORKFLOW_ID,
-    planId: null,
     role: "coordinator",
     expected: workflowToken,
     operationId: `bind-${OMP_COORDINATOR_ID}`,
@@ -833,8 +834,6 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
       [["coordinator", OMP_COORDINATOR_ID]],
       "one workflow holds exactly one coordinator session",
     );
-    const leases = db.prepare("select count(*) as n from execution_leases where workflow_id = ?").get(OMP_WORKFLOW_ID);
-    assert.equal(leases.n, 0, "no per-plan execution lease row exists");
   } finally {
     db.close();
   }
