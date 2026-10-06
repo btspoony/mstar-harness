@@ -402,21 +402,24 @@ describe("standalone-development-completion", () => {
       completeCall(fixture, PLAN_ID, malformed({ ...good, qc: { ...good.qc, decision: ["Approve"] } })),
     );
     expect(failureCode(decisionRefusal)).toBe("coordination.invalid-input");
-    expect(decisionRefusal.message).toMatch(/decision|Approve/);
+    expect(decisionRefusal.message).toContain("qc.decision");
+    expect(decisionRefusal.message).toContain("plan complete");
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     // An array QA gate is refused the same way.
     const gateRefusal = await refusalError(() =>
       completeCall(fixture, PLAN_ID, malformed({ ...good, qa: { ...good.qa, gate: ["mandatory"] } })),
     );
     expect(failureCode(gateRefusal)).toBe("coordination.invalid-input");
-    expect(gateRefusal.message).toMatch(/gate|mandatory/);
+    expect(gateRefusal.message).toContain("qa");
+    expect(gateRefusal.message).toContain("gate");
+    expect(gateRefusal.message).toContain("plan complete");
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     // An unknown nested QC member is refused by the exact-key rule.
     const keyRefusal = await refusalError(() =>
       completeCall(fixture, PLAN_ID, malformed({ ...good, qc: { ...good.qc, unexpected: "x" } })),
     );
-    expect(failureCode(keyRefusal)).toBe("coordination.invalid-input");
-    expect(keyRefusal.message).toMatch(/unexpected|unknown|field/i);
+    expect(failureCode(keyRefusal)).toBe("coordination.forbidden-field");
+    expect(keyRefusal.details).toMatchObject({ what: "completion evidence qc", unexpected: ["unexpected"] });
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
 
@@ -615,17 +618,18 @@ describe("report-only-completion", () => {
       `import { readFileSync } from "node:fs";`,
       `import { bindPlanSession, mutatePlanCoordination, readPlanCoordination } from ${JSON.stringify(join(import.meta.dir, "..", "src", "coordination.ts"))};`,
       `import { createFsStore, setArtifactStore } from ${JSON.stringify(join(import.meta.dir, "..", "src", "store.ts"))};`,
-      `const [root, harness, planId, sessionPath, evidencePath] = process.argv.slice(2);`,
+      `const [root, harness, planId, sessionPath, evidencePath, snapshotPath] = process.argv.slice(2);`,
       `setArtifactStore(createFsStore(harness));`,
       `const resumed = await bindPlanSession({ resumePath: sessionPath, cwd: root });`,
       `if (resumed.outcome !== "resumed") throw new Error("bad resume: " + String(resumed.outcome));`,
       `const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));`,
       `const view = await readPlanCoordination(sessionPath, planId, root);`,
       `const completed = await mutatePlanCoordination({ sessionPath, planId, expectedRevision: view.revision, operation: { kind: "complete", evidence } });`,
+      `const snapshotAfterFirst = readFileSync(snapshotPath, "utf8");`,
       `// Replay the IDENTICAL request in the SAME no-Git child.`,
       `const replay = await mutatePlanCoordination({ sessionPath, planId, expectedRevision: view.revision, operation: { kind: "complete", evidence } });`,
-      `const snapshotText = require("node:fs").readFileSync(process.argv[process.argv.length - 1], "utf8");`,
-      `console.log(JSON.stringify({ outcome: completed.outcome, replay: replay.outcome, completedAt: completed.view.row.coordination.completion.completed_at, replayAt: replay.view.row.coordination.completion.completed_at, snapshotText }));`,
+      `const snapshotAfterReplay = readFileSync(snapshotPath, "utf8");`,
+      `console.log(JSON.stringify({ outcome: completed.outcome, replay: replay.outcome, completedAt: completed.view.row.coordination.completion.completed_at, replayAt: replay.view.row.coordination.completion.completed_at, snapshotAfterFirst, snapshotAfterReplay }));`,
       ``,
     ].join("\n"));
     await sealStoreForReaders(fixture);
@@ -638,15 +642,14 @@ describe("report-only-completion", () => {
     const stderr = await new Response(child.stderr).text();
     expect(exitCode, `child stderr: ${stderr}`).toBe(0);
     const report = JSON.parse(stdout) as {
-      outcome: string; replay: string; completedAt: string; replayAt: string; snapshotText: string;
+      outcome: string; replay: string; completedAt: string; replayAt: string; snapshotAfterFirst: string; snapshotAfterReplay: string;
     };
     expect(report.outcome).toBe("completed");
     // The replay, in the same no-Git child, is already-satisfied with an unchanged timestamp.
     expect(report.replay).toBe("already-satisfied");
     expect(report.replayAt).toBe(report.completedAt);
     // The WHOLE committed snapshot is byte-identical across the replay.
-    const snapshotAfterFirst = readFileSync(snapshotPath, "utf8");
-    expect(report.snapshotText).toBe(snapshotAfterFirst);
+    expect(report.snapshotAfterReplay).toBe(report.snapshotAfterFirst);
     // The parent reads the committed row: Done with all-null provenance, no integration.
     const row = planRowOf(fixture, PLAN_ID);
     expect(row.status).toBe("Done");

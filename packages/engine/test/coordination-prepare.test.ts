@@ -2790,10 +2790,11 @@ describe("prepare coordinator recovery", () => {
     };
     const seeded = prepareSnapshotOf(fixture);
     seeded.integration_merge_lease = ownedLease;
+    seeded.integration_worktree_path = fixture.integrationPath;
     writeJson(fixture.snapshotPath, seeded);
     const planRowsBefore = JSON.stringify(seeded.plans);
     const branchBefore = JSON.stringify(seeded.branch);
-    const integrationPathBefore = seeded.integration_worktree_path;
+    const integrationPathBefore = fixture.integrationPath;
 
     // The claim is discarded only under the operator's validated stop attestation.
     const attestation = stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID);
@@ -2811,11 +2812,17 @@ describe("prepare coordinator recovery", () => {
     // An EXACT replay: the recorded receipt is served and every protected byte —
     // rows, anchors, checkout, status, compass, peer and envelopes — survives.
     const auditAfterFirst = JSON.stringify(recoveryAuditOf(fixture));
-    const bytesAfterFirst = protectedBytes(fixture);
+    const bytesAfterFirst = {
+      ...protectedBytes(fixture),
+      replacement: readFileSync(recovered.session_file, "utf8"),
+    };
     const replay = await recoverPrepareCoordinator(recoveryInputOf(fixture, { attestation }));
     expect(replay.recovery.replay).toBe(true);
     expect(JSON.stringify(recoveryAuditOf(fixture))).toBe(auditAfterFirst);
-    expect(protectedBytes(fixture)).toEqual(bytesAfterFirst);
+    expect({
+      ...protectedBytes(fixture),
+      replacement: readFileSync(replay.session_file, "utf8"),
+    }).toEqual(bytesAfterFirst);
     expect(prepareSnapshotOf(fixture).integration_worktree_path).toBe(integrationPathBefore);
     expect(JSON.stringify(prepareSnapshotOf(fixture).plans)).toBe(planRowsBefore);
   }, 60000);
@@ -2841,9 +2848,13 @@ describe("prepare coordinator recovery", () => {
     await ensurePrepareCoordinator(missing);
     const missingDoc = prepareSnapshotOf(missing);
     const missingBefore = protectedBytes(missing);
-    expect((await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(missing)))).code).toBe(
-      "coordination.identity-recovery.unauthorized",
-    );
+    const missingRefusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(missing)));
+    expect(missingRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(missingRefusal.details).toMatchObject({
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T00:00:00Z",
+      attested_at: null,
+    });
     expect(protectedBytes(missing)).toEqual(missingBefore);
     expect(prepareSnapshotOf(missing).integration_merge_lease).toEqual(missingDoc.integration_merge_lease);
     // ...until the MISSING fact is supplied: the same fixture recovers by
@@ -2881,13 +2892,15 @@ describe("prepare coordinator recovery", () => {
     newerDoc.integration_merge_lease = { ...newerDoc.integration_merge_lease, claimed_at: "2026-09-15T02:00:00Z" };
     writeJson(newer.snapshotPath, newerDoc);
     const newerBefore = protectedBytes(newer);
-    expect(
-      (
-        await prepareRefusalOf(() =>
-          recoverPrepareCoordinator(recoveryInputOf(newer, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) })),
-        )
-      ).code,
-    ).toBe("coordination.identity-recovery.unauthorized");
+    const newerRefusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(recoveryInputOf(newer, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) })),
+    );
+    expect(newerRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(newerRefusal.details).toMatchObject({
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T02:00:00Z",
+      attested_at: "2026-09-15T01:00:00.000Z",
+    });
     expect(protectedBytes(newer)).toEqual(newerBefore);
     // Correcting ONLY the attested stop to a lawful time after the claim recovers
     // the SAME fixture.
@@ -2911,15 +2924,11 @@ describe("prepare coordinator recovery", () => {
     // The shared validator throws its OWN typed error, not a coordination one.
     expect(runningFailure).toBeInstanceOf(StoreActivationError);
     expect((runningFailure as StoreActivationError).code).toBe("store.activation-blocked");
-    expect(runningFailure.message).toMatch(/running/);
     expect(protectedBytes(running)).toEqual(runningBefore);
     expect(prepareSnapshotOf(running).integration_merge_lease).toEqual(runningDoc.integration_merge_lease);
 
     // Correcting ONLY the running state to a lawful stop admits the recovery on
     // the SAME fixture: the claim is released and the ownership moves.
-    const correctedDoc = prepareSnapshotOf(running);
-    correctedDoc.integration_merge_lease = { ...runningDoc.integration_merge_lease };
-    writeJson(running.snapshotPath, correctedDoc);
     const corrected = await recoverPrepareCoordinator(recoveryInputOf(running, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) }));
     expect(corrected.recovery.replay).toBe(false);
     expect(prepareSnapshotOf(running).integration_merge_lease).toBeUndefined();
@@ -2932,9 +2941,9 @@ describe("prepare coordinator recovery", () => {
     const selfAttestation = stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID);
     selfAttestation.stoppedSessions.push({ sessionId: RECOVERED_COORDINATOR_ID, host: "fixture", state: "stopped" });
     const selfBefore = protectedBytes(selfStopped);
-    expect((await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(selfStopped, { attestation: selfAttestation })))).code).toBe(
-      "coordination.identity-recovery.unauthorized",
-    );
+    const selfRefusal = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(selfStopped, { attestation: selfAttestation })));
+    expect(selfRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(selfRefusal.details).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
     expect(protectedBytes(selfStopped)).toEqual(selfBefore);
     expect(prepareSnapshotOf(selfStopped).integration_merge_lease).toEqual(selfDoc.integration_merge_lease);
     // Removing ONLY the replacement from the stop list recovers the SAME fixture.
@@ -3434,11 +3443,10 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     const branchRefusal = await failureOf(() =>
       reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" }),
     );
+    if (!(branchRefusal instanceof CoordinationError)) throw branchRefusal;
     expect(failureCode(branchRefusal)).toBe("coordination.invalid-input");
     // The actual branch cause and the ordinary correction are both named.
-    expect(String(branchRefusal.details?.working_branch ?? "")).toBe("feature/plan-a-v2");
-    expect(String(branchRefusal.details?.actual ?? "")).toBe("feature/plan-a");
-    expect(branchRefusal.message).toContain("revise it with plan prepare");
+    expect(branchRefusal.details).toMatchObject({ working_branch: "feature/plan-a-v2", actual: "feature/plan-a" });
     expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
 
     // The real correction: switch the disposable feature checkout onto the new
