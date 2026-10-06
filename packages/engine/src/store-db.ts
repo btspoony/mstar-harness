@@ -1011,11 +1011,17 @@ alter table provenance add column origin text not null default 'scoped' check (o
  * `normalizeExecutionState` pass over `execution_plans` / `execution_workflows`
  * in the SAME exclusive transaction that records this version.
  *
+ * The per-plan lease is the ONE place a schema-8 store records a plan's source
+ * checkout and branch (the plan row itself never carries it — the old producer
+ * deletes `execution_lease` before writing `state_json`). SQL cannot read a
+ * value and copy it into JSON, so the capture of `execution_leases` is a
+ * TEMPORARY table the normalizer reads after this SQL and the runner drops
+ * after the normalizer returns: the lease facts are reconciled into ordinary
+ * row metadata BEFORE their table is gone.
+ *
  * `execution_sessions` keeps only coordinator rows, so the `plan_id` column and
  * the role check that admitted `plan-pm` go with them — a column's CHECK cannot
- * be dropped in place, hence the table rewrite. `execution_leases` is dropped:
- * its recorded worktree/branch ownership is already mapped into ordinary row
- * metadata by the same pass.
+ * be dropped in place, hence the table rewrite.
  *
  * Migrations 1–8 stay byte-identical: every applied store keeps its recorded
  * checksum, and the historical DDL that once created these rows remains
@@ -1039,6 +1045,7 @@ drop table execution_sessions;
 alter table execution_sessions_coordinator rename to execution_sessions;
 create unique index execution_sessions_active_coordinator
   on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+create table execution_lease_cutover as select workflow_id, plan_id, owner_epoch, lease_json from execution_leases;
 drop table execution_leases;
 `;
 
@@ -1108,10 +1115,19 @@ function normalizeLegacyCoordination(legacy: JsonRecord): JsonRecord {
   return out;
 }
 
-/** Map the source/cleanup ownership a removed lease carried onto ordinary row metadata. */
-function normalizeLegacyLeaseScope(row: JsonRecord, workflowId: string, planId: string): JsonRecord | null {
-  const lease = row.execution_lease;
-  if (!isRecord(lease)) return null;
+/**
+ * Map the source/cleanup ownership a removed per-plan lease carried onto the
+ * ordinary row metadata the target shape uses.
+ *
+ * The plan's own metadata is the authoritative, ORDINARY and revisable record
+ * of its checkout/branch: the target contract keeps scope on
+ * `plans[].metadata`, and the coordinator revises it through ordinary `prepare`.
+ * The removed lease is the superseded protocol's copy, so it only FILLS a member
+ * metadata does not already record. A member the two disagree on is never a hard
+ * gate: metadata wins (it is the live config an operator can revise), and the
+ * stale lease value is dropped with its table.
+ */
+function reconcileLeaseScope(metadata: JsonRecord, lease: JsonRecord): JsonRecord | null {
   const worktree = typeof lease.worktree_path === "string" && lease.worktree_path !== ""
     ? lease.worktree_path
     : typeof lease.plan_worktree_path === "string" && lease.plan_worktree_path !== ""
@@ -1123,29 +1139,39 @@ function normalizeLegacyLeaseScope(row: JsonRecord, workflowId: string, planId: 
       ? lease.plan_branch
       : undefined;
   if (worktree === undefined && branch === undefined) return null;
-  const metadata = isRecord(row.metadata) ? row.metadata : {};
+  const out: JsonRecord = { ...metadata };
   const recordedWorktree = metadata.worktree_path;
   const recordedBranch = metadata.working_branch;
-  // A genuine conflict is named rather than silently resolved: the operator
-  // decides which checkout/branch owns the plan before the upgrade commits.
-  if (worktree !== undefined && typeof recordedWorktree === "string" && recordedWorktree !== "" && recordedWorktree !== worktree) {
-    throw new StoreError(
-      "store.corrupt",
-      `execution_plans(${workflowId},${planId}) records worktree ${recordedWorktree} in metadata and ${worktree} on its removed ` +
-        `execution lease; resolve which checkout owns this plan, then rerun the upgrade. Nothing was modified.`,
-    );
+  if (worktree !== undefined && (typeof recordedWorktree !== "string" || recordedWorktree === "")) {
+    out.worktree_path = worktree;
   }
-  if (branch !== undefined && typeof recordedBranch === "string" && recordedBranch !== "" && recordedBranch !== branch) {
-    throw new StoreError(
-      "store.corrupt",
-      `execution_plans(${workflowId},${planId}) records branch ${recordedBranch} in metadata and ${branch} on its removed ` +
-        `execution lease; resolve which branch owns this plan, then rerun the upgrade. Nothing was modified.`,
-    );
+  if (branch !== undefined && (typeof recordedBranch !== "string" || recordedBranch === "")) {
+    out.working_branch = branch;
   }
-  const out: JsonRecord = { ...metadata };
-  if (worktree !== undefined) out.worktree_path = worktree;
-  if (branch !== undefined) out.working_branch = branch;
   return out;
+}
+
+function readLeaseCutover(db: StoreDb): Map<string, JsonRecord> {
+  const table = db
+    .prepare("select name from sqlite_master where type = 'table' and name = 'execution_lease_cutover'")
+    .get() as { name?: unknown } | undefined;
+  const leases = new Map<string, JsonRecord>();
+  if (table === undefined) return leases;
+  const rows = db
+    .prepare("select workflow_id, plan_id, lease_json from execution_lease_cutover")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; lease_json?: unknown }>;
+  for (const row of rows) {
+    const raw = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
+    if (!isRecord(raw)) {
+      throw new StoreError(
+        "store.corrupt",
+        `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the ` +
+          `recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`,
+      );
+    }
+    leases.set(`${String(row.workflow_id)}/${String(row.plan_id)}`, raw);
+  }
+  return leases;
 }
 
 /**
@@ -1163,6 +1189,7 @@ function normalizeExecutionState(db: StoreDb): void {
       .filter((name) => name !== ""),
   );
   if (!tables.has("execution_plans") || !tables.has("execution_workflows")) return;
+  const leaseCutover = readLeaseCutover(db);
 
   const plans = db
     .prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans")
@@ -1175,8 +1202,13 @@ function normalizeExecutionState(db: StoreDb): void {
     const state = parseStoredRecord(row.state_json, `${what}.state_json`);
     const legacy = parseStoredRecord(row.coordination_json, `${what}.coordination_json`);
     const coordination = normalizeLegacyCoordination(legacy);
+    // The removed seat's plan row never carried `execution_lease` (the old
+    // producer deleted it before insert), so the authoritative source/cleanup
+    // scope is the keyed lease captured from `execution_leases` above.
+    const lease = leaseCutover.get(`${workflowId}/${planId}`);
+    const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const scope = lease === undefined ? null : reconcileLeaseScope(metadata, lease);
     const nextState: JsonRecord = { ...state };
-    const scope = normalizeLegacyLeaseScope(state, workflowId, planId);
     if (scope !== null) nextState.metadata = scope;
     if (isRecord(coordination.completion) && !(typeof nextState.status === "string" && nextState.status === "Done")) {
       nextState.status = "Done";
@@ -1340,6 +1372,10 @@ function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: b
     for (const migration of pending) {
       db.exec(migration.sql);
       if (migration.normalize !== undefined) migration.normalize(db);
+      // A migration's temporary staging tables are the normalizer's input only:
+      // they never survive the batch, so a rolled-back or committed store holds
+      // exactly the version's declared schema.
+      db.exec("drop table if exists execution_lease_cutover");
       db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
         migration.version,
         migration.name,

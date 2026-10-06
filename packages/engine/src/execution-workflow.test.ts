@@ -806,9 +806,29 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
       delete state.delivery;
       db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
     });
-    // The row is already Done (an imported/historical report-only row) and its QA
-    // report passes — exactly the state that must NOT be turned into fulfilment.
+    // The row is already Done (an imported/historical report-only row) with a
+    // REAL passing QC/QA completion record — exactly the state that must NOT be
+    // turned into fulfilment.
     setRowStatus(fixture.context, PLAN_ID, "Done");
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?").run(
+        JSON.stringify({
+          completion: {
+            source_branch: SOURCE_BRANCH,
+            source_sha: null,
+            worktree_path: null,
+            review_base: null,
+            review_head: null,
+            qc: { decision: "Approve", reports: [{ path: join(fixture.repoRoot, "qc.md"), sha256: "b".repeat(64) }], consolidated: { path: join(fixture.repoRoot, "qc-s.md"), sha256: "c".repeat(64) } },
+            qa: { gate: "mandatory", decision: "pass", report: { path: join(fixture.repoRoot, "qa.md"), sha256: "d".repeat(64) } },
+            completed_by: COORDINATOR_ID,
+            completed_at: TS,
+          },
+        }),
+        WORKFLOW_ID,
+        PLAN_ID,
+      );
+    });
     const before = await workflowFootprint(fixture.context);
     const refused = await refusalOf(() =>
       workflowMutation(fixture, "op-close-report-only-missing", {
@@ -829,6 +849,29 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(stored!.registered).toBe(1);
     expect(stored!.status).toBe("running");
     expect(stored!.delivery).toBeNull();
+
+    // The refusal names ordinary recovery: a `delivery` operation records the
+    // explicitly matching registered-policy fulfilment. The Do not-synthesize
+    // rule is preserved — the value comes from the caller, never from QA.
+    await workflowMutation(fixture, "op-close-report-only-evidence", {
+      kind: "delivery",
+      delivery: { completion: { policy: "acceptance report", evidence: "acceptance.md" } },
+    });
+    const closed = await workflowMutation(fixture, "op-close-report-only-recovered", {
+      kind: "lifecycle",
+      status: "completed",
+      reason: "acceptance report verified",
+    });
+    expect(closed.data.workflows.some((workflow) => workflow.state.id === WORKFLOW_ID)).toBe(false);
+    const [after] = rows(
+      fixture.context,
+      `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+        `(select json_extract(state_json, '$.delivery') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as delivery`,
+    );
+    expect(after!.registered).toBe(0);
+    expect(after!.status).toBe("completed");
+    expect(JSON.parse(String(after!.delivery))).toEqual({ completion: { policy: "acceptance report", evidence: "acceptance.md" } });
   });
 
   test("the terminal close removes routing and keeps history in ONE commit", async () => {

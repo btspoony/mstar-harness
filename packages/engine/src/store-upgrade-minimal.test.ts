@@ -178,10 +178,31 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       );
     `);
     initialized.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
-    initialized.db.prepare(
-      "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-        "values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
-    ).run(workflowId, sessionId, planId);
+    // FK order: workflow, then plan, then the sessions and the lease that
+    // reference them. The lease is the REAL `execution_leases` row — the plan row
+    // itself never carries `execution_lease` (the old producer deleted it before
+    // insert), so an embedded copy would be a nonhistorical boundary.
+    initialized.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
+      .run(
+        workflowId,
+        JSON.stringify({
+          schema_version: 1,
+          id: workflowId,
+          type: "plan",
+          status: "running",
+          started_at: "2026-10-04",
+          updated_at: "2026-10-04",
+          delivery_kind: "development",
+          branch: { source: `feature/${planId}`, target: "main" },
+          coordination: {
+            coordinator: { session_id: "host-coord", session_file: join(ROOT, "coord.json"), bound_at: "2026-10-04T00:00:00Z" },
+            identity_recoveries: [{ operation_id: "recover-op" }],
+          },
+          self_amendments: [{ at: "2026-10-04T01:00:00Z", session_id: "plan-session", operation_id: "amend-op" }],
+        }),
+        "2026-10-04",
+        "2026-10-04",
+      );
     initialized.db.prepare(
       "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)",
     ).run(
@@ -192,12 +213,6 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
         title: "Schema-8 fixture plan",
         file: `${planId}.md`,
         status: "Todo",
-        execution_lease: {
-          holder: sessionId,
-          claimed_at: "2026-10-04T00:00:00Z",
-          worktree_path: join(ROOT, "schema8-worktree"),
-          working_branch: `feature/${planId}`,
-        },
       }),
       JSON.stringify({
         revision: 1,
@@ -231,6 +246,14 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       }),
     );
     initialized.db.prepare(
+      "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+        "values (?, 'coordinator', 'host-coord', null, 1, 1, 'active', '2026-10-04T00:00:00Z')",
+    ).run(workflowId);
+    initialized.db.prepare(
+      "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+        "values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
+    ).run(workflowId, sessionId, planId);
+    initialized.db.prepare(
       "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
     ).run(
       workflowId,
@@ -245,24 +268,42 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
         status: "held",
       }),
     );
-    initialized.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
-      .run(
-        workflowId,
-        JSON.stringify({
-          schema_version: 1,
-          id: workflowId,
-          type: "plan",
-          status: "running",
-          started_at: "2026-10-04",
-          updated_at: "2026-10-04",
-          delivery_kind: "development",
-          branch: { source: `feature/${planId}`, target: "main" },
-          coordination: { coordinator: { session_id: "host-coord", session_file: join(ROOT, "coord.json"), bound_at: "2026-10-04T00:00:00Z" } },
-          self_amendments: [{ at: "2026-10-04T01:00:00Z", session_id: "plan-session", operation_id: "amend-op" }],
-        }),
-        "2026-10-04",
-        "2026-10-04",
-      );
+    // A second plan whose row metadata ALREADY records a scope that disagrees
+    // with its removed lease. The metadata is the authoritative, revisable
+    // record, so the upgrade must keep it and never hard-stop on the stale copy.
+    const conflictPlanId = `${planId}-2`;
+    initialized.db.prepare(
+      "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 1, ?, ?)",
+    ).run(
+      workflowId,
+      conflictPlanId,
+      JSON.stringify({
+        id: conflictPlanId,
+        title: "Schema-8 conflict plan",
+        file: `${conflictPlanId}.md`,
+        status: "Todo",
+        metadata: {
+          worktree_path: join(ROOT, "metadata-worktree"),
+          working_branch: `feature/${conflictPlanId}`,
+        },
+      }),
+      JSON.stringify({}),
+    );
+    initialized.db.prepare(
+      "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
+    ).run(
+      workflowId,
+      conflictPlanId,
+      JSON.stringify({
+        holder: sessionId,
+        holder_session_id: sessionId,
+        holder_role: "plan-pm",
+        claimed_at: "2026-10-04T00:00:00Z",
+        worktree_path: join(ROOT, "lease-worktree"),
+        working_branch: `feature/lease-${conflictPlanId}`,
+        status: "held",
+      }),
+    );
   } finally {
     initialized.close();
   }
@@ -302,15 +343,32 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     expect(state).not.toHaveProperty("execution_lease");
     expect(state).not.toHaveProperty("coordination");
     // The workflow header lost the removed self-amendment audit and the removed
-    // per-workflow coordination block, keeping its identity.
+    // per-workflow coordination block, keeping its identity and promoting the
+    // coordinator recovery history the ordinary importer keeps.
     const header = JSON.parse(
       (store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json,
     ) as Record<string, unknown>;
     expect(header).not.toHaveProperty("self_amendments");
     expect(header).not.toHaveProperty("coordination");
-    expect(header).toMatchObject({ id: workflowId, status: "running" });
-    // The legacy plan-PM session row is gone; the table is coordinator-only.
-    expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 0 });
+    expect(header).toMatchObject({ id: workflowId, status: "running", identity_recoveries: [{ operation_id: "recover-op" }] });
+    // The legacy plan-PM session is gone; the workflow's own coordinator session
+    // is preserved exactly.
+    const sessions = store.db.prepare("select role, session_id, epoch, revision, state from execution_sessions where workflow_id = ? order by role").all(workflowId) as Array<Record<string, unknown>>;
+    expect(sessions).toEqual([
+      { role: "coordinator", session_id: "host-coord", epoch: 1, revision: 1, state: "active" },
+    ]);
+    // The final public read serves the migrated row and its scope facts.
+    const readable = await readExecutionState(context);
+    const migrated = readable.data.workflows.find((workflow) => workflow.state.id === workflowId)?.plans[0];
+    expect(migrated?.plan.id).toBe(planId);
+    // The conflicting plan's own metadata survived untouched — no hard gate.
+    const conflictState = JSON.parse(
+      (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, `${planId}-2`) as { state_json: string }).state_json,
+    ) as Record<string, unknown>;
+    expect(conflictState.metadata).toEqual({
+      worktree_path: join(ROOT, "metadata-worktree"),
+      working_branch: `feature/${planId}-2`,
+    });
   } finally {
     store.close();
   }

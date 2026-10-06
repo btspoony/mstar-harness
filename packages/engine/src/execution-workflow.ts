@@ -1475,20 +1475,23 @@ function applyDeliveryEvidence(input: {
       );
     }
   }
-  // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence that
-  // arrives when it arrives: the engine captures it whenever it is observed and
-  // never makes the row's `Done` projection an ordering prerequisite, because
-  // the close composes that projection itself from the same evidence (E10). The
-  // semantic boundary is the CLOSE, which still requires the declared kind's
-  // complete evidence (`consultDeliveryEvidence`) against rows it has completed —
-  // so the ordering is bookkeeping rather than a caller ceremony.
-  //
-  // Completion freezes its accepted policy/reference, not the document body.
+  // §R5/A19/A21 the completion freeze protects an ACCEPTED fulfilment, not the
+  // absence of one. Once the workflow is Done against a completion whose policy
+  // IS the registered one, that recorded policy/reference is frozen: editing the
+  // referenced document is normal, a different completed intent uses its own
+  // workflow. But an imported/historical Done row that recorded NO matching
+  // fulfilment (or one whose policy is not the registered policy) has no accepted
+  // fact to preserve, so ordinary `workflow evidence` is exactly the supported
+  // way to record the missing matching fulfilment — never QA-derived synthesis.
   if (members.includes("completion") && rows.some((row) => rowStatusOf(row) === "Done")) {
     const incoming = isPlainObject(delivery.completion) ? delivery.completion : undefined;
     const recorded = isPlainObject(stored.completion) ? stored.completion : undefined;
-    if (recorded === undefined || incoming === undefined ||
-        recorded.policy !== incoming.policy || recorded.evidence !== incoming.evidence) {
+    const registered = isNonEmptyString(header.completion_policy) ? header.completion_policy : undefined;
+    const recordedIsAccepted = recorded !== undefined && registered !== undefined && recorded.policy === registered;
+    const changesAccepted =
+      recordedIsAccepted &&
+      (incoming === undefined || incoming.policy !== recorded.policy || incoming.evidence !== recorded.evidence);
+    if (changesAccepted) {
       throw new CoordinationError(
         "coordination.completion-frozen",
         `workflow ${workflowId} is Done against its recorded completion policy/reference; edit the referenced document normally; a different completed intent uses its own workflow`,

@@ -107,11 +107,11 @@ function projectLegacyRowCoordination(row: Record<string, unknown>): Record<stri
 /**
  * Map the source/cleanup ownership a removed per-plan lease carried onto the
  * ordinary row metadata, so dropping the lease never drops the only record of
- * the source checkout and branch. Existing metadata wins; only the members the
- * lease alone recorded are filled in, and the caller resolves a genuine
- * conflict by naming it rather than silently keeping one.
+ * the source checkout and branch. The row's own metadata is the authoritative,
+ * revisable scope (the coordinator revises it through ordinary `prepare`), so it
+ * wins any disagreement and the superseded lease value is dropped with its seat.
  */
-function projectLegacyLeaseScope(row: Record<string, unknown>, workflowId: string, planId: string): Record<string, string> {
+function projectLegacyLeaseScope(row: Record<string, unknown>): Record<string, string> {
   const lease = row.execution_lease;
   if (!isPlainObject(lease)) return {};
   const worktree = isNonEmptyString(lease.worktree_path)
@@ -128,22 +128,8 @@ function projectLegacyLeaseScope(row: Record<string, unknown>, workflowId: strin
   const scoped: Record<string, string> = {};
   const recordedWorktree = metadata.worktree_path;
   const recordedBranch = metadata.working_branch;
-  if (worktree !== undefined) {
-    if (isNonEmptyString(recordedWorktree) && recordedWorktree !== worktree) {
-      conflict(`plan ${planId} of workflow ${workflowId} records worktree ${recordedWorktree} in metadata and ${worktree} on its removed execution lease; resolve which checkout owns this plan, then rerun store upgrade.`);
-    }
-    scoped.worktree_path = worktree;
-  } else if (isNonEmptyString(recordedWorktree)) {
-    scoped.worktree_path = recordedWorktree;
-  }
-  if (branch !== undefined) {
-    if (isNonEmptyString(recordedBranch) && recordedBranch !== branch) {
-      conflict(`plan ${planId} of workflow ${workflowId} records branch ${recordedBranch} in metadata and ${branch} on its removed execution lease; resolve which branch owns this plan, then rerun store upgrade.`);
-    }
-    scoped.working_branch = branch;
-  } else if (isNonEmptyString(recordedBranch)) {
-    scoped.working_branch = recordedBranch;
-  }
+  if (worktree !== undefined && !isNonEmptyString(recordedWorktree)) scoped.worktree_path = worktree;
+  if (branch !== undefined && !isNonEmptyString(recordedBranch)) scoped.working_branch = branch;
   return scoped;
 }
 
@@ -172,7 +158,7 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     // Source/cleanup ownership survives the removed lease: its recorded
     // worktree/branch move into the ordinary row metadata the target shape uses,
     // so L1 facts and cleanup ownership are never lost with the seat.
-    const scope = projectLegacyLeaseScope(row, id, planId);
+    const scope = projectLegacyLeaseScope(row);
     const state: Record<string, unknown> = { ...row, id: planId };
     if (Object.keys(scope).length > 0) {
       const metadata = isPlainObject(row.metadata) ? { ...row.metadata } : {};
