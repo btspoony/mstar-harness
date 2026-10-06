@@ -296,9 +296,6 @@ const PHASE2_EXTENSION_MIRROR = join(ROOT, "extensions", "phase2-orchestration.j
 const MCP_IDENTITY_EXTENSION_MIRROR = join(ROOT, "extensions", "mcp-identity.js");
 const PHASE2_EXTENSION_SUFFIX = "/extensions/phase2-orchestration.js";
 const PHASE2_TOOL = "mstar_phase2";
-/** Native settings keys the manifest publishes for Phase-2 orchestration. */
-const PHASE2_SETTING_KEYS = ["phase2PlanInstances", "maxPlanInstances"] as const;
-
 interface Phase2RuntimeReport {
   host: { entry: string; root: string; version: string };
   packages: Array<{ name: string; version: string; path: string; scope: string }>;
@@ -311,13 +308,13 @@ interface Phase2RuntimeReport {
     parsedBind: unknown;
     parsedCheckpoint: unknown;
     rejectsWrongTypeSessionPath: string | null;
-    rejectsCreatedWithoutTarget: string | null;
+    rejectsCheckpointExtraKey: string | null;
     rejectsUnknownOperation: string | null;
     rejectsUnknownKey: string | null;
   };
   bindUnreadableEnvelope: { ok: boolean; isError: boolean; code: string | null; message: string };
   checkpointUnbound: { ok: boolean; isError: boolean; code: string | null; message: string };
-  settings: { mode: string; observed: Record<string, unknown>; invalidCapacityAccepted: boolean | null };
+  settings: { mode: string; observed: Record<string, unknown> };
   engineFromPackedRoot: { resolved: string } | { error: string };
 }
 
@@ -338,13 +335,13 @@ function loadPhase2PackedRuntime(
 import { existsSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { getEnabledPlugins, getPluginSettings, PluginManager, resolvePluginExtensionPaths, validateSetting } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
+import { getEnabledPlugins, getPluginSettings, PluginManager, resolvePluginExtensionPaths } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 
 const project = process.env.MSTAR_BUNDLE_PROJECT;
 const pluginsRoot = process.env.MSTAR_BUNDLE_PLUGINS;
 const pluginName = ${JSON.stringify(PLUGIN_NAME)};
-const settingKeys = ${JSON.stringify(PHASE2_SETTING_KEYS)};
+const settingKeys = ${JSON.stringify(["modelHandoff", "handoffTarget"])};
 const settingsMode = process.env.MSTAR_BUNDLE_SETTINGS_MODE ?? "read";
 
 // Refuse to run against anything but the disposable host root this test seeded.
@@ -404,10 +401,11 @@ const report = await (async () => {
     workflowId: "probe-iteration",
     evidencePath: join(project, "evidence.txt"),
   });
-  const rejectsCreatedWithoutTarget = rejectionOf({
-    operation: "record-launch",
-    intentId: "probe-intent",
-    observation: "created",
+  const rejectsCheckpointExtraKey = rejectionOf({
+    operation: "checkpoint",
+    reason: "before-wait",
+    decision: "wait",
+    note: "probe",
     evidencePath: join(project, "evidence.txt"),
   });
   const rejectsUnknownOperation = rejectionOf({ operation: "probe-unsupported" });
@@ -455,15 +453,12 @@ const report = await (async () => {
     note: "probe",
   });
 
-  // Native settings exercised for real. This process either writes through the
+  // Native settings exercised for real: this process either writes through the
   // host's own settings path or freshly reads what a *previous* process wrote.
   if (settingsMode === "write") {
-    await new PluginManager(project).setPluginSetting(pluginName, "phase2PlanInstances", true);
+    await new PluginManager(project).setPluginSetting(pluginName, "modelHandoff", true);
   }
   const observed = await getPluginSettings(pluginName, project);
-  const capacitySchema = packedManifestSettings?.maxPlanInstances;
-  const invalidCapacityAccepted =
-    capacitySchema === undefined ? null : validateSetting(0, capacitySchema).valid === true;
 
   let engineFromPackedRoot;
   try {
@@ -490,7 +485,7 @@ const report = await (async () => {
       parsedExportHistory,
       rejectsWrongTypeWorkflowId,
       rejectsExportHistoryExtraKey,
-      rejectsCreatedWithoutTarget,
+      rejectsCheckpointExtraKey,
       rejectsUnknownOperation,
       rejectsUnknownKey,
     },
@@ -499,7 +494,6 @@ const report = await (async () => {
     settings: {
       mode: settingsMode,
       observed: Object.fromEntries(settingKeys.map((key) => [key, observed?.[key] ?? null])),
-      invalidCapacityAccepted,
     },
     engineFromPackedRoot,
   };
@@ -722,11 +716,11 @@ describe("@mstar-harness/omp packed artifact", () => {
 
       // The published native settings schema is the manifest's own declaration.
       expect(report.packedManifestSettings).toMatchObject({
-        phase2PlanInstances: { type: "boolean", default: false },
-        maxPlanInstances: { type: "number", default: 2, min: 1, step: 1 },
+        modelHandoff: { type: "boolean", default: false },
+        handoffTarget: { type: "enum", default: "@default" },
       });
       expect(Object.keys(report.packedManifestSettings).sort()).toEqual(
-        ["handoffTarget", "maxPlanInstances", "modelHandoff", "phase2PlanInstances"].sort(),
+        ["handoffTarget", "modelHandoff"].sort(),
       );
 
       // The model-facing tool contract is the host's own schema: exact round
@@ -743,7 +737,7 @@ describe("@mstar-harness/omp packed artifact", () => {
       // The §4.2 producer is read-only: it has no evidence-path or attestation
       // parameter, so the strict schema refuses one instead of accepting it.
       expect(report.schema.rejectsExportHistoryExtraKey).toBeTruthy();
-      expect(report.schema.rejectsCreatedWithoutTarget).toContain("requires the returned opaque target");
+      expect(report.schema.rejectsCheckpointExtraKey).toBeTruthy();
       expect(report.schema.rejectsUnknownOperation).toContain("operation must be");
       expect(report.schema.rejectsUnknownKey).toBeTruthy();
 
@@ -755,13 +749,11 @@ describe("@mstar-harness/omp packed artifact", () => {
 
       // Native settings API exercised for real, across sessions: the writing
       // process observed its own write, and the fresh process that never wrote
-      // anything still reads it from the host's settings store. Keys that were
-      // never declared stay absent (the schema defaults apply), and the declared
-      // minimum refuses a malformed capacity.
-      expect(writeReport.settings).toMatchObject({ mode: "write", observed: { phase2PlanInstances: true } });
+      // anything still reads the same value from the host's settings store.
+      // Keys that were never declared stay absent (the schema defaults apply).
+      expect(writeReport.settings).toMatchObject({ mode: "write", observed: { modelHandoff: true } });
       expect(report.settings.mode).toBe("read");
-      expect(report.settings.observed).toEqual({ phase2PlanInstances: true, maxPlanInstances: null });
-      expect(report.settings.invalidCapacityAccepted).toBe(false);
+      expect(report.settings.observed).toEqual({ modelHandoff: true, handoffTarget: null });
     },
     300_000,
   );
