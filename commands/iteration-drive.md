@@ -15,7 +15,7 @@ Drive the active Morning Star iteration forward. **Boot loads skills; this comma
 
 **Done 定义**：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 Phase 6 §6.1–§6.4 完成。**Phase 3 close ≠ Done；Phase 4 开 PR ≠ Done；§5.5 exit / PR merged ≠ Done。**
 
-**Scoped route 的 Done 边界**：plan 会话的 finish 是 **durable handoff**（plan 保持 `InReview`、保留 `execution_lease`）；`status: Done` 与两个 lease 的删除由 **coordinator** 在验证 Git 合并后**同一次** snapshot 写入中完成。Phase 3–6 与 PR 仍归 coordinator → **`references/plan-scoped-pm.md`** §5–§6。
+**Scoped route 的 Done 边界**：plan 会话 finish = **durable handoff**（保持 `InReview` 与 lease）；Done 与两类 lease 删除仅 coordinator 在验证 Git 合并后原子完成（ACTIVE：DB transition；pre-activation：snapshot write）。Phase 3–6 与 PR 仍归 coordinator → **`references/plan-scoped-pm.md`** §5–§6。
 
 ## 共享 invariants / preflight / todos / STOP
 
@@ -67,4 +67,4 @@ PR merge itself may still be manual or a separate host action unless user author
 
 PR **已 merge**（verified merged；mergeable ≠ merged）→ 追加 todo `phase-6-post-merge-close` → 打印 **`## Phase 6: post-merge close`** → execute **`mstar-iteration/references/phase-6-post-merge-close.md`** §6.1→§6.4（`mstar status workflow-close --workflow <id>` terminal write → unregister → projections reconcile → cleanup handoff）。**§6.1–§6.4 完成 = 本 command Done**（勾掉 `phase-6-post-merge-close`）。可在后续会话补跑；对已关闭 lifecycle 幂等。
 
-**Then** report adds: post-merge close evidence（snapshot `completed` + `ended_at`、根 `status.json` 注销、投影一致）。
+**Then** report adds: post-merge close evidence（保留 ACTIVE close applied / replay 收据证明 workflow `completed` + `ended_at` 与 DB root unregister；无路径 `mstar status validate` 核对 register absence，Phase-6 gate 与叙事投影一致）。

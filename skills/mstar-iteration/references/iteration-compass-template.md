@@ -84,7 +84,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Delivery Branch Policy
 
-> Mirror of frontmatter; keep in sync with workflow snapshot `{WORKFLOW_DIR}/<id>/snapshot.json` `branch` anchors.
+> Mirror of frontmatter; keep in sync with workflow branch anchors (ACTIVE: store execution authority; pre-activation: snapshot `branch`).
 
 | Field | Value |
 |-------|-------|
@@ -111,7 +111,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 
 ## Quality Gate Summary
 
-> Filled at iteration-close. Human summary only; per-plan gate details stay in each main plan, and open residual SSOT stays in `{PROJECT_DIR}/<id>/residuals.json`.
+> Filled at iteration-close. Human summary only; per-plan gate details stay in each main plan. Open findings SSOT is the plan-linked open issues in `{HARNESS_DIR}/store.db`.
 
 | plan_id | QC decision | QA gate | Residuals | Durable summary |
 |---------|-------------|---------|-----------|-----------------|
@@ -120,7 +120,7 @@ Status values: `Todo` | `InProgress` | `InReview` | `Done` | `Blocked`
 Notes:
 
 - Raw review bundle: `{SDD_DIR}/review/` (ephemeral; do not rely on it after Done).
-- Open residual SSOT: `{PROJECT_DIR}/<id>/residuals.json` `entries[<plan-id>]` (default `{HARNESS_DIR}/projects/<id>/`).
+- Open findings: store issue IDs + issue severity + tracking location; gate via `mstar status findings-cleanup <plan-id>`. Project `residuals.json` is migration history, never a live register.
 
 ## Compound Round Summary
 

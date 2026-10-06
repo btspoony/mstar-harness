@@ -54,7 +54,7 @@ if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validat
 | `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 §5.5 exit 全 `[x]` |
 | `phase-6-post-merge-close` | §5.2 exit 后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
-Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」按上表刷新会话 todos：先按 snapshot / plan 证据勾掉已完成 phase 条目，保留未决 gate / 未来 phase 条目，再追加下一 phase 条目；todos 只是投影，不授权状态转换。
+Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据（pre-activation：snapshot / plan）勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 

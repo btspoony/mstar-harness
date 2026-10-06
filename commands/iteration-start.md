@@ -66,7 +66,7 @@ Command-only supplements:
 
 ## 1. Research
 
-Survey structured harness dirs（`{HARNESS_DIR}/status.json`、`{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`）+ glob for planning artifacts（`**/roadmap*.md`、`**/deferred*.md`、`**/features*.md`、`**/backlog*.md`、`**/TODO*.md`、`**/*.plan.md`）；read `STRATEGY.md`（if exists）and `{KNOWLEDGE_DIR}/README.md`（if exists — Active index rows are Research candidates）。Prioritize deferred / incomplete items from prior iterations。
+Survey harness execution / catalog via `mstar status validate` / `mstar catalog list`（ACTIVE：store.db；pre-activation 才读 legacy status 文件），以及 `{ITERATION_DIR}/`、`{KNOWLEDGE_DIR}/`、`{SPECS_DIR}/`；glob planning artifacts（roadmap/deferred/features/backlog/TODO/plan Markdown）作历史线索，不替代 store 权威。读 `STRATEGY.md` 与可选 knowledge README 散文；Research candidates 从 catalog 发现，不从 README Active 登记行推导。优先 prior iteration 未完成事项。
 
 ## 2. Explore Directions
 
@@ -111,15 +111,15 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 - [ ] direction lock decisions recorded in compass（Plan 路径：Feedback log + deferred grill log；非 Plan：grill-me）
 - [ ] `direction-lock` anchor executed **before** the draft was written（§3.5；未登记/无 compass 属预期）
 - [ ] Current HTML prototype persisted in the iteration package, presented, and explicitly approved; feedback revisions and approval disposition retained
-- [ ] Draft compass + plans + `status.json` registered
+- [ ] Draft compass + authored plans 经 `mstar iteration register` 注册（ACTIVE: store.db）
 - [ ] product-manager / architect include/skip reasons recorded; every selected invoke returned; mandatory writing-specialist returned last; no skipped-role markers / blocking questions or fake receipts; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock: compass `status: locked`; Prepare gates pass (blocked plans documented)
-- [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded in compass / `status.json`
+- [ ] Branch policy locked: `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass + workflow execution authority（ACTIVE: store.db；pre-activation: snapshot）
 - [ ] **THEN**（§6 按 §2.3 checklist step 7 执行）：integration worktree 已建立，新建的 `iteration/<iteration-id>` 分支已 push —— Phase 1 的全部写入目标（compass / plans / `<iteration-id>/` package，specs 在 `<iteration-id>/specs/`）均为默认 gitignored 的本地 `.mstar/` 工件；全局 `{SPECS_DIR}` 在 Phase 3 iteration-close 提升时写入；never the primary checkout
 
 ## 6. Integration Branch
 
-**Call site — do not restate the sequence.** Execute **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist **steps 1–7** —— 该 checklist 是该序列的**唯一 home**。本命令另记两件 command 层事实：register `iteration_base_branch` / `spec_integration_branch` / `target_branch` in compass frontmatter **and** `status.json` metadata；record the observed primary branch as **`Main worktree branch`** in the main plan header。**STOP** if `iteration_base_branch` / `target_branch` missing — never default `main`/`master`。
+**Call site — do not restate the sequence.** Execute **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3** checklist **steps 1–7**（唯一 home）。本命令另记两件事实：branch anchors 在 compass frontmatter 与当前 workflow 执行权威登记（ACTIVE：store.db；pre-activation：snapshot）；主 plan 头记录实际 **`Main worktree branch`**，主 checkout 不切换。
 
 **Phase 1 完成 anchor（pointer only — 本命令不承载 marker）**：checklist **step 7** 走完后必须执行 `phase-1-lock` 的 host 动作 —— 其 marker 与触发条件由 **`mstar-iteration/references/phase-2-worktree-lease.md` §2.3**「Integration worktree (Phase 2 entry) + control root」checklist tail 承载。
 
@@ -131,6 +131,6 @@ PM must print this block before §6; all `[ ]` must be `[x]`:
 
 **`pause` arg → command ends here**（Phase 1 locked + integration pushed；run `/iteration-drive` later）。**Default（no `pause`）→ auto-continue**：execute **`iteration-drive`**（Phase 2 → **`mstar-iteration/references/phase-2-worktree-lease.md`**；Phase 3 → `references/phase-3-iteration-close.md`；Phase 4/5 → `references/phase-4-5-pr-delivery.md`；Phase 5 helper discovery → `phase5-helper-discovery.md`；Phase 6 post-merge close（PR merged 后）→ `references/phase-6-post-merge-close.md` §6.1–§6.4）。Shared invariants / preflight / STOP → **`mstar-iteration/references/command-shared-invariants.md`**。
 
-**Done = Phase 6 post-merge close 完成**（同 `iteration-drive`：Phase 5 §5.5 exit checklist 全 `[x]` 且 PR merged 后 §6.1–§6.4 完成 — Phase 5 exit / PR merged 不是 Done）。**Then** report: iteration id, direction lock summary, plans completed, compound summary, PR link, merge-ready evidence（CI snapshot + review resolution + Greptile if applicable）, post-merge close evidence（snapshot `completed` + `ended_at`、根 `status.json` 注销、投影一致）。
+**Done = Phase 6 post-merge close 完成**（Phase 5 exit 全 `[x]`、verified PR merged 后 §6.1–§6.4 完成）。**Then** report: iteration id, direction lock summary, plans completed, compound summary, PR link, merge-ready evidence（CI + review resolution + Greptile if applicable）, post-merge close evidence（store workflow `completed` + `ended_at`、DB 根 register 注销、投影一致；ACTIVE 读 `mstar status validate`）。
 
 PR merge itself may remain manual unless user authorized auto-merge.
