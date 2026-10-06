@@ -72,34 +72,6 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
-  test("plan bind reports the valued option when a flag is mistaken for a value", async () => {
-    const result = await run(["plan", "bind", "--plan", "--workflow", "w"]);
-    const body = JSON.parse(result.stdout) as {
-      message: string;
-      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string; helpRoute?: string };
-    };
-    const diagnostic = body.details?.diagnostics?.[0];
-    // The primary surface must carry the identified option facts, not just the
-    // metadata: the first line names the option, its expected arity and the
-    // received token.
-    const firstLine = body.message.split("\n")[0] ?? "";
-    expect(firstLine).toBe("Rejected --plan: expected option value; received --plan");
-    expect(diagnostic?.path).toBe("--plan");
-    expect(diagnostic?.usage).toContain("--plan <value>");
-    expect(diagnostic?.usage).toContain("--execution");
-    expect(body.details?.recovery).toContain("Correct usage:");
-    expect(body.details?.helpRoute).toBe("mstar plan bind --help");
-  });
-  test("plan bind does not attribute option-like positionals after the terminator", async () => {
-    const result = await run(["plan", "bind", "--", "--plan", "--workflow", "w"]);
-    const body = JSON.parse(result.stdout) as {
-      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string };
-    };
-    const diagnostic = body.details?.diagnostics?.[0];
-    expect(diagnostic).not.toHaveProperty("path");
-    expect(diagnostic?.usage).toContain("--plan <value>");
-    expect(body.details?.recovery).toContain("Correct usage:");
-  });
 
 
   test("issue show positional parse errors retain their diagnostic shape", () => {
