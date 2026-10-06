@@ -74,8 +74,13 @@ function projectLegacyRowCoordination(row: Record<string, unknown>): Record<stri
     }
   }
   if (isPlainObject(legacy.progress)) out.progress = legacy.progress;
+  // The block may already be the projected target shape (discovery projects the
+  // whole snapshot before this writer runs): carry its contracted completion
+  // verbatim rather than re-deriving it from a handoff that no longer exists.
   const handoff = legacy.handoff;
-  if (isPlainObject(handoff) && handoff.state === "completed") {
+  if (isPlainObject(legacy.completion)) {
+    out.completion = legacy.completion;
+  } else if (isPlainObject(handoff) && handoff.state === "completed") {
     const qc = handoff.qc;
     const qa = handoff.qa;
     const integration = handoff.integration;
@@ -202,8 +207,9 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     // than apparently being worked on.
     if (droppedLease && state.status === "InProgress") state.status = "Blocked";
     if (!isNonEmptyString(state.status) || state.status === "Todo") {
-      const projected = isPlainObject(block.completion) ? "Done" : undefined;
-      if (projected !== undefined) state.status = projected;
+      // A migrated completion is a finished row: promote it exactly as the
+      // migration normalizer does, preserving every other recorded status.
+      if (isPlainObject(block.completion)) state.status = "Done";
     }
     delete state.coordination;
     delete state.execution_lease;

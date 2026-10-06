@@ -1210,7 +1210,7 @@ function normalizeExecutionState(db: StoreDb): void {
     const scope = lease === undefined ? null : reconcileLeaseScope(metadata, lease);
     const nextState: JsonRecord = { ...state };
     if (scope !== null) nextState.metadata = scope;
-    if (isRecord(coordination.completion) && !(typeof nextState.status === "string" && nextState.status === "Done")) {
+    if (isRecord(coordination.completion) && (!(typeof nextState.status === "string") || nextState.status === "Todo")) {
       nextState.status = "Done";
     }
     delete nextState.coordination;
