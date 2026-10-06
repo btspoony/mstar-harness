@@ -19,7 +19,7 @@ import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 // Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
 // import of the activation validator must be loaded at call time (see
@@ -1772,10 +1772,18 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  * parent store. The resolver retains main-worktree and linked-fail-closed rules. */
 function executionFileStorePath(context: StoreContext): string {
   if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const start = resolve(context.harnessDir);
+  const target = resolve(context.harnessDir);
+  // Git cannot use a future directory as cwd. Probe its existing ancestor
+  // before any writer mkdir/lock, while retaining the original null fallback.
+  let start = target;
+  while (!existsSync(start)) {
+    const parent = dirname(start);
+    if (parent === start) break;
+    start = parent;
+  }
   const root = resolveProcessHarnessDir(start);
   // A non-Git harness may contain its own plans/ child; it is not a new root.
-  return join(root === join(start, "plans") ? start : root ?? start, "store.db");
+  return join(root === join(start, "plans") ? start : root ?? target, "store.db");
 }
 
 /**
