@@ -565,14 +565,13 @@ export async function assertKnowledgeCatalogCompleteness(context: StoreContext):
 /**
  * The compound-refresh scope (mstar-compound-refresh SKILL.md §
  * 产物与操作路径): `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`,
- * `<repo-root>/CONCEPTS.md`, `{HARNESS_DIR}/status.json`.
+ * and `<repo-root>/CONCEPTS.md`.
  */
 export function compoundRefreshScope(harnessDir: string, projectRoot: string): string[] {
   return [
     join(harnessDir, "knowledge"),
     join(harnessDir, "knowledge", "README.md"),
     join(projectRoot, "CONCEPTS.md"),
-    join(harnessDir, "status.json"),
   ];
 }
 
@@ -584,9 +583,8 @@ function isFileLikeRoot(root: string): boolean {
 
 /**
  * Guard an operation path against the allowed root set (compound-refresh
- * scope SSOT: only knowledge/**, knowledge/README.md, CONCEPTS.md, and
- * status.json may be written). File-like roots require an exact match;
- * directory roots allow any path beneath them. `..` traversal-out is
+ * scope SSOT: only knowledge/**, knowledge/README.md, and CONCEPTS.md may be
+ * written). File-like roots require an exact match;
  * rejected via `resolve()` normalization.
  *
  * Limitation (documented): the guard is lexical — `resolve()` never follows
