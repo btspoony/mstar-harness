@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync, chmodSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
@@ -572,22 +572,17 @@ describe("mstar pr-review worktree-setup — detached modes with real temp repos
     });
   });
 
-  test("default worktree lands under <repo>/.worktrees/ and the repo stays clean", () => {
+  test("default worktree lands under the sibling .worktrees root and the repo stays clean", () => {
     withTempDir((dir) => {
       const repo = join(dir, "repo");
       repoWithAddedLines(repo, 10);
       const sha = git(["rev-parse", "HEAD"], repo);
-      // No --path: the review worktree must default to <repo>/.worktrees/
-      // per the mstar-branch-worktree convention, and the target repo (which
-      // has no .gitignore) must stay clean — setup appends .worktrees/ to
-      // .git/info/exclude when the repo does not already ignore it.
+      // No --path: review worktrees default beside the repository.
       const result = runCli(["pr-review", "worktree-setup", "--commit", sha], { cwd: repo });
       expect(result.exitCode).toBe(0);
       const printed = data(result);
       const wtPath = String(printed.worktreePath);
-      // git resolves the toplevel to the real path (macOS /tmp → /private/tmp),
-      // so compare against the realpath of the repo.
-      expect(wtPath.startsWith(join(realpathSync(repo), ".worktrees", "review-"))).toBe(true);
+      expect(wtPath.startsWith(join(dirname(realpathSync(repo)), `${basename(repo)}.worktrees`, "review-"))).toBe(true);
       expect(wtPath.endsWith(`-${sha.slice(0, 8)}`)).toBe(true);
       expect(existsSync(wtPath)).toBe(true);
       expect(git(["status", "--porcelain"], repo)).toBe("");
