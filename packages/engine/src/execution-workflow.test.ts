@@ -251,7 +251,6 @@ async function workflowFixture(label: string, additionalPlanIds: readonly string
   const [workflow] = created.data.workflows;
   const coordinator = await bindExecutionSession(domainContext(context, coordinatorCaller), {
     workflowId: WORKFLOW_ID,
-    planId: null,
     role: "coordinator",
     expected: workflow.workflowToken,
     operationId: `bind-coordinator-${label}`,
@@ -930,7 +929,7 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     const before = await workflowFootprint(fixture.context);
 
     // A coordinator reference of another workflow authorizes nothing here.
-    const foreignCaller: ExecutionCaller = { sessionId: "host-other", role: "coordinator", workflowId: "wf-other", planId: null };
+    const foreignCaller: ExecutionCaller = { sessionId: "host-other", role: "coordinator", workflowId: "wf-other" };
     const foreign = await refusalOf(() =>
       workflowMutation(fixture, "op-unauthorized-session", { kind: "lifecycle", status: "paused", reason: "not mine" }, {
         who: foreignCaller,
@@ -1383,7 +1382,6 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       workflowId: WORKFLOW_ID,
       role: "coordinator",
       sessionId: RECOVERY_ID,
-      planId: null,
     });
 
     // The store serves the replacement, and its binding is usable.

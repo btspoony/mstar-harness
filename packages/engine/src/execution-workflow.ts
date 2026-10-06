@@ -1192,13 +1192,11 @@ function applyWorkflowOperation(input: {
     !residueRepair && operation.kind === "lifecycle" && operation.status === "completed"
       ? composeEntailedCompletions({ tx, witness, read, evidence, at })
       : { completions: [] as readonly EntailedRowCompletion[], fulfilment: null };
-  // §R11/A21 the integration-claim half of a failed/stopped close's own-claim
-  // cleanup, under the same rule the execution leases were settled by: the
-  // workflow's OWN merge claim goes when its holder's session is not active at
-  // this epoch, and stays when that holder is live. It reads the claim from the
-  // witness this transaction already holds (the whole-view reader carries a
-  // merge claim whatever its holder's state), so a settled claim re-reads the
-  // witness below.
+  // §R11/A21 the failed/stopped close settles the workflow's OWN merge claim:
+  // it goes when its holder's session is not active at this epoch, and stays
+  // when that holder is live. It reads the claim from the witness this
+  // transaction already holds (the whole-view reader carries a merge claim
+  // whatever its holder's state), so a settled claim re-reads the witness below.
   const claim = operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")
     ? witness.view.integrationLease
     : null;
@@ -1639,7 +1637,6 @@ function recoverCoordinatorRequestHash(
           session_id: caller.sessionId,
           role: caller.role,
           workflow_id: caller.workflowId,
-          plan_id: caller.planId,
         },
         prior_session_id: input.priorSessionId,
         reason: input.reason,
@@ -1691,12 +1688,11 @@ export async function recoverExecutionCoordinator(
   input: { expected: ExecutionToken; operationId: string; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const caller = context.caller;
-  if (caller?.role !== "coordinator" || caller.planId !== null) {
+  if (caller?.role !== "coordinator") {
     throw new ExecutionError(
       "execution.scope-mismatch",
-      `recovering a coordinator identity is a coordinator operation; the supplied caller is a ${String(caller?.role)} session` +
-        `${caller?.planId === null || caller?.planId === undefined ? "" : ` for plan ${String(caller.planId)}`}. The caller ` +
-        `identity is never taken from request JSON.`,
+      `recovering a coordinator identity is a coordinator operation; the supplied caller is a ${String(caller?.role)} session. ` +
+        `The caller identity is never taken from request JSON.`,
     );
   }
   const workflowId = caller.workflowId;
@@ -1824,7 +1820,6 @@ export async function recoverExecutionCoordinator(
         workflowId,
         role: "coordinator",
         sessionId: caller.sessionId,
-        planId: null,
       },
       token: executionToken("session", tx.storeId, tx.epoch, sessionKey, revision),
       storeId: tx.storeId,
