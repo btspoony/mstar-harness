@@ -186,6 +186,17 @@ export function projectLegacySnapshot(raw: unknown): WorkflowSnapshot {
     const row: Record<string, unknown> = { ...plan };
     row.coordination = projectLegacyRowCoordination(row);
     const scope = projectLegacyLeaseScope(row);
+    const legacy = isPlainObject(plan.coordination) ? plan.coordination : {};
+    const handoff = legacy.handoff;
+    // A finished historical attempt retains its source ownership after the
+    // removed protocol is projected away. Current row configuration wins over
+    // protocol copies, as with lease scope; separate rows retain separate claims.
+    if (plan.status === "Done" && isPlainObject(handoff) && handoff.state === "completed" &&
+        isNonEmptyString(handoff.source_branch) && isNonEmptyString(handoff.worktree_path)) {
+      const metadata = isPlainObject(plan.metadata) ? plan.metadata : {};
+      if (!isNonEmptyString(metadata.working_branch) && scope.working_branch === undefined) scope.working_branch = handoff.source_branch;
+      if (!isNonEmptyString(metadata.worktree_path) && scope.worktree_path === undefined) scope.worktree_path = handoff.worktree_path;
+    }
     if (Object.keys(scope).length > 0) {
       const metadata = isPlainObject(row.metadata) ? row.metadata : {};
       row.metadata = { ...metadata, ...scope };

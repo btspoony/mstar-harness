@@ -1,7 +1,7 @@
 import fs, { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
+import { SddScriptError, WorkflowSnapshotValidationError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -308,7 +308,16 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
     snapshots = [...read.workflows];
   } else {
     const root = resolveWorkflowDir(harness, { harnessDir: harness });
-    selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
+    try {
+      selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
+    } catch (error) {
+      if (error instanceof WorkflowSnapshotValidationError && error.violations.some((violation) =>
+        violation.code === "coordination.row.field" &&
+        (violation.message.endsWith("unexpected key: handoff") || violation.message.endsWith("unexpected key: session")))) {
+        throw new SddScriptError(`${error.message}. Historical coordination state requires the supported public cutover: stop the workspace's writers, then run mstar store upgrade --harness ${JSON.stringify(harness)} --operator <name> (see mstar store upgrade --help for applicable stop attestation), and retry this cleanup. No state was changed.`, 1);
+      }
+      throw error;
+    }
     snapshots = [selected];
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name === input.workflow) continue;

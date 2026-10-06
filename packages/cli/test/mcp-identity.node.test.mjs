@@ -16,8 +16,8 @@
  *   coordinator (sessionId=A, adopts; receipt reports A) -> plan prepare (A) ->
  *   start record -> progress (all as A) -> lease verify-integration (no
  *   sessionId — its schema declares none; the call stays untouched, no error).
- *   Assertions come from the authority's own store: creator, the coordinator
- *   session row, and the absence of any plan-pm session row or per-plan lease.
+ *   Assertions come from the authority's own store: creator, the sole active
+ *   coordinator session row, and the addressed plan's uncompleted state.
  *
  * Not exercised here: the omp host process itself (the extension's injection
  * unit tests own the host-side rules); this file proves the SERVER side of the
@@ -87,7 +87,6 @@ async function makeActiveWorkspace(label) {
   return { root, harness };
 }
 
-/** The header block the engine's Assignment parser accepts. */
 /* ------------------------------------------------------------------------ *
  * The MCP stdio client: newline-delimited JSON-RPC over the child's stdio
  * ------------------------------------------------------------------------ */
@@ -297,24 +296,20 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: true });
     try {
       const coordinatorRow = db
-        .prepare("select session_id, plan_id, state from execution_sessions where workflow_id = ? and role = 'coordinator'")
-        .get(WORKFLOW_ID);
-      assert.ok(coordinatorRow !== undefined, "coordinator session row exists");
-      assert.equal(coordinatorRow.session_id, NATIVE_ID, "coordinator session row names the native id");
-      assert.equal(coordinatorRow.plan_id, null, "coordinator session row carries no plan scope");
-      assert.equal(coordinatorRow.state, "active");
-      const planPmRows = db
-        .prepare("select count(*) as n from execution_sessions where workflow_id = ? and role = 'plan-pm'")
-        .get(WORKFLOW_ID);
-      assert.equal(planPmRows.n, 0, "no plan-pm session row exists");
-      const leases = db
-        .prepare("select count(*) as n from execution_leases where workflow_id = ?")
-        .get(WORKFLOW_ID);
-      assert.equal(leases.n, 0, "no per-plan execution lease exists");
+        .prepare("select session_id, role, state from execution_sessions where workflow_id = ?")
+        .all(WORKFLOW_ID);
+      assert.equal(coordinatorRow.length, 1, "the workflow has exactly one session owner");
+      assert.equal(coordinatorRow[0].role, "coordinator");
+      assert.equal(coordinatorRow[0].session_id, NATIVE_ID, "coordinator session row names the native id");
+      assert.equal(coordinatorRow[0].state, "active");
       const row = db
-        .prepare("select state_json from execution_plans where plan_id = ?")
-        .get(PLAN_ID);
-      const coordination = JSON.parse(row.state_json).coordination ?? {};
+        .prepare("select state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(WORKFLOW_ID, PLAN_ID);
+      const plan = JSON.parse(row.state_json);
+      const coordination = JSON.parse(row.coordination_json);
+      assert.equal(plan.status, "InReview");
+      assert.equal(coordination.prepared.prepared_by, NATIVE_ID);
+      assert.equal(coordination.progress.summary, "t4 omp identity regression");
       assert.ok(coordination.completion === undefined, "the row is not completed by this chain");
     } finally {
       db.close();

@@ -14,6 +14,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -245,7 +246,7 @@ function wt(records: WtRecord[], suffix: string): WtRecord {
 
 /**
  * Shared plan-row shapes (mirror the canonical PlanRow shape used by the
- * other CLI suites: id/title/file/status plus optional metadata/lease).
+ * other CLI suites: id/title/file/status plus optional recorded metadata).
  */
 const row = (id: string, status: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   id,
@@ -255,9 +256,13 @@ const row = (id: string, status: string, extra: Record<string, unknown> = {}): R
   ...extra,
 });
 
-function completedHandoff(sourceBranch: string, worktreePath: string): Record<string, unknown> {
-  const sha = "a".repeat(40);
-  const digest = "c".repeat(64);
+function completedHandoff(sourceBranch: string, worktreePath: string, integrationPath: string): Record<string, unknown> {
+  const sha = git(["rev-parse", "HEAD"], worktreePath);
+  const resultSha = git(["rev-parse", "HEAD"], integrationPath);
+  const baseSha = git(["rev-parse", "HEAD^1"], integrationPath);
+  const evidencePath = join(dirname(worktreePath), "historical-review.md");
+  writeFileSync(evidencePath, "# Historical cleanup fixture review\n");
+  const evidence = { path: evidencePath, sha256: createHash("sha256").update(readFileSync(evidencePath)).digest("hex") };
   return {
     id: "handoff-cleanup",
     attempt: 1,
@@ -267,16 +272,18 @@ function completedHandoff(sourceBranch: string, worktreePath: string): Record<st
     source_branch: sourceBranch,
     source_sha: sha,
     worktree_path: worktreePath,
-    review_base: "b".repeat(40),
+    review_base: baseSha,
     review_head: sha,
-    qc: { decision: "Approve", reports: [{ path: "/tmp/qc1.md", sha256: digest }], consolidated: { path: "/tmp/qc.md", sha256: digest } },
-    qa: { gate: "mandatory", decision: "pass", report: { path: "/tmp/qa.md", sha256: digest } },
+    qc: { decision: "Approve", reports: [evidence], consolidated: evidence },
+    qa: { gate: "mandatory", decision: "pass", report: evidence },
+    accepted_by: "cleanup-coordinator",
+    accepted_at: "2026-09-15T00:30:00Z",
     integration: {
-      target_branch: "main",
-      worktree_path: "/tmp/integration-wt",
-      base_sha: sha,
+      target_branch: git(["branch", "--show-current"], integrationPath),
+      worktree_path: integrationPath,
+      base_sha: baseSha,
       started_at: "2026-09-15T01:00:00Z",
-      result_sha: sha,
+      result_sha: resultSha,
       verified_at: "2026-09-15T01:30:00Z",
     },
     completed_at: "2026-09-15T02:00:00Z",
@@ -292,16 +299,22 @@ function updateWorkflow(root: string, id: string, update: (snapshot: MutableClea
   writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
 }
 
-const lease = (worktreePath: string, workingBranch: string): Record<string, unknown> => ({
-  holder: "cleanup-test",
-  claimed_at: "2026-09-12",
-  worktree_path: worktreePath,
-  working_branch: workingBranch,
-});
+/** Import the stopped historical workspace through the ordinary public cutover. */
+function upgradeHistoricalWorkspace(root: string): void {
+  const snapshotPath = join(root, "workflows", "wf-1", "snapshot.json");
+  const historicalBytes = readFileSync(snapshotPath);
+  // These serialized fixtures have no live coordinator or held merge claim.
+  // There is no retired current holder that would require a stop attestation.
+  const upgraded = runCli(["store", "upgrade", "--operator", "cleanup-fixture", "--harness", root], root);
+  expect(upgraded.exitCode, upgraded.stdout).toBe(0);
+  expect(envelope(upgraded).status).toBe("ok");
+  expect(readFileSync(snapshotPath)).toEqual(historicalBytes);
+}
+
 
 /**
  * Basic fixture: main worktree (harness root) + integration worktree
- * (running iteration wf-1) + Done+merged attached worktree + leased
+ * (running iteration wf-1) + Done+merged attached worktree + non-terminal
  * InProgress worktree + Done dirty worktree + Done ignored-only-dirty
  * worktree + Done unmerged detached branch + one foreign worktree/branch
  * nothing records.
@@ -912,6 +925,8 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
     try {
       const beforeRefs = refInventory(fx.root);
       const beforeWt = git(["worktree", "list", "--porcelain"], fx.root);
+      const snapshotPath = join(fx.root, "workflows", "wf-1", "snapshot.json");
+      const beforeSnapshot = readFileSync(snapshotPath);
       // Full-sweep visibility assertions (foreign rows, main keep rows) run
       // in --all-workflows mode; the default universe is workflow-scoped.
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
@@ -919,9 +934,9 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
       // Eligible Done+merged attached worktree removes; its branch refuses checked-out until replan.
       expect(decisionRows(result).join("\n")).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
       expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/done-a | cleanup.refuse.checked-out");
-      // Active lease refuses by path and by branch.
-      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.wipWt} | cleanup.refuse.active-lease`);
-      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/wip | cleanup.refuse.active-lease");
+      // The recorded InProgress owner refuses by path and by branch.
+      expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.wipWt} | cleanup.refuse.non-terminal`);
+      expect(decisionRows(result).join("\n")).toContain("refuse | local-branch | feature/wip | cleanup.refuse.non-terminal");
       // Dirty worktree refuses.
       expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.dirtyWt} | cleanup.refuse.dirty-worktree`);
       // Foreign worktree/branch (nothing records them) refuse.
@@ -938,6 +953,7 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
       // Byte-for-byte no-op.
       expect(refInventory(fx.root)).toBe(beforeRefs);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toBe(beforeWt);
+      expect(readFileSync(snapshotPath)).toEqual(beforeSnapshot);
     } finally {
       chmodSync(fx.root, 0o755);
       rmSync(fx.root, { recursive: true, force: true });
@@ -965,7 +981,7 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
 });
 
 describe("mstar worktree cleanup — apply executes exactly the current remove rows", () => {
-  test("removes the eligible attached worktree, then its newly unchecked-out branch; retains unmerged/leased/dirty/foreign", () => {
+  test("removes the eligible attached worktree, then its newly unchecked-out branch; retains unmerged/non-terminal/dirty/foreign", () => {
     const fx = basicFixture("mstar-cleanup-apply-");
     try {
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
@@ -1044,7 +1060,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
       chmodSync(adminDir, 0o755);
     }
   });
-  test("a completed Done handoff restores historical branch and worktree ownership", () => {
+  test("a completed Done handoff restores historical branch and worktree ownership", async () => {
     const fx = basicFixture("mstar-cleanup-handoff-");
     try {
       updateWorkflow(fx.root, "wf-1", (snapshot) => {
@@ -1053,9 +1069,15 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         plan.coordination = {
           revision: 3,
           session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
-          handoff: completedHandoff("feature/done-a", fx.doneWt),
+          handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt),
         };
       });
+      upgradeHistoricalWorkspace(fx.root);
+      const imported = await readExecutionState({ harnessDir: fx.root });
+      const retained = imported.data.workflows.find((entry) => entry.state.id === "wf-1")!.plans[0]!;
+      expect(retained.plan.metadata).toMatchObject({ working_branch: "feature/done-a", worktree_path: fx.doneWt });
+      expect(retained.coordination?.completion?.source_sha).toBe(git(["rev-parse", "HEAD"], fx.doneWt));
+      expect(retained.coordination?.completion?.integration?.result_sha).toBe(git(["rev-parse", "HEAD"], fx.intWt));
 
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
       if (dry.exitCode !== 0) throw new Error(message(dry));
@@ -1070,7 +1092,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     }
   });
 
-  test("a completed handoff on a non-Done row grants no cleanup ownership", () => {
+  test("a completed handoff on a non-Done row grants no cleanup ownership", async () => {
     const fx = basicFixture("mstar-cleanup-handoff-nondone-");
     try {
       updateWorkflow(fx.root, "wf-1", (snapshot) => {
@@ -1080,9 +1102,15 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         plan.coordination = {
           revision: 3,
           session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
-          handoff: completedHandoff("feature/done-a", fx.doneWt),
+          handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt),
         };
       });
+      upgradeHistoricalWorkspace(fx.root);
+      const imported = await readExecutionState({ harnessDir: fx.root });
+      const retained = imported.data.workflows.find((entry) => entry.state.id === "wf-1")!.plans[0]!;
+      expect(retained.plan.status).toBe("InProgress");
+      expect(retained.plan.metadata?.working_branch).toBeUndefined();
+      expect(retained.plan.metadata?.worktree_path).toBeUndefined();
       const result = runCli(
         ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows", "--apply"],
         fx.root,
@@ -1104,7 +1132,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
         plan.coordination = {
           revision: 3,
           session: { session_id: "plan-session", session_file: "/tmp/plan-session.json", bound_at: "2026-09-15T00:00:00Z" },
-          handoff: completedHandoff("feature/done-a", fx.doneWt),
+          handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt),
         };
       });
       const sibling = join(fx.root, "workflows", "wf-other");
@@ -1120,9 +1148,10 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
           ended_at: "2026-09-12",
           updated_at: "2026-09-12",
           branch: { source: "feature/done-a", target: fx.mainBranch },
-          plans: [row("other-plan", "Done", { coordination: { revision: 3, handoff: completedHandoff("feature/done-a", fx.doneWt) } })],
+          plans: [row("other-plan", "Done", { coordination: { revision: 3, handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt) } })],
         }),
       );
+      upgradeHistoricalWorkspace(fx.root);
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       if (result.exitCode !== 0) throw new Error(message(result));
       expect(decisionRows(result).join("\n")).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
@@ -1142,6 +1171,7 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
           handoff: { state: "completed", source_branch: "feature/done-a", worktree_path: fx.doneWt },
         };
       });
+      upgradeHistoricalWorkspace(fx.root);
       const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--apply"], fx.root);
       expect(result.exitCode).toBe(1);
       expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.doneWt);
@@ -1228,15 +1258,13 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     }
   });
 
-  test("a lease added between planning and mutation refuses the removal (re-probe re-reads snapshots)", () => {
-    const fx = basicFixture("mstar-cleanup-lease-change-");
+  test("a row reopened between planning and mutation refuses removal (re-probe re-reads snapshots)", () => {
+    const fx = basicFixture("mstar-cleanup-owner-change-");
     try {
       const dry = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
       expect(decisionRows(dry).join("\n")).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
 
-      // Owner re-claims the worktree: the row re-opens (InProgress) and takes
-      // an execution lease (a Done row must not carry a lease per the
-      // canonical validator — the re-claim re-opens the row).
+      // The owner reopens the recorded row; cleanup must use the current status.
       const snapshotPath = join(fx.root, "workflows", "wf-1", "snapshot.json");
       const doc = JSON.parse(readFileSync(snapshotPath, "utf8")) as { plans: Array<Record<string, unknown>> };
       doc.plans[0]!.status = "InProgress";
@@ -1417,7 +1445,7 @@ describe("mstar worktree cleanup — exit contract", () => {
         JSON.stringify({
           schema_version: 1,
           id: "wf-bad-schema",
-          plans: [row("plan-protective", "Done", { coordination: { handoff: completedHandoff("feature/done-a", fx.doneWt) } })],
+          plans: [row("plan-protective", "Done", { coordination: { handoff: completedHandoff("feature/done-a", fx.doneWt, fx.intWt) } })],
         }),
       );
 
@@ -1444,8 +1472,8 @@ describe("mstar worktree cleanup — exit contract", () => {
  *   claimed by B), and an asserted worktree `wt-a1`.
  * - a2 (Done): working branch `feature/a2-work` + worktree `wt-a2` — a
  *   SIBLING row a1's scope must not select.
- * Workflow B (`wf-b`, RUNNING plan) owns `wt-b`/`feature/b-work` under an
- * ACTIVE lease, tracks `feature/b-track` and `feature/a1-ambiguous`, and its
+ * Workflow B (`wf-b`, RUNNING plan) records `wt-b`/`feature/b-work` on an
+ * InProgress row, tracks `feature/b-track` and `feature/a1-ambiguous`, and its
  * base anchor PROTECTS `feature/a1-track-1` — B's safety declarations must
  * refuse/keep in-scope A targets in every mode.
  * `wt-lost` hosts a1's recorded track `feature/a1-track-3` but records NO
@@ -1594,7 +1622,7 @@ describe("mstar worktree cleanup — candidate scope", () => {
         `keep | worktree | ${fx.root} | cleanup.keep.main-worktree`,
         `remove | worktree | ${fx.wtA1} | cleanup.remove.merged`,
         `remove | worktree | ${fx.wtA2} | cleanup.remove.merged`,
-        `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
+        `refuse | worktree | ${fx.wtB} | cleanup.refuse.non-terminal`,
         `refuse | worktree | ${fx.wtForeign} | cleanup.refuse.foreign-worktree`,
         `refuse | worktree | ${fx.wtLost} | cleanup.refuse.foreign-worktree`,
         "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
@@ -1604,7 +1632,7 @@ describe("mstar worktree cleanup — candidate scope", () => {
         "refuse | local-branch | feature/a1-work | cleanup.refuse.checked-out",
         "refuse | local-branch | feature/a2-work | cleanup.refuse.checked-out",
         "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
-        "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
+        "refuse | local-branch | feature/b-work | cleanup.refuse.non-terminal",
         "refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch",
         `keep | local-branch | ${fx.mainBranch} | cleanup.keep.protected-ref`,
       ]);
@@ -1672,12 +1700,12 @@ describe("mstar worktree cleanup — candidate scope", () => {
       expect(result.exitCode).toBe(0);
       expect(decisionRows(result)).toEqual([
         // The asserted B worktree is inspected under the SAME guards.
-        `refuse | worktree | ${fx.wtB} | cleanup.refuse.active-lease`,
+        `refuse | worktree | ${fx.wtB} | cleanup.refuse.non-terminal`,
         // Exact owner (wf-b, plan-b1): its tracks plus the ambiguous branch
         // that carries a matching claim (still unowned).
         "refuse | local-branch | feature/a1-ambiguous | cleanup.refuse.foreign-branch",
         "refuse | local-branch | feature/b-track | cleanup.refuse.non-terminal",
-        "refuse | local-branch | feature/b-work | cleanup.refuse.active-lease",
+        "refuse | local-branch | feature/b-work | cleanup.refuse.non-terminal",
       ]);
       expect(decisionRows(result).join("\n")).not.toContain(fx.wtA1);
       expect(decisionRows(result).join("\n")).not.toContain("feature/a1-track-2");
