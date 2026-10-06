@@ -6,14 +6,15 @@
 
 给新仓或迁移仓提供一套可复制的启动方式，确保：
 
-- `status.json` / residual / review bundle 有唯一落点；
+- store.db 执行/issue 权威与 authored plan、review bundle 有唯一落点；root JSON 仅 pre-activation bootstrap；
 - 根规则与 harness 规则不互相覆盖；
 - 目录级 `AGENTS.md` 只承载增量边界，不变成重复手册。
 
 ## Bootstrap 最小步骤
 
 1. 创建 `{HARNESS_DIR}`（推荐 `.mstar/`）与 `{PLAN_DIR}`（推荐 `.mstar/plans/`）。
-2. 初始化 `status.json`：从 **`mstar-artifacts/templates/status.empty.json`** 复制（**v2 形状**：`version: 2` + `workflows: []`）；residual canonical 见 **`mstar-artifacts` SKILL.md**；字段与生命周期见 **`mstar-artifacts/references/status-and-residuals.md`**。`scaffoldHarness` / `mstar harness scaffold` 建立 `projects/_default/` 目录并在可用的 catalog 中登记项目；不产出 `roadmap.md` 或新 register。遗留 Markdown 仅是 reviewed import 的候选；内容权威与读写规则 → `mstar-project-governance`。
+2. `status.json` 仅 **pre-activation bootstrap**：从 **`mstar-artifacts/templates/status.empty.json`** 复制 v2 空形状。ACTIVE root register / plan 行 / leases / sessions 在 store；findings 是 store issues，project register 无条件退役为迁移历史。`scaffoldHarness` / `mstar harness scaffold` 建立 `projects/_default/` 并在可用 catalog 中登记，不产出 roadmap Markdown 或 register。
+   Store 初始化/升级与 staged activation 的分工只按 **`mstar-conventions` SKILL.md「初始化 Plan 目录」**：全新用 `store init`；已有/legacy 用 `store upgrade` 导入并激活执行权威；`store activate` 仅用于 reviewed staged migration，不是例行追加步骤。scaffold 不代替 store 生命周期。
 3. `sdd/` 空目录占位（per-plan 子目录由 **`mstar-sdd`** → `mstar sdd workspace <plan-id>` 创建）。
 4. 项目根 `.gitignore` 追加 Morning Star **进程产物**忽略集（canonical snippet → `mstar-conventions` SKILL.md「Git 跟踪策略」；legacy `.agents/` 有等价表）。
 5. 可选：创建 `{ITERATION_DIR}`（`iterations/` + `README.md`）与 `{KNOWLEDGE_DIR}`（`knowledge/` + `README.md`）；`{HARNESS_DIR}/specs/`（解析后的 `{SPECS_DIR}` 默认落点）；内容边界见 `mstar-conventions` SKILL.md 与 `references/knowledge-and-designs.md`。
@@ -32,7 +33,7 @@
 | 类别 | 默认 tracked | 默认 gitignored |
 |------|--------------|-----------------|
 | 结果（跨 clone handoff） | `{HARNESS_DIR}/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**` | — |
-| 进程（本地会话 SSOT） | — | `plans/`、`iterations/`、`status.json`、`workflows/`、`projects/`、`sdd/`、`archived/` |
+| 进程（执行权威在 store；plan 是 authored artifact） | — | `store.db`、`plans/`、`iterations/`、pre-activation `status.json`、`workflows/` retained bodies 与 legacy 文件、`projects/`、`sdd/`、`archived/` |
 
 跨 clone 须持久的 residual 或决策：经 **`mstar-compound`** 提升入 `{KNOWLEDGE_DIR}/`、写入 `{SPECS_DIR}/`，或记入 tracked `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `plans/`。
 
@@ -87,7 +88,7 @@
 ## 反模式与修正
 
 - 反模式：在根 `AGENTS.md` 维护当前计划进展与 commit 列表。  
-  修正：迁移到 workflow snapshot 的 `plans[].metadata` 与 `workflows/<id>/notes.jsonl`。
+  修正：经公共动词写 store.db 执行 plan 行 metadata，并 append `workflows/<id>/notes.jsonl`（pre-activation：snapshot metadata）。
 
 - 反模式：每个子目录复制一份完整 harness 规则。  
   修正：保留一行引用 `{HARNESS_DIR}/AGENTS.md`，仅写本目录增量约束。
