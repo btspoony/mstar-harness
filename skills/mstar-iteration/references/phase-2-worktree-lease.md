@@ -253,7 +253,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
 1. **Claim / resume — execution lease**（§2.0 #5 未 waive）：按下方「Execution lease」claim/resume 规则——同 `holder` → resume（校验 `worktree_path` / `working_branch` 与 Assignment 一致）；异 `holder` → **Blocked**；`InProgress` 无 lease → **STOP** 升级（孤儿恢复 → **`mstar-artifacts`**）；verify 通过前 **禁止**可写派发。**Scoped route**：fresh claim 的唯一入口是 `mstar plan bind`（active：`--execution --workflow <id> --plan <id> --expect <plan-execution-token> --operation <id>`；pre-activation：`--assignment` / `--workflow --plan`）——同 plan 的第二个 fresh 形态 → `coordination.duplicate-holder`；续接只经只读 resume（active `--execution --resume-ref <wire>`；pre-activation `--resume`），且为**只读校验**（不重新获取 ownership、不重启执行、不改 revision；无自动 attach / fallback plan / TTL 夺取）；停止 owner 的替换只经所属 authority 的 recovery 动词（**resume ≠ recovery**）。
-2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree（默认 `<repoRoot>/.worktrees/<plan-id>-<slug>`）；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
+2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree（默认 `../<repo>.worktrees/<plan-id>-<slug>`，相对于 Git top-level 的 realpath，`<repo>` 为仓库 basename）；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
 3. **Implement → InReview**（产品编辑在 feature worktree；plans / snapshot / iterations / SDD 经 control root 绝对路径）：
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按依赖与 ownership 派发 **独立 ready tasks 并行** 的 per-task 循环（**不是**一次派发 dev 做全部 tasks）：
@@ -350,7 +350,7 @@ Lives on the snapshot plan row — `{WORKFLOW_DIR}/<id>/snapshot.json` → `plan
    - **Same `holder` as this session** → **resume**: verify `worktree_path` and
      `working_branch` match the Assignment; continue (not steal/block).
    - **Different `holder`** → **Blocked** (no timestamp makes it stealable).
-3. Create or verify dedicated feature worktree + branch (default `<repoRoot>/.worktrees/<plan-id>-<slug>`).
+3. Create or verify dedicated feature worktree + branch (default `../<repo>.worktrees/<plan-id>-<slug>` relative to the realpath of the Git top-level, with `<repo>` its basename).
 4. Re-read the snapshot under write lock; if row/status/lease changed, restart claim.
 5. One complete-file update (still under lock): `status: "InProgress"` + full `execution_lease`.
    Use temp file + atomic replace; never expose partial JSON.
