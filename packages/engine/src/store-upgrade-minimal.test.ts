@@ -364,6 +364,24 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     ],
     stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
   };
+  // Without the operator's stop attestation the cutover refuses and rolls the
+  // whole batch back: schema 8, every business/claim byte intact, no staging
+  // table left behind. The SAME fixture then upgrades successfully under the
+  // attested retry, proving a supported public recovery rather than a one-way
+  // orphan.
+  await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-schema8-refused" }))
+    .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+  const refused = await openStore(context, "read");
+  try {
+    expect(refused.schemaVersion).toBe(MIGRATIONS.length - 1);
+    expect(refused.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string } | undefined)
+      .toBeDefined();
+    expect(refused.db.prepare("select count(*) as n from execution_sessions where role = 'plan-pm'").get()).toEqual({ n: 1 });
+    expect(refused.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 1 });
+    expect(refused.db.prepare("select name from sqlite_master where type = 'table' and name = 'execution_lease_cutover'").get()).toBeUndefined();
+  } finally {
+    refused.close();
+  }
   await upgradeStoreMinimal({
     context,
     operator: "operator",
@@ -488,10 +506,18 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
   };
   plan.status = "Todo";
   snapshot.coordination = {
-    coordinator: { session_id: "host-coord", session_file: join(ROOT, "coord.json"), bound_at: "2026-10-04T00:00:00Z" },
+    coordinator: {
+      session_id: "host-coord",
+      session_file: join(context.harnessDir, "workflows", workflowId, "sessions", "coordinator.json"),
+      bound_at: "2026-10-04T00:00:00Z",
+    },
     self_amendments: [{ at: "2026-10-04T01:00:00Z", session_id: "plan-session", operation_id: "amend-op" }],
   };
   writeFileSync(snapshotPath, JSON.stringify(snapshot));
+  // A real in-workflow coordinator envelope matching the binding, so the
+  // import's binding verification has something to verify against.
+  const coordinatorPath = join(context.harnessDir, "workflows", workflowId, "sessions", "coordinator.json");
+  writeFileSync(coordinatorPath, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "host-coord", workflow_id: workflowId, harness_root: context.harnessDir }));
 
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-legacy-sealed-completed" });
   // The workflow is ADMITTED, not skipped as unrecognizable.
