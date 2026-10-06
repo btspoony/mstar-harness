@@ -1,5 +1,10 @@
 /**
  * Protected-writers CAS and catalog/store registration-gate families.
+ *
+ * The coordinator is the only plan writer: an ordinary `prepare`/`progress`
+ * carries the row's own metadata, and the retired residuals register is never a
+ * write target. The catalog execution pin records the frozen prepare input; it
+ * is evidence of the selection the authorized prepare made, not a byte seal.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -17,14 +22,19 @@ import {
   PROJECT_ID,
   WORKFLOW_ID,
   afterEachCleanup,
-  bindPlan,
   ensureCoordinator,
   errorCodeOf,
+  failureCode,
   finding,
   linkedOpenIssues,
   makeFixture,
-  preparePlan,
+  arrayField,
+  metadataOf,
+  prepareCall,
+  progressCall,
+  planRowOf,
   readJson,
+  recordField,
   storeBacked,
   writeJson,
   type Fixture,
@@ -111,11 +121,10 @@ describe("protected-writers", () => {
 
     // The residual-add mutation itself never recreates the register: after
     // the DB cutover a coordinated plan still leaves the legacy file alone.
-    await preparePlan(fixture, PLAN_ID);
-    await bindPlan(fixture, PLAN_ID);
-    const view = await readPlanCoordination(fixture.planSession, PLAN_ID, fixture.root);
+    await prepareCall(fixture, PLAN_ID);
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     await mutatePlanCoordination({
-      sessionPath: fixture.planSession,
+      sessionPath: fixture.coordinatorSession,
       planId: PLAN_ID,
       expectedRevision: view.revision,
       operation: { kind: "residual-add", entries: [finding("r-scoped")] as never },
@@ -124,9 +133,9 @@ describe("protected-writers", () => {
     expect((await linkedOpenIssues(fixture, PLAN_ID)).map((issue) => issue.id)).toEqual(["I-000001"]);
   });
 
-  test("uncoordinated kinds refuse explicitly and a plan session cannot replace a snapshot", async () => {
+  test("uncoordinated kinds refuse explicitly and only the coordinator replaces a snapshot", async () => {
     const fixture = makeFixture();
-    await preparePlan(fixture, PLAN_ID);
+    await prepareCall(fixture, PLAN_ID);
     await ensureCoordinator(fixture);
     const harnessRoot = realpathSync(fixture.harness);
 
@@ -137,19 +146,35 @@ describe("protected-writers", () => {
       ).toBe("coordination.scoped-writer-required");
     }
 
-    // A coordinated snapshot is replaceable by the coordinator only: a plan
-    // session is refused before the payload is even considered.
+    // A coordinated snapshot is replaceable by the coordinator only: a session
+    // that is not the workflow's live coordinator is refused before the payload
+    // is even considered.
     const snapshotRef = { kind: "snapshot", key: WORKFLOW_ID } as const;
     const snapshotPath = join(harnessRoot, "workflows", WORKFLOW_ID, "snapshot.json");
     const snapshot = readJson(snapshotPath);
-    const planSession = (await bindPlan(fixture, PLAN_ID)).session_file;
-    for (const sessionPath of [undefined, planSession]) {
+    const foreign = join(fixture.workflowDir, "sessions", "coordinator-foreign.json");
+    writeJson(foreign, {
+      schema_version: 1,
+      role: "coordinator",
+      session_id: "foreign",
+      workflow_id: WORKFLOW_ID,
+      harness_root: fixture.harness,
+    });
+    for (const sessionPath of [undefined, foreign]) {
       expect(
         await errorCodeOf(() =>
           replaceCoordinatedArtifact({ harnessRoot, ref: snapshotRef, payload: snapshot, sessionPath }),
         ),
-      ).toBe("coordination.session-role");
+      ).not.toBe(undefined);
     }
+    // The workflow's own coordinator replaces it.
+    const replaced = await replaceCoordinatedArtifact({
+      harnessRoot,
+      ref: snapshotRef,
+      payload: snapshot,
+      sessionPath: fixture.coordinatorSession,
+    });
+    expect(replaced.payload).toEqual(snapshot);
   });
 
   test("a json alias through a symlinked parent cannot create a not-yet-existing protected file (PR241-G4)", async () => {
@@ -203,27 +228,34 @@ async function pinConflictOf(run: () => Promise<unknown>): Promise<{ code?: stri
   try {
     await run();
   } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    return { ...(typeof code === "string" ? { code } : {}), message: error instanceof Error ? error.message : String(error) };
+    const code = failureCode(error);
+    return { ...(code === undefined ? {} : { code }), message: error instanceof Error ? error.message : String(error) };
   }
   throw new Error("expected the coordination call to fail");
 }
 
 /** The plan row as stored on disk (the frozen execution input). */
 function storedRow(fixture: Fixture, planId: string): Record<string, unknown> {
-  const snapshot = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
-  return snapshot.plans.find((row) => row.id === planId || row.plan_id === planId)!;
+  const snapshot = readJson(fixture.snapshotPath);
+  const plans = arrayField(snapshot, "plans");
+  const row = plans.find((entry) => {
+    if (entry === null || typeof entry !== "object") return false;
+    const candidate = entry as Record<string, unknown>;
+    return candidate.id === planId || candidate.plan_id === planId;
+  });
+  if (row === undefined || row === null || typeof row !== "object") throw new Error(`snapshot has no row ${planId}`);
+  return row as Record<string, unknown>;
 }
 
 function pinOf(row: Record<string, unknown>): CatalogExecutionPin {
-  return (row.metadata as Record<string, unknown>).catalog_pin as CatalogExecutionPin;
+  return recordField(metadataOf(row), "catalog_pin") as CatalogExecutionPin;
 }
 
 describe("catalog pin — frozen prepare inputs (state-projection contract §1)", () => {
   test("catalog pin: prepare records the pin, and a later catalog move leaves the prepared execution stable", async () => {
     const fixture = makeFixture();
     const context = await storeBacked(fixture);
-    await preparePlan(fixture, PLAN_ID);
+    await prepareCall(fixture, PLAN_ID);
 
     const row = storedRow(fixture, PLAN_ID);
     const pin = pinOf(row);
@@ -248,15 +280,12 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     const after = storedRow(fixture, PLAN_ID);
     expect(after.file).toBe(row.file);
     expect(pinOf(after)).toEqual(pin);
-    // Execution may start on the pinned input.
-    const bound = await bindPlan(fixture, PLAN_ID);
-    expect(bound.outcome).toBe("claimed");
   });
 
   test("catalog pin: an authorized prepare records the new catalog revision, while the earlier pin stays frozen", async () => {
     const fixture = makeFixture();
     const context = await storeBacked(fixture, [PLAN_ID, PEER_PLAN_ID]);
-    await preparePlan(fixture, PLAN_ID);
+    await prepareCall(fixture, PLAN_ID);
     const first = pinOf(storedRow(fixture, PLAN_ID));
     // Both plan entities move on: their revisions (the pin's selection pointer)
     // are now 2.
@@ -271,20 +300,18 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
 
     // The authorized prepare is the pin writer: a later prepare (another plan
     // row of the same workflow) selects the CURRENT catalog revision.
-    await preparePlan(fixture, PEER_PLAN_ID);
+    await prepareCall(fixture, PEER_PLAN_ID);
     const second = pinOf(storedRow(fixture, PEER_PLAN_ID));
     expect(second.entity_revision).toBe(2);
     expect(second.store_id).toBe(first.store_id);
     expect(second.entity_revision).not.toBe(first.entity_revision);
 
-    // The already-prepared row keeps its own pin: a re-prepare of that row is
-    // answered from the seal it already holds (already-satisfied, no write),
-    // so the move cannot be applied retroactively.
+    // The already-prepared row keeps its own pin: a re-prepare is answered
+    // already-satisfied (no write), so the move cannot be applied retroactively.
     const snapshotBefore = readJson(fixture.snapshotPath);
-    const again = await preparePlan(fixture, PLAN_ID);
+    const again = await prepareCall(fixture, PLAN_ID);
     expect(again.outcome).toBe("already-satisfied");
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(first);
-    // The already-satisfied re-prepare is answered from the seal: no write.
     expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(first);
@@ -295,7 +322,7 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
   test("catalog pin: a frozen input edited after preparation keeps its recorded pin and never blocks", async () => {
     const fixture = makeFixture();
     const context = await storeBacked(fixture);
-    await preparePlan(fixture, PLAN_ID);
+    await prepareCall(fixture, PLAN_ID);
     const pinned = pinOf(storedRow(fixture, PLAN_ID));
 
     // A generic snapshot metadata update (NOT an authorized prepare) re-points
@@ -309,8 +336,6 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     );
     writeJson(fixture.snapshotPath, snapshot);
 
-    const bound = await bindPlan(fixture, PLAN_ID);
-    expect(bound.outcome).toBe("claimed");
     // Neither side is overwritten: the row keeps its edited document and the
     // catalog keeps its own revision.
     const handle = await openStore(context, "read");
@@ -330,21 +355,12 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
   test("catalog pin: progress reporting does not invalidate the pin", async () => {
     const fixture = makeFixture();
     await storeBacked(fixture);
-    await preparePlan(fixture, PLAN_ID);
-    await bindPlan(fixture, PLAN_ID);
+    await prepareCall(fixture, PLAN_ID);
     const pinned = pinOf(storedRow(fixture, PLAN_ID));
 
-    const view = await readPlanCoordination(fixture.planSession, undefined, fixture.root);
-    await mutatePlanCoordination({
-      sessionPath: fixture.planSession,
-      expectedRevision: view.revision,
-      operation: {
-        kind: "progress",
-        progress: { status: "InProgress", summary: "executing", evidence_paths: [] },
-      },
-    });
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "executing", evidence_paths: [] });
 
-    const after = await readPlanCoordination(fixture.planSession, undefined, fixture.root);
+    const after = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(after.catalog_pin?.conflict).toBeNull();
     expect(after.catalog_pin?.pin).toEqual(pinned);
     expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(pinned);
@@ -394,12 +410,10 @@ describe("catalog registration gate — prepare/bind/selection refuse a pending 
     // evaluated per reader call, not amortized into a one-time check.
     await ensureCoordinator(fixture);
     await seedPendingRegistration(fixture, context, "execution-written");
-    const refusal = await pinConflictOf(() => preparePlan(fixture, PLAN_ID));
+    const refusal = await pinConflictOf(() => prepareCall(fixture, PLAN_ID));
     expect(refusal.code).toBe("catalog.registration-pending");
     // No prepared block was written.
-    const view = readJson(fixture.snapshotPath);
-    const row = (view.plans as Array<Record<string, unknown>>).find((r) => r.id === PLAN_ID)!;
-    expect(row.coordination).toBeUndefined();
+    expect(planRowOf(fixture, PLAN_ID).coordination).toBeUndefined();
   });
 
   test("the selection view refuses the same pending workflow", async () => {
@@ -415,10 +429,9 @@ describe("catalog registration gate — prepare/bind/selection refuse a pending 
     const fixture = makeFixture();
     await storeBacked(fixture);
     // Active store, root-visible workflow, no catalog_operations row at all:
-    // prepare and bind succeed unchanged (pre-activation/registered-excluded
+    // prepare succeeds unchanged (pre-activation/registered-excluded
     // workspaces are never retro-refused).
-    await preparePlan(fixture, PLAN_ID);
-    const bound = await bindPlan(fixture, PLAN_ID);
-    expect(bound.outcome).toBe("claimed");
+    const prepared = await prepareCall(fixture, PLAN_ID);
+    expect(prepared.outcome).toBe("prepared");
   });
 });
