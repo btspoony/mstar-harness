@@ -570,7 +570,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
  * ------------------------------------------------------------------------ */
 
 /** The core `CaptureInput` minus `projectId`, as the scoped list takes it. */
-function finding(overrides: Record<string, unknown> = {}): CaptureInput {
+function finding(overrides: Partial<Omit<CaptureInput, "projectId">> = {}): Omit<CaptureInput, "projectId"> {
   return {
     title: "Finding",
     kind: "review-obligation",
@@ -588,7 +588,7 @@ function finding(overrides: Record<string, unknown> = {}): CaptureInput {
     evidence: ["review/qc1.md"],
     discoveredAt: TS,
     ...overrides,
-  } as CaptureInput;
+  };
 }
 
 describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () => {

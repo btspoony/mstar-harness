@@ -241,7 +241,6 @@ async function sessionFixture(label: string): Promise<Fixture> {
   const coordinatorBind = { expected: workflow.workflowToken, operationId: `bind-coordinator-${label}` };
   const coordinator = await bindExecutionSession(domainContext(context, coordinatorCaller), {
     workflowId: WORKFLOW_ID,
-    role: "coordinator",
     ...coordinatorBind,
   });
   return {
@@ -293,7 +292,6 @@ describe("execution session recovery (S2/E03)", () => {
     // timestamp.
     const retried = await bindExecutionSession(domainContext(fixture.context, fixture.coordinatorCaller), {
       workflowId: WORKFLOW_ID,
-      role: "coordinator",
       ...fixture.coordinatorBind,
     });
     expect(retried.replayed).toBe(true);
