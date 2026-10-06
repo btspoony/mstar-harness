@@ -50,8 +50,15 @@ Dispatch:
     meaningful consumer-visible tests, invariants, boundaries, or a fails-first
     regression (`mstar-coding-behavior` § Evidence). Existing affected
     evidence is enough when applicable; do not demand a new test per edit.
-    Reject tests that only pin wording/source shape, forwarding echoes,
-    duplicated producer checks, or environment-dependent bytes. For changed
+    Keep product-behaviour assertions and fails-first regression defences;
+    delete incidental / source-shape / wiring / environment-constant assertions
+    (including wording/source-shape pins, forwarding echoes, duplicated producer
+    checks, or environment-dependent bytes) — deleted, never renamed or re-pinned.
+    Report the non-product-assertion class and conclude
+    "delete, or replace with a product-behaviour assertion".
+    PR #280 counter-examples: manifest parity guard, platform build-byte pins,
+    raw-SQLite fixture, test-only header regression; judge assertions against
+    production-owner contracts, not names. For changed
     planning documents in scope (delivery compass, plans, specs, knowledge),
     check the edit's local seat/model/timestamp/iteration attribution; an
     explicitly `unknown` model is honest when the ID is unavailable. Do not

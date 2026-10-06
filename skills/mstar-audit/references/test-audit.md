@@ -17,6 +17,8 @@ A test justifies its maintenance cost by protecting **behavior**, a **credible r
 
 An existing test that would have to change for a behavior-preserving source reorganization is **suspect, not automatically deletable** — rewrite-at-the-owner-boundary is the remedy, and the authoring gate (§3) still rejects its new-form cousins.
 
+**Keep/delete rule and auditor obligation:** keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. For each confirmed non-product assertion, report its non-product-assertion class and conclude **"delete, or replace with a product-behaviour assertion"**. Calibrate against the PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression. These are assertion-level counter-examples, not name-based deletion shortcuts: inspect the production owner and retention bar before deciding; a replacement must independently exercise product behaviour, not rename, weaken, or re-pin the rejected assertion.
+
 ## 3. Authoring gate (four questions, used both ways)
 
 The gate that rejects a new test at write time is the same lens that grades existing ones:

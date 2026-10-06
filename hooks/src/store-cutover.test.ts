@@ -10,16 +10,15 @@
  *   authority paths and the untouched document paths;
  * - the COMMITTED BUNDLE (`hooks/mstar-write-gate.mjs`, rebuilt from source by
  *   `scripts/build-zcode-hooks.ts` in `beforeAll`) under NATIVE `node` — the
- *   runtime hooks.json spawns. That run carries the store-backed path under
- *   the actual Node runtime, including the in-process laziness probe
- *   (`process.moduleLoadList`: no `node:sqlite` for a non-store write).
+ *   runtime hooks.json spawns. That run exercises the store-backed refusal and
+ *   document-validation outcomes under the runtime that hooks.json launches.
  *
  * Stores are REAL (`initializeStore` / `openStore`, real `node:sqlite`
  * migrations); the refusals are the entry's own.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
@@ -351,12 +350,6 @@ describe("ZCode write gate \u2014 authority paths (source entry)", () => {
 });
 
 describe("ZCode write gate \u2014 committed bundle under native node", () => {
-  test("the node on PATH meets the store floor this gate advertises", () => {
-    const version = spawnSync("node", ["--version"], { encoding: "utf8" }).stdout.trim().replace(/^v/, "");
-    const [major = 0, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10));
-    expect(major > 24 || (major === 24 && minor >= 18)).toBe(true);
-  });
-
   test("bundle refuses the authority database and the retired register, and passes unrelated targets", async () => {
     const fixture = makeHarness("bundle", "hard");
     await seedActiveStore(fixture.harness);
@@ -394,64 +387,15 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
     expect(run.stderr).toContain("status.invalid-json");
   });
 
-  test("the store is acquired only on an AUTHORITY route (moduleLoadList, in-process)", async () => {
-    const fixture = makeHarness("bundle-lazy", "hard");
+  test("active store bundle preserves status document validation", async () => {
+    const fixture = makeHarness("bundle-active-status", "hard");
     await seedActiveStore(fixture.harness);
-    const probeDir = mkdtempSync(join(tmpdir(), "wgate-g4b-probe-"));
-    roots.push(probeDir);
-    const preload = join(probeDir, "preload.mjs");
-    const outPath = join(probeDir, "probe.json");
-    // The preload runs INSIDE the hook process; `process.moduleLoadList` is
-    // Node's own record of loaded native modules, so this observes the exact
-    // committed artifact's acquisition instead of inferring it from behaviour.
-    writeFileSync(
-      preload,
-      [
-        'import { writeFileSync } from "node:fs";',
-        "process.on(\"exit\", () => {",
-        "  const loaded = (process.moduleLoadList ?? []).some((name) => /sqlite/i.test(name));",
-        "  try { writeFileSync(process.env.MSTAR_G4B_PROBE_OUT, JSON.stringify({ sqlite: loaded })); } catch {}",
-        "});",
-        "",
-      ].join("\n"),
-    );
-
-    // An ungated target never enters an authority route — the store is not
-    // acquired for it.
-    writeFileSync(join(fixture.root, "notes.md"), "# notes\n");
-    const unrelatedWrite = runGate(
-      "node",
-      HOOK_BUNDLE,
-      writeEvent(join(fixture.root, "notes.md"), BAD_JSON),
-      { MSTAR_G4B_PROBE_OUT: outPath },
-      ["--import", preload],
-    );
-    expect(unrelatedWrite.exitCode).toBe(0);
-    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual({ sqlite: false });
-
-    // A coordination document DOES enter the route first (§4.3/§5: the
-    // authority decision precedes any document read), so the store is
-    // acquired — and on this active-issue/legacy-execution harness the route
-    // answers `files`, so the document validator still decides.
-    const statusWrite = runGate(
-      "node",
-      HOOK_BUNDLE,
-      writeEvent(join(fixture.harness, "status.json"), BAD_JSON),
-      { MSTAR_G4B_PROBE_OUT: outPath },
-      ["--import", preload],
-    );
-    expect(statusWrite.exitCode).toBe(2); // document validator still fires
-    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual({ sqlite: true });
-
-    const registerWrite = runGate(
-      "node",
-      HOOK_BUNDLE,
-      writeEvent(fixture.register, VALID_REGISTER),
-      { MSTAR_G4B_PROBE_OUT: outPath },
-      ["--import", preload],
-    );
-    expect(registerWrite.exitCode).toBe(2);
-    expect(JSON.parse(readFileSync(outPath, "utf8"))).toEqual({ sqlite: true });
+    const run = runGate("node", HOOK_BUNDLE, writeEvent(join(fixture.harness, "status.json"), BAD_JSON));
+    expect(run.exitCode).toBe(2);
+    expect(lines(run)[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
+    expect(lines(run)[2]).toBe(ENFORCEMENT_LINE);
   });
+
+
 });
 

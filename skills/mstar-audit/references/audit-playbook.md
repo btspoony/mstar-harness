@@ -71,6 +71,7 @@ The goal is not a percentage — it's *which untested code is dangerous*.
 - Real entry path: do tests exercise the shipped entry (CLI, loader, plugin boot) rather than a hand-mounted equivalent?
 - Externally observable state: assertions verify logs, events, files, exit codes — never implementation restatement or agent-reported success.
 - User-visible output is behavior (conditional): in repos shipping UI copy, CLI output, API error shapes, or prompt text, wording is behavior — snapshot or e2e coverage should pin it.
+- Test keep/delete check: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. The auditor reports the non-product-assertion class and concludes **"delete, or replace with a product-behaviour assertion"**. PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression. Classify the assertion against its production-owner contract, not its name; apply the retention and candidate-evidence bars in `references/test-audit.md`.
 
 For the deep method behind this category — value bar, authoring gate (used both to grade existing tests and to gate test proposals in plans), the junk-pattern sweep, the retention bar, per-candidate evidence fields, discovery lanes, and campaign scope — load **`references/test-audit.md`** (load when the category focus is `tests`, via `/amazing-test-audit`, or when the Test Coverage pass needs depth).
 
