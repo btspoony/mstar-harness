@@ -24,11 +24,11 @@
 ## `{ITERATION_DIR}`（可选·迭代/版本级 package）
 
 - **物理路径**：`**{ITERATION_DIR}/**`（推荐布局下常为 `**.mstar/iterations/**`，与 `{KNOWLEDGE_DIR}`、`{PLAN_DIR}` 并列；legacy 项目可继续为 `.agents/iterations/`）。
-- **放什么**：**`<iteration-id>/` package** — `delivery-compass.md`（迭代状态 SSOT）；`guides/`（探索、过程）；`specs/`（迭代级规格草案）；可选 package `README.md`；遗留规划快照。
+- **放什么**：**`<iteration-id>/` package** — `delivery-compass.md`（authored 迭代范围输入，非运行状态权威）；`guides/`（探索、过程）；`specs/`（迭代级规格草案）；可选 package `README.md`；遗留规划快照。ACTIVE 运行状态在 store execution_* 行。
 - **不放什么**：已锁定的仓库级规范（→ **`{SPECS_DIR}/`**）；已提升的跨迭代实施 SSOT（→ **`{KNOWLEDGE_DIR}/`**，经 compound）；单 plan QC/QA 原始报告（→ `{SDD_DIR}/review/`）。
 - **登记（DB 权威）**：迭代 identity、compass 位置、description、project 归属，以及 package 内文档的 `documents` 关系，都是 `{HARNESS_DIR}/store.db` 的 catalog 行（contract §1/§4）；查询用 `mstar catalog show` / `mstar catalog list`，登记走 reviewed `mstar catalog discover` + `mstar catalog import` 或 `mstar catalog register` / `mstar catalog link`。根 `{ITERATION_DIR}/README.md` 与 package `README.md` 保留为**散文**，**不再**维护「一行 = 一次迭代」的登记行或 Documents 登记表。
 - **维护**：`@product-manager` / `@architect` 起草 package；**`@project-manager`** 维护 catalog 登记（经域边界写入）与 metadata；**iteration-close** 时 **`mstar-compound`** 盘点 package 并**提升**至 `{KNOWLEDGE_DIR}/`。
-- **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`（迭代状态 SSOT）；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
+- **Compass 路径**：canonical `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`（authored 输入）；legacy flat `{ITERATION_DIR}/<iteration-id>-delivery-compass.md` 仅兼容读。
 
 ## `{SPECS_DIR}`（可选·长期规格）
 
@@ -59,9 +59,9 @@
 - 避免与主 plan 文件名混淆：主 plan 仍建议 `<plan-id>-<plan-name>.md` 且放在 `{PLAN_DIR}/` 根下，而非塞进 `{KNOWLEDGE_DIR}` 根（除非团队明确约定）。
 - 迭代 compass 放在 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md`，**不要**与 `{KNOWLEDGE_DIR}` 中跨版本 SSOT 混放同一命名空间；**不要**新写根目录 flat `*-delivery-compass.md`。
 
-## 与 `status.json` 的链接
+## 与执行 plan 行及 catalog 的链接
 
-- 某 plan 的**权威设计输入**在规格、迭代 compass 或（已有）知识库中时，在 `**plans[].metadata**` 中登记路径：`**primary_spec**` / `**spec_refs**` → 优先 **`{SPECS_DIR}/`**；`**iteration_compass**` / `**iteration_refs**` → **`{ITERATION_DIR}/`**；已有 **`{KNOWLEDGE_DIR}/`** 链接保留，但 **iteration-start 不得新增** knowledge 路径。
+- 某 plan 的**权威设计输入**在规格或迭代 compass 中时，经公共 prepare 域边界冻结到 store 执行 plan 行的 `metadata`（pre-activation：snapshot `plans[]`）：`primary_spec` / `spec_refs` → 优先 `{SPECS_DIR}/`；`iteration_compass` / `iteration_refs` → `{ITERATION_DIR}/`。知识关联走 catalog relations（`mstar catalog link`），不写 snapshot `metadata.knowledge_refs`；知识引用载体决策待定（I-000370），不推定新的 engine 行为。iteration-start 不得新增 knowledge 路径。
 - 执行方在 **implement 前**：先查 catalog（`mstar catalog list`，按 kind / document kind / lifecycle 过滤见 help）发现与当轮相关的 `active` 文档（发现式阅读，不要求通读全库；README 散文可作导览，但表格不是权威）；再按 metadata 读取已登记路径；均与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则
@@ -70,7 +70,7 @@
    - **Specs（长期）**：文件落 `{SPECS_DIR}/` → **登记** catalog document 行（`mstar catalog register` / `mstar catalog link`，或 reviewed `discover`+`import`）→ `plans[].metadata` 的 `primary_spec` / `spec_refs`
    - **迭代 package**：文件落 `{ITERATION_DIR}/<iteration-id>/guides|specs/` → **登记** catalog document 行 + `belongs-to`/`documents` 关系 → `iteration_refs`（**不再**写 `{ITERATION_DIR}/README.md` 目录行或 package Documents 表）
    - **Knowledge**：**`mstar-compound`** @ iteration-close（含 package **提升**）→ 落 `{KNOWLEDGE_DIR}/<category>/` + **登记** catalog document 行（写入位置与 SSOT：**`mstar-conventions/references/artifact-storage-paths.md`**）
-2. **阅读**：开发类 agent 在开始编码前，先按 **catalog** 查询当轮相关的 `active` knowledge/document 行（`mstar catalog list`，见上「与 `status.json` 的链接」）；随后**必须**阅读当前 plan 在 `metadata` 中指向的 knowledge 文档（若存在）；`@project-manager` 在 Assignment 中可再次点名路径。
+2. **阅读**：开发类 agent 编码前，先按 **catalog** 查询当轮相关 `active` knowledge/document 行；读取 catalog relations 与当前冻结输入指向的文档，PM 可在 Assignment 点名路径。不得把知识关联写为 snapshot `knowledge_refs`。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新其 catalog 行（`mstar catalog update`；identity 不可改，可改字段与 revision 守卫见 help）；版本迭代优先新文件名 `v<N+1>`，旧版改 catalog 生命周期为 `superseded`。
 4. **归档**：
    - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。
@@ -81,7 +81,7 @@
 
 - `**{SDD_DIR}/review/`**：偏 **审查流程临时证据**（review package、QC1/2/3、consolidated、QA），gitignored，可在 Done 后丢失。
 - `**主 plan gate summary**`：偏 **长期门禁决策摘要**（verdict、review range、R#、QA gate），随主 plan 追踪。
-- `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open 的 R# 长文补充**（与 project register `entries[<plan-id>]` 配套，canonical 见 `mstar-conventions` **SKILL.md** 开篇）；见下文「open residual 散文详情」。
+- `**{PLAN_DIR}/residuals/<plan-id>/`**：偏 **仍 open finding 的长文补充**，与 plan-linked store issue 配套；见下文「open residual 散文详情」。
 - `**{KNOWLEDGE_DIR}/**`：偏 **可复用的实现向设计上下文**（架构细则、决策、分析），可被后续 plan 或多会话反复引用。
 - `**{ITERATION_DIR}/**`：偏 **某一迭代/版本** 的 package（compass + guides/specs），通常按版本索引而非按单 plan 长期复用。
 - `**{PROJECT_DIR}/<id>/references/**`：偏 **主题化研究**（surveys、epic 备注、第三方 notes），随项目绑定；与 specs / knowledge / iteration guides 职责不混写。
@@ -91,21 +91,21 @@
 
 ## `{PLAN_DIR}/residuals/<plan-id>/`（可选·open residual 散文详情）
 
-当某条 open residual 需要**多于** register（`projects/<id>/residuals.json` → `entries[<plan-id>]`）里结构化字段所能承载的叙述时，可在本目录增加 **Markdown 散文**，作为 **SSOT 的补充**（**不替代** JSON；**权威仍以 register 中的 open 条目为准**）。
+当某条 open issue 需要超出结构化字段的叙述时，可在本目录增加 **Markdown 散文**作为补充，**不替代 store issue 权威**；project register 仅作迁移映射/历史。
 
 
 | 与相邻目录的分工                                  | 典型内容                                                                  |
 | ----------------------------------------- | --------------------------------------------------------------------- |
 | `**{SDD_DIR}/review/**`       | QC / QA **流程临时证据**（`qc1.md` … `qc-consolidated.md`、`qa.md` 等），gitignored                  |
 | **本目录 `{PLAN_DIR}/residuals/<plan-id>/`** | 针对**仍 open** 的某一 R#：defer 背景、遗留原因、代码锚点、后续接手提示等**长文**                  |
-| `**{KNOWLEDGE_DIR}/**`            | 可跨 plan 复用的**实现向**设计上下文、规格修订、gap 分析（若文中顺带提到 residual，仍以 JSON + residuals 为跟踪权威） |
+| `**{KNOWLEDGE_DIR}/**` | 可跨 plan 复用的实现向设计上下文、规格修订、gap 分析；顺带提到 finding 时仍以 store issue 为跟踪权威 |
 | `**{ITERATION_DIR}/**`            | 迭代 package（`<id>/delivery-compass.md` 等）；**不**替代 `{KNOWLEDGE_DIR}` 中的跨版本 SSOT |
 
 
-**文件命名（推荐）**：`<finding-id>-<short-label>.md`，其中 `**finding-id`** 与该条在 register（`projects/<id>/residuals.json` → `entries[<plan-id>]`，见 `mstar-conventions` **SKILL.md** 开篇）中的 `**id`**（如 `R1`）或团队约定的 `**td-*` 等技术债编号**一致，便于 `detail_doc` 与目录互查。
+**文件命名（推荐）**：`<issue-id>-<short-label>.md`，与 store issue 的身份一致，便于来源证据与目录互查；旧 R# 仅保留为迁移映射。
 
-**登记**：在对应 open 条目中填写可选 `**detail_doc`**（仓库内相对路径，常形如 `**{PLAN_DIR}/residuals/<plan-id>/R1-….md**`）。**禁止**只写散文、不在 register 中登记 open 行。
+**登记**：先经 `mstar plan issue-add` / `mstar issue add` 捕获 issue，按公共 payload 契约附散文路径证据（见 help），**禁止**只写散文而不捕获 store issue，也不写 register open 行。
 
 **维护**：`**@project-manager`**（或与 Assignment 一致的可写角色）；`**@qc-specialist***` 宿主白名单通常**不含**本目录——审查结论仍以 Assignment 指定的 `**{SDD_DIR}/review/`** 为准，散文由 PM/实现方据结论整理。
 
-**关闭**：当该条在 register 中 close（`lifecycle` / `closed_at` / `closure_note`）或从 `entries[<plan-id>]` 移除时，应将对应 `**.md**` 一并收口：可迁入 `**{HARNESS_DIR}/archived/knowledge/**`（若视为历史考据）、或团队约定的归档子路径（与 register 变更同批可追溯）；并在关闭条目的 `**closure_evidence` / `closure_note**`（或团队约定字段）中**写明散文最终路径**。勿长期保留「JSON 已关闭而散文仍留在 `residuals/` 且声称仍 open」的状态。
+**关闭**：经 `mstar issue close|waive|duplicate|supersede` 或 `mstar plan issue-close` 关闭 issue 后，将对应散文同批收口；可迁入 `{HARNESS_DIR}/archived/knowledge/` 或团队归档路径，并在关闭证据中写明最终路径。勿保留「store issue 已关闭而散文仍声称 open」的状态；不编辑迁移 register。

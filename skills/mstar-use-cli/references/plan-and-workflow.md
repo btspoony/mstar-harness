@@ -128,6 +128,10 @@ Refusal commit-state is action-local: read the receipt instead of assuming. On t
 
 | Code | When |
 |---|---|
+| `execution.direct-write-refused` | ACTIVE root/snapshot/session file mutation is refused; use the owning public workflow/plan verb |
+| `execution.consumer-not-ready` | a file-route consumer tries to read ACTIVE execution state; use `status validate` / `plan show`, or update the consumer |
+| `execution.not-active` | an execution-store operation has no ACTIVE authority; use the documented store upgrade/activation route, not file repair |
+| `execution.token-kind` | an explicit token addresses the wrong scope/kind; read the addressed scope and use its full token |
 The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvidence`); the coordinator accepts it and follows the registered delivery kind in the table above. On the iteration route, start a pinned integration attempt, perform and verify the recorded Git merge, accept integration and complete. On standalone development, complete after accept; on report-only, record fulfilment of its registered policy before complete without inventing a Git step. At each point consult current verb help and supply the required address for the active or pre-activation route — plan operations may omit `--expect` under the verified resolver (an explicitly held token stays a constraint), while workflow-level writes retain their documented expectation contract — and inspect the `applied` or `replayed` receipt. Do not turn those explicit inputs into a ceremonial top-down preflight ladder.
 | `coordination.scope-mismatch` | the request reaches outside the session's scope |
 | `coordination.workflow-not-found` | no workflow for that id under the resolved root |
