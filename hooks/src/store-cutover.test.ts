@@ -10,16 +10,15 @@
  *   authority paths and the untouched document paths;
  * - the COMMITTED BUNDLE (`hooks/mstar-write-gate.mjs`, rebuilt from source by
  *   `scripts/build-zcode-hooks.ts` in `beforeAll`) under NATIVE `node` — the
- *   runtime hooks.json spawns. That run carries the store-backed path under
- *   the actual Node runtime, including the in-process laziness probe
- *   (`process.moduleLoadList`: no `node:sqlite` for a non-store write).
+ *   runtime hooks.json spawns. That run exercises the store-backed refusal and
+ *   document-validation outcomes under the runtime that hooks.json launches.
  *
  * Stores are REAL (`initializeStore` / `openStore`, real `node:sqlite`
  * migrations); the refusals are the entry's own.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
@@ -386,6 +385,15 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
     expect(run.exitCode).toBe(2);
     expect(lines(run)[2]).toBe(ENFORCEMENT_LINE);
     expect(run.stderr).toContain("status.invalid-json");
+  });
+
+  test("active store bundle preserves status document validation", async () => {
+    const fixture = makeHarness("bundle-active-status", "hard");
+    await seedActiveStore(fixture.harness);
+    const run = runGate("node", HOOK_BUNDLE, writeEvent(join(fixture.harness, "status.json"), BAD_JSON));
+    expect(run.exitCode).toBe(2);
+    expect(lines(run)[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
+    expect(lines(run)[2]).toBe(ENFORCEMENT_LINE);
   });
 
 
