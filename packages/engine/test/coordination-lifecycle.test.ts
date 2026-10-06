@@ -139,11 +139,12 @@ describe("iteration-completion", () => {
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
-    // An integration pair that is not the merge of this source is refused.
+    // An integration pair that is not the two-parent merge of this source is
+    // refused; the base commit is not a merge at all.
     const mergeSha = mergeFeature(fixture);
     expect(
       await errorCodeOf(() => completeCall(fixture, PLAN_ID, evidence, { base_sha: fixture.baseSha, result_sha: fixture.baseSha })),
-    ).not.toBe("completed");
+    ).toBe("coordination.integration-diverged");
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     expect(planRowOf(fixture, PLAN_ID).coordination).not.toHaveProperty("completion");
     // The real merge is accepted.
@@ -702,7 +703,7 @@ describe("seam-regressions", () => {
     // The row is InReview, not Done: the close refuses instead of completing it.
     await expect(
       closeWorkflow(WORKFLOW_ID, fixture.workflowDir, { sessionPath: fixture.coordinatorSession, endedAt: "2026-09-15T02:00:00Z" }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/every plan row must be Done/);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
     expect(snapshotOf(fixture).status).not.toBe("completed");
     void before;
@@ -763,7 +764,7 @@ describe("seam-regressions", () => {
           result_sha: mergeSha,
         }),
       ),
-    ).not.toBe("completed");
+    ).toBe("coordination.merge-lease-foreign");
     expect(readJson(fixture.snapshotPath)).toEqual(foreignSnapshot);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
