@@ -810,7 +810,7 @@ test("retained track ownership refuses main and ordinary progress repairs retire
 
     mkdirSync(join(root, "plans"), { recursive: true });
     writeFileSync(join(root, "plans", "plan-a.md"), `# Plan A\n\n**plan_id:** plan-a\n**Main worktree branch:** ${mainBranch}\n**Working branch:** feature/plan-a\n`);
-    const bound = commandOutput(runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", root], root));
+    const bound = commandOutput(runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", root, "--session-id", "retained-track-coordinator"], root));
     if (bound.status !== "ok" || typeof bound.data?.session_file !== "string") throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
     const session = bound.data.session_file;
     const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a"], root));
