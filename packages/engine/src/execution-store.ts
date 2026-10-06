@@ -11,9 +11,9 @@
  * records of ONE new, unbound, unleased lifecycle against an exact root CAS
  * token, and it seals each plan's frozen execution input with the unchanged
  * `executionInputHash` selection (`coordination.ts`). C4 owns the session
- * surface — `bindExecutionSession` (trusted-caller coordinator/plan-pm binding
- * plus the plan's initial execution lease) and the session-authorized
- * `readExecutionPlan`. The coordination-mutation verbs (W1–W6), the public
+ * surface — `bindExecutionSession` (trusted-caller coordinator binding) and the
+ * session-authorized `readExecutionPlan`. The coordination-mutation verbs and
+ * the public
  * prepare transition (W2), historical import (R1) and coordinator recovery are
  * NOT defined or stubbed here: an unprepared plan is refused, never admitted.
  *
@@ -34,14 +34,13 @@
  * `revision` (projected back from the row column, §2.2).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ExecutionPinConflictError,
   executionInputHash,
   executionInputSelection,
-  leaseFailure,
   type CatalogExecutionPin,
 } from "./coordination.js";
 import {
@@ -52,12 +51,8 @@ import {
 } from "./coordination-write.js";
 import { storedCoordinationViolations } from "./coordination-transitions.js";
 import {
-  claimLease,
-  validateExecutionLease,
   validateIntegrationMergeLease,
   withStatusWriteLock,
-  type ClaimLeaseFields,
-  type ExecutionLease,
   type IntegrationMergeLease,
 } from "./lease.js";
 import { resolveWorkflowDir } from "./path.js";
@@ -320,7 +315,6 @@ const KIND_KEY_LENGTHS: Record<ExecutionKind, number> = {
   workflow: 1,
   plan: 2,
   session: 3,
-  "execution-lease": 2,
   "integration-lease": 1,
   input: 2,
 };
@@ -387,8 +381,8 @@ function assertKeyShape(kind: ExecutionKind, key: readonly string[]): void {
   for (const part of key) {
     if (!isNonEmptyString(part)) throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
   }
-  if (kind === "session" && key[1] !== "coordinator" && key[1] !== "plan-pm") {
-    throw tokenRefusal(`a session token key carries the role as its second part \u2014 got ${JSON.stringify(key[1])}`);
+  if (kind === "session" && key[1] !== "coordinator") {
+    throw tokenRefusal(`a session token key carries role coordinator as its second part — got ${JSON.stringify(key[1])}`);
   }
 }
 
@@ -674,7 +668,6 @@ export function semanticRequestHash(input: {
           session_id: input.caller.sessionId,
           role: input.caller.role,
           workflow_id: input.caller.workflowId,
-          plan_id: input.caller.planId,
         },
         intent: input.intent,
       }),
@@ -826,112 +819,20 @@ function readFrozenInput(json: unknown, what: string): CatalogExecutionPin | nul
   };
 }
 
-function readExecutionLease(json: unknown, what: string): ExecutionLease {
-  const lease = storedJsonObject(json, what);
-  const validation = validateExecutionLease(lease);
-  if (!validation.ok) throw validationRefusal(what, validation.violations);
-  return lease as unknown as ExecutionLease;
-}
-
-function readIntegrationLease(json: unknown, what: string): IntegrationMergeLease {
-  const lease = storedJsonObject(json, what);
-  const validation = validateIntegrationMergeLease(lease);
-  if (!validation.ok) throw validationRefusal(what, validation.violations);
-  return lease as unknown as IntegrationMergeLease;
-}
-
-/**
- * §2.2 lease ownership invariant: a HELD execution lease must carry the holder
- * session identity and role it owns the plan through, and the DB-named scope
- * fields (`plan_worktree_path` / `plan_branch`) must agree with the
- * `ExecutionLease` identity fields they mirror. A lease that claims the CURRENT
- * epoch must name that epoch's ACTIVE session of exactly that role — the
- * session row's own `epoch` included, because a row superseded by a later epoch
- * is not that session. `bindExecutionSession` writes a plan-pm holder; the
- * coordination `accept` transition transfers the same lease to the workflow's
- * coordinator, and a transfer is still ONE ownership fact of one epoch, so the
- * lookup is by the identity the lease names — never by a hardcoded plan-pm row,
- * which would read a transferred lease as corrupt.
- *
- * A lease whose `owner_epoch` is behind the store (a suspended or
- * migration-recovered one) is REPRESENTED rather than repaired: it agrees with
- * no current session and authorizes nothing, because every mutation revalidates
- * the epoch.
- */
-function assertLeaseOwnership(
-  lease: ExecutionLease,
-  sessionRow: Record<string, unknown> | undefined,
-  ownerEpoch: number,
-  store: StoreIdentity,
-  workflowId: string,
-  planId: string,
-): void {
-  if (lease.status !== "held") return;
-  const what = `execution_leases(${workflowId},${planId}).lease_json`;
-  if (!isNonEmptyString(lease.holder_session_id) || (lease.holder_role !== "plan-pm" && lease.holder_role !== "coordinator")) {
-    throw corrupt(`${what} is held without the holder session identity and role it must agree with`);
-  }
-  if (lease.plan_worktree_path !== lease.worktree_path || lease.plan_branch !== lease.working_branch) {
-    throw corrupt(`${what} records a plan scope that disagrees with its own lease identity fields`);
-  }
-  if (ownerEpoch !== store.epoch) return;
-  if (sessionRow === undefined) {
-    throw corrupt(
-      `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ` +
-        `${planId} has no session of that identity`,
-    );
-  }
-  if (sessionRow.state !== "active") {
-    throw corrupt(
-      `${what} is held in current epoch ${ownerEpoch} by ${String(lease.holder_role)} session ` +
-        `${String(lease.holder_session_id)}, but that session is ${String(sessionRow.state)} and cannot authorize the lease`,
-    );
-  }
-  if (sessionRow.epoch !== ownerEpoch) {
-    throw corrupt(
-      `${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that ` +
-        `active session is in epoch ${String(sessionRow.epoch)}; a lease and the session row it names as its owner are ONE ownership ` +
-        `fact of one epoch`,
-    );
-  }
-  if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
-    throw corrupt(
-      `${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session row of ` +
-        `${planId} in epoch ${ownerEpoch} is ${String(sessionRow.role)} session ${String(sessionRow.session_id)}`,
-    );
-  }
-}
-
 function sessionRef(store: StoreIdentity, workflowId: string, row: Record<string, unknown>): ExecutionSessionRef {
-  const role = row.role;
-  if (role !== "plan-pm" && role !== "coordinator") {
-    throw corrupt(`execution_sessions(${workflowId}) carries role ${JSON.stringify(role)}`);
-  }
-  if (!isNonEmptyString(row.session_id)) {
-    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
-  }
+  if (row.role !== "coordinator") throw corrupt(`execution_sessions(${workflowId}) carries a non-coordinator role`);
+  if (!isNonEmptyString(row.session_id)) throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
   if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
     throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
-  }
-  let planId: string | null = null;
-  if (role === "plan-pm") {
-    if (!isNonEmptyString(row.plan_id)) {
-      throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
-    }
-    planId = row.plan_id;
-  } else if (row.plan_id !== null && row.plan_id !== undefined) {
-    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
   }
   return {
     storeId: store.storeId,
     epoch: row.epoch,
     workflowId,
-    role,
+    role: "coordinator",
     sessionId: row.session_id,
-    planId,
   };
 }
-
 /**
  * §2.2/§3.1 the workflow's integration merge lease as the DB holds it: ONE row
  * per workflow (the merge is workflow-wide and exclusive) carrying the claim
@@ -947,6 +848,13 @@ type StoredIntegrationLease = {
   revision: number;
   ownerEpoch: number;
 };
+
+function readIntegrationLease(json: unknown, what: string): IntegrationMergeLease {
+  const lease = storedJsonObject(json, what);
+  const validation = validateIntegrationMergeLease(lease);
+  if (!validation.ok) throw validationRefusal(what, validation.violations);
+  return lease as unknown as IntegrationMergeLease;
+}
 
 function readIntegrationLeaseRow(db: StoreDb, workflowId: string): StoredIntegrationLease | null {
   const row = db
@@ -1050,7 +958,7 @@ function readWorkflowView(
     if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
       throw corrupt(
         `execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned ` +
-          `by coordination_json/execution_leases`,
+          `by coordination_json, not by the row state`,
       );
     }
     if (planState.id !== planId) {
@@ -1318,10 +1226,9 @@ function cleanupSnapshot(workflow: ExecutionState["workflows"][number]): Workflo
   return {
     ...(workflow.state as unknown as WorkflowSnapshot),
     ...(workflow.integrationLease === null ? {} : { integration_merge_lease: workflow.integrationLease }),
-    plans: workflow.plans.map(({ plan, coordination, executionLease }) => ({
+    plans: workflow.plans.map(({ plan, coordination }) => ({
       ...plan,
       ...(coordination === null ? {} : { coordination }),
-      ...(executionLease?.status === "held" ? { execution_lease: executionLease } : {}),
     })),
   };
 }
@@ -1421,7 +1328,6 @@ function assertExecutionDomainEmpty(db: StoreDb, meta: ExecutionMeta): void {
     "execution_registry",
     "execution_plans",
     "execution_sessions",
-    "execution_leases",
     "execution_integration_leases",
     "execution_inputs",
     "execution_operations",
@@ -1609,12 +1515,8 @@ export function resolveCreateWorkflow(
   const doc = snapshot as WorkflowSnapshot & Record<string, unknown>;
   const workflowId = workflow.id;
 
-  if (caller.role !== "coordinator" || caller.planId !== null) {
-    throw new ExecutionError(
-      "execution.scope-mismatch",
-      `creating a workflow is a coordinator operation; the supplied caller is a ${caller.role} session` +
-        `${caller.planId === null ? "" : ` for plan ${caller.planId}`}. The caller identity is never taken from request JSON.`,
-    );
+  if (caller.role !== "coordinator") {
+    throw new ExecutionError("execution.scope-mismatch", "creating a workflow is a coordinator operation");
   }
   if (caller.workflowId !== workflowId) {
     throw new ExecutionError(
@@ -1652,9 +1554,9 @@ export function resolveCreateWorkflow(
       throw invalidInput(`snapshot ${workflowId} lists plan ${planId} twice \u2014 a plan row is one identity`);
     }
     seen.add(planId);
-    // The row's own lease and coordination blocks are accepted execution
-    // evidence (handoffs, prepared inputs, holders) that a new lifecycle cannot
-    // inherit; `execution_leases`/`execution_plans.coordination_json` own them.
+    // The row's own coordination block is accepted execution evidence
+    // (prepared config, progress, completion) that a new lifecycle cannot
+    // inherit; `execution_plans.coordination_json` owns it.
     if (row.execution_lease !== undefined || row.coordination !== undefined) {
       throw notNewLifecycle(
         `plan ${planId} of snapshot ${workflowId} already carries a coordination block or an execution lease. ` +
@@ -1687,7 +1589,6 @@ function createWorkflowRequestHash(
           session_id: caller.sessionId,
           role: caller.role,
           workflow_id: caller.workflowId,
-          plan_id: caller.planId,
         },
         entry: creation.entry,
         snapshot: creation.snapshot,
@@ -2036,107 +1937,30 @@ const EXECUTION_SESSION_STATES: readonly ExecutionSessionState[] = ["active", "s
 /** §2.2 one stored session row: its typed identity plus the ownership record beside it. */
 export type SessionRow = { ref: ExecutionSessionRef; revision: number; state: ExecutionSessionState };
 
-/** §2.3 the workflow/plan/role a call is authorized against; `planId` is null exactly for a coordinator. */
-type SessionAddress = {
-  workflowId: string;
-  role: ExecutionCaller["role"];
-  sessionId: string;
-  planId: string | null;
-};
+/** A coordinator session addresses one workflow; plans are explicit operation addresses. */
+type SessionAddress = { workflowId: string; role: "coordinator"; sessionId: string };
+type ResolvedBind = { role: "coordinator"; workflowId: string; sessionId: string; operationId: string };
 
-/** The address one bind request resolves to, once it is the trusted caller's own. */
-type ResolvedBind =
-  | { role: "coordinator"; planId: null; workflowId: string; sessionId: string; operationId: string }
-  | { role: "plan-pm"; planId: string; workflowId: string; sessionId: string; operationId: string };
-
-function sessionRoleRefusal(detail: string, details: Record<string, unknown> = {}): CoordinationError {
-  return new CoordinationError("coordination.session-role", detail, details);
-}
-
-/**
- * §2.3 the identity gate of `bindExecutionSession`. The request describes the
- * binding the caller wants; `ExecutionContext.caller` — the trusted host/engine
- * identity, never model request JSON — is the only thing that decides whether
- * the caller may have it. A request whose role, workflow or plan is not the
- * caller's own is refused: naming `role: "coordinator"` in the request never
- * promotes a plan-pm caller, and a caller-written role string authorizes
- * nothing. Pure argument checks — no store is opened.
- */
 function resolveBindRequest(caller: ExecutionCaller, input: unknown): ResolvedBind {
   if (!isPlainObject(input)) throw invalidInput("a session bind needs a request object");
   if (!isNonEmptyString(caller?.sessionId)) throw invalidInput("the execution caller needs a non-empty session identity");
-  const { workflowId, planId, role } = input;
+  const { workflowId } = input;
   const operationId = assertOperationId(input.operationId);
-  if (role !== "coordinator" && role !== "plan-pm") {
-    throw invalidInput(`a session role is "coordinator" or "plan-pm" \u2014 got ${JSON.stringify(role)}`);
-  }
   if (!isNonEmptyString(workflowId)) throw invalidInput("a session bind needs a non-empty workflowId");
-  if (caller.role !== role) {
-    throw sessionRoleRefusal(
-      `the trusted caller is a ${caller.role} session; a bind request is never authorized by the role it names for itself`,
-      { caller_role: caller.role, requested_role: role },
-    );
+  if (caller.role !== "coordinator" || caller.workflowId !== workflowId) {
+    throw new ExecutionError("execution.scope-mismatch", "the session bind must address the trusted caller's coordinator workflow");
   }
-  if (caller.workflowId !== workflowId) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `the trusted caller identifies workflow ${JSON.stringify(caller.workflowId)}; this request binds a session of ` +
-        `workflow ${JSON.stringify(workflowId)}. The caller identity is never taken from request JSON.`,
-      { caller_workflow: caller.workflowId, requested_workflow: workflowId },
-    );
-  }
-  if (role === "coordinator") {
-    if (planId !== null) {
-      throw invalidInput(`a coordinator bind takes no plan id \u2014 got ${JSON.stringify(planId)}`);
-    }
-    if (caller.planId !== null) {
-      throw new CoordinationError(
-        "coordination.session-mismatch",
-        `the trusted caller identifies plan ${JSON.stringify(caller.planId)}; a coordinator address carries no plan id`,
-        { caller_plan: caller.planId },
-      );
-    }
-    return { role, planId: null, workflowId, sessionId: caller.sessionId, operationId };
-  }
-  if (!isNonEmptyString(planId)) {
-    throw invalidInput(`a plan-pm bind needs the plan id it binds \u2014 got ${JSON.stringify(planId)}`);
-  }
-  if (caller.planId !== planId) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `the trusted caller identifies plan ${JSON.stringify(caller.planId)}; this request binds a session of plan ` +
-        `${JSON.stringify(planId)}`,
-      { caller_plan: caller.planId, requested_plan: planId },
-    );
-  }
-  return { role, planId, workflowId, sessionId: caller.sessionId, operationId };
+  return { role: "coordinator", workflowId, sessionId: caller.sessionId, operationId };
 }
 
-/**
- * §3.1 request hash: operation kind, exact scope (workflow, plan, role),
- * expected token and caller identity. Reusing an operation id for any other
- * request refuses `execution.operation-conflict` instead of replaying a foreign
- * receipt, and another actor cannot replay this one.
- */
 function bindSessionRequestHash(caller: ExecutionCaller, bind: ResolvedBind, expected: ExecutionToken): string {
-  return createHash("sha256")
-    .update(
-      serializeExecutionValue({
-        operation: BIND_SESSION_OPERATION,
-        workflow_id: bind.workflowId,
-        plan_id: bind.planId,
-        role: bind.role,
-        expected,
-        caller: {
-          session_id: caller.sessionId,
-          role: caller.role,
-          workflow_id: caller.workflowId,
-          plan_id: caller.planId,
-        },
-      }),
-      "utf8",
-    )
-    .digest("hex");
+  return createHash("sha256").update(serializeExecutionValue({
+    operation: BIND_SESSION_OPERATION,
+    workflow_id: bind.workflowId,
+    role: bind.role,
+    expected,
+    caller: { session_id: caller.sessionId, role: caller.role, workflow_id: caller.workflowId },
+  }), "utf8").digest("hex");
 }
 
 function storedSessionState(value: unknown, what: string): ExecutionSessionState {
@@ -2146,16 +1970,9 @@ function storedSessionState(value: unknown, what: string): ExecutionSessionState
   return value as ExecutionSessionState;
 }
 
-/**
- * Every stored session row of one workflow and role, validated field by field
- * inside the caller's transaction. Availability is decided by `state` and the
- * CURRENT epoch together: a row the store still records is re-read here rather
- * than trusted from a reference.
- */
-function readSessionRows(db: StoreDb, store: StoreIdentity, workflowId: string, role: ExecutionCaller["role"]): SessionRow[] {
-  const rows = db
-    .prepare("select role, session_id, plan_id, epoch, revision, state from execution_sessions where workflow_id = ? and role = ?")
-    .all(workflowId, role) as Array<Record<string, unknown>>;
+function readSessionRows(db: StoreDb, store: StoreIdentity, workflowId: string): SessionRow[] {
+  const rows = db.prepare("select role, session_id, epoch, revision, state from execution_sessions where workflow_id = ? and role = 'coordinator'")
+    .all(workflowId) as Array<Record<string, unknown>>;
   return rows.map((row) => {
     const ref = sessionRef(store, workflowId, row);
     return {
@@ -2165,6 +1982,7 @@ function readSessionRows(db: StoreDb, store: StoreIdentity, workflowId: string, 
     };
   });
 }
+
 
 /** §2.2: one workflow header row's CAS revision, or `coordination.workflow-not-found`. */
 function readWorkflowHeaderRow(db: StoreDb, workflowId: string): { revision: number; creatorSessionId: string | null } {
@@ -2185,40 +2003,6 @@ function readWorkflowHeaderRow(db: StoreDb, workflowId: string): { revision: num
   return {
     revision: storedRevision(row.revision, `execution_workflows(${workflowId}).revision`),
     creatorSessionId: isNonEmptyString(row.creator_session_id) ? row.creator_session_id : null,
-  };
-}
-
-/** §2.2: one plan row's CAS revision, or `coordination.plan-not-found`. */
-function readPlanRevision(db: StoreDb, workflowId: string, planId: string): number {
-  const row = db
-    .prepare("select revision from execution_plans where workflow_id = ? and plan_id = ?")
-    .get(workflowId, planId) as { revision?: unknown } | undefined;
-  if (row === undefined) {
-    throw new CoordinationError(
-      "coordination.plan-not-found",
-      `workflow ${workflowId} holds no plan ${planId} to bind`,
-      { workflow_id: workflowId, plan_id: planId },
-    );
-  }
-  return storedRevision(row.revision, `execution_plans(${workflowId},${planId}).revision`);
-}
-
-/**
- * §2.2 unique active ownership of the addressed scope: `mine` is this
- * identity's own record (the row key admits at most one per workflow/role/
- * session), and `holder` is the ACTIVE record of the addressed role and plan
- * (the partial unique indexes admit at most one). Both are read inside the
- * caller's transaction, so the answer cannot be a stale snapshot.
- */
-function readOwnership(
-  db: StoreDb,
-  store: StoreIdentity,
-  address: SessionAddress,
-): { mine: SessionRow | undefined; holder: SessionRow | undefined } {
-  const rows = readSessionRows(db, store, address.workflowId, address.role);
-  return {
-    mine: rows.find((row) => row.ref.sessionId === address.sessionId),
-    holder: rows.find((row) => row.state === "active" && row.ref.planId === address.planId),
   };
 }
 
@@ -2297,60 +2081,51 @@ function coordinatorRecoveryWork(input: {
  */
 function liveSession(tx: ExecutionTransaction, address: SessionAddress): SessionRow {
   const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
-  const rows = readSessionRows(tx.db, store, address.workflowId, address.role);
+  const rows = readSessionRows(tx.db, store, address.workflowId);
   const mine = rows.find((row) => row.ref.sessionId === address.sessionId);
   if (mine === undefined || mine.state !== "active" || mine.ref.epoch !== tx.epoch) {
     const problem: RecoveryProblem = {
       component: "session",
       path: "session",
       code: "execution.session-unavailable",
-      sourcesTried: [`the execution session rows of workflow ${JSON.stringify(address.workflowId)} (${address.role}), read in this transaction`],
+      sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(address.workflowId)}, read in this transaction`],
       currentFacts: [
-        `the reference names ${address.role} session ${JSON.stringify(address.sessionId)} of workflow ` +
-          `${JSON.stringify(address.workflowId)} plan ${JSON.stringify(address.planId)}`,
+        `the reference names coordinator session ${JSON.stringify(address.sessionId)} of workflow ${JSON.stringify(address.workflowId)}`,
         mine === undefined
-          ? `the store holds no ${address.role} session row for ${JSON.stringify(address.sessionId)} at the current epoch ${tx.epoch}`
+          ? `the store holds no coordinator session row for ${JSON.stringify(address.sessionId)} at the current epoch ${tx.epoch}`
           : `session ${JSON.stringify(address.sessionId)}'s row is ${mine.state} in epoch ${mine.ref.epoch}, while the store's ` +
               `current authority epoch is ${tx.epoch}`,
       ],
-      needed: `a session reference the store holds ACTIVE for ${address.role} of workflow ${JSON.stringify(address.workflowId)} ` +
+      needed: `a session reference the store holds ACTIVE for the coordinator of workflow ${JSON.stringify(address.workflowId)} ` +
         `at the current epoch ${tx.epoch}`,
       withheldEffect:
         "only the addressed effect: authority was withheld, so nothing was written, no revision advanced and no receipt " +
         "was committed under this operation",
       availableWork: [
-        `present the session reference of a binding the store holds ACTIVE for ${address.role} of workflow ` +
+        `present the session reference of a binding the store holds ACTIVE for the coordinator of workflow ` +
           `${JSON.stringify(address.workflowId)} at epoch ${tx.epoch}`,
         ...(mine === undefined
-          ? [
-              "bind a session for this role first \u2014 the active bind verb takes the workflow, the role, the plan " +
-                "(a coordinator binds none), the full execution token and an operation id",
-            ]
-          : address.role === "coordinator"
-            ? coordinatorRecoveryWork({
-                rows,
-                workflowId: address.workflowId,
-                epoch: tx.epoch,
-                sessionId: address.sessionId,
-                rowState: mine.state,
-                rowEpoch: mine.ref.epoch,
-              })
-            : [
-                `no recovery transition exists for a ${address.role} session row in this engine \u2014 the row stays ` +
-                  `${mine.state} at epoch ${mine.ref.epoch} and no bind revives it`,
-              ]),
+          ? ["bind the coordinator session first \u2014 the bind verb takes the workflow, the full execution token and an operation id"]
+          : coordinatorRecoveryWork({
+              rows,
+              workflowId: address.workflowId,
+              epoch: tx.epoch,
+              sessionId: address.sessionId,
+              rowState: mine.state,
+              rowEpoch: mine.ref.epoch,
+            })),
         "retry the operation with the reference and token of the current epoch",
       ],
     };
     throw new ExecutionError(
       "execution.session-unavailable",
-      `workflow ${address.workflowId} holds no ACTIVE ${address.role} session ${address.sessionId} in epoch ${tx.epoch}` +
+      `workflow ${address.workflowId} holds no ACTIVE coordinator session ${address.sessionId} in epoch ${tx.epoch}` +
         `${mine === undefined ? "" : ` (its row is ${mine.state} in epoch ${mine.ref.epoch})`}. An execution session ` +
         `reference authorizes only the binding the store records at the current epoch; a legacy session envelope is ` +
         `never consulted.`,
       sessionRefusalDetails({
         problem,
-        target: { workflowId: address.workflowId, ...(address.planId === null ? {} : { planId: address.planId }) },
+        target: { workflowId: address.workflowId },
         facts: {
           session_id: address.sessionId,
           workflow_id: address.workflowId,
@@ -2359,14 +2134,6 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
           ...(mine === undefined ? {} : { row_state: mine.state, row_epoch: mine.ref.epoch }),
         },
       }),
-    );
-  }
-  if (mine.ref.planId !== address.planId) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `${address.role} session ${address.sessionId} is bound to plan ${JSON.stringify(mine.ref.planId)}, not to plan ` +
-        `${JSON.stringify(address.planId)}`,
-      { session_id: address.sessionId, bound_plan: mine.ref.planId, addressed_plan: address.planId },
     );
   }
   return mine;
@@ -2383,151 +2150,17 @@ function assertReferenceAuthority(
   assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...(target === undefined ? {} : { target }) });
 }
 
-/**
- * §2.2/§4.1 the plan scope an initial execution lease records: the plan row's
- * own recorded worktree and branch (`metadata.worktree_path` /
- * `metadata.working_branch` — the anchors the legacy route pins from the
- * prepared Assignment and re-checks on every handoff). The DB authority reads
- * them from the row it already holds, so no file is authority here, and a
- * prepared row that records no plan scope cannot have a lease claimed from it:
- * ownership is never claimed from a guessed scope.
- */
-function planLeaseScope(state: Record<string, unknown>, workflowId: string, planId: string): ClaimLeaseFields {
-  const metadata = isPlainObject(state.metadata) ? state.metadata : {};
-  const worktree = metadata.worktree_path;
-  const branch = metadata.working_branch;
-  if (!isNonEmptyString(worktree) || !isAbsolute(worktree) || !isNonEmptyString(branch)) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `plan ${planId} records no plan worktree/branch scope (metadata.worktree_path must be an absolute path and ` +
-        `metadata.working_branch a non-empty branch), so an execution lease cannot be claimed for it`,
-      { workflow_id: workflowId, plan_id: planId, worktree_path: worktree ?? null, working_branch: branch ?? null },
-    );
-  }
-  return { worktree_path: worktree, working_branch: branch, session_label: "plan-pm" };
-}
 
-/** §2.2 one new ACTIVE session row; a new DB record starts at revision 1. */
 function writeExecutionSession(
   db: StoreDb,
   input: { workflowId: string; address: SessionAddress; epoch: number; now: string },
 ): void {
   db.prepare(
-    "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-      "values (?, ?, ?, ?, ?, 1, 'active', ?)",
-  ).run(input.workflowId, input.address.role, input.address.sessionId, input.address.planId, input.epoch, input.now);
+    "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+      "values (?, 'coordinator', ?, ?, 1, 'active', ?)",
+  ).run(input.workflowId, input.address.sessionId, input.epoch, input.now);
 }
 
-/**
- * §2.2 the plan's FIRST `execution_leases` row. The pure `claimLease`
- * transition carries the legacy `ExecutionLease` identity fields
- * (`holder`/`claimed_at`/`worktree_path`/`working_branch`); this adds the
- * ownership and observation fields the DB lease carries. Ownership is
- * `holder_session_id` + `holder_role` + the row's `owner_epoch` column, so the
- * fence is the column — rebinding the same identity after an epoch change
- * never revives this lease.
- */
-function writeInitialExecutionLease(
-  db: StoreDb,
-  input: { workflowId: string; planId: string; address: SessionAddress; epoch: number; lease: ExecutionLease; operationId: string },
-): void {
-  const lease = {
-    ...input.lease,
-    lease_id: randomUUID(),
-    holder_session_id: input.address.sessionId,
-    holder_role: input.address.role,
-    plan_worktree_path: input.lease.worktree_path,
-    plan_branch: input.lease.working_branch,
-    heartbeat_at: input.lease.claimed_at,
-    status: "held",
-    claim_operation_id: input.operationId,
-  };
-  db.prepare(
-    "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)",
-  ).run(input.workflowId, input.planId, input.epoch, JSON.stringify(lease));
-}
-
-function reclaimExecutionLease(
-  tx: ExecutionTransaction,
-  input: { workflowId: string; planId: string; address: SessionAddress; lease: ExecutionLease; operationId: string },
-): void {
-  const row = tx.db
-    .prepare("select revision, owner_epoch, lease_json from execution_leases where workflow_id = ? and plan_id = ?")
-    .get(input.workflowId, input.planId) as { revision?: unknown; owner_epoch?: unknown; lease_json?: unknown } | undefined;
-  if (row === undefined) throw corrupt(`execution lease lineage for ${input.workflowId}/${input.planId} is absent`);
-  const prior = readExecutionLease(row.lease_json, `execution_leases(${input.workflowId},${input.planId}).lease_json`) as
-    ExecutionLease & { release_operation_id?: string; claim_operation_id?: string; lease_id?: string };
-  if (
-    prior.status !== "released" ||
-    prior.holder_session_id !== input.address.sessionId ||
-    prior.holder_role !== input.address.role ||
-    storedRevision(row.owner_epoch, "execution lease owner epoch") !== tx.epoch ||
-    prior.release_operation_id === undefined
-  ) {
-    throw new CoordinationError("coordination.duplicate-holder", `plan ${input.planId} has no current own releasable claim`, {
-      plan_id: input.planId,
-    });
-  }
-  const receiptRow = tx.db.prepare(
-    "select result_json from execution_operations where epoch = ? and operation_id = ? and workflow_id = ? and plan_id = ?",
-  ).get(tx.epoch, prior.release_operation_id, input.workflowId, input.planId) as { result_json?: unknown } | undefined;
-  if (receiptRow === undefined) {
-    throw new CoordinationError("coordination.execution-lease-required", `plan ${input.planId} release has no committed operation receipt`, {
-      plan_id: input.planId,
-    });
-  }
-  const receipt = storedJsonObject(receiptRow.result_json, `execution_operations(${prior.release_operation_id}).result_json`);
-  const receiptLease = isPlainObject(receipt.data) ? receipt.data.executionLease : undefined;
-  if (
-    !isPlainObject(receiptLease) ||
-    receiptLease.status !== "released" ||
-    receiptLease.holder_session_id !== input.address.sessionId ||
-    receiptLease.release_operation_id !== prior.release_operation_id
-  ) {
-    throw corrupt(`execution lease ${input.workflowId}/${input.planId} does not match its retained release receipt`);
-  }
-  const claimed = {
-    ...input.lease,
-    lease_id: prior.lease_id,
-    holder_session_id: input.address.sessionId,
-    holder_role: input.address.role,
-    plan_worktree_path: input.lease.worktree_path,
-    plan_branch: input.lease.working_branch,
-    heartbeat_at: input.lease.claimed_at,
-    status: "held",
-    prior_claim: {
-      lease_id: prior.lease_id,
-      released_by: prior.released_by,
-      released_at: prior.released_at,
-      release_reason: prior.release_reason,
-      release_operation_id: prior.release_operation_id,
-      claim_operation_id: prior.claim_operation_id,
-    },
-    claim_operation_id: input.operationId,
-    release_operation_id: undefined,
-  };
-  tx.db.prepare(
-    "update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?",
-  ).run(JSON.stringify(claimed), input.workflowId, input.planId);
-}
-
-/**
- * §2.2 the stored plan state never duplicates the DB ownership rows: the
- * `claimLease` result's `execution_lease` is written to `execution_leases`, so
- * only the state (status included) is persisted here. The row revision advances
- * once because the state changed.
- */
-function writePlanState(
-  db: StoreDb,
-  input: { workflowId: string; planId: string; state: Record<string, unknown>; revision: number },
-): void {
-  db.prepare("update execution_plans set state_json = ?, revision = ? where workflow_id = ? and plan_id = ?").run(
-    JSON.stringify(input.state),
-    input.revision,
-    input.workflowId,
-    input.planId,
-  );
-}
 
 /**
  * §2.2 write one plan's state and coordination blocks in ONE statement: the row
@@ -2700,125 +2333,68 @@ export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: 
   return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
 }
 
-/**
- * §2.2/§4.2 one workflow's HELD execution leases, read WITHOUT the reader's
- * lease/session ownership invariant. Two transitions need exactly this narrow
- * view: the terminal transition (does any plan still own a lease?) and the
- * coordinator recovery bootstrap, whose job is to make a workflow READABLE
- * again — the whole-view reader refuses the very state it recovers from
- * (`assertLeaseOwnership` cannot represent a held lease whose holder row is not
- * active at this epoch), so recovery never runs it.
- */
-export function readHeldExecutionLeases(
-  tx: ExecutionTransaction,
-  workflowId: string,
-): ReadonlyArray<{ planId: string; ownerEpoch: number; lease: ExecutionLease }> {
-  const rows = tx.db
-    .prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ? order by plan_id")
-    .all(workflowId) as Array<{ plan_id?: unknown; owner_epoch?: unknown; lease_json?: unknown }>;
-  const held: Array<{ planId: string; ownerEpoch: number; lease: ExecutionLease }> = [];
-  for (const row of rows) {
-    const planId = storedText(row.plan_id, `execution_leases(${workflowId}).plan_id`);
-    const lease = readExecutionLease(row.lease_json, `execution_leases(${workflowId},${planId}).lease_json`);
-    if (lease.status !== "held") continue;
-    held.push({
-      planId,
-      ownerEpoch: storedRevision(row.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`),
-      lease,
-    });
-  }
-  return held;
-}
-/** The owner epoch stored beside one execution-lease lineage. */
-export function executionLeaseOwnerEpoch(tx: ExecutionTransaction, workflowId: string, planId: string): number {
-  const row = tx.db
-    .prepare("select owner_epoch from execution_leases where workflow_id = ? and plan_id = ?")
-    .get(workflowId, planId) as { owner_epoch?: unknown } | undefined;
-  if (row === undefined) throw corrupt(`execution lease ${workflowId}/${planId} has no retained owner epoch`);
-  return storedRevision(row.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`);
-}
 
 /**
- * §2.2 the stored session rows of one workflow and role, INCLUDING the
+ * §2.2 the stored coordinator session rows of one workflow, INCLUDING the
  * non-active ones — the recovery bootstrap has to see the suspended, revoked
  * and previous-epoch rows the ordinary bind treats as unusable. Availability
  * is still decided by `state` and the current epoch together, by the caller.
  */
-export function readWorkflowSessionRows(
-  tx: ExecutionTransaction,
-  workflowId: string,
-  role: ExecutionCaller["role"],
-): SessionRow[] {
-  return readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, workflowId, role);
+export function readWorkflowSessionRows(tx: ExecutionTransaction, workflowId: string, role: "coordinator"): SessionRow[] {
+  if (role !== "coordinator") {
+    throw new CoordinationError("coordination.session-role", `this authority holds only coordinator session rows — got ${String(role)}`, {
+      role,
+    });
+  }
+  return readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, workflowId);
 }
 
 /**
- * §2.3 the revocation half of the recovery transition: the prior holder stops
- * being an ACTIVE binding. The row is kept — it is the history a later
+ * §2.3 the revocation half of the recovery transition: the prior coordinator
+ * stops being an ACTIVE binding. The row is kept — it is the history a later
  * reference must not silently re-own — and an already revoked row gains no
  * revision, so a retried recovery never rewrites the end of an ownership.
  */
 export function revokeSessionRow(
   tx: ExecutionTransaction,
-  input: { workflowId: string; role: ExecutionCaller["role"]; sessionId: string },
+  input: { workflowId: string; role: "coordinator"; sessionId: string },
 ): void {
+  if (input.role !== "coordinator") {
+    throw new CoordinationError(
+      "coordination.session-role",
+      `this authority revokes only coordinator session rows — got ${String(input.role)}`,
+      { role: input.role },
+    );
+  }
   tx.db
     .prepare(
       "update execution_sessions set state = 'revoked', revision = revision + 1 " +
-        "where workflow_id = ? and role = ? and session_id = ? and state <> 'revoked'",
+        "where workflow_id = ? and role = 'coordinator' and session_id = ? and state <> 'revoked'",
     )
-    .run(input.workflowId, input.role, input.sessionId);
+    .run(input.workflowId, input.sessionId);
 }
 
-/**
- * §2.3 the binding half of the recovery transition: the trusted recovery caller
- * becomes the workflow's ACTIVE session at the current epoch. A row this store
- * already holds for that identity is REACTIVATED (its revision advances and
- * `bound_at` moves) — the named recovery transition is the only way back for a
- * suspended/revoked/epoch-invalidated binding — while a new identity starts at
- * revision 1. Reactivation never moves the identity to another plan.
- *
- * Returns the row revision the receipt's session token carries.
- */
+/** Recovery reactivates only the coordinator identity for the workflow. */
 export function bindRecoveredSession(
   tx: ExecutionTransaction,
-  input: {
-    workflowId: string;
-    role: ExecutionCaller["role"];
-    sessionId: string;
-    planId: string | null;
-    epoch: number;
-    now: string;
-  },
+  input: { workflowId: string; role: "coordinator"; sessionId: string; epoch: number; now: string },
 ): number {
-  const existing = tx.db
-    .prepare("select plan_id, revision from execution_sessions where workflow_id = ? and role = ? and session_id = ?")
-    .get(input.workflowId, input.role, input.sessionId) as { plan_id?: unknown; revision?: unknown } | undefined;
+  const existing = tx.db.prepare(
+    "select revision from execution_sessions where workflow_id=? and role='coordinator' and session_id=?",
+  ).get(input.workflowId, input.sessionId) as { revision?: unknown } | undefined;
   if (existing === undefined) {
     writeExecutionSession(tx.db, {
       workflowId: input.workflowId,
-      address: { workflowId: input.workflowId, role: input.role, sessionId: input.sessionId, planId: input.planId },
+      address: { workflowId: input.workflowId, role: "coordinator", sessionId: input.sessionId },
       epoch: input.epoch,
       now: input.now,
     });
     return 1;
   }
-  const boundPlan = existing.plan_id === null || existing.plan_id === undefined ? null : storedText(existing.plan_id, "execution_sessions.plan_id");
-  if (boundPlan !== input.planId) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `session ${input.sessionId} is recorded as the ${input.role} session of plan ${JSON.stringify(boundPlan)}; recovery ` +
-        `reactivates an identity, it never moves one to plan ${JSON.stringify(input.planId)}`,
-      { session_id: input.sessionId, bound_plan: boundPlan, addressed_plan: input.planId },
-    );
-  }
   const revision = storedRevision(existing.revision, `execution_sessions(${input.workflowId},${input.sessionId}).revision`) + 1;
-  tx.db
-    .prepare(
-      "update execution_sessions set state = 'active', epoch = ?, revision = ?, bound_at = ? " +
-        "where workflow_id = ? and role = ? and session_id = ?",
-    )
-    .run(input.epoch, revision, input.now, input.workflowId, input.role, input.sessionId);
+  tx.db.prepare(
+    "update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?",
+  ).run(input.epoch, revision, input.now, input.workflowId, input.sessionId);
   return revision;
 }
 
@@ -2873,68 +2449,6 @@ export function releaseIntegrationMergeLease(
     .run(existing.revision + 1, JSON.stringify(tombstone), input.workflowId);
 }
 
-/**
- * §D the `accept` transfer: the plan's HELD execution lease moves to the
- * coordinator session verbatim — same `claimed_at`, worktree and branch, extra
- * fields preserved — and only the holder identity and role change. The lease
- * row's revision advances because its record changed (§3.1), and no claim,
- * steal or re-claim path exists here: the caller has already authenticated the
- * receiving session as the addressed plan's coordinator.
- */
-export function transferExecutionLease(
-  tx: ExecutionTransaction,
-  input: {
-    workflowId: string;
-    planId: string;
-    lease: ExecutionLease;
-    to: { sessionId: string; role: "coordinator" | "plan-pm" };
-    now: string;
-  },
-): void {
-  const moved = {
-    ...input.lease,
-    holder: input.to.sessionId,
-    holder_session_id: input.to.sessionId,
-    holder_role: input.to.role,
-    transferred_from: input.lease.holder,
-    transferred_at: input.now,
-  };
-  tx.db
-    .prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
-    .run(JSON.stringify(moved), input.workflowId, input.planId);
-}
-
-/**
- * §E the completion release: the plan's execution lease becomes a tombstone
- * that keeps its identity, revision and owner epoch (§3.1's ABA guard) and
- * reads as NOT held — the DB equivalent of the file route deleting the row's
- * `execution_lease`. The released record carries the release provenance, so
- * "who owned this plan, who released it and why" survives completion.
- */
-export function releaseExecutionLease(
-  tx: ExecutionTransaction,
-  input: {
-    workflowId: string;
-    planId: string;
-    lease: ExecutionLease;
-    releasedBy: string;
-    reason: string;
-    now: string;
-    operationId?: string;
-  },
-): void {
-  const released = {
-    ...input.lease,
-    status: "released",
-    released_by: input.releasedBy,
-    released_at: input.now,
-    release_reason: input.reason,
-    ...(input.operationId === undefined ? {} : { release_operation_id: input.operationId }),
-  };
-  tx.db
-    .prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
-    .run(JSON.stringify(released), input.workflowId, input.planId);
-}
 
 /**
  * §3.1 the committed receipt of one operation id, or `null` for a first
@@ -3109,278 +2623,62 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
   return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
 }
 
-/**
- * §3 session bind: the trusted caller becomes the workflow's coordinator, or
- * the plan-pm of one prepared plan, in ONE transaction that also revalidates
- * the caller's identity, the current epoch, unique active ownership and the
- * plan's lease.
- *
- * - Coordinator: only the workflow's creating trusted identity may bind it,
- *   against the workflow's current token. A later or foreign identity never
- *   replaces a live owner.
- * - Plan-pm: the plan must be PREPARED (this module has no prepare transition —
- *   an unprepared plan is refused, never admitted) and must record its own
- *   worktree/branch scope; the bind claims the plan's execution lease through
- *   the same `claimLease` state machine the legacy transport uses.
- * - No file envelope is written, read or required: a session file is neither
- *   output nor authority here.
- *
- * Revisions (§3.1): a new session row and a new lease row start at revision 1,
- * the claimed plan's own revision advances once, the workflow revision advances
- * once because a child and a session changed, and the store revision advances
- * once for the multi-domain transaction. A replayed operation advances none.
- */
+/** Bind the trusted caller as the single coordinator for a running workflow. */
 export async function bindExecutionSession(
   context: ExecutionContext,
-  input: { workflowId: string; planId: string | null; role: "coordinator" | "plan-pm"; expected: ExecutionToken; operationId: string },
+  input: { workflowId: string; expected: ExecutionToken; operationId: string },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const bind = resolveBindRequest(context.caller, input);
-  const requestHash = bindSessionRequestHash(context.caller, bind, input?.expected);
+  const requestHash = bindSessionRequestHash(context.caller, bind, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError(
-        "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` +
-          `A staged store is inspectable only through migration diagnostics.`,
-      );
-    }
+    if (tx.execution.authorityState !== "active") throw new ExecutionError("execution.not-active", "session binding requires an active authority");
     const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
     if (recorded !== null) {
-      if (recorded.requestHash !== requestHash) {
-        throw new ExecutionError(
-          "execution.operation-conflict",
-          `operation id ${JSON.stringify(bind.operationId)} is already committed on this store epoch for a different request ` +
-            `(kind, scope, expected token, caller or payload). Retry the committed request unchanged or use a new id. ` +
-            `Nothing was bound.`,
-        );
-      }
+      if (recorded.requestHash !== requestHash) throw new ExecutionError("execution.operation-conflict", "operation id is committed for another request");
       const receipt = readCommittedReceipt<ExecutionSessionRef>(recorded, tx, bind.operationId, bind.workflowId, {
-        kind: "session",
-        key: [bind.workflowId, bind.role, bind.sessionId],
+        kind: "session", key: [bind.workflowId, "coordinator", bind.sessionId],
       });
-      // §3.1: a replay revalidates the CURRENT authority instead of the
-      // receipt's own CAS, so a revoked or epoch-invalidated binding never
-      // hands back a success it no longer owns.
       assertReferenceAuthority(tx, receipt.data.storeId, receipt.data.epoch);
-      liveSession(tx, receipt.data);
+      liveSession(tx, { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId });
       return { ...receipt, operationId: bind.operationId, replayed: true };
     }
     const header = readWorkflowHeaderRow(tx.db, bind.workflowId);
-    if (bind.role === "coordinator") {
-      assertExecutionToken(input.expected, {
-        kind: "workflow",
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        key: [bind.workflowId],
-        revision: header.revision,
-      });
-    } else {
-      assertExecutionToken(input.expected, {
-        kind: "plan",
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        key: [bind.workflowId, bind.planId],
-        revision: readPlanRevision(tx.db, bind.workflowId, bind.planId),
-      });
+    assertExecutionToken(input.expected, {
+      kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [bind.workflowId], revision: header.revision,
+    });
+    const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    if (view.state.status !== "running") throw new CoordinationError("coordination.invalid-transition", `workflow ${bind.workflowId} is not running`);
+    const rows = readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    if (rows.some((row) => row.state === "active" && row.ref.epoch === tx.epoch)) {
+      throw new ExecutionError("execution.session-unavailable", `workflow ${bind.workflowId} already has an active coordinator`);
     }
-
-    const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
-    const view = readWorkflowView(tx.db, store, bind.workflowId);
+    if (header.creatorSessionId !== null && header.creatorSessionId !== bind.sessionId) {
+      throw new ExecutionError("execution.session-unavailable", `workflow ${bind.workflowId} was created by another session`);
+    }
+    if (header.creatorSessionId === null) {
+      tx.db.prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?").run(bind.sessionId, bind.workflowId);
+    }
     const now = new Date().toISOString();
-    const { mine, holder } = readOwnership(tx.db, store, bind);
-    if (mine !== undefined && (mine.state !== "active" || mine.ref.epoch !== tx.epoch)) {
-      // The same live-holder fence recoverExecutionCoordinator refuses the
-      // named-prior recovery with: while a current-epoch ACTIVE coordinator
-      // holder exists, recovery naming this non-active row is refused, so the
-      // guidance names the reachable paths instead of a dead end.
-      const liveHolder =
-        bind.role === "coordinator"
-          ? readSessionRows(tx.db, store, bind.workflowId, "coordinator").find(
-              (row) => row.state === "active" && row.ref.epoch === tx.epoch,
-            )
-          : undefined;
-      throw new ExecutionError(
-        "execution.session-unavailable",
-        `workflow ${bind.workflowId} records session ${bind.sessionId} as a ${bind.role} session in state ` +
-          `${mine.state} at epoch ${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or ` +
-          `epoch-invalidated binding is never revived by a normal bind` +
-          (liveHolder === undefined
-            ? ` \u2014 the named recovery transition, with stop evidence and the prior holder, is the only way back`
-            : `, and no recovery replaces this binding by naming it while workflow ${JSON.stringify(bind.workflowId)} ` +
-                `holds the ACTIVE coordinator session ${JSON.stringify(liveHolder.ref.sessionId)} at epoch ${tx.epoch} ` +
-                `\u2014 recoverExecutionCoordinator replaces only the holder it names; work runs through ` +
-                `${JSON.stringify(liveHolder.ref.sessionId)}'s own live reference, and a recovery naming that holder ` +
-                `proceeds with a valid operator attestation carrying its stopped/reloaded entry \u2014 the attestation ` +
-                `is the stop evidence, with no change to the holder's row needed first`) +
-          `. Nothing was bound.`,
-      );
+    const address: SessionAddress = { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId };
+    const mine = rows.find((row) => row.ref.sessionId === bind.sessionId);
+    let revision = 1;
+    if (mine === undefined) writeExecutionSession(tx.db, { workflowId: bind.workflowId, address, epoch: tx.epoch, now });
+    else {
+      revision = mine.revision + 1;
+      tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?")
+        .run(tx.epoch, revision, now, bind.workflowId, bind.sessionId);
     }
-    const existing = mine ?? holder;
-    const releasedLease = view.plans.find((candidate) => candidate.plan.id === bind.planId)?.executionLease;
-    const releasedClaimRebind =
-      bind.role === "plan-pm" &&
-      mine?.state === "active" &&
-      mine.ref.epoch === tx.epoch &&
-      mine.ref.sessionId === bind.sessionId &&
-      mine.ref.planId === bind.planId &&
-      (holder === undefined || (holder.ref.sessionId === bind.sessionId && holder.ref.planId === bind.planId)) &&
-      releasedLease?.status === "released" &&
-      releasedLease.holder_session_id === bind.sessionId &&
-      releasedLease.holder_role === bind.role;
-    if (existing !== undefined && !releasedClaimRebind) {
-      throw new CoordinationError(
-        "coordination.duplicate-holder",
-        `workflow ${bind.workflowId} already records ${bind.role} session ${existing.ref.sessionId}` +
-          `${existing.ref.planId === null ? "" : ` for plan ${existing.ref.planId}`} (${existing.state} at epoch ` +
-          `${existing.ref.epoch}). Ownership is not replaceable by a bind: a live holder resumes through its own ` +
-          `reference, and a normal bind never takes over a held scope. Nothing was bound.`,
-        { holder: existing.ref.sessionId, workflow_id: bind.workflowId, plan_id: bind.planId },
-      );
-    }
-
-    if (bind.role === "coordinator") {
-      // §2.3: the FIRST coordinator bind of a newly created workflow is
-      // permitted only to the identity that created it, so a foreign trusted
-      // identity cannot claim a lifecycle it did not create.
-      if (header.creatorSessionId === null) {
-        if (readSessionRows(tx.db, store, bind.workflowId, "coordinator").length > 0) {
-          throw new ExecutionError(
-            "execution.session-unavailable",
-            `workflow ${bind.workflowId} already records a coordinator session; first-bind adoption is unavailable after any ` +
-              `coordinator record exists. Use the separate recovery transition after validated stop evidence. Nothing was bound.`,
-          );
-        }
-        tx.db
-          .prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?")
-          .run(bind.sessionId, bind.workflowId);
-      } else if (header.creatorSessionId !== bind.sessionId) {
-        throw new ExecutionError(
-          "execution.session-unavailable",
-          `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted ` +
-            `caller is ${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating ` +
-            `identity (or the separate recovery transition after validated stop evidence). Nothing was bound.`,
-        );
-      }
-      if (view.state.status !== "running") {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          `workflow ${bind.workflowId} is ${String(view.state.status)} \u2014 a coordinator session binds only to a running lifecycle`,
-          { workflow_id: bind.workflowId, status: view.state.status },
-        );
-      }
-    } else {
-      const plan = view.plans.find((candidate) => candidate.plan.id === bind.planId);
-      if (plan === undefined) {
-        throw new CoordinationError(
-          "coordination.plan-not-found",
-          `workflow ${bind.workflowId} holds no plan ${bind.planId} to bind`,
-          { workflow_id: bind.workflowId, plan_id: bind.planId },
-        );
-      }
-      // §2.3: a plan bind requires PREPARED eligibility. The public prepare
-      // transition is a later plan; until it exists an unprepared row is
-      // refused rather than admitted through a bypass.
-      if (plan.coordination === null || plan.coordination.prepared === undefined) {
-        throw new CoordinationError(
-          "coordination.not-prepared",
-          `plan ${bind.planId} has no prepared Assignment in workflow ${bind.workflowId} \u2014 the coordinator must ` +
-            `prepare it first. A plan session never claims ownership of an unprepared row.`,
-          { workflow_id: bind.workflowId, plan_id: bind.planId },
-        );
-      }
-      const releasedClaim =
-        plan.executionLease?.status === "released" &&
-        plan.executionLease.holder_session_id === bind.sessionId &&
-        plan.executionLease.holder_role === bind.role &&
-        releasedClaimRebind;
-      if (plan.executionLease !== null && !releasedClaim) {
-        throw new CoordinationError(
-          "coordination.duplicate-holder",
-          `plan ${bind.planId} already holds an execution lease (holder session ` +
-            `${JSON.stringify(plan.executionLease.holder_session_id)}, status ${JSON.stringify(plan.executionLease.status)}). ` +
-            `A bind never replaces, steals or revives a recorded lease \u2014 reconcile is the transition that may move it. ` +
-            `Nothing was bound.`,
-          { workflow_id: bind.workflowId, plan_id: bind.planId, holder: plan.executionLease.holder_session_id },
-        );
-      }
-      if (
-        releasedClaim &&
-        (view.state.status !== "running" || !["Todo", "Blocked"].includes(String(plan.plan.status)))
-      ) {
-        throw new CoordinationError("coordination.invalid-transition", `released plan ${bind.planId} is not claimable in a running workflow`, {
-          workflow_id: bind.workflowId, plan_id: bind.planId, status: plan.plan.status,
-        });
-      }
-      const scope = planLeaseScope(plan.plan as Record<string, unknown>, bind.workflowId, bind.planId);
-      // The same pure transition the legacy transport runs; the row the DB
-      // reader validated is its input, and `execution_leases` (not the row) is
-      // where the resulting lease is stored.
-      const transition = claimLease(plan.plan as PlanRow, bind.sessionId, scope);
-      if (!transition.ok) throw leaseFailure(transition.violations);
-      if (transition.outcome !== "claimed") {
-        throw corrupt(
-          `claiming the execution lease of plan ${bind.planId} returned ${String(transition.outcome)} although the plan ` +
-            `held no lease`,
-        );
-      }
-      if (releasedClaim) {
-        reclaimExecutionLease(tx, {
-          workflowId: bind.workflowId, planId: bind.planId, address: bind, operationId: bind.operationId,
-          lease: transition.row.execution_lease as ExecutionLease,
-        });
-      } else {
-        writeInitialExecutionLease(tx.db, {
-          workflowId: bind.workflowId,
-          planId: bind.planId,
-          address: bind,
-          epoch: tx.epoch,
-          lease: transition.row.execution_lease as ExecutionLease,
-          operationId: bind.operationId,
-        });
-      }
-      // §2.2: the lease lives in `execution_leases`, never in the row state.
-      const state: Record<string, unknown> = { ...(transition.row as Record<string, unknown>) };
-      delete state.execution_lease;
-      writePlanState(tx.db, {
-        workflowId: bind.workflowId,
-        planId: bind.planId,
-        state,
-        revision: readPlanRevision(tx.db, bind.workflowId, bind.planId) + 1,
-      });
-    }
-
-    if (!releasedClaimRebind) writeExecutionSession(tx.db, { workflowId: bind.workflowId, address: bind, epoch: tx.epoch, now });
-    // A session (and, for a plan, its lease) is a child of the workflow: the
-    // workflow revision and its timestamp advance once, and the multi-domain
-    // transaction bumps the store revision once. Registry membership did not
-    // change, so the root revision is untouched.
-    tx.db
-      .prepare("update execution_workflows set revision = revision + 1, updated_at = ? where workflow_id = ?")
-      .run(now, bind.workflowId);
-    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-
+    advanceWorkflowHeaderRevision(tx, { workflowId: bind.workflowId, now });
+    const data: ExecutionSessionRef = {
+      storeId: tx.storeId, epoch: tx.epoch, workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId,
+    };
     const receipt: ExecutionRead<ExecutionSessionRef> = {
-      data: {
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        workflowId: bind.workflowId,
-        role: bind.role,
-        sessionId: bind.sessionId,
-        planId: bind.planId,
-      },
-      token: executionToken(
-        "session", tx.storeId, tx.epoch, [bind.workflowId, bind.role, bind.sessionId],
-        releasedClaimRebind ? mine!.revision : 1,
-      ),
+      data,
+      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, "coordinator", bind.sessionId], revision),
       storeId: tx.storeId,
       epoch: tx.epoch,
     };
-    tx.db
-      .prepare(
-        "insert into execution_operations(epoch, operation_id, request_hash, store_id, workflow_id, plan_id, result_json, committed_at) " +
-          "values (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(tx.epoch, bind.operationId, requestHash, tx.storeId, bind.workflowId, bind.planId, JSON.stringify(receipt), now);
+    writeOperationReceipt(tx, { operationId: bind.operationId, requestHash, workflowId: bind.workflowId, planId: null, receipt, now });
     return { ...receipt, operationId: bind.operationId, replayed: false };
   });
 }
@@ -3435,9 +2733,8 @@ export function readExecutionPlanWitness(tx: ExecutionTransaction, read: Resolve
   assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
   const live = liveSession(tx, {
     workflowId: read.workflowId,
-    role: read.role,
+    role: "coordinator",
     sessionId: read.sessionId,
-    planId: read.boundPlanId,
   });
   const workflow = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, read.workflowId);
   const view = workflow.plans.find((candidate) => candidate.plan.id === read.planId);
@@ -3474,67 +2771,28 @@ export type ResolvedWorkflowWrite = {
 
 /**
  * §2.3/§3 the seat and reference gate of one WORKFLOW-level operation — the
- * coordinator-only sibling of `resolvePlanRead`. The seat is checked first: a
- * workflow-level transition belongs to the workflow's coordinator, and a
- * plan-pm identity (which addresses one plan of a lifecycle) never performs
- * one. The reference is then the caller's OWN coordinator address: possession
- * of a reference, a legacy session file, or another workflow's address
- * authorizes nothing.
+ * sibling of `resolvePlanRead`. The seat is checked first: a workflow-level
+ * transition belongs to the workflow's coordinator. The reference is then the
+ * caller's OWN coordinator address: possession of a reference or another
+ * workflow's address authorizes nothing.
  *
  * Pure argument checks — no store is opened — so each transport decides where
  * this gate sits relative to its own store access.
  */
 export function resolveWorkflowWrite(caller: ExecutionCaller, session: unknown, workflowId: unknown): ResolvedWorkflowWrite {
-  if (caller?.role !== "coordinator" || caller.planId !== null) {
-    throw new ExecutionError(
-      "execution.scope-mismatch",
-      `a workflow-level transition is a coordinator operation; the supplied caller is a ${String(caller?.role)} session` +
-        `${caller?.planId === null || caller?.planId === undefined ? "" : ` for plan ${String(caller.planId)}`}. ` +
-        `The caller identity is never taken from request JSON.`,
-    );
-  }
-  if (!isNonEmptyString(caller?.sessionId)) {
-    throw invalidInput("the execution caller needs a non-empty session identity");
-  }
+  if (caller?.role !== "coordinator") throw new ExecutionError("execution.scope-mismatch", "workflow writes require the coordinator identity");
+  if (!isNonEmptyString(caller.sessionId)) throw invalidInput("the execution caller needs a non-empty session identity");
   if (!isNonEmptyString(workflowId)) throw invalidInput("a workflow operation needs the non-empty workflow id it addresses");
-  const bound = session;
-  if (!isPlainObject(bound)) throw invalidInput("a workflow operation needs an execution session reference");
-  const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId, planId } = bound;
-  if (
-    !isNonEmptyString(storeId) ||
-    typeof epoch !== "number" ||
-    !Number.isSafeInteger(epoch) ||
-    epoch <= 0 ||
-    !isNonEmptyString(boundWorkflowId) ||
-    !isNonEmptyString(sessionId)
-  ) {
-    throw invalidInput(
-      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} \u2014 got ${JSON.stringify(bound)}`,
-    );
+  if (!isPlainObject(session)) throw invalidInput("a workflow operation needs an execution session reference");
+  const { storeId, epoch, workflowId: boundWorkflowId, role, sessionId } = session;
+  if (!isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 ||
+    !isNonEmptyString(boundWorkflowId) || !isNonEmptyString(sessionId) || role !== "coordinator") {
+    throw invalidInput("a workflow operation needs a valid coordinator session reference");
   }
-  if (role !== "coordinator" || planId !== null) {
-    throw sessionRoleRefusal(
-      `a workflow-level operation requires a COORDINATOR session reference; the supplied reference is role ` +
-        `${JSON.stringify(role)} plan ${JSON.stringify(planId ?? null)}`,
-      { role, plan_id: planId ?? null },
-    );
+  if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId) {
+    throw new ExecutionError("execution.scope-mismatch", "the trusted caller does not match the supplied coordinator reference");
   }
-  if (caller.sessionId !== sessionId || caller.workflowId !== boundWorkflowId || caller.planId !== null) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `the trusted caller is session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)} ` +
-        `plan ${JSON.stringify(caller.planId)}; the supplied reference names session ${JSON.stringify(sessionId)} of ` +
-        `workflow ${JSON.stringify(boundWorkflowId)} plan null`,
-      { caller_session: caller.sessionId, reference_session: sessionId },
-    );
-  }
-  if (caller.workflowId !== workflowId) {
-    throw new ExecutionError(
-      "execution.scope-mismatch",
-      `the caller belongs to workflow ${JSON.stringify(caller.workflowId)}, not to the workflow ${JSON.stringify(workflowId)} ` +
-        `this request addresses`,
-    );
-  }
+  if (caller.workflowId !== workflowId) throw new ExecutionError("execution.scope-mismatch", "the caller does not own the addressed workflow");
   return { workflowId, sessionId, referenceStoreId: storeId, referenceEpoch: epoch };
 }
 
@@ -3546,7 +2804,7 @@ export function resolveWorkflowWrite(caller: ExecutionCaller, session: unknown, 
  */
 export function resolveWorkflowSession(tx: ExecutionTransaction, read: ResolvedWorkflowWrite): ExecutionSessionRef {
   assertReferenceAuthority(tx, read.referenceStoreId, read.referenceEpoch);
-  return liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId, planId: null }).ref;
+  return liveSession(tx, { workflowId: read.workflowId, role: "coordinator", sessionId: read.sessionId }).ref;
 }
 
 /**
@@ -3600,12 +2858,11 @@ export function readExecutionWorkflowWitness(
 /**
  * §3 the session-authorized plan read: one consistent read of the plan's
  * authoritative view, served only when the supplied reference is the binding
- * the trusted caller actually holds at the current epoch (a coordinator reads
- * any plan of its workflow, a plan-pm only its own). The returned plan token is
+ * the trusted caller actually holds at the current epoch. The returned plan token is
  * the CAS a later coordination mutation passes back.
  *
- * The reference gate runs BEFORE the store is opened: a malformed, foreign-role
- * or caller-mismatched request is refused by itself, never by — or after — an
+ * The reference gate runs BEFORE the store is opened: a malformed or
+ * caller-mismatched request is refused by itself, never by — or after — an
  * authority-state or store-open failure.
  */
 export function readExecutionPlan(context: ExecutionContext, planId: string): Promise<ExecutionRead<ExecutionPlanView>>;
@@ -3640,8 +2897,7 @@ export async function readExecutionSession(
   if (
     session.workflowId !== context.caller.workflowId ||
     session.role !== context.caller.role ||
-    session.sessionId !== context.caller.sessionId ||
-    session.planId !== context.caller.planId
+    session.sessionId !== context.caller.sessionId
   ) {
     throw new CoordinationError(
       "coordination.session-mismatch",
@@ -3652,9 +2908,8 @@ export async function readExecutionSession(
     assertReferenceAuthority(tx, session.storeId, session.epoch);
     const live = liveSession(tx, {
       workflowId: session.workflowId,
-      role: session.role,
+      role: "coordinator",
       sessionId: session.sessionId,
-      planId: null,
     });
     return {
       data: live.ref,
@@ -3682,59 +2937,54 @@ function ownSessionAddress(caller: ExecutionCaller | undefined): SessionAddress 
   if (caller.role !== "coordinator") {
     throw invalidInput("the only execution session role is coordinator");
   }
-  return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId, planId: null };
+  return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId };
 }
 
 /**
  * §2.3/§4.1 (R9/A16) the caller's own question when this store records NO row
- * for its identity: the durable facts, the ONE decision that would release the
- * addressed scope, the effect withheld — that identity's own binding, never
- * another holder's — and what still works meanwhile.
+ * for its identity: the durable facts, the ONE decision that would make its
+ * coordinator binding current, the effect withheld — that identity's own
+ * binding, never another holder's — and what still works meanwhile.
  *
- * `holder` is the same ACTIVE record `readOwnership` treats as occupying the
- * scope (no epoch filter), so this refusal and a bind's
- * `coordination.duplicate-holder` name one fact. Reporting is all this path
- * does: a held scope is never revived, stolen or replaced here — the narrow
- * recovery transition owns replacement, and only after validated stop
- * evidence.
+ * `holder` is the workflow's ACTIVE coordinator record (no epoch filter), so
+ * this refusal and a bind's `coordination.duplicate-holder` name one fact.
+ * Reporting is all this path does: a held workflow-wide coordinator scope is
+ * never revived, stolen or replaced here — the narrow recovery transition owns
+ * replacement, and only after validated stop evidence.
  */
 function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow[]): never {
-  const scope =
-    address.planId === null ? `workflow ${address.workflowId}` : `plan ${address.planId} of workflow ${address.workflowId}`;
-  const holder = rows.find((row) => row.state === "active" && row.ref.planId === address.planId);
+  const holder = rows.find((row) => row.state === "active");
   const code = holder === undefined ? "coordination.session-not-found" : "coordination.duplicate-holder";
   const currentFacts = [
-    `the trusted caller is ${address.role} session ${address.sessionId} of ${scope}`,
+    `the trusted caller is coordinator session ${address.sessionId} of workflow ${address.workflowId}`,
     holder === undefined
-      ? `workflow ${address.workflowId} records no ${address.role} session ${address.sessionId} and holds no ACTIVE ` +
-        `${address.role} session of ${scope}`
-      : `workflow ${address.workflowId} holds the ACTIVE ${address.role} session ${holder.ref.sessionId} of ${scope} ` +
-        `(epoch ${holder.ref.epoch})`,
+      ? `workflow ${address.workflowId} records no coordinator session ${address.sessionId} and holds no ACTIVE coordinator session`
+      : `workflow ${address.workflowId} holds the ACTIVE coordinator session ${holder.ref.sessionId} (epoch ${holder.ref.epoch})`,
   ];
   const problem: RecoveryProblem = {
     component: "session",
     path: "session",
     code,
     sourcesTried: [
-      `execution_sessions rows of workflow ${address.workflowId} for role ${address.role}`,
-      "the trusted caller identity (workflow, role, plan, session)",
+      `execution_sessions rows of workflow ${address.workflowId} for role coordinator`,
+      "the trusted caller identity (workflow, role, session)",
     ],
     currentFacts,
     needed:
       holder === undefined
-        ? `a binding this identity can resume: bind ${address.role} session ${address.sessionId} to ${scope}`
-        : `the stop/transfer decision for the live holder ${holder.ref.sessionId}: authorized stop evidence for that ` +
-          `holder, or a transfer of ${scope} to this identity`,
+        ? `a binding this identity can resume: bind coordinator session ${address.sessionId} to workflow ${address.workflowId}`
+        : `the stop/recovery decision for the live coordinator ${holder.ref.sessionId}: the named coordinator recovery with ` +
+          `stop evidence for that holder`,
     withheldEffect:
-      `only this identity's own session binding and reference \u2014 no row was written, and ${scope} is never taken ` +
-      `over by another name here`,
+      `only this identity's own session binding and reference \u2014 no row was written, and the coordinator scope of ` +
+      `workflow ${address.workflowId} is never taken over by another name here`,
     availableWork: [
-      `read the state of workflow ${address.workflowId} and every row of a scope no session of it holds`,
+      `read the state of workflow ${address.workflowId} and every plan row it holds`,
       ...(holder === undefined
-        ? [`bind ${address.role} session ${address.sessionId} to ${scope} and resume it`]
+        ? [`bind coordinator session ${address.sessionId} and resume it`]
         : [
             `resume ${holder.ref.sessionId}'s own binding from that holder's identity`,
-            `bind this identity once the stop/transfer decision is recorded`,
+            `run recoverExecutionCoordinator naming ${holder.ref.sessionId} once its stop is attested`,
           ]),
     ],
   };
@@ -3749,7 +2999,7 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
     current_facts: problem.currentFacts,
     available_work: problem.availableWork,
     recovery: unresolvedRecovery({
-      target: { workflowId: address.workflowId, ...(address.planId === null ? {} : { planId: address.planId }) },
+      target: { workflowId: address.workflowId },
       unresolved: [problem],
       resolvedFrom: [
         { path: "workflowId", source: "caller.identity" },
@@ -3761,30 +3011,27 @@ function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow
 }
 
 /**
- * §2.3/§4.1 (R8, A09/A15) the caller's OWN current binding, reconstructed from
- * the session row this store holds instead of a reference the caller had to
- * keep. The reference a host caches is a PROJECTION of that row: the store's
- * own `{storeId, epoch}` generation and the session revision belong to the
- * store, so a host that lost the envelope loses nothing the engine cannot read
- * back — the trusted caller identity names the scope, and this read answers with
- * the row recorded for it at the CURRENT epoch.
+ * §2.3/§4.1 (R8, A09/A15) the caller's OWN current coordinator binding,
+ * reconstructed from the session row this store holds instead of a reference
+ * the caller had to keep. The reference a host caches is a PROJECTION of that
+ * row: the store's own `{storeId, epoch}` generation and the session revision
+ * belong to the store, so a host that lost the envelope loses nothing the
+ * engine cannot read back — the trusted caller identity names the workflow, and
+ * this read answers with the row recorded for it at the CURRENT epoch.
  *
- * It is a READ: no claim, identity, `bound_at` or revision is written, so a
- * repeat after a lost response returns the same binding (A09). When this store
- * holds no usable binding for the caller's own identity the refusal is the
- * caller's own question (`unresolvedOwnSession`) or the precise stored-state
- * verdict of `liveSession`; a foreign holder's row is never touched, and reads
- * of unrelated scopes continue.
+ * It is a READ: no identity, `bound_at` or revision is written, so a repeat
+ * after a lost response returns the same binding (A09). When this store holds
+ * no usable binding for the caller's own identity the refusal is the caller's
+ * own question (`unresolvedOwnSession`) or the precise stored-state verdict of
+ * `liveSession`; a foreign holder's row is never touched, and reads of
+ * unrelated workflows continue.
  */
 export async function readOwnExecutionSession(context: ExecutionContext): Promise<ExecutionRead<ExecutionSessionRef>> {
   const address = ownSessionAddress(context?.caller);
   return withExecutionReadTransaction(context, (tx) => {
     const store: StoreIdentity = { storeId: tx.storeId, epoch: tx.epoch };
-    const rows = readSessionRows(tx.db, store, address.workflowId, address.role);
+    const rows = readSessionRows(tx.db, store, address.workflowId);
     if (rows.every((row) => row.ref.sessionId !== address.sessionId)) unresolvedOwnSession(address, rows);
-    // `liveSession` is the ONE availability verdict of an own row — active at
-    // the CURRENT epoch and bound to the caller's own plan — and its refusal
-    // names the exact stored state/epoch when the row is not usable.
     const live = liveSession(tx, address);
     return {
       data: live.ref,
