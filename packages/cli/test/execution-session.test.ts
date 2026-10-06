@@ -951,8 +951,9 @@ describe("mstar session recover — documented invocation", () => {
       fixture,
       successor,
     );
-    expect(planSelector.exitCode).not.toBe(0);
-    expect(jsonOf(planSelector).command).not.toBe("session.recover");
+    expect(planSelector.exitCode).toBe(2);
+    expect(jsonOf(planSelector)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(await workflowStateOf(fixture)).toEqual(workflow);
   });
 });
 
@@ -1143,7 +1144,7 @@ describe("workflow.register — state-aware transport refusals", () => {
       "--branch-source", "feature/refusal", "--branch-target", "main",
       "--expect", activeAuthority.token, "--operation", "legacy-refusal",
       "--harness", legacy.harnessDir,
-    ], legacy, coordinatorIdentity());
+    ], legacy, { ...coordinatorIdentity(), workflowId: "legacy-refusal" });
     expect(legacyResult.exitCode).toBe(1);
     const legacyResponse = jsonOf(legacyResult);
     expect(legacyResponse.code).toBe("execution.not-active");
@@ -1160,7 +1161,7 @@ describe("workflow.register — state-aware transport refusals", () => {
       "--plan-file", `plans/${PLAN_ID}.md`, "--delivery-kind", "development",
       "--branch-source", "feature/refusal", "--branch-target", "main",
       "--harness", active.harnessDir,
-    ], active, coordinatorIdentity());
+    ], active, { ...coordinatorIdentity(), workflowId: "active-refusal" });
     expect(activeResult.exitCode).toBe(1);
     const activeResponse = jsonOf(activeResult);
     expect(activeResponse.code).toBe("execution.consumer-not-ready");
@@ -1334,7 +1335,10 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(reprepped.exitCode, reprepped.stdout).toBe(0);
     const shownAfterCorrection = runCli(["plan", "show", "--plan", PLAN_ID, "--harness", fixture.harnessDir], fixture, identity);
-    expect(stringMember(objectMember(objectMember(dataOf(shownAfterCorrection), "data"), "scope"), "workingBranch")).toBe("feature/corrected");
+    expect(objectMember(objectMember(objectMember(dataOf(shownAfterCorrection), "data"), "plan"), "metadata")).toMatchObject({
+      worktree_path: correctedPath,
+      working_branch: "feature/corrected",
+    });
     // The correction preserves the started state: status and progress survive.
     expect(await storedRowStatus(fixture)).toBe("InProgress");
 
@@ -1423,17 +1427,13 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     const fixture = await activeFixture("mstar-transfer-verbs-gone");
     const { coordinatorWire } = await prepareRow(fixture);
     const identity = coordinatorIdentity();
+    const before = await readExecutionAuthority(fixture.context);
     for (const verb of ["handoff", "accept", "return", "integration-start", "integration-accept", "reconcile", "release", "repair-delivery-source"] as const) {
       const result = runCli(["plan", verb, "--session-ref", coordinatorWire, "--plan", PLAN_ID, "--harness", fixture.harnessDir], fixture, identity);
-      expect(`${verb}: ${jsonOf(result).command ?? "(none)"}`).toBe(`${verb}: (none)`);
+      expect(result.exitCode).toBe(2);
+      expect(jsonOf(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
     }
-    // The whole command surface still names only the retained verbs.
-    const help = runCli(["schema", "--family", "plan"], fixture);
-    expect(help.exitCode).toBe(0);
-    const members = (dataOf(help).members as Array<{ id: string }>).map((member) => member.id);
-    expect(members).toEqual([
-      "plan.bind", "plan.show", "plan.prepare", "plan.progress", "plan.issue-add", "plan.issue-close", "plan.complete",
-    ]);
+    expect(await readExecutionAuthority(fixture.context)).toEqual(before);
   }, 30_000);
 
   test("complete refuses the integration pair on the standalone development route", async () => {
