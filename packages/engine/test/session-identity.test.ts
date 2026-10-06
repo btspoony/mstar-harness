@@ -39,7 +39,11 @@ describe("prerequisite identity — execution identity validation", () => {
     ).not.toThrow();
   });
 
-  test("an absent, blank or non-string session id is identity-missing, never repaired", () => {
+  test("the validator refuses an absent, blank or non-string session id — the bind supplies the default before it", () => {
+    // The validator's own contract is unchanged: it is the last gate that sees a
+    // concrete identity, so an empty id is `identity-missing` and never repaired
+    // in place. The fresh coordinator bind is what supplies its safe default
+    // BEFORE calling this, so omitting the id at the public operation succeeds.
     const scope = { workflowId: "wf-a", role: "coordinator" } as const;
     for (const sessionId of ["", "   ", undefined, null, 42]) {
       expect(

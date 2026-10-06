@@ -148,18 +148,38 @@ describe("binding", () => {
     }
   });
 
-  test("prerequisite identity — an omitted coordinator id writes nothing, and a re-used one never overwrites an envelope", async () => {
-    // A fresh coordinator bind never generates an identity: the engine refuses
-    // before any write, so the workflow keeps no envelope and no sessions dir.
+  test("an omitted coordinator id takes the engine's safe default, and an occupied envelope path is never overwritten", async () => {
+    // `sessionId` is OPTIONAL on a fresh coordinator bind: the engine supplies a
+    // safe default identity of its own and writes it once. A caller that omits
+    // the id therefore succeeds against a real root/workflow.
     const fixture = makeFixture();
+    const bound = await bindPlanSession({
+      coordinator: true,
+      workflowId: WORKFLOW_ID,
+      harnessDir: fixture.harness,
+      cwd: fixture.root,
+    });
+    expect(bound.operation).toBe("bind");
+    expect(bound.session.role).toBe("coordinator");
+    // The default is a real, safe identity — never the empty string.
+    expect(typeof bound.session.session_id).toBe("string");
+    expect(bound.session.session_id.length).toBeGreaterThan(0);
+    expect(existsSync(bound.session_file)).toBe(true);
+    // The binding is the workflow's single holder: a second fresh coordinator,
+    // whatever id it names, is refused as a duplicate holder.
     const snapshotBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() =>
-        bindPlanSession({ coordinator: true, workflowId: WORKFLOW_ID, harnessDir: fixture.harness, cwd: fixture.root }),
+        bindPlanSession({
+          coordinator: true,
+          workflowId: WORKFLOW_ID,
+          harnessDir: fixture.harness,
+          cwd: fixture.root,
+          sessionId: "second-coordinator",
+        }),
       ),
-    ).toBe("coordination.identity-missing");
+    ).toBe("coordination.duplicate-holder");
     expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
-    expect(existsSync(join(fixture.workflowDir, "sessions"))).toBe(false);
 
     // An envelope that already occupies the id's role-scoped path is never
     // replaced: the existing exclusive-create refusal reports it instead of
