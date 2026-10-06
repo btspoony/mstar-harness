@@ -334,11 +334,36 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
         status: "held",
       }),
     );
+    // A held plan-PM integration mutex on this very plan is an orphan once the
+    // holder row retires: the cutover must settle it, using the operator's stop
+    // evidence, or the workflow carries an unreachable claim forever.
+    initialized.db.prepare(
+      "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
+    ).run(
+      workflowId,
+      JSON.stringify({
+        holder: sessionId,
+        plan_id: planId,
+        claimed_at: "2026-10-04T00:30:00Z",
+        source_branch: `feature/${planId}`,
+        target_branch: "main",
+        status: "held",
+      }),
+    );
   } finally {
     initialized.close();
   }
 
-  await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-schema8-normalize" });
+  const retiredAttestation = {
+    attestedAt: "2026-10-04T04:00:00Z",
+    stoppedSessions: [{ sessionId }],
+  };
+  await upgradeStoreMinimal({
+    context,
+    operator: "operator",
+    operationId: "op-active-schema8-normalize",
+    attestation: retiredAttestation,
+  });
   const store = await openStore(context, "read");
   try {
     expect(store.schemaVersion).toBe(MIGRATIONS.length);
@@ -398,6 +423,16 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     expect(conflictState.metadata).toEqual({
       worktree_path: join(ROOT, "metadata-worktree"),
       working_branch: `feature/${workflowId}-conflict-plan`,
+    });
+    // The retired seat's integration mutex is settled as a released tombstone,
+    // naming the stop evidence that authorized it — not left unreachable.
+    const claim = JSON.parse(
+      (store.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(workflowId) as { lease_json: string }).lease_json,
+    ) as Record<string, unknown>;
+    expect(claim).toMatchObject({
+      status: "released",
+      prior_holder: sessionId,
+      release_reason: `retired-plan-pm-seat:${sessionId}`,
     });
   } finally {
     store.close();
