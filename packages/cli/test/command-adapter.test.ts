@@ -561,7 +561,7 @@ test("generated CLI adapter decodes schema-typed numeric options and registers b
 
 describe("generated CLI adapter — minted identity transport", () => {
   const minted = (overrides: Record<string, unknown> = {}): string =>
-    serializeExecutionValue({ source: "local", sessionId: "minted-adapter", workflowId: "wf-adapter", role: "coordinator", planId: null, ...overrides });
+    serializeExecutionValue({ source: "local", sessionId: "minted-adapter", workflowId: "wf-adapter", role: "coordinator", ...overrides });
 
   /**
    * One envelope field read by name. The parsed JSON is our own adapter's
@@ -583,7 +583,7 @@ describe("generated CLI adapter — minted identity transport", () => {
     const priorHost = process.env.MSTAR_HOST_SESSION_ID;
     try {
       process.env.MSTAR_HOST_SESSION_ID = "ambient-host";
-      for (const malformed of ["not json", "[]", '"scalar"', minted({ sessionId: "" })]) {
+      for (const malformed of ["not json", "[]", '"scalar"', minted({ sessionId: "" }), minted({ planId: null })]) {
         process.env.MSTAR_EXECUTION_IDENTITY = malformed;
         const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator"]);
         const envelope: unknown = JSON.parse(result.stdout);

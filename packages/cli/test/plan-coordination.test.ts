@@ -19,7 +19,6 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -83,6 +82,25 @@ function jsonOf(result: RunResult): Record<string, unknown> {
   } catch {
     throw new Error(`expected JSON stdout, got ${JSON.stringify(result.stdout)} (stderr: ${result.stderr})`);
   }
+}
+
+function objectOf(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The owning command's data, never a legacy top-level projection. */
+function dataOf(result: RunResult): Record<string, unknown> {
+  const envelope = jsonOf(result);
+  if (envelope.status !== "ok" || !objectOf(envelope.data)) {
+    throw new Error(`expected successful command data: ${result.stdout}`);
+  }
+  return envelope.data;
+}
+
+function viewOf(result: RunResult): Record<string, unknown> {
+  const view = dataOf(result).view;
+  if (!objectOf(view)) throw new Error(`expected command view: ${result.stdout}`);
+  return view;
 }
 
 /**
@@ -246,19 +264,18 @@ const PREPARE_INTEGRATION_BRANCH = "integration/wf-prepare";
 /** Bind the workflow coordinator through the CLI and return its session file. */
 function bindCoordinator(fixture: Fixture, sessionId = FIXTURE_COORDINATOR_ID): string {
   const bound = runCli(
-    ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", sessionId, "--json"],
+    ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", sessionId],
     fixture.root,
   );
   expect(bound.exitCode, bound.stdout).toBe(0);
-  const payload = jsonOf(bound);
-  expect(payload.ok).toBe(true);
-  expect(payload.role).toBe("coordinator");
+  const payload = dataOf(bound);
+  expect(payload.session).toMatchObject({ role: "coordinator", session_id: sessionId, workflow_id: WORKFLOW_ID });
   return String(payload.session_file);
 }
 
 /** Prepare one row through the coordinator session's ordinary configuration. */
 function preparePlan(fixture: Fixture, coordinatorSession: string, planId: string, worktree?: string): void {
-  const view = runCli(["plan", "show", "--session", coordinatorSession, "--plan", planId, "--json"], fixture.root);
+  const view = runCli(["plan", "show", "--session", coordinatorSession, "--plan", planId], fixture.root);
   expect(view.exitCode, view.stdout).toBe(0);
   const prepared = runCli(
     [
@@ -266,19 +283,19 @@ function preparePlan(fixture: Fixture, coordinatorSession: string, planId: strin
       "--worktree-path", worktree ?? (planId === PLAN_ID ? fixture.worktreePath : fixture.peerWorktreePath),
       "--working-branch", `feature/${planId}`,
       "--qa-gate", "mandatory", "--findings-cleanup", "allow-residual",
-      "--expect", String(jsonOf(view).revision), "--json",
+      "--expect", String(dataOf(view).revision),
     ],
     fixture.root,
   );
   expect(prepared.exitCode, prepared.stdout).toBe(0);
-  expect(jsonOf(prepared).outcome).toBe("prepared");
+  expect(dataOf(prepared).outcome).toBe("prepared");
 }
 
 /** Row revision of one plan as the coordinator's CLI read reports it. */
 function rowRevision(fixture: Fixture, session: string, planId: string = PLAN_ID): number {
-  const result = runCli(["plan", "show", "--session", session, "--plan", planId, "--json"], fixture.root);
+  const result = runCli(["plan", "show", "--session", session, "--plan", planId], fixture.root);
   expect(result.exitCode, result.stdout).toBe(0);
-  return Number(jsonOf(result).revision);
+  return Number(dataOf(result).revision);
 }
 
 /** Parsed authority state used to verify refusal and replay non-mutation. */
@@ -299,7 +316,7 @@ function toInProgress(fixture: Fixture, coordinator: string, summary: string, pl
   const payload = join(fixture.root, `progress-${planId}-start.json`);
   writeJson(payload, { status: "InProgress", summary, evidence_paths: [fixture.evidencePath] });
   const moved = runCli(
-    ["plan", "progress", "--session", coordinator, "--plan", planId, "--file", payload, "--expect", String(rowRevision(fixture, coordinator, planId)), "--json"],
+    ["plan", "progress", "--session", coordinator, "--plan", planId, "--file", payload, "--expect", String(rowRevision(fixture, coordinator, planId))],
     fixture.root,
   );
   expect(moved.exitCode, moved.stdout).toBe(0);
@@ -311,11 +328,11 @@ function toInReview(fixture: Fixture, coordinator: string, summary: string, plan
     const payload = join(fixture.root, `progress-${planId}-${status}.json`);
     writeJson(payload, { status, summary, evidence_paths: [fixture.evidencePath] });
     const moved = runCli(
-      ["plan", "progress", "--session", coordinator, "--plan", planId, "--file", payload, "--expect", String(rowRevision(fixture, coordinator, planId)), "--json"],
+      ["plan", "progress", "--session", coordinator, "--plan", planId, "--file", payload, "--expect", String(rowRevision(fixture, coordinator, planId))],
       fixture.root,
     );
     expect(moved.exitCode, moved.stdout).toBe(0);
-    expect(jsonOf(moved).ok).toBe(true);
+    expect(jsonOf(moved).status).toBe("ok");
   }
 }
 
@@ -350,22 +367,23 @@ function issueAdd(fixture: Fixture, coordinator: string, payloadPath: string, pl
       "plan", "issue-add", "--session", coordinator, "--plan", planId,
       "--file", payloadPath,
       "--expect", String(rowRevision(fixture, coordinator, planId)),
-      "--json",
     ],
     fixture.root,
   );
 }
 
 function issueReceiptsOf(result: RunResult): Array<Record<string, unknown>> {
-  const issues = jsonOf(result).issues;
-  return Array.isArray(issues) ? (issues as Array<Record<string, unknown>>) : [];
+  const issues = dataOf(result).issues;
+  if (!Array.isArray(issues) || !issues.every(objectOf)) throw new Error(`expected issue receipts: ${result.stdout}`);
+  return issues;
 }
 
 function listedIssues(fixture: Fixture, extraArgs: string[] = []): Array<Record<string, unknown>> {
-  const result = runCli(["issue", "list", "--harness", fixture.harness, "--json", ...extraArgs], fixture.root);
+  const result = runCli(["issue", "list", "--harness", fixture.harness, ...extraArgs], fixture.root);
   expect(result.exitCode, result.stdout).toBe(0);
-  const issues = jsonOf(result).issues;
-  return Array.isArray(issues) ? (issues as Array<Record<string, unknown>>) : [];
+  const issues = dataOf(result).items;
+  if (!Array.isArray(issues) || !issues.every(objectOf)) throw new Error(`expected issue page: ${result.stdout}`);
+  return issues;
 }
 
 /* ------------------------------------------------------------------ entry forms */
@@ -388,9 +406,9 @@ describe("mstar plan — entry-forms", () => {
     const coordinator = bindCoordinator(fixture);
     const before = readJson(fixture.snapshotPath);
 
-    const resumed = runCli(["plan", "bind", "--resume", coordinator, "--json"], fixture.root);
+    const resumed = runCli(["plan", "bind", "--resume", coordinator], fixture.root);
     expect(resumed.exitCode, resumed.stdout).toBe(0);
-    const payload = jsonOf(resumed);
+    const payload = dataOf(resumed);
     expect(payload.outcome).toBe("resumed");
     expect(payload.session_file).toBe(coordinator);
     // Resume is read-only: the recorded binding is unchanged.
@@ -401,11 +419,11 @@ describe("mstar plan — entry-forms", () => {
     const fixture = makeFixture();
     bindCoordinator(fixture);
     const again = runCli(
-      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "second-coordinator", "--json"],
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "second-coordinator"],
       fixture.root,
     );
     expect(again.exitCode).toBe(1);
-    expect(jsonOf(again).code).toBe("coordination.duplicate-holder");
+    expect(jsonOf(again).code).toBe("coordination.identity-mismatch");
   });
 
   test("the coordinator reads any row of its workflow by explicit plan id", () => {
@@ -413,21 +431,20 @@ describe("mstar plan — entry-forms", () => {
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
 
-    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID], fixture.root);
     expect(view.exitCode, view.stdout).toBe(0);
-    const payload = jsonOf(view);
-    expect(payload.plan_id).toBe(PLAN_ID);
-    expect(payload.role).toBe("coordinator");
-    expect(payload.snapshot_version).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const payload = dataOf(view);
+    expect(payload.row).toMatchObject({ id: PLAN_ID });
+    expect(payload.session).toMatchObject({ role: "coordinator", workflow_id: WORKFLOW_ID });
     expect(payload.allowed_operations).toContain("complete");
     const scope = payload.scope as Record<string, unknown>;
     expect(scope.worktreePath).toBe(fixture.worktreePath);
     expect(scope.workingBranch).toBe("feature/plan-a");
 
     // The coordinator addresses its rows explicitly; the same read works for the peer row.
-    const peer = runCli(["plan", "show", "--session", coordinator, "--plan", PEER_PLAN_ID, "--json"], fixture.root);
+    const peer = runCli(["plan", "show", "--session", coordinator, "--plan", PEER_PLAN_ID], fixture.root);
     expect(peer.exitCode, peer.stdout).toBe(0);
-    expect(jsonOf(peer).plan_id).toBe(PEER_PLAN_ID);
+    expect(dataOf(peer).row).toMatchObject({ id: PEER_PLAN_ID });
   });
 
   test("an active plan operation without --plan states the addressing fact it requires", () => {
@@ -437,7 +454,7 @@ describe("mstar plan — entry-forms", () => {
     writeJson(payload, { status: "InProgress", summary: "no row addressed", evidence_paths: [fixture.evidencePath] });
 
     const refused = runCli(
-      ["plan", "progress", "--session", coordinator, "--file", payload, "--expect", "0", "--json"],
+      ["plan", "progress", "--session", coordinator, "--file", payload, "--expect", "0"],
       fixture.root,
     );
     expect(refused.exitCode).toBe(2);
@@ -445,14 +462,14 @@ describe("mstar plan — entry-forms", () => {
     expect(String(jsonOf(refused).message)).toContain("--plan");
   });
 
-  test("show on an unprepared row returns revision 0, no scope and prepare allowed", () => {
+  test("show on an unprepared row returns revision 0 and the recorded branch without requiring prepare", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
-    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID], fixture.root);
     expect(view.exitCode, view.stdout).toBe(0);
-    const payload = jsonOf(view);
+    const payload = dataOf(view);
     expect(payload.revision).toBe(0);
-    expect(payload.scope).toBeNull();
+    expect(payload.scope).toMatchObject({ workingBranch: "feature/plan-a", worktreePath: null });
     expect(payload.allowed_operations).toContain("prepare");
   });
 });
@@ -464,12 +481,12 @@ describe("mstar plan — session identity", () => {
     const fixture = makeFixture();
     const supplied = "host-session-coordinator";
     const coordinated = runCli(
-      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", supplied, "--json"],
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", supplied],
       fixture.root,
     );
     expect(coordinated.exitCode, coordinated.stdout).toBe(0);
-    const payload = jsonOf(coordinated);
-    expect(payload.session_id).toBe(supplied);
+    const payload = dataOf(coordinated);
+    expect(payload.session).toMatchObject({ session_id: supplied });
     expect(String(payload.session_file)).toBe(
       join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${supplied}.json`),
     );
@@ -479,7 +496,7 @@ describe("mstar plan — session identity", () => {
   test("a rejected address id is never echoed into the bind diagnostic", () => {
     const fixture = makeFixture();
     const bound = runCli(
-      ["plan", "bind", "--coordinator", "--workflow", "  ", "--session-id", "attacker-session", "--json"],
+      ["plan", "bind", "--coordinator", "--workflow", "  ", "--session-id", "attacker-session"],
       fixture.root,
     );
     expect(bound.exitCode).toBe(2);
@@ -490,7 +507,7 @@ describe("mstar plan — session identity", () => {
   test("a coordinator bootstrap through the legacy file route redirects to the active form", () => {
     const fixture = makeFixture({ active: true });
     const legacy = runCli(
-      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "legacy-coordinator", "--json"],
+      ["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "legacy-coordinator"],
       fixture.root,
     );
     // `--coordinator` without `--execution` is the pre-activation bootstrap; on a
@@ -503,14 +520,14 @@ describe("mstar plan — session identity", () => {
   test("--resume accepts no identity input and stays resumable", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
-    const flagged = runCli(["plan", "bind", "--resume", coordinator, "--session-id", "other", "--json"], fixture.root);
+    const flagged = runCli(["plan", "bind", "--resume", coordinator, "--session-id", "other"], fixture.root);
     expect(flagged.exitCode).toBe(2);
     expect(jsonOf(flagged).code).toBe("command.invalid-input");
   });
 
   test("the active bind requires the runtime session identity before any IO", () => {
     const fixture = makeFixture();
-    const absent = runCli(["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator", "--json"], fixture.root);
+    const absent = runCli(["plan", "bind", "--execution", "--workflow", WORKFLOW_ID, "--coordinator"], fixture.root);
     expect(absent.exitCode).toBe(2);
     expect(jsonOf(absent).code).toBe("command.invalid-input");
     expect(existsSync(fixture.projectRegisterPath)).toBe(false);
@@ -528,7 +545,7 @@ describe("mstar plan — strict-input", () => {
       ["plan", "complete"],
       ["plan", "issue-add"],
     ]) {
-      const result = runCli([...args, "--json"], fixture.root);
+      const result = runCli(args, fixture.root);
       expect(`${args.join(" ")} -> ${result.exitCode}`).toBe(`${args.join(" ")} -> 2`);
       expect(jsonOf(result).code).toBe("command.invalid-input");
     }
@@ -539,7 +556,7 @@ describe("mstar plan — strict-input", () => {
     const coordinator = bindCoordinator(fixture);
     for (const file of ["relative.json", join(fixture.root, "absent.json")]) {
       const result = runCli(
-        ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", file, "--expect", "0", "--json"],
+        ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", file, "--expect", "0"],
         fixture.root,
       );
       expect(`${file} -> ${result.exitCode}`).toBe(`${file} -> 2`);
@@ -547,17 +564,19 @@ describe("mstar plan — strict-input", () => {
     }
   });
 
-  test("a malformed progress payload is refused by the engine, not silently dropped", () => {
+  test("a malformed progress payload is rejected before mutation, not silently dropped", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
+    const before = snapshotState(fixture);
     const payload = join(fixture.root, "progress.json");
     writeJson(payload, { summary: "no status at all" });
     const refused = runCli(
-      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payload, "--expect", "0", "--json"],
+      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payload, "--expect", "0"],
       fixture.root,
     );
-    expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused).code).toBe("coordination.invalid-input");
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(snapshotState(fixture)).toEqual(before);
   });
 
   test("issue authority: --expect-issue accepts only a nonnegative revision, before any payload is read (exit 2)", () => {
@@ -568,7 +587,7 @@ describe("mstar plan — strict-input", () => {
         "plan", "issue-close", "--session", coordinator, "--plan", PLAN_ID,
         "--issue", "issue-1", "--disposition", "resolved",
         "--file", join(fixture.root, "absent.json"),
-        "--expect-issue", "-2", "--expect", "1", "--json",
+        "--expect-issue", "-2", "--expect", "1",
       ],
       fixture.root,
     );
@@ -584,7 +603,7 @@ describe("mstar plan — strict-input", () => {
         "plan", "issue-close", "--session", coordinator, "--plan", PLAN_ID,
         "--issue", "issue-1", "--disposition", "not-a-disposition",
         "--file", join(fixture.root, "absent.json"),
-        "--expect-issue", "1", "--expect", "1", "--json",
+        "--expect-issue", "1", "--expect", "1",
       ],
       fixture.root,
     );
@@ -601,22 +620,22 @@ describe("mstar plan — linked-control-root", () => {
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
     const here = runCli(
-      ["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--harness", fixture.harness, "--json"],
+      ["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--harness", fixture.harness],
       tmpdir(),
     );
     expect(here.exitCode, here.stdout).toBe(0);
-    expect(jsonOf(here).plan_id).toBe(PLAN_ID);
+    expect(dataOf(here).row).toMatchObject({ id: PLAN_ID });
   });
 
   test("a control root that cannot resolve a harness refuses instead of reading another one", () => {
     const fixture = makeFixture();
-    const coordinator = bindCoordinator(fixture);
     const refused = runCli(
-      ["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--harness", join(fixture.root, "absent"), "--json"],
+      ["plan", "show", "--workflow", WORKFLOW_ID, "--session-id", FIXTURE_COORDINATOR_ID, "--plan", PLAN_ID, "--harness", join(fixture.root, "absent")],
       fixture.root,
     );
-    expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused).ok).toBe(false);
+    expect(refused.exitCode).toBe(2);
+    expect(jsonOf(refused)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(rowOf(fixture).status).toBe("Todo");
   });
 });
 
@@ -632,12 +651,12 @@ describe("mstar plan — coordinator operations", () => {
     const payloadPath = join(fixture.root, "progress.json");
     writeJson(payloadPath, { status: "InProgress", summary: "coordinator start record", evidence_paths: [fixture.evidencePath] });
     const progressed = runCli(
-      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(before), "--json"],
+      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(before)],
       fixture.root,
     );
     expect(progressed.exitCode, progressed.stdout).toBe(0);
-    expect(jsonOf(progressed).outcome).toBe("progressed");
-    expect(jsonOf(progressed).revision).toBe(before + 1);
+    expect(dataOf(progressed).outcome).toBe("progressed");
+    expect(viewOf(progressed).revision).toBe(before + 1);
 
     const rows = readJson(fixture.snapshotPath).plans as Array<Record<string, unknown>>;
     expect(rows[0]!.status).toBe("InProgress");
@@ -656,7 +675,7 @@ describe("mstar plan — coordinator operations", () => {
     const payloadPath = join(fixture.root, "progress.json");
     writeJson(payloadPath, { status: "InProgress", summary: "stale", evidence_paths: [fixture.evidencePath] });
     const stale = runCli(
-      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(revision - 1), "--json"],
+      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(revision - 1)],
       fixture.root,
     );
     expect(stale.exitCode, stale.stdout).toBe(0);
@@ -679,13 +698,11 @@ describe("mstar plan — coordinator operations", () => {
       phase: "Done",
     });
     const injected = runCli(
-      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(revision), "--json"],
+      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(revision)],
       fixture.root,
     );
-    expect(injected.exitCode).toBe(1);
-    expect(jsonOf(injected).ok).toBe(false);
-    expect(jsonOf(injected).code).toBe("coordination.invalid-input");
-    expect(String(jsonOf(injected).message)).toContain("phase");
+    expect(injected.exitCode).toBe(2);
+    expect(jsonOf(injected)).toMatchObject({ status: "usage", code: "command.invalid-input" });
     expect(snapshotState(fixture)).toEqual(before);
   });
 
@@ -699,7 +716,7 @@ describe("mstar plan — coordinator operations", () => {
     writeJson(entriesPath, [issueEntryOf("occ-1", { severity: "critical" })]);
     const added = issueAdd(fixture, coordinator, entriesPath);
     expect(added.exitCode, added.stdout).toBe(0);
-    expect(jsonOf(added).outcome).toBe("residual-added");
+    expect(dataOf(added).outcome).toBe("residual-added");
 
     const listed = listedIssues(fixture);
     expect(listed).toHaveLength(1);
@@ -751,7 +768,7 @@ describe("mstar plan — coordinator operations", () => {
       fixture.root,
     );
     expect(blocked.exitCode).toBe(1);
-    expect(JSON.stringify(jsonOf(blocked).violations)).toContain(issueId);
+    expect(JSON.stringify(jsonOf(blocked).details)).toContain(issueId);
 
     const evidencePath = join(fixture.root, "evidence.json");
     writeJson(evidencePath, {
@@ -765,7 +782,7 @@ describe("mstar plan — coordinator operations", () => {
         "plan", "issue-close", "--session", coordinator, "--plan", PLAN_ID,
         "--issue", issueId, "--disposition", "resolved", "--file", evidencePath,
         "--expect-issue", String(issueRevision + 5),
-        "--expect", String(rowRevision(fixture, coordinator)), "--json",
+        "--expect", String(rowRevision(fixture, coordinator)),
       ],
       fixture.root,
     );
@@ -778,12 +795,12 @@ describe("mstar plan — coordinator operations", () => {
         "plan", "issue-close", "--session", coordinator, "--plan", PLAN_ID,
         "--issue", issueId, "--disposition", "resolved", "--file", evidencePath,
         "--expect-issue", String(issueRevision),
-        "--expect", String(rowRevision(fixture, coordinator)), "--json",
+        "--expect", String(rowRevision(fixture, coordinator)),
       ],
       fixture.root,
     );
     expect(closed.exitCode, closed.stdout).toBe(0);
-    expect(jsonOf(closed).outcome).toBe("residual-closed");
+    expect(dataOf(closed).outcome).toBe("residual-closed");
     expect(listedIssues(fixture)).toHaveLength(0);
     expect(listedIssues(fixture, ["--disposition", "resolved"])).toHaveLength(1);
 
@@ -818,7 +835,7 @@ describe("mstar plan — coordinator operations", () => {
         "plan", "issue-close", "--session", coordinator, "--plan", PLAN_ID,
         "--issue", issueId, "--disposition", "resolved", "--file", evidencePath,
         "--expect-issue", "1",
-        "--expect", String(rowRevision(fixture, coordinator)), "--json",
+        "--expect", String(rowRevision(fixture, coordinator)),
       ],
       fixture.root,
     );
@@ -836,12 +853,13 @@ describe("mstar plan — prepare configuration", () => {
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
 
-    const view = jsonOf(runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root));
+    const view = dataOf(runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID], fixture.root));
     expect(view.revision).toBe(1);
     const scope = view.scope as Record<string, unknown>;
     expect(scope.worktreePath).toBe(fixture.worktreePath);
     expect(scope.workingBranch).toBe("feature/plan-a");
-    const prepared = (view.coordination as Record<string, unknown>).prepared as Record<string, unknown>;
+    const prepared = view.prepared;
+    if (!objectOf(prepared)) throw new Error("prepared configuration missing from plan read");
     expect(prepared.qa_gate).toBe("mandatory");
     expect(prepared.findings_cleanup).toBe("allow-residual");
     expect(prepared.prepared_by).toBe(FIXTURE_COORDINATOR_ID);
@@ -861,13 +879,13 @@ describe("mstar plan — prepare configuration", () => {
       [
         "plan", "prepare", "--session", coordinator, "--plan", PLAN_ID,
         "--worktree-path", correctedPath, "--working-branch", "feature/corrected",
-        "--expect", String(rowRevision(fixture, coordinator)), "--json",
+        "--expect", String(rowRevision(fixture, coordinator)),
       ],
       fixture.root,
     );
     expect(corrected.exitCode, corrected.stdout).toBe(0);
-    expect(jsonOf(corrected).outcome).toBe("already-satisfied");
-    const scope = jsonOf(runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root)).scope as Record<string, unknown>;
+    expect(dataOf(corrected).outcome).toBe("prepared");
+    const scope = dataOf(runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID], fixture.root)).scope as Record<string, unknown>;
     expect(scope.worktreePath).toBe(correctedPath);
     expect(scope.workingBranch).toBe("feature/corrected");
     // The started state is preserved by the correction: status/progress survive.
@@ -883,18 +901,6 @@ describe("mstar plan — prepare configuration", () => {
     expect(rowOf(fixture).status).toBe("InReview");
   });
 
-  test("the recorded plan digests are provenance, never a freshness gate", () => {
-    const fixture = makeFixture();
-    const coordinator = bindCoordinator(fixture);
-    preparePlan(fixture, coordinator, PLAN_ID);
-    const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
-    const digest = createHash("sha256").update(readFileSync(planPath)).digest("hex");
-    const prepared = (jsonOf(runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root)).coordination as Record<string, unknown>).prepared as Record<string, unknown>;
-    expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(prepared.prepared_at).toBeTruthy();
-    // Rewriting the prose above did not invalidate the recorded configuration.
-    expect(prepared.qa_gate).toBe("mandatory");
-  });
 });
 
 /* ------------------------------------------------------------------ direct completion */
@@ -966,11 +972,11 @@ describe("standalone-development completion — direct coordinator operation", (
     const evidencePath = join(fixture.root, "completion.json");
     writeJson(evidencePath, completionEvidence(fixture));
     const completed = runCli(
-      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--json"],
+      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--expect", String(rowRevision(fixture, coordinator))],
       fixture.root,
     );
     expect(completed.exitCode, completed.stdout).toBe(0);
-    expect(jsonOf(completed).outcome).toBe("completed");
+    expect(dataOf(completed).outcome).toBe("completed");
     expect(rowOf(fixture).status).toBe("Done");
     const completion = (rowOf(fixture).coordination as Record<string, unknown>).completion as Record<string, unknown>;
     expect(completion.source_sha).toBe(fixture.sourceSha);
@@ -993,16 +999,18 @@ describe("standalone-development completion — direct coordinator operation", (
 
     const evidencePath = join(fixture.root, "completion.json");
     writeJson(evidencePath, completionEvidence(fixture));
-    const args = ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--operation", "complete-1", "--json"];
+    const args = ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--expect", String(rowRevision(fixture, coordinator))];
     const first = runCli(args, fixture.root);
     expect(first.exitCode, first.stdout).toBe(0);
     const completionOf = (): Record<string, unknown> =>
       (rowOf(fixture).coordination as Record<string, unknown>).completion as Record<string, unknown>;
     const firstAt = completionOf().completed_at;
+    const snapshotStateBeforeReplay = snapshotState(fixture);
 
     const replay = runCli(args, fixture.root);
     expect(replay.exitCode, replay.stdout).toBe(0);
-    expect(jsonOf(replay).outcome).toBe("already-completed");
+    expect(dataOf(replay).outcome).toBe("already-satisfied");
+    expect(snapshotState(fixture)).toEqual(snapshotStateBeforeReplay);
     expect(completionOf().completed_at).toBe(firstAt);
   }, CLI_INTEGRATION_TIMEOUT);
 
@@ -1018,7 +1026,8 @@ describe("standalone-development completion — direct coordinator operation", (
     const contaminated = runCli(
       [
         "plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath,
-        "--integration-base-sha", fixture.baseSha, "--integration-result-sha", fixture.sourceSha, "--json",
+        "--integration-base-sha", fixture.baseSha, "--integration-result-sha", fixture.sourceSha,
+        "--expect", String(rowRevision(fixture, coordinator)),
       ],
       fixture.root,
     );
@@ -1029,27 +1038,50 @@ describe("standalone-development completion — direct coordinator operation", (
     // A half-stated integration pair is a caller-input refusal, never a silently
     // half-recorded merge.
     const partial = runCli(
-      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--integration-base-sha", fixture.baseSha, "--json"],
+      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--integration-base-sha", fixture.baseSha, "--expect", String(rowRevision(fixture, coordinator))],
       fixture.root,
     );
     expect(partial.exitCode).toBe(2);
     expect(jsonOf(partial).code).toBe("command.invalid-input");
   }, CLI_INTEGRATION_TIMEOUT);
 
-  test("complete refuses a row that never reached InReview", () => {
+  test("complete refuses Todo and Blocked but completes a genuinely started InProgress row", () => {
     const fixture = makeDeliveryFixture();
     const coordinator = bindCoordinator(fixture);
     preparePlan(fixture, coordinator, PLAN_ID);
     const evidencePath = join(fixture.root, "completion.json");
     writeJson(evidencePath, completionEvidence(fixture));
+    const before = snapshotState(fixture);
 
     const refused = runCli(
-      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--json"],
+      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--expect", String(rowRevision(fixture, coordinator))],
       fixture.root,
     );
     expect(refused.exitCode).toBe(1);
     expect(String(jsonOf(refused).code)).toMatch(/^coordination\./);
     expect(rowOf(fixture).status).toBe("Todo");
+    expect(snapshotState(fixture)).toEqual(before);
+    const blockedPath = join(fixture.root, "blocked.json");
+    writeJson(blockedPath, { status: "Blocked", summary: "awaiting work", evidence_paths: [fixture.evidencePath] });
+    const blocked = runCli(
+      ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", blockedPath, "--expect", String(rowRevision(fixture, coordinator))],
+      fixture.root,
+    );
+    expect(blocked.exitCode, blocked.stdout).toBe(0);
+    const blockedState = snapshotState(fixture);
+    const blockedComplete = runCli(
+      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--expect", String(rowRevision(fixture, coordinator))],
+      fixture.root,
+    );
+    expect(blockedComplete.exitCode).toBe(1);
+    expect(snapshotState(fixture)).toEqual(blockedState);
+    toInProgress(fixture, coordinator, "work resumed");
+    const completed = runCli(
+      ["plan", "complete", "--session", coordinator, "--plan", PLAN_ID, "--file", evidencePath, "--expect", String(rowRevision(fixture, coordinator))],
+      fixture.root,
+    );
+    expect(completed.exitCode, completed.stdout).toBe(0);
+    expect(rowOf(fixture).status).toBe("Done");
   }, CLI_INTEGRATION_TIMEOUT);
 });
 
@@ -1066,25 +1098,15 @@ describe("mstar plan — retired transfer verbs are absent", () => {
       "reconcile", "release", "repair-delivery-source", "residual-add", "residual-close",
     ]) {
       const result = runCli(
-        ["plan", verb, "--session", coordinator, "--plan", PLAN_ID, "--expect", "1", "--json"],
+        ["plan", verb, "--session", coordinator, "--plan", PLAN_ID, "--expect", "1"],
         fixture.root,
       );
-      expect(`${verb} -> ${result.exitCode === 0 ? "ok" : "refused"}`).toBe(`${verb} -> refused`);
-      expect(result.stdout).not.toContain(`"command":"plan.${verb}"`);
+      expect(result.exitCode).toBe(2);
+      expect(jsonOf(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
     }
     expect(snapshotState(fixture)).toEqual(before);
   });
 
-  test("the published plan family names only the retained verbs", () => {
-    const fixture = makeFixture();
-    const family = runCli(["schema", "--family", "plan", "--json"], fixture.root);
-    expect(family.exitCode, family.stdout).toBe(0);
-    const members = (jsonOf(family).members as Array<{ id: string }>).map((member) => member.id);
-    expect(members).toEqual([
-      "plan.bind", "plan.show", "plan.prepare", "plan.progress",
-      "plan.issue-add", "plan.issue-close", "plan.complete",
-    ]);
-  });
 });
 
 /* ------------------------------------------------------------------ catalog pin */
@@ -1097,9 +1119,9 @@ describe("mstar plan — catalog pin", () => {
 
     // No catalog store exists in this fixture. The reader discloses that
     // explicitly instead of reading the missing store as an empty catalog.
-    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    const view = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID], fixture.root);
     expect(view.exitCode, view.stdout).toBe(0);
-    expect(jsonOf(view).catalog_pin).toMatchObject({
+    expect(dataOf(view).catalog_pin).toMatchObject({
       source: null,
       pin: null,
       absence: "store-absent",
@@ -1118,13 +1140,13 @@ describe("mstar plan — catalog pin", () => {
       ),
     });
 
-    const shown = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID, "--json"], fixture.root);
+    const shown = runCli(["plan", "show", "--session", coordinator, "--plan", PLAN_ID], fixture.root);
     expect(shown.exitCode, shown.stdout).toBe(0);
-    const pin = jsonOf(shown).catalog_pin as { conflict: string | null; pin: { entity_revision: number } };
+    const pin = dataOf(shown).catalog_pin as { conflict: string | null; pin: { entity_revision: number } };
     expect(pin.pin.entity_revision).toBe(1);
     expect(pin.conflict).toBeNull();
 
-    const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--session-id", "catalog-pin-check", "--json"], fixture.root);
+    const bound = runCli(["plan", "bind", "--resume", coordinator], fixture.root);
     expect(bound.exitCode, bound.stdout).toBe(0);
     expect(rowOf(fixture).status).toBe("Todo");
   });
@@ -1132,9 +1154,9 @@ describe("mstar plan — catalog pin", () => {
   test("an unknown plan id refuses instead of inventing a row", () => {
     const fixture = makeFixture();
     const coordinator = bindCoordinator(fixture);
-    const refused = runCli(["plan", "show", "--session", coordinator, "--plan", "no-such-plan", "--json"], fixture.root);
+    const refused = runCli(["plan", "show", "--session", coordinator, "--plan", "no-such-plan"], fixture.root);
     expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused).ok).toBe(false);
+    expect(jsonOf(refused)).toMatchObject({ status: "refused", code: "coordination.plan-not-found" });
   });
 });
 
@@ -1156,10 +1178,6 @@ interface PrepareFixture {
   coordinator: string;
 }
 
-/** SHA-256 of a file's exact bytes, computed independently of the CLI. */
-function sha256OfFile(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
 
 /** A Prepare lifecycle with one Todo row, a reviewed compass and a real integration checkout. */
 function makePrepareFixture(): PrepareFixture {
@@ -1255,11 +1273,11 @@ function makePrepareFixture(): PrepareFixture {
   writeJson(patchPath, preparePatchOf({ planDir, specPath, compassPath, integrationPath }));
 
   const bound = runCli(
-    ["plan", "bind", "--coordinator", "--workflow", PREPARE_WORKFLOW, "--session-id", FIXTURE_COORDINATOR_ID, "--json"],
+    ["plan", "bind", "--coordinator", "--workflow", PREPARE_WORKFLOW, "--session-id", FIXTURE_COORDINATOR_ID],
     root,
   );
   expect(bound.exitCode).toBe(0);
-  const coordinator = String(jsonOf(bound).session_file);
+  const coordinator = String(dataOf(bound).session_file);
 
   return {
     root,
@@ -1310,31 +1328,13 @@ function preparePatchOf(paths: PreparePaths): Record<string, unknown> {
 }
 
 /** The `show-prepare` argv one case drives. */
-function showPrepareArgs(fixture: PrepareFixture, json = true): string[] {
-  return [
-    "workflow",
-    "show-prepare",
-    "--session",
-    fixture.coordinator,
-    ...(json ? ["--json"] : []),
-  ];
+function showPrepareArgs(fixture: PrepareFixture): string[] {
+  return ["workflow", "show-prepare", "--session", fixture.coordinator];
 }
 
-/** The `amend-prepare` argv one case drives (payload supplied). */
-function amendPrepareArgs(
-  fixture: PrepareFixture,
-  tokens: { snapshot: string; compass: string; patch?: string },
-  json = true,
-): string[] {
-  return [
-    "workflow",
-    "amend-prepare",
-    "--session",
-    fixture.coordinator,
-    "--input",
-    JSON.stringify(readJson(tokens.patch ?? fixture.patchPath)),
-    ...(json ? ["--json"] : []),
-  ];
+/** The amendment carries actual public patch data, not unused byte-token mirrors. */
+function amendPrepareArgs(fixture: PrepareFixture): string[] {
+  return ["workflow", "amend-prepare", "--session", fixture.coordinator, "--input", JSON.stringify(readJson(fixture.patchPath))];
 }
 
 
@@ -1467,7 +1467,7 @@ function completeReportOnly(fixture: ReportOnlyFixture): RunResult {
   });
   return runCli(
     ["plan", "complete", "--session", fixture.coordinator, "--plan", PLAN_ID, "--file", payload,
-      "--expect", String(rowRevision(fixture, fixture.coordinator)), "--json"],
+      "--expect", String(rowRevision(fixture, fixture.coordinator))],
     fixture.root,
   );
 }
@@ -1531,15 +1531,20 @@ describe("report-only completion", () => {
     const fixture = makeAcceptedReportOnlyFixture();
     const acceptedBytes = snapshotState(fixture);
 
-    // There is no integration route to take on this kind: the verb refuses
-    // before it writes anything, because the snapshot names no integration
-    // target for it.
+    // Readable evidence must reach the actual report-only integration guard.
+    const contaminatedPath = join(fixture.root, "contaminated-completion.json");
+    writeJson(contaminatedPath, {
+      qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+      qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+    });
     const refusedStart = runCli(
-      ["plan", "complete", "--session", fixture.coordinator, "--plan", PLAN_ID, "--file", join(fixture.root, "absent.json"),
-        "--integration-base-sha", "a".repeat(40), "--integration-result-sha", "b".repeat(40), "--json"],
+      ["plan", "complete", "--session", fixture.coordinator, "--plan", PLAN_ID, "--file", contaminatedPath,
+        "--expect", String(rowRevision(fixture, fixture.coordinator)),
+        "--integration-base-sha", "a".repeat(40), "--integration-result-sha", "b".repeat(40)],
       fixture.root,
     );
-    expect(refusedStart.exitCode).not.toBe(0);
+    expect(refusedStart.exitCode).toBe(1);
+    expect(jsonOf(refusedStart).code).toBe("coordination.invalid-transition");
     expect(snapshotState(fixture)).toEqual(acceptedBytes);
 
     // Explicit registered-policy fulfilment precedes direct row completion;
@@ -1552,7 +1557,7 @@ describe("report-only completion", () => {
 
     const completed = completeReportOnly(fixture);
     expect(completed.exitCode).toBe(0);
-    expect(jsonOf(completed).outcome).toBe("completed");
+    expect(dataOf(completed).outcome).toBe("completed");
     expect(rowOf(fixture).status).toBe("Done");
     expect((rowOf(fixture).coordination as Record<string, unknown>).completion).toBeDefined();
     
@@ -1571,11 +1576,11 @@ describe("report-only completion", () => {
     const completeBytes = snapshotState(fixture);
     const replay = runCli(
       ["plan", "complete", "--session", fixture.coordinator, "--plan", PLAN_ID, "--file", join(fixture.root, "completion.json"),
-        "--expect", String(rowRevision(fixture, fixture.coordinator)), "--json"],
+        "--expect", String(rowRevision(fixture, fixture.coordinator))],
       fixture.root,
     );
     expect(replay.exitCode, replay.stdout).toBe(0);
-    expect(jsonOf(replay).outcome).toBe("already-completed");
+    expect(dataOf(replay).outcome).toBe("already-satisfied");
     expect(snapshotState(fixture)).toEqual(completeBytes);
 
     // The close writes `completed` from the evidence it already consults, then
@@ -1606,9 +1611,8 @@ describe("report-only completion", () => {
     const refused = completeReportOnly(fixture);
     expect(refused.exitCode).toBe(1);
     const failure = jsonOf(refused);
-    expect(failure.ok).toBe(false);
-    expect(String(failure.message)).toContain("delivery.completion");
-    expect(String(failure.message)).toContain("registered policy");
+    expect(failure.status).toBe("refused");
+    expect(failure.code).toBe("coordination.invalid-transition");
     expect(rowOf(fixture).status).toBe("InReview");
     expect((rowOf(fixture).coordination as Record<string, unknown>).completion).toBeUndefined();
     expect(snapshotState(fixture)).toEqual(before);
@@ -1634,8 +1638,7 @@ describe("report-only completion", () => {
     const refused = completeReportOnly(fixture);
     expect(refused.exitCode).toBe(1);
     const failure = jsonOf(refused);
-    expect(failure.code).toBe("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
-    expect(String(failure.message)).toContain("delivery.completion.policy");
+    expect(failure).toMatchObject({ status: "refused", code: "coordination.invalid-transition" });
     expect(rowOf(fixture).status).toBe("InReview");
     expect(snapshotState(fixture)).toEqual(before);
     // The mismatched fulfilment is still the stored evidence: nothing repaired
@@ -1655,7 +1658,7 @@ describe("report-only completion", () => {
     expect(readJson(fixture.snapshotPath).status).toBe("completed");
   }, RECOVERY_TIMEOUT);
 
-  test("completion reference remains the accepted basis after Done; document contents stay editable", () => {
+  test("completion reference remains the accepted basis after Done", () => {
     const fixture = makeAcceptedReportOnlyFixture();
     expect(recordCompletionEvidence(fixture, REPORT_ONLY_POLICY).exitCode).toBe(0);
     const completed = completeReportOnly(fixture);
@@ -1706,7 +1709,7 @@ describe("report-only completion", () => {
 
     const closed = closeReportOnly(fixture);
     expect(closed.exitCode).toBe(1);
-    expect(String(jsonOf(closed).message)).toContain("coordination.row.handoff-field");
+    expect(jsonOf(closed).code).toBe("coordination.store");
     // Zero writes: the workflow stays running, registered and byte-identical.
     expect(readJson(fixture.snapshotPath).status).toBe("running");
     expect(snapshotState(fixture)).toEqual(rewritten);
@@ -1716,22 +1719,21 @@ describe("report-only completion", () => {
     // the rewritten document is an invalid snapshot, not merely non-terminal.
     const gate = phase6Gate(fixture);
     expect(gate.exitCode).toBe(1);
-    expect((jsonOf(gate).gate as { violations: Array<{ code: string }> }).violations[0]!.code).toBe("PHASE6_INVALID_SNAPSHOT");
+    expect(jsonOf(gate).details).toMatchObject({
+      gate: { violations: expect.arrayContaining([expect.objectContaining({ code: "PHASE6_INVALID_SNAPSHOT" })]) },
+    });
   }, RECOVERY_TIMEOUT);
 });
 
 describe("Prepare workflow amendment", () => {
-  test("show-prepare reports the byte versions and amend-prepare applies the approved delta with a readback", () => {
+  test("show-prepare reads the admissible scope and amend-prepare applies the approved delta with a readback", () => {
     const fixture = makePrepareFixture();
     const peerBefore = readJson(fixture.peerSnapshotPath);
     const statusBefore = readJson(fixture.statusPath);
 
     const show = runCli(showPrepareArgs(fixture), fixture.root);
     expect(show.exitCode).toBe(0);
-    const view = jsonOf(show);
-    expect(view.ok).toBe(true);
-    expect(view.operation).toBe("show-prepare");
-    expect(view.role).toBe("coordinator");
+    const view = viewOf(show);
     expect(view.workflowId).toBe(PREPARE_WORKFLOW);
     expect(view.allowed).toBe(true);
     expect(view.blockers).toEqual([]);
@@ -1740,14 +1742,12 @@ describe("Prepare workflow amendment", () => {
     
 
     const amend = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
+      amendPrepareArgs(fixture),
       fixture.root,
     );
     expect(amend.exitCode).toBe(0);
-    const amended = jsonOf(amend);
-    expect(amended.ok).toBe(true);
-    expect(amended.operation).toBe("amend-prepare");
-    expect(amended.outcome).toBe("amended");
+    const amended = viewOf(amend);
+    expect(dataOf(amend).outcome).toBe("amended");
     expect(amended.allowed).toBe(true);
     expect(amended.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
     
@@ -1763,7 +1763,7 @@ describe("Prepare workflow amendment", () => {
     ]);
     expect(snapshot.integration_worktree_path).toBe(fixture.integrationPath);
     expect(snapshot.execution_policy).toEqual({ plan_parallelism: "parallel", worktree_mode: "required" });
-    const readback = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
+    const readback = viewOf(runCli(showPrepareArgs(fixture), fixture.root));
     
     expect(readback.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
     expect(readJson(fixture.peerSnapshotPath)).toEqual(peerBefore);
@@ -1773,19 +1773,17 @@ describe("Prepare workflow amendment", () => {
   test("missing required inputs and unknown flags are usage errors", () => {
     const fixture = makePrepareFixture();
     const before = readJson(fixture.snapshotPath);
-    const usageCases: Array<{ name: string; args: string[]; operation: string }> = [
-      { name: "missing-session", args: ["workflow", "show-prepare", "--json"], operation: "show-prepare" },
+    const usageCases: Array<{ name: string; args: string[] }> = [
+      { name: "missing-session", args: ["workflow", "show-prepare"] },
       {
         name: "missing-input",
         args: [
           "workflow", "amend-prepare", "--session", fixture.coordinator,
         ],
-        operation: "amend-prepare",
       },
       {
         name: "unknown-flag",
-        args: ["workflow", "amend-prepare", "--session", fixture.coordinator, "--force", "--json"],
-        operation: "amend-prepare",
+        args: ["workflow", "amend-prepare", "--session", fixture.coordinator, "--force"],
       },
     ];
 
@@ -1793,54 +1791,16 @@ describe("Prepare workflow amendment", () => {
       const result = runCli(usageCase.args, fixture.root);
       expect(`${usageCase.name}: ${result.exitCode}`).toBe(`${usageCase.name}: 2`);
       const payload = jsonOf(result);
-      expect(`${usageCase.name}: ${String(payload.ok)}`).toBe(`${usageCase.name}: false`);
+      expect(payload.status).toBe("usage");
       expect(`${usageCase.name}: ${String(payload.code)}`).toBe(`${usageCase.name}: command.invalid-input`);
-      expect(`${usageCase.name}: ${String(payload.operation)}`).toBe(`${usageCase.name}: ${usageCase.operation}`);
     }
     // No usage case reached the engine.
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   }, 60000);
 
-  test("a stale compass token is TRANSPORT DRIFT, not a refusal: the amendment is decided against the compass it reads", () => {
-    const fixture = makePrepareFixture();
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
-    const stale = `sha256:${"0".repeat(64)}`;
-
-    // §4.1/A06/A29: the caller's `expectedSnapshotVersion` / `expectedCompassVersion`
-    // are a COMPARISON BASIS, not a lock. A token that no longer matches is
-    // reported as `coordination.token-drifted` and the amendment is decided
-    // against the rows and documents read under the lock — it does not refuse,
-    // and it does not silently accept the caller's stale view either.
-    const amended = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: stale }),
-      fixture.root,
-    );
-    expect(amended.exitCode).toBe(0);
-    const payload = jsonOf(amended);
-    expect(payload.ok).toBe(true);
-    expect(payload.operation).toBe("amend-prepare");
-    expect(String(payload.code)).toContain("amend-prepare");
-    expect(String((payload.data as Record<string, unknown>).outcome)).toBe("amended");
-    // The amendment landed against the compass it read, and the returned tokens
-    // are re-read from the committed bytes rather than echoed from the call.
-    const amendedView = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
-    expect(amendedView.allowed).toBe(true);
-    
-
-    // Human mode keeps stdout machine-only.
-    const silentFixture = makePrepareFixture();
-    const silentView = jsonOf(runCli(showPrepareArgs(silentFixture), silentFixture.root));
-    const human = runCli(
-      amendPrepareArgs(silentFixture, { snapshot: String(silentView.snapshotVersion), compass: stale }, false),
-      silentFixture.root,
-    );
-    expect(human.exitCode).toBe(0);
-    expect(human.stderr).toBe("");
-  });
 
   test("a duplicate plan id refuses through the CLI while the read stays available", () => {
     const fixture = makePrepareFixture();
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const patch = preparePatchOf(fixture);
     const appends = patch.appendPlans as Array<Record<string, unknown>>;
     // Re-declare the EXISTING row COHERENTLY: id, title, document and branch all
@@ -1865,14 +1825,13 @@ describe("Prepare workflow amendment", () => {
     });
 
     const refused = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
+      amendPrepareArgs(fixture),
       fixture.root,
     );
 
     expect(refused.exitCode).toBe(1);
     const payload = jsonOf(refused);
-    expect(payload.ok).toBe(false);
-    expect(payload.operation).toBe("amend-prepare");
+    expect(payload.status).toBe("refused");
     expect(payload.code).toBe("coordination.prepare-amendment.duplicate-plan");
     // Components are independent (§4.1/A23/A27): the DUPLICATE is withheld while
     // this patch's unrelated components (the checkout and the policy) still land,
@@ -1880,64 +1839,32 @@ describe("Prepare workflow amendment", () => {
     // re-declared and the review stays readable and re-appliable.
     const after = JSON.parse(readText(fixture.snapshotPath)) as { plans: Array<{ id: string }> };
     expect(after.plans.filter((row) => row.id === PREPARE_ROW)).toHaveLength(1);
-    expect(jsonOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
+    expect(viewOf(runCli(showPrepareArgs(fixture), fixture.root)).allowed).toBe(true);
   });
 
   test("a workflow refusal carries the addressed workflow id from the engine details", () => {
     const fixture = makePrepareFixture();
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const before = readJson(fixture.snapshotPath);
     // The reviewed compass disappears between the read and the amendment, so
     // the engine refusal carries the addressed workflow in its own details.
     rmSync(fixture.compassPath);
 
     const refused = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
+      amendPrepareArgs(fixture),
       fixture.root,
     );
 
     expect(refused.exitCode).toBe(1);
     const payload = jsonOf(refused);
-    expect(payload.ok).toBe(false);
-    expect(payload.operation).toBe("amend-prepare");
+    expect(payload.status).toBe("refused");
     expect(payload.code).toBe("coordination.prepare-amendment.compass-mismatch");
     expect(payload.details).toMatchObject({ workflow_id: PREPARE_WORKFLOW });
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
 
-  test("a usage payload names the family the caller invoked, not an argv value equal to a family token", () => {
-    const fixture = makePrepareFixture();
-    const before = readJson(fixture.snapshotPath);
-    // Both invocations carry an argv value equal to the *other* family token
-    // (`--session plan` is the usage error itself), so only the command the
-    // caller actually ran may decide the payload's family.
-    const usageCases: Array<{ name: string; args: string[]; operation: string }> = [
-      {
-        name: "workflow-with-a-plan-valued-flag",
-        args: ["workflow", "amend-prepare", "--session", "plan", "--force", "--json"],
-        operation: "amend-prepare",
-      },
-      {
-        name: "plan-with-a-workflow-valued-flag",
-        args: ["plan", "show", "--session", "workflow", "--force", "--json"],
-        operation: "show",
-      },
-    ];
-
-    for (const usageCase of usageCases) {
-      const result = runCli(usageCase.args, fixture.root);
-      expect(`${usageCase.name}: ${result.exitCode}`).toBe(`${usageCase.name}: 2`);
-      const payload = jsonOf(result);
-      expect(`${usageCase.name}: ${String(payload.ok)}`).toBe(`${usageCase.name}: false`);
-      expect(`${usageCase.name}: ${String(payload.code)}`).toBe(`${usageCase.name}: command.invalid-input`);
-      expect(`${usageCase.name}: ${String(payload.operation)}`).toBe(`${usageCase.name}: ${usageCase.operation}`);
-    }
-    expect(readJson(fixture.snapshotPath)).toEqual(before);
-  }, 30000);
 
   test("an unexpected workflow-family failure carries the workflow family's own code", () => {
     const fixture = makePrepareFixture();
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const before = readJson(fixture.snapshotPath);
     const snapshotDir = dirname(fixture.snapshotPath);
     // The snapshot directory loses write permission after the read, so the
@@ -1948,14 +1875,13 @@ describe("Prepare workflow amendment", () => {
     chmodSync(snapshotDir, 0o555);
     try {
       const failed = runCli(
-        amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
+        amendPrepareArgs(fixture),
         fixture.root,
       );
 
       expect(failed.exitCode).toBe(1);
       const payload = jsonOf(failed);
-      expect(payload.ok).toBe(false);
-      expect(payload.operation).toBe("amend-prepare");
+      expect(payload.status).toBe("refused");
       expect(payload.code).toBe("EACCES");
       expect(readJson(fixture.snapshotPath)).toEqual(before);
     } finally {
@@ -1978,17 +1904,14 @@ describe("Prepare workflow amendment", () => {
     });
     const statusBefore = readJson(fixture.statusPath);
 
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     const amended = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) }),
+      amendPrepareArgs(fixture),
       fixture.root,
     );
 
     expect(amended.exitCode).toBe(0);
-    const payload = jsonOf(amended);
-    expect(payload.ok).toBe(true);
-    expect(payload.operation).toBe("amend-prepare");
-    expect(payload.outcome).toBe("amended");
+    const payload = viewOf(amended);
+    expect(dataOf(amended).outcome).toBe("amended");
     expect(payload.planIds).toEqual([PREPARE_ROW, PREPARE_APPEND]);
 
     const after = readJson(fixture.snapshotPath) as { plans: Array<Record<string, unknown>> };
@@ -1999,7 +1922,6 @@ describe("Prepare workflow amendment", () => {
     // A correction whose old pointer names a foreign document refuses with exit
     // 1 and leaves the snapshot byte-identical.
     const before = readJson(fixture.snapshotPath);
-    const freshView = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
     writeJson(fixture.patchPath, {
       ...preparePatchOf(fixture),
       appendPlans: [],
@@ -2008,7 +1930,7 @@ describe("Prepare workflow amendment", () => {
       ],
     });
     const refused = runCli(
-      amendPrepareArgs(fixture, { snapshot: String(freshView.snapshotVersion), compass: String(freshView.compassVersion) }),
+      amendPrepareArgs(fixture),
       fixture.root,
     );
     expect(refused.exitCode).toBe(1);
@@ -2028,7 +1950,6 @@ const CLI_RECOVERY_SESSION_ID = "recovered-cli-coordinator";
 /** The `workflow recover-coordinator` argv one case drives. */
 function recoverCoordinatorArgs(
   fixture: PrepareFixture,
-  tokens: { snapshot: string; compass: string },
   overrides: Record<string, unknown> = {},
 ): string[] {
   const flags: Array<[string, string | undefined]> = [
@@ -2047,7 +1968,6 @@ function recoverCoordinatorArgs(
   }
   const stopped = overrides.stopped as string[] | undefined ?? ["fixture-coordinator"];
   for (const id of stopped) argv.push("--stopped", id);
-  if (overrides.json !== false) argv.push("--json");
   return argv;
 }
 
@@ -2086,12 +2006,10 @@ function cliPlanRowsOf(fixture: PrepareFixture): unknown {
 describe("prepare coordinator recovery — CLI transport", () => {
   test("prepare coordinator recovery travels through `workflow recover-coordinator` and the old reference refuses", () => {
     const fixture = makePrepareFixture();
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
-    const tokens = { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) };
     const peerBefore = readJson(fixture.peerSnapshotPath);
     const rowsBefore = cliPlanRowsOf(fixture);
 
-    const recovered = runCli(recoverCoordinatorArgs(fixture, tokens), fixture.root);
+    const recovered = runCli(recoverCoordinatorArgs(fixture), fixture.root);
 
     expect(recovered.exitCode).toBe(0);
     const envelope = JSON.parse(recovered.stdout);
@@ -2106,12 +2024,10 @@ describe("prepare coordinator recovery — CLI transport", () => {
       sessionId: CLI_RECOVERY_SESSION_ID,
       operationId: "op-cli-recover-1",
       replay: false,
-      snapshotVersion: expect.any(String),
-      compassVersion: tokens.compass,
     });
     expect(existsSync(newEnvelope)).toBe(true);
     expect(recovered.stderr).toBe("");
-    const human = runCli(recoverCoordinatorArgs(fixture, tokens, { json: false }), fixture.root);
+    const human = runCli(recoverCoordinatorArgs(fixture), fixture.root);
     expect(human.exitCode).toBe(0);
     expect(JSON.parse(human.stdout)).toMatchObject({ command: "workflow.recover-coordinator", status: "ok" });
     expect(human.stderr).toBe("");
@@ -2123,8 +2039,6 @@ describe("prepare coordinator recovery — CLI transport", () => {
       operation_id: "op-cli-recover-1",
       prior_session_id: FIXTURE_COORDINATOR_ID,
       session_id: CLI_RECOVERY_SESSION_ID,
-      snapshot_version_before: tokens.snapshot,
-      compass_version: tokens.compass,
     });
     // Rows and the sibling workflow are untouched; the old envelope survives.
     expect(cliPlanRowsOf(fixture)).toEqual(rowsBefore);
@@ -2136,39 +2050,37 @@ describe("prepare coordinator recovery — CLI transport", () => {
     const oldRefused = runCli(showPrepareArgs(fixture), fixture.root);
     expect(oldRefused.exitCode).toBe(1);
     const oldPayload = jsonOf(oldRefused);
-    expect(oldPayload.operation).toBe("show-prepare");
     expect(oldPayload.code).toBe("coordination.session-mismatch");
     const live = runCli(
-      ["workflow", "show-prepare", "--session", newEnvelope, "--json"],
+      ["workflow", "show-prepare", "--session", newEnvelope],
       fixture.root,
     );
     expect(live.exitCode).toBe(0);
-    expect(jsonOf(live).allowed).toBe(true);
+    expect(viewOf(live).allowed).toBe(true);
 
-    // An exact retry with the same reviewed tokens is a stable receipt.
+    // An exact retry with the same operation identity is a stable receipt.
     const committedBytes = readJson(fixture.snapshotPath);
-    const retry = runCli(recoverCoordinatorArgs(fixture, tokens), fixture.root);
+    const retry = runCli(recoverCoordinatorArgs(fixture), fixture.root);
     expect(retry.exitCode).toBe(0);
-    expect((jsonOf(retry).recovery as Record<string, unknown>).replay).toBe(true);
+    const replay = dataOf(retry).recovery;
+    if (!objectOf(replay)) throw new Error("recovery receipt missing");
+    expect(replay.replay).toBe(true);
     expect(readJson(fixture.snapshotPath)).toEqual(committedBytes);
     expect(cliRecoveryAudit(fixture)).toHaveLength(1);
 
-    // A changed request and an incomplete stop assertion both refuse with their
-    // own engine codes, exit 1, and no mutation — each against the CURRENT
-    // reviewed tokens, so the refusal is the guard's own and not a stale token.
-    const liveView = jsonOf(runCli(["workflow", "show-prepare", "--session", newEnvelope, "--json"], fixture.root));
-    const liveTokens = { snapshot: String(liveView.snapshotVersion), compass: String(liveView.compassVersion) };
+    // Changed request facts and an incomplete stop assertion refuse without
+    // moving the committed coordinator or rewriting the audit.
     const changedReason = runCli(
-      recoverCoordinatorArgs(fixture, liveTokens, { operationId: "op-cli-recover-1", reason: "another reason" }),
+      recoverCoordinatorArgs(fixture, { operationId: "op-cli-recover-1", reason: "another reason" }),
       fixture.root,
     );
     expect(changedReason.exitCode).toBe(1);
-    expect(jsonOf(changedReason)).toMatchObject({ ok: false, code: "coordination.identity-recovery.operation-conflict", details: { workflow_id: PREPARE_WORKFLOW } });
+    expect(jsonOf(changedReason)).toMatchObject({ status: "refused", code: "coordination.identity-recovery.operation-conflict", details: { workflow_id: PREPARE_WORKFLOW } });
     // The operator addresses the binding the workflow records NOW and names
     // somebody else as stopped: the engine authenticates the owner and then
     // refuses the incomplete attestation.
     const unauthorized = runCli(
-      recoverCoordinatorArgs(fixture, liveTokens, {
+      recoverCoordinatorArgs(fixture, {
         operationId: "op-cli-recover-3",
         priorSession: newEnvelope,
         sessionId: "another-coordinator",
@@ -2184,8 +2096,6 @@ describe("prepare coordinator recovery — CLI transport", () => {
 
   test("prepare coordinator recovery distinguishes usage errors from runtime refusals", () => {
     const fixture = makePrepareFixture();
-    const view = jsonOf(runCli(showPrepareArgs(fixture), fixture.root));
-    const tokens = { snapshot: String(view.snapshotVersion), compass: String(view.compassVersion) };
     const before = readJson(fixture.snapshotPath);
 
     // No stop assertion, no reason, and a relative prior-session path are usage
@@ -2204,19 +2114,18 @@ describe("prepare coordinator recovery — CLI transport", () => {
         "cancelled",
         "--authorization-ref",
         "PM-1",
-        "--json",
       ],
       fixture.root,
     );
     expect(noStop.exitCode).toBe(2);
-    expect(jsonOf(noStop)).toMatchObject({ status: "usage", operation: "recover-coordinator", code: "command.invalid-input" });
+    expect(jsonOf(noStop)).toMatchObject({ status: "usage", code: "command.invalid-input" });
 
-    const noReason = runCli(recoverCoordinatorArgs(fixture, tokens, { omitReason: true }), fixture.root);
+    const noReason = runCli(recoverCoordinatorArgs(fixture, { omitReason: true }), fixture.root);
     expect(noReason.exitCode).toBe(2);
-    expect(jsonOf(noReason)).toMatchObject({ status: "usage", operation: "recover-coordinator", code: "command.invalid-input" });
+    expect(jsonOf(noReason)).toMatchObject({ status: "usage", code: "command.invalid-input" });
 
     const relative = runCli(
-      recoverCoordinatorArgs(fixture, tokens, { priorSession: ".mstar/workflows/x/sessions/coordinator-a.json" }),
+      recoverCoordinatorArgs(fixture, { priorSession: ".mstar/workflows/x/sessions/coordinator-a.json" }),
       fixture.root,
     );
     expect(relative.exitCode).toBe(2);
@@ -2229,7 +2138,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     // guard), and that refusal reaches the same public diagnostic: it must name
     // the rule and the received length, never the value.
     for (const rejected of [`ghp_${"a".repeat(140)}`, "../creds/secret.json"]) {
-      const badId = runCli(recoverCoordinatorArgs(fixture, tokens, { sessionId: rejected }), fixture.root);
+      const badId = runCli(recoverCoordinatorArgs(fixture, { sessionId: rejected }), fixture.root);
       expect({ rejected, exitCode: badId.exitCode }).toEqual({ rejected, exitCode: 1 });
       expect(jsonOf(badId).code).toBe("coordination.invalid-session-id");
       expect(badId.stdout).not.toContain(rejected);
@@ -2239,10 +2148,10 @@ describe("prepare coordinator recovery — CLI transport", () => {
     // The engine classifies malformed stop attestations as runtime refusals;
     // their public projection must not repeat credential- or path-like values.
     for (const badStopped of ["a/b", "../creds/secret.json", `ghp_${"a".repeat(140)}`, "with space"]) {
-      const malformed = runCli(recoverCoordinatorArgs(fixture, tokens, { stopped: [badStopped] }), fixture.root);
+      const malformed = runCli(recoverCoordinatorArgs(fixture, { stopped: [badStopped] }), fixture.root);
       const label = `${badStopped.slice(0, 12)}:`;
       expect(`${label} ${malformed.exitCode}`).toBe(`${label} 1`);
-      expect(jsonOf(malformed)).toMatchObject({ status: "refused", operation: "recover-coordinator", code: "coordination.identity-recovery.invalid-request" });
+      expect(jsonOf(malformed)).toMatchObject({ status: "refused", code: "coordination.identity-recovery.invalid-request" });
       expect(malformed.stdout).not.toContain(badStopped);
       expect(malformed.stderr).not.toContain(badStopped);
     }
@@ -2250,7 +2159,7 @@ describe("prepare coordinator recovery — CLI transport", () => {
     // A nonexistent absolute envelope is a runtime refusal (exit 1), never a
     // usage error, and it still writes nothing.
     const missing = runCli(
-      recoverCoordinatorArgs(fixture, tokens, { priorSession: join(fixture.root, "no-such-session.json") }),
+      recoverCoordinatorArgs(fixture, { priorSession: join(fixture.root, "no-such-session.json") }),
       fixture.root,
     );
     expect(missing.exitCode).toBe(1);
@@ -2301,6 +2210,8 @@ describe("mstar plan \u2014 execution transport", () => {
     const mixedArgs = [
       "plan",
       "progress",
+      "--plan",
+      PLAN_ID,
       "--session",
       join(fixture.harness, "sessions", "plan-a.json"),
       "--session-ref",
@@ -2316,13 +2227,6 @@ describe("mstar plan \u2014 execution transport", () => {
     expect(mixed.exitCode).toBe(2);
     expect(jsonOf(mixed).code).toBe("command.invalid-input");
 
-    // Under `--json` the SAME refusal is the A2 usage object on stdout — the
-    // one output path this family already uses for every usage failure
-    // ("a commander-level usage failure still carries the A2 failure object
-    // under --json", above in this file).
-    const mixedJson = runCli([...mixedArgs, "--json"], fixture.root);
-    expect(mixedJson.exitCode).toBe(2);
-    expect(jsonOf(mixedJson).code).toBe("command.invalid-input");
 
     // A pre-activation control root has no ACTIVE claim to bind against, so the
     // bind states its capability refusal truthfully (the supported operator
@@ -2345,7 +2249,7 @@ describe("mstar plan \u2014 execution transport", () => {
     writeJson(progressPath, { status: "InReview", summary: "no write expected", evidence_paths: [fixture.evidencePath] });
 
     const numeric = runCli(
-      ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "3", "--operation", "progress-numeric", "--file", progressPath],
+      ["plan", "progress", "--session-ref", activeRefWire(), "--plan", PLAN_ID, "--expect", "3", "--operation", "progress-numeric", "--file", progressPath],
       fixture.root,
       activeIdentityEnv(),
     );
@@ -2355,7 +2259,7 @@ describe("mstar plan \u2014 execution transport", () => {
     expect(jsonOf(numeric).code).toBe("command.invalid-input");
 
     const noOperation = runCli(
-      ["plan", "progress", "--session-ref", activeRefWire(), "--expect", "exec-v1:plan:store:1:key:1", "--file", progressPath],
+      ["plan", "progress", "--session-ref", activeRefWire(), "--plan", PLAN_ID, "--expect", "exec-v1:plan:store:1:key:1", "--file", progressPath],
       fixture.root,
       activeIdentityEnv(),
     );
@@ -2372,12 +2276,10 @@ describe("mstar plan \u2014 execution transport", () => {
         activeRefWire(),
         "--plan",
         PLAN_ID,
-        "--json",
       ],
       fixture.root,
     );
-    // A missing acquired identity is usage: `--json` usage failures of this
-    // family carry the A2 object on STDOUT, never a stderr line.
+    // Missing acquired identity is usage and never reads a file-route envelope.
     expect(noIdentity.exitCode).toBe(2);
     expect(jsonOf(noIdentity).code).toBe("command.invalid-input");
 
@@ -2403,16 +2305,17 @@ describe("mstar plan \u2014 execution transport", () => {
           "progress",
           "--session-ref",
           activeRefWire(),
+          "--plan",
+          PLAN_ID,
           "--expect",
           "3",
           "--operation",
           "progress-numeric-no-io",
-          "--session-id",
-          "execution-ref-session",
           "--file",
           file,
         ],
         fixture.root,
+        activeIdentityEnv(),
       );
       expect(`${state} -> ${numeric.exitCode}`).toBe(`${state} -> 2`);
       expect(jsonOf(numeric).code).toBe("command.invalid-input");
@@ -2438,13 +2341,14 @@ describe("mstar plan \u2014 execution transport", () => {
         "progress",
         "--session-ref",
         activeRefWire(),
+        "--plan",
+        PLAN_ID,
         "--expect",
         "exec-v1:plan:stores%2Fexecution-test:1:key64:1",
         "--operation",
         "progress-not-active",
         "--file",
         progressPath,
-        "--json",
       ],
       fixture.root,
       activeIdentityEnv(),
