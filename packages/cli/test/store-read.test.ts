@@ -204,7 +204,7 @@ describe("dashboard views over a real store", () => {
       capturedCumulative: 2,
       retiredCumulative: 1,
       openDifference: 1,
-      origin: "store",
+      origin: "register-history",
     });
 
     const scoped = await readDashboardView({ context, view: "issue-flow", params: { project: "proj-a" } });
