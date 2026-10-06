@@ -188,7 +188,7 @@ async function seedPbShapeInvalid(harnessDir: string): Promise<void> {
   })
 }
 
-/** InProgress plan row WITHOUT a lease — orphan (uncovered). */
+/** InProgress plan row with no recorded scope — uncovered. */
 const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
   id: 'plan-orphan',
   title: 'orphan plan',
@@ -196,21 +196,19 @@ const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
   status: 'InProgress',
 }
 
-/** InProgress plan row WITH a valid execution_lease (covered). */
+/** InProgress plan row whose scope is recorded (covered). */
 const IN_PROGRESS_WITH_LEASE: Record<string, unknown> = {
   id: 'plan-leased',
   title: 'leased plan',
   file: 'plans/plan-leased.md',
   status: 'InProgress',
-  execution_lease: {
-    holder: 'test-agent',
-    claimed_at: '2026-08-08',
+  metadata: {
     worktree_path: '/tmp/lease-worktree',
     working_branch: 'feature/lease',
   },
 }
 
-/** Done plan row without a lease — not active, never uncovered. */
+/** Done plan row without a scope — not active, never uncovered. */
 const DONE_NO_LEASE: Record<string, unknown> = {
   id: 'plan-done',
   title: 'done plan',
