@@ -81,6 +81,8 @@ const inputSchema = z.object({
   integrationResultSha: z.string().min(1).optional(),
   expectIssue: z.number().int().nonnegative().optional(),
 });
+const bindInputSchema = inputSchema.omit({ plan: true }).strict();
+const bindOptionKeys = Object.keys(bindInputSchema.shape);
 type PlanInput = z.infer<typeof inputSchema>;
 
 const optionKeys = Object.keys(inputSchema.shape);
@@ -444,7 +446,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         aliases: [],
         arguments: [],
         options: [
-          ...optionKeys.map((key) => ({
+          ...(verb === "bind" ? bindOptionKeys : optionKeys).map((key) => ({
             key,
             flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`,
             required: false,
@@ -453,7 +455,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
           { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
         ],
       },
-      input: inputSchema,
+      input: verb === "bind" ? bindInputSchema : inputSchema,
       payloads: Object.fromEntries(
         (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
       ),
