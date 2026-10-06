@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -16,7 +16,7 @@ import { previewExecutionRestore, restoreExecutionBackup } from "./execution-rec
 import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 
-const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-"));
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
 afterAll(() => {
   setArtifactStore(undefined);
   rmSync(ROOT, { recursive: true, force: true });
