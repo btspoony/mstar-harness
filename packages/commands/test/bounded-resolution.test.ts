@@ -239,6 +239,8 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "catalog.update": unverified("update a catalog entry", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   "catalog.link": unverified("link catalog entries", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   "catalog.list": unverified("list catalog entries", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
+  "catalog.purge-registration": unverified("purge a producer-written invalid registration snapshot", "identity-guarded destructive verb; fail-first/round-trip/isolation coverage lives in catalog-registration.test.ts"),
+  "catalog.purge-registration": unverified("purge a producer-written invalid registration snapshot", "identity-guarded destructive verb; fail-first/round-trip/isolation coverage lives in catalog-registration.test.ts"),
   "catalog.show": unverified("show a catalog entry", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   "catalog.export": unverified("export the catalog", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
   "catalog.reconcile": unverified("reconcile catalog with sources", "hybrid file/store authority; fixture deferred to the versioned scenario set"),

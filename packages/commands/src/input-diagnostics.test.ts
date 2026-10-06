@@ -139,14 +139,18 @@ describe("executeCommand input diagnostics", () => {
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
     expect(envelope.message).toContain('Unrecognized key: "bogus"');
   });
-  test("all diagnostics are rendered without an omission note", async () => {
+  test("large invalid input bounds the message while retaining every diagnostic", async () => {
     const issueCount = 5000;
     const envelope = await executeCommand("worktree.qc-alignment", { files: Array(issueCount).fill(42) }, context());
     const diagnostics = usageDiagnostics(envelope);
     expect(diagnostics).toHaveLength(issueCount);
+    expect(diagnostics[0]).toMatchObject({ path: "files[0]", code: "invalid_type", index: 0 });
+    expect(diagnostics[0]?.message).toContain("received number");
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message).not.toContain("…and");
+    expect(envelope.message).toContain("\n…and 4980 more issues — full diagnostics in details.diagnostics.");
+    expect(envelope.message.length).toBeLessThan(3000);
+    expect(envelope.message).toContain("received 42");
   });
 
 });

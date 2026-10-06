@@ -34,6 +34,7 @@ import {
   type CatalogRootKind,
   type StoreContext,
 } from "@mstar-harness/engine";
+import { purgeCatalogRegistration } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 import { commandEnvelopeSchema } from "../definitions.js";
@@ -46,10 +47,11 @@ const inputSchema = z.object({
   ordinal: z.number().int().nonnegative().nullable().optional(), project: z.string().optional(), iteration: z.string().optional(),
   limit: z.number().int().positive().max(200).optional(), offset: z.number().int().nonnegative().optional(), out: z.string().optional(),
   plan: z.string().optional(), inputs: z.string().optional(), dryRun: z.boolean().optional(), operationId: z.string().optional(),
+  operation: z.string().optional(), workflow: z.string().optional(),
   actor: z.string().optional(), harness: z.string().optional(), abort: z.boolean().optional(), list: z.boolean().optional(),
 });
 type Input = z.infer<typeof inputSchema>;
-const verbs = ["discover", "import", "register", "update", "link", "list", "show", "export", "reconcile"] as const;
+const verbs = ["discover", "import", "register", "update", "link", "list", "show", "export", "reconcile", "purge-registration"] as const;
 const entityKinds: readonly CatalogEntityKind[] = ["project", "iteration", "plan", "document"];
 const rootKinds: readonly CatalogRootKind[] = ["repository", "harness", "plans", "iterations", "specs", "knowledge", "projects"];
 const documentKinds: readonly CatalogDocumentKind[] = ["spec", "knowledge", "guide", "compass", "plan", "roadmap", "review", "other"];
@@ -65,6 +67,7 @@ const descriptions: Record<(typeof verbs)[number], string> = {
   show: "Show one catalog row and its incident relations.",
   export: "Export the versioned catalog transport payload.",
   reconcile: "Recover a pending catalog execution registration; --list is read-only and --abort abandons only unwritten work.",
+  "purge-registration": "Remove a producer-written registration snapshot after verifying its recorded identity digest.",
 };
 const cliFlags: Record<keyof Input, string> = {
   kind: "--kind <kind>", id: "--id <id>", title: "--title <title>", description: "--description <text>", rootKind: "--root-kind <rootKind>",
@@ -73,6 +76,7 @@ const cliFlags: Record<keyof Input, string> = {
   toId: "--to-id <id>", ordinal: "--ordinal <n>", project: "--project <id>", iteration: "--iteration <id>", limit: "--limit <n>", offset: "--offset <n>",
   out: "--out <file>", plan: "--plan <file>", inputs: "--inputs <file>", dryRun: "--dry-run", operationId: "--operation-id <id>", actor: "--actor <role>",
   harness: "--harness <path>", abort: "--abort", list: "--list",
+  operation: "--operation <id>", workflow: "--workflow <id>",
 };
 function envelope(id: string, data: unknown): CommandEnvelope {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -291,6 +295,13 @@ async function execute(id: string, input: Input, invocation: InvocationContext):
       }
       return envelope(id, payload);
     }
+    if (verb === "purge-registration") {
+      requireAll(input, ["workflow", "operation", "expect", "actor"]);
+      return envelope(id, await purgeCatalogRegistration(context, {
+        workflowId: input.workflow!, operationId: input.operation!,
+        expectedCatalogRevision: input.expect!, actor: input.actor!,
+      }));
+    }
     if (verb === "reconcile") {
       if (input.list) {
         if (input.operationId !== undefined || input.abort) throw new SddScriptError("list mode rejects operationId and abort", 2);
@@ -315,9 +326,10 @@ const optionsByVerb: Record<(typeof verbs)[number], (keyof Input)[]> = {
   show: ["harness"],
   export: ["out", "harness"],
   reconcile: ["operationId", "abort", "list", "harness"],
+  "purge-registration": ["workflow", "operation", "expect", "actor", "harness"],
 };
 const argumentsByVerb: Record<(typeof verbs)[number], (keyof Input)[]> = {
-  discover: [], import: [], register: [], update: ["kind", "id"], link: [], list: [], show: ["kind", "id"], export: [], reconcile: [],
+  discover: [], import: [], register: [], update: ["kind", "id"], link: [], list: [], show: ["kind", "id"], export: [], reconcile: [], "purge-registration": [],
 };
 /**
  * Write verbs declare no parser-level required option: a sparse intent reaches
@@ -327,7 +339,7 @@ const argumentsByVerb: Record<(typeof verbs)[number], (keyof Input)[]> = {
  */
 const requiredOptions: Record<(typeof verbs)[number], (keyof Input)[]> = {
   discover: [], import: [], register: [], update: [], link: [],
-  list: [], show: [], export: [], reconcile: [],
+  list: [], show: [], export: [], reconcile: [], "purge-registration": [],
 };
 export function getCatalogCommandDefinitions(): readonly CommandDefinition[] {
   return verbs.map((verb) => {
