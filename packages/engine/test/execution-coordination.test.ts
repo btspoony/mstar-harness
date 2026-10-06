@@ -18,9 +18,10 @@
  * `mkdtempSync`; no test reads or writes this checkout's `store.db`.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
 import { mutateExecutionPlan as publishedMutateExecutionPlan } from "../src/index.js";
@@ -52,7 +53,7 @@ import {
   type ExecutionToken,
 } from "../src/execution-store.js";
 import type { CoordinationOperation } from "../src/index.js";
-import { initializeStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
+import { initializeStore, openStore, storeDbPath, type StoreContext, type StoreDb } from "../src/store-db.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 
@@ -141,7 +142,16 @@ type Fixture = {
  * configuration the operations below drive.
  */
 async function seededWorkflow(label: string): Promise<Fixture> {
-  const context: StoreContext = { harnessDir: realpathSync(mkdtempSync(join(ROOT, `${label}-`))) };
+  // A real Git workspace whose `.mstar` child is the control harness, so the
+  // route proofs below run against actual checkouts and object ids.
+  const workspace = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
+  execFileSync("git", ["init", "-q", "-b", "main", workspace], { stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["-C", workspace, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  const harnessDir = join(workspace, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
@@ -195,6 +205,43 @@ async function planTokenOf(fixture: Fixture, planId: string): Promise<ExecutionT
     planId,
   );
   return read.token;
+}
+
+/** One freshly-written plan row of a fixture's DB workflow. */
+function planRow(context: StoreContext, planId: string): Record<string, unknown> {
+  const [row] = rows(
+    context,
+    `select state_json from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${planId}'`,
+  );
+  return JSON.parse(String(row!.state_json)) as Record<string, unknown>;
+}
+
+/**
+ * Real QC/QA evidence inside the plan's own SDD area, the shape the coordinator
+ * submits to `complete`: paths on disk that `readCompletionEvidence` accepts.
+ */
+function completionEvidence(context: StoreContext, sourceSha: string): {
+  source_sha: string;
+  review_base: string;
+  review_head: string;
+  qc: { decision: "Approve"; reports: string[]; consolidated: string };
+  qa: { gate: "mandatory"; decision: "pass"; report: string };
+} {
+  const sdd = join(context.harnessDir, "sdd", OWN_PLAN);
+  const reports = [join(sdd, "review", "qc1.md"), join(sdd, "review", "qc2.md")];
+  const consolidated = join(sdd, "review", "qc.md");
+  const qa = join(sdd, "qa.md");
+  for (const path of [...reports, consolidated, qa]) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "# evidence\n");
+  }
+  return {
+    source_sha: sourceSha,
+    review_base: sourceSha,
+    review_head: sourceSha,
+    qc: { decision: "Approve", reports, consolidated },
+    qa: { gate: "mandatory", decision: "pass", report: qa },
+  };
 }
 
 /** One coordinator operation on one explicitly addressed plan. */
@@ -299,7 +346,7 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
     // A caller of another workflow addresses nothing in this one.
     await expect(
       attempt({ ...coordinatorCaller, workflowId: "wf-other" }, { session: coordinator, expected: planTokens[OWN_PLAN], planId: OWN_PLAN, operation: { kind: "residual-add", entries: [] } }),
-    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
     // A sibling plan addressed with the OTHER plan's token.
     await expect(
       attempt(coordinatorCaller, { session: coordinator, expected: planTokens[PEER_PLAN], planId: OWN_PLAN, operation: { kind: "residual-add", entries: [] } }),
@@ -339,7 +386,7 @@ describe("execution-authority-boundary: §2.3/§3 DB plan-operation authorizatio
       code: "execution.scope-mismatch",
     });
     await expect(attempt({ ...coordinator, sessionId: "host-elsewhere" })).rejects.toMatchObject({
-      code: "coordination.session-mismatch",
+      code: "coordination.identity-mismatch",
     });
 
     // The reference is the binding the store holds: revoking the row ends it.
@@ -542,7 +589,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
         planId: OWN_PLAN,
         operation: { kind: "prepare" },
       }),
-    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
     expect(footprint(context)).toEqual(before);
   });
 
@@ -631,24 +678,24 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
     const fixture = await seededWorkflow("residual-replay");
     const { context } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-residual-replay", undefined);
-    const call = () =>
-      residualAddExecutionPlan(domainContext(context, fixture.coordinatorCaller), {
-        operationId: "residual-op",
-        session: fixture.coordinator,
-        expected: fixture.planTokens[OWN_PLAN]!,
-        planId: OWN_PLAN,
-        operation: { kind: "residual-add", entries: [finding()] },
-      });
-    await call();
-    const replay = await call();
+    // The token is read AFTER prepare, so the committed call carries the row's
+    // current CAS; the exact retry reuses the same original request.
+    const expected = await planTokenOf(fixture, OWN_PLAN);
+    const request = {
+      operationId: "residual-op",
+      session: fixture.coordinator,
+      expected,
+      planId: OWN_PLAN,
+      operation: { kind: "residual-add" as const, entries: [finding()] },
+    };
+    const first = await residualAddExecutionPlan(domainContext(context, fixture.coordinatorCaller), request);
+    expect(first.replayed).toBe(false);
+    const replay = await residualAddExecutionPlan(domainContext(context, fixture.coordinatorCaller), request);
     expect(replay.replayed).toBe(true);
 
     const conflict = await refusalOf(() =>
       residualAddExecutionPlan(domainContext(context, fixture.coordinatorCaller), {
-        operationId: "residual-op",
-        session: fixture.coordinator,
-        expected: fixture.planTokens[OWN_PLAN]!,
-        planId: OWN_PLAN,
+        ...request,
         operation: { kind: "residual-add", entries: [finding({ occurrenceKey: "occ-other" })] },
       }),
     );
@@ -688,8 +735,96 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
 });
 
 /* ------------------------------------------------------------------------ *
- * W5 — `complete` on the DB authority
+ * W5 — `complete` on the DB authority: the three declared routes
  * ------------------------------------------------------------------------ */
+
+/** A real commit in one checkout. */
+function commit(cwd: string, file: string, body: string, message: string): string {
+  writeFileSync(join(cwd, file), body);
+  execFileSync("git", ["-C", cwd, "add", "-A"], { stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["-C", cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", message], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  return execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+}
+
+/** A real two-parent merge of `source` into `target`'s branch; returns the merge id. */
+function mergeInto(integration: string, sourceSha: string, message: string): string {
+  execFileSync("git", ["-C", integration, "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", sourceSha, "-m", message], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  return execFileSync("git", ["-C", integration, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+}
+
+/**
+ * A real iteration fixture: one workflow with two rows, a real source checkout
+ * per row on its own branch, and a real integration checkout on the registered
+ * target branch. The store's snapshot names the integration worktree.
+ */
+async function realIterationFixture(label: string): Promise<Fixture & { integrationPath: string; sourceSha: string; baseSha: string }> {
+  const fixture = await seededWorkflow(label);
+  const { context } = fixture;
+  const statusBefore = rows(context, "select 1 as x");
+  void statusBefore;
+  // The fixture's harness root IS the control root; the Git repository is its
+  // parent workspace, which `realpathSync` already resolved.
+  const repo = dirname(context.harnessDir);
+  const integrationPath = join(repo, "wt-integration");
+  // Switch the two rows' checkouts onto their real feature branches.
+  for (const [planId, branch] of [
+    [OWN_PLAN, `feature/${OWN_PLAN}`],
+    [PEER_PLAN, `feature/${PEER_PLAN}`],
+  ] as const) {
+    const worktree = join(context.harnessDir, "worktrees", planId);
+    mkdirSync(worktree, { recursive: true });
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", branch, worktree], { stdio: ["ignore", "ignore", "ignore"] });
+  }
+  mkdirSync(integrationPath, { recursive: true });
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", `integration/${WORKFLOW_ID}`, integrationPath], { stdio: ["ignore", "ignore", "ignore"] });
+  const baseSha = execFileSync("git", ["-C", integrationPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const sourceSha = commit(join(context.harnessDir, "worktrees", OWN_PLAN), "slice.txt", "slice\n", "feat: slice");
+  // Record the integration anchors on the snapshot the store holds.
+  const handle = await openStore(context, "write");
+  try {
+    const row = handle.db
+      .prepare("select state_json from execution_workflows where workflow_id = ?")
+      .get(WORKFLOW_ID) as { state_json?: unknown };
+    const state = JSON.parse(String(row.state_json)) as Record<string, unknown>;
+    state.integration_worktree_path = integrationPath;
+    state.branch = { source: `feature/${OWN_PLAN}`, target: `integration/${WORKFLOW_ID}`, integration: `integration/${WORKFLOW_ID}` };
+    handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+  } finally {
+    handle.close();
+  }
+  return { ...fixture, integrationPath, sourceSha, baseSha };
+}
+
+/** A real standalone development fixture: one row, one real source checkout. */
+async function realStandaloneFixture(label: string): Promise<Fixture & { sourceSha: string }> {
+  const fixture = await seededWorkflow(label);
+  const { context } = fixture;
+  const repo = dirname(context.harnessDir);
+  const worktree = join(context.harnessDir, "worktrees", OWN_PLAN);
+  mkdirSync(worktree, { recursive: true });
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", `feature/${OWN_PLAN}`, worktree], { stdio: ["ignore", "ignore", "ignore"] });
+  const sourceSha = commit(worktree, "standalone.txt", "standalone slice\n", "feat: standalone");
+  const handle = await openStore(context, "write");
+  try {
+    const row = handle.db
+      .prepare("select state_json from execution_workflows where workflow_id = ?")
+      .get(WORKFLOW_ID) as { state_json?: unknown };
+    const state = JSON.parse(String(row.state_json)) as Record<string, unknown>;
+    state.type = "plan";
+    state.delivery_kind = "development";
+    state.branch = { source: `feature/${OWN_PLAN}`, target: "main" };
+    state.plans = [{ id: OWN_PLAN, title: `${OWN_PLAN} title`, file: `plans/${OWN_PLAN}.md`, status: "Todo" }];
+    delete state.integration_worktree_path;
+    handle.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+  } finally {
+    handle.close();
+  }
+  return { ...fixture, sourceSha };
+}
 
 describe("execution-completion: §3/§4.1 DB completion and its route selection", () => {
   test("classifies the delivery route from the workflow's own declared kind and cardinality", () => {
@@ -713,13 +848,27 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     ).toBe("integration");
   });
 
-  test("complete refuses outside its window: a Todo row and a missing QC/QA evidence both refuse", async () => {
+  test("a Todo row is not completable, and a same-transaction InProgress row completes", async () => {
     const fixture = await seededWorkflow("complete-window");
     const { context, planTokens } = fixture;
     const before = footprint(context);
+    const evidence = () => {
+      const reports = [join(context.harnessDir, "sdd", OWN_PLAN, "review", "qc1.md")];
+      const consolidated = join(context.harnessDir, "sdd", OWN_PLAN, "review", "qc.md");
+      const qa = join(context.harnessDir, "sdd", OWN_PLAN, "qa.md");
+      for (const path of [...reports, consolidated, qa]) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, "# evidence\n");
+      }
+      return {
+        qc: { decision: "Approve" as const, reports, consolidated },
+        qa: { gate: "mandatory" as const, decision: "pass" as const, report: qa },
+      };
+    };
+    void evidence;
 
-    // A Todo row is not completable: only InReview (or a same-transaction
-    // InProgress→InReview) may complete.
+    // A Todo row refuses: only InReview (or a same-transaction
+    // InProgress→InReview) completes.
     const early = await refusalOf(() =>
       planCall(fixture, OWN_PLAN, "complete-early", planTokens[OWN_PLAN]!, {
         kind: "complete",
@@ -727,32 +876,136 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
           qc: { decision: "Approve", reports: [], consolidated: "" },
           qa: { gate: "mandatory", decision: "pass", report: "" },
         },
-      } as unknown as CoordinationOperation),
+      } as CoordinationOperation),
     );
     expect(early.code).toBe("coordination.plan-status");
     expect(footprint(context)).toEqual(before);
   });
 
-  test("an iteration row requires the integration result and refuses without it", async () => {
-    const fixture = await seededWorkflow("complete-integration-required");
-    const { context } = fixture;
-    await preparePlan(fixture, OWN_PLAN, "prepare-complete", undefined);
+  test("an iteration row requires the integration result and names the missing fact", async () => {
+    const fixture = await realIterationFixture("complete-integration-required");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "prepare-complete", {
+      worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN),
+      workingBranch: `feature/${OWN_PLAN}`,
+      qaGate: "mandatory",
+    });
     await progressPlan(fixture, OWN_PLAN, "progress-start", "InProgress");
     await progressPlan(fixture, OWN_PLAN, "progress-review", "InReview");
     const before = footprint(context);
+    const evidence = completionEvidence(context, sourceSha);
 
+    // Otherwise-valid evidence, only the integration pair omitted: the refusal
+    // names the missing integration fact, and nothing is written.
     const missing = await refusalOf(() =>
       planCall(fixture, OWN_PLAN, "complete-no-integration", await planTokenOf(fixture, OWN_PLAN), {
         kind: "complete",
-        evidence: {
-          qc: { decision: "Approve", reports: [], consolidated: "" },
-          qa: { gate: "mandatory", decision: "pass", report: "" },
-        },
-      } as unknown as CoordinationOperation),
+        evidence,
+      } as CoordinationOperation),
     );
-    expect(typeof missing.code).toBe("string");
+    expect(missing.code).toBe("coordination.invalid-input");
+    expect(`${String(missing.message)} ${JSON.stringify(missing.details ?? {})}`).toMatch(/integration/);
     expect(footprint(context)).toEqual(before);
   });
+
+  test("the iteration route completes on the real serial merge, records it, releases the claim and replays", async () => {
+    const fixture = await realIterationFixture("complete-integration-success");
+    const { context, sourceSha, baseSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "prepare-int", {
+      worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN),
+      workingBranch: `feature/${OWN_PLAN}`,
+      qaGate: "mandatory",
+    });
+    await progressPlan(fixture, OWN_PLAN, "progress-int-start", "InProgress");
+    await progressPlan(fixture, OWN_PLAN, "progress-int-review", "InReview");
+    // The operator performs the real serial merge.
+    const resultSha = mergeInto(fixture.integrationPath, sourceSha, "Merge plan-a");
+    const evidence = completionEvidence(context, sourceSha);
+    const receipt = await planCall(fixture, OWN_PLAN, "complete-int", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete",
+      evidence,
+      integration: { base_sha: baseSha, result_sha: resultSha },
+    } as CoordinationOperation);
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data.plan.status).toBe("Done");
+    const completion = receipt.data.coordination?.completion;
+    expect(completion).toMatchObject({ source_branch: `feature/${OWN_PLAN}`, source_sha: sourceSha });
+    expect(completion?.integration).toMatchObject({ base_sha: baseSha, result_sha: resultSha });
+    expect(completion?.completed_by).toBe(COORDINATOR_ID);
+    // Replay is a recorded-receipt read: no Git, no rewrite of the timestamp.
+    const replay = await planCall(fixture, OWN_PLAN, "complete-int", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete",
+      evidence,
+      integration: { base_sha: baseSha, result_sha: resultSha },
+    } as CoordinationOperation);
+    expect(replay.replayed).toBe(true);
+    expect(replay.data.coordination?.completion?.completed_at).toBe(completion?.completed_at);
+  }, 30000);
+
+  test("the standalone development route completes on the real source checkout and refuses an integration input", async () => {
+    const fixture = await realStandaloneFixture("complete-standalone-success");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "prepare-sa", {
+      worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN),
+      workingBranch: `feature/${OWN_PLAN}`,
+      qaGate: "mandatory",
+    });
+    await progressPlan(fixture, OWN_PLAN, "progress-sa-start", "InProgress");
+    await progressPlan(fixture, OWN_PLAN, "progress-sa-review", "InReview");
+    const evidence = completionEvidence(context, sourceSha);
+    const before = footprint(context);
+    const contaminated = await refusalOf(() =>
+      planCall(fixture, OWN_PLAN, "complete-sa-contaminated", await planTokenOf(fixture, OWN_PLAN), {
+        kind: "complete",
+        evidence,
+        integration: { base_sha: sourceSha, result_sha: sourceSha },
+      } as CoordinationOperation),
+    );
+    expect(contaminated.code).toBe("coordination.invalid-transition");
+    expect(footprint(context)).toEqual(before);
+
+    const receipt = await planCall(fixture, OWN_PLAN, "complete-sa", await planTokenOf(fixture, OWN_PLAN), {
+      kind: "complete",
+      evidence,
+    } as CoordinationOperation);
+    expect(receipt.data.plan.status).toBe("Done");
+    expect(receipt.data.coordination?.completion?.integration).toBeUndefined();
+  }, 30000);
+
+  test("a source checkout advanced between the proof and the commit refuses with no DB mutation", async () => {
+    const fixture = await realStandaloneFixture("complete-witness-gap");
+    const { context, sourceSha } = fixture;
+    await preparePlan(fixture, OWN_PLAN, "prepare-witness", {
+      worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN),
+      workingBranch: `feature/${OWN_PLAN}`,
+      qaGate: "mandatory",
+    });
+    await progressPlan(fixture, OWN_PLAN, "progress-witness-start", "InProgress");
+    await progressPlan(fixture, OWN_PLAN, "progress-witness-review", "InReview");
+    const evidence = completionEvidence(context, sourceSha);
+    const before = footprint(context);
+    let seamRan = false;
+    // The seam runs after the precheck proof and before the commit: advancing
+    // the real checkout there must make the re-witnessed Git proof refuse.
+    setCompleteWitnessGapForTest(() => {
+      seamRan = true;
+      commit(join(context.harnessDir, "worktrees", OWN_PLAN), "late.txt", "late\n", "chore: late");
+    });
+    try {
+      const refusal = await refusalOf(() =>
+        planCall(fixture, OWN_PLAN, "complete-witness", await planTokenOf(fixture, OWN_PLAN), {
+          kind: "complete",
+          evidence,
+        } as CoordinationOperation),
+      );
+      expect(seamRan).toBe(true);
+      expect(refusal.code).toBe("coordination.git-proof");
+      expect(footprint(context)).toEqual(before);
+      expect(planRow(context, OWN_PLAN).status).toBe("InReview");
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
+    }
+  }, 30000);
 
   test("the published entry point dispatches the same closed union as the direct verb", () => {
     expect(publishedMutateExecutionPlan).toBe(mutateExecutionPlan);
@@ -760,61 +1013,18 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
 });
 
 /* ------------------------------------------------------------------------ *
- * `complete` witness gap — a moved source checkout never completes on stale proof
- * ------------------------------------------------------------------------ */
-
-describe("execution-completion: witness revalidation", () => {
-  test("a source checkout advanced between the proof and the commit refuses with no DB mutation", async () => {
-    const fixture = await seededWorkflow("complete-witness-gap");
-    const { context } = fixture;
-    await preparePlan(fixture, OWN_PLAN, "prepare-witness", {
-      worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN),
-      workingBranch: `feature/${OWN_PLAN}`,
-    });
-    await progressPlan(fixture, OWN_PLAN, "progress-witness-start", "InProgress");
-    await progressPlan(fixture, OWN_PLAN, "progress-witness-review", "InReview");
-    const before = footprint(context);
-
-    // The witness gap fires exactly at the commit boundary; a standalone
-    // development row's proof is re-read there, so the completion refuses.
-    setCompleteWitnessGapForTest(() => {
-      throw Object.assign(new Error("git proof moved"), { code: "coordination.git-proof" });
-    });
-    try {
-      const refusal = await refusalOf(() =>
-        planCall(fixture, OWN_PLAN, "complete-witness", await planTokenOf(fixture, OWN_PLAN), {
-          kind: "complete",
-          evidence: {
-            source_sha: "a".repeat(40),
-            review_base: "b".repeat(40),
-            review_head: "a".repeat(40),
-            qc: { decision: "Approve", reports: [], consolidated: "" },
-            qa: { gate: "mandatory", decision: "pass", report: "" },
-          },
-        } as unknown as CoordinationOperation),
-      );
-      expect(refusal.code).toBe("coordination.git-proof");
-      expect(footprint(context)).toEqual(before);
-    } finally {
-      setCompleteWitnessGapForTest(undefined);
-    }
-  });
-});
-
-/* ------------------------------------------------------------------------ *
- * Concurrency and store-side facts
+ * §3.1 concurrency and catalog facts
  * ------------------------------------------------------------------------ */
 
 describe("execution-concurrency: §3.1 concurrent plan operations", () => {
   test("two plans mutated at once are both retained, and a conflicting write needs an explicit reread", async () => {
     const fixture = await seededWorkflow("concurrency-two-plans");
     const { context, coordinator, coordinatorCaller } = fixture;
-    const expected = await planTokenOf(fixture, OWN_PLAN);
     const settled = await Promise.allSettled([
       mutateExecutionPlan(domainContext(context, coordinatorCaller), {
         operationId: "concurrent-own",
         session: coordinator,
-        expected,
+        expected: await planTokenOf(fixture, OWN_PLAN),
         planId: OWN_PLAN,
         operation: { kind: "prepare" },
       }),
@@ -847,11 +1057,11 @@ describe("execution-concurrency: §3.1 concurrent plan operations", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * Issue-authority cross-checks
+ * Issue authority — a capture and its link are one store write
  * ------------------------------------------------------------------------ */
 
-describe("execution-issue-authority: capture is a store write", () => {
-  test("a capture and its link commit in the same store authority as the plan row", async () => {
+describe("execution-issue-authority: the store is the capture authority", () => {
+  test("a core capture and its plan provenance both land in the store", async () => {
     const fixture = await seededWorkflow("issue-authority-cross");
     const { context } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-issue", undefined);
@@ -876,7 +1086,6 @@ describe("execution-surface: the published DB verbs", () => {
     const engineIndex = await import("../src/index.js");
     expect(engineIndex.mutateExecutionPlan).toBe(mutateExecutionPlan);
     expect(engineIndex.mutateExecutionPlan.length).toBe(2);
-    // The per-operation transition verbs are not themselves published.
     for (const name of ["prepareExecutionPlan", "progressExecutionPlan", "residualAddExecutionPlan", "residualCloseExecutionPlan"]) {
       expect(name in engineIndex).toBe(false);
     }
@@ -884,20 +1093,22 @@ describe("execution-surface: the published DB verbs", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * Unprepared addressing
+ * Explicit addressing
  * ------------------------------------------------------------------------ */
 
 describe("execution-plan-address: explicit addressing", () => {
   test("an operation with no planId refuses and names the plan it must address", async () => {
     const fixture = await seededWorkflow("address-required");
     const { context, coordinatorCaller, coordinator } = fixture;
-    const refusal = await refusalOf(() =>
-      mutateExecutionPlan(domainContext(context, coordinatorCaller), {
-        operationId: "no-plan",
-        session: coordinator,
-        operation: { kind: "prepare" },
-      } as { operationId: string; session: ExecutionSessionRef; operation: CoordinationOperation }),
-    );
+    // The published intent type REQUIRES `planId`; a caller whose own layer has
+    // not supplied one reaches the engine only through a runtime boundary, so
+    // the deliberate omission is expressed as `unknown` and cast once here.
+    const planless = {
+      operationId: "no-plan",
+      session: coordinator,
+      operation: { kind: "prepare" },
+    } as unknown as Parameters<typeof mutateExecutionPlan>[1];
+    const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(context, coordinatorCaller), planless));
     expect(refusal.code).toBe("coordination.invalid-input");
     expect(String(refusal.message)).toContain("plan");
   });
@@ -916,7 +1127,7 @@ describe("execution-plan-address: explicit addressing", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * Session-row sanity
+ * One coordinator session row per workflow
  * ------------------------------------------------------------------------ */
 
 describe("execution-session-rows: one coordinator per workflow", () => {
@@ -926,9 +1137,7 @@ describe("execution-session-rows: one coordinator per workflow", () => {
       fixture.context,
       `select role, session_id, plan_id, state from execution_sessions where workflow_id = '${WORKFLOW_ID}'`,
     );
-    expect(sessions).toEqual([
-      { role: "coordinator", session_id: COORDINATOR_ID, plan_id: null, state: "active" },
-    ]);
+    expect(sessions).toEqual([{ role: "coordinator", session_id: COORDINATOR_ID, plan_id: null, state: "active" }]);
     expect(fixture.epoch).toBeGreaterThan(0);
   });
 });

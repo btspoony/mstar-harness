@@ -23,7 +23,7 @@ import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, FIXTURE_COORDINATOR_ID,
   git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureCode,
   ensureCoordinator, coordinatorCall, prepareCall, progressCall,
-  gitFixture, planRowOf,
+  gitFixture, planRowOf, headOf,
   completionEvidenceOf, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
 } from "./support/coordination-fixtures.js";
 
@@ -178,7 +178,7 @@ describe("binding", () => {
           sessionId: "second-coordinator",
         }),
       ),
-    ).toBe("coordination.duplicate-holder");
+    ).toBe("coordination.identity-mismatch");
     expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
 
     // An envelope that already occupies the id's role-scoped path is never
@@ -287,10 +287,14 @@ describe("binding", () => {
       ),
     ).toBe("coordination.invalid-input");
 
-    // A coordinator view of an unprepared row advertises its ordinary operations.
+    // The peer row already records its own ordinary scope metadata, so the view
+    // resolves that scope without any preparation record — `prepare` is not a
+    // precondition for addressing a row whose facts are already present.
     const unprepared = await readPlanCoordination(fixture.coordinatorSession, PEER_PLAN_ID, fixture.root);
     expect(unprepared.allowed_operations).toContain("prepare");
-    expect(unprepared.scope).toBeNull();
+    expect(unprepared.scope?.workingBranch).toBe("feature/plan-b");
+    expect(unprepared.scope?.worktreePath).toBe(fixture.peerWorktreePath);
+    expect(unprepared.prepared).toBeUndefined();
   });
 });
 
@@ -501,12 +505,25 @@ describe("findings-gate — issue authority (G2a)", () => {
     });
     const critical = added.issues![0]!;
 
+    // The operator performs the real serial merge, so every completion attempt
+    // below is otherwise valid and can only fail on the findings authority.
+    const baseSha = headOf(fixture.integrationPath);
+    git(
+      ["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", fixture.planSha, "-m", "Merge plan-a"],
+      fixture.integrationPath,
+    );
+    const integration = { base_sha: baseSha, result_sha: headOf(fixture.integrationPath) };
+
     // An unresolved critical blocks approval under the plan's cleanup mode —
     // read from the issue store, never from a register.
     const snapshotBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() =>
-        coordinatorCall(fixture, PLAN_ID, { kind: "complete", evidence: completionEvidenceOf(fixture, fixture.planSha) }),
+        coordinatorCall(fixture, PLAN_ID, {
+          kind: "complete",
+          evidence: completionEvidenceOf(fixture, fixture.planSha),
+          integration,
+        }),
       ),
     ).toBe("coordination.findings-open");
     expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
@@ -521,19 +538,14 @@ describe("findings-gate — issue authority (G2a)", () => {
     });
     expect(closed.outcome).toBe("residual-closed");
 
-    // With the finding disposed, the real merge completes the row.
-    const mergeSha = headOf(fixture.integrationPath);
-    git(
-      ["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", fixture.planSha, "-m", "Merge plan-a"],
-      fixture.integrationPath,
-    );
+    // With the finding disposed, the same otherwise-valid request completes.
     const completed = await coordinatorCall(
       fixture,
       PLAN_ID,
       {
         kind: "complete",
         evidence: completionEvidenceOf(fixture, fixture.planSha),
-        integration: { base_sha: mergeSha, result_sha: headOf(fixture.integrationPath) },
+        integration,
       },
     );
     expect(completed.outcome).toBe("completed");
@@ -545,8 +557,17 @@ describe("findings-gate — issue authority (G2a)", () => {
     await prepareCall(fixture, PLAN_ID);
     await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "start", evidence_paths: [] });
     await progressCall(fixture, PLAN_ID, { status: "InReview", summary: "review", evidence_paths: [] });
+    const baseSha = headOf(fixture.integrationPath);
+    git(
+      ["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", fixture.planSha, "-m", "Merge plan-a"],
+      fixture.integrationPath,
+    );
     const complete = () =>
-      coordinatorCall(fixture, PLAN_ID, { kind: "complete", evidence: completionEvidenceOf(fixture, fixture.planSha) });
+      coordinatorCall(fixture, PLAN_ID, {
+        kind: "complete",
+        evidence: completionEvidenceOf(fixture, fixture.planSha),
+        integration: { base_sha: baseSha, result_sha: headOf(fixture.integrationPath) },
+      });
 
     // A staged store is the pre-activation exclusion window: the bytes exist, but
     // the DB is not yet the findings authority, so the step refuses rather than
@@ -682,6 +703,10 @@ describe("scope-and-revisions", () => {
         }),
       ),
     ).toBe("coordination.invalid-input");
+
+    // Todo → InProgress is the ordinary start report.
+    const started = await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "start", evidence_paths: [evidence] });
+    expect(started.outcome).toBe("progressed");
 
     const progressed = await progressCall(fixture, PLAN_ID, {
       status: "InReview",

@@ -666,33 +666,31 @@ describe("file-route direct completion", () => {
     expect(prepared.outcome).toBe("prepared");
     rmSync(fixture.planPath);
 
-    // The row's own document is missing: the address is refused with its own
-    // code and the snapshot the row lives in is unchanged.
+    // The row's own document is missing: the read refuses with its own code and
+    // the snapshot the row lives in is unchanged.
     const before = readJson(fixture.snapshotPath);
-    const code = await failureCode(async () => {
-      try {
-        await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
-      } catch (error) {
-        throw error;
-      }
-    });
-    expect(typeof code === "string" || code === undefined).toBe(true);
+    const code = await errorCodeOf(() => readPlanCoordination(sessionPath, PLAN_ID, fixture.root));
+    expect(typeof code).toBe("string");
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
 
-  test("a plan session that is not the coordinator cannot read or mutate a row", async () => {
+  test("a session that is not the coordinator cannot address a row, for read or mutation", async () => {
     const fixture = makeFixture();
     await ensureCoordinator(fixture);
     const stray = join(fixture.root, "not-an-envelope.json");
     writeJson(stray, { role: "plan-pm", session_id: "x", workflow_id: WORKFLOW_ID, plan_id: PLAN_ID });
-    const code = await failureCode(async () => {
-      try {
-        await readPlanCoordination(stray, PLAN_ID, fixture.root);
-      } catch (error) {
-        throw error;
-      }
-    });
-    expect(typeof code).toBe("string");
+    const before = readJson(fixture.snapshotPath);
+
+    // A file that is not a coordinator envelope is refused on the read...
+    const readCode = await errorCodeOf(() => readPlanCoordination(stray, PLAN_ID, fixture.root));
+    expect(typeof readCode).toBe("string");
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
+    // ...and on the public mutation, which never adopts another seat.
+    const mutateCode = await errorCodeOf(() =>
+      mutatePlanCoordination({ sessionPath: stray, planId: PLAN_ID, operation: { kind: "prepare", config: { workingBranch: "feature/plan-a" } } }),
+    );
+    expect(typeof mutateCode).toBe("string");
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
 
   test("a second concurrent operation on one row settles with one committed effect (concurrency)", async () => {

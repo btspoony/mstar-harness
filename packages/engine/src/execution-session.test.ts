@@ -307,7 +307,7 @@ describe("execution session recovery (S2/E03)", () => {
     // A foreign coordinator session id names a binding this store does not
     // hold: the reconstruction refuses instead of adopting the live holder.
     const foreign = await refusalOf(() => resumeExecutionSession(domainContext(fixture.context, caller(FOREIGN_COORDINATOR_ID))));
-    expect(foreign.code).toBe("coordination.session-not-found");
+    expect(foreign.code).toBe("coordination.identity-mismatch");
     expect(foreign.details).toMatchObject({ workflow_id: WORKFLOW_ID, role: "coordinator" });
     expect(foreign.recovery).toMatchObject({ outcome: "unresolved", commitState: "none", applied: [] });
     expect(foreign.recovery.unresolved).toHaveLength(1);

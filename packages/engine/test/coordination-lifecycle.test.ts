@@ -39,8 +39,8 @@ import {
   git, writeText, writeJson, readJson, makeFixture, sleep, errorCodeOf,
   ensureCoordinator, prepareCall, progressCall, completeCall,
   headOf, snapshotOf, planRowOf, updatePlanRow,
-  completionOf, preparedOf, metadataOf, recordField, arrayField,
-  acceptedFixture, acceptedStandaloneFixture, reportOnlyGitFixture,
+  completionOf, preparedOf, metadataOf, recordField, arrayField, sha256OfFile,
+  acceptedFixture, acceptedStandaloneFixture, reportOnlyGitFixture, standaloneGitFixture,
   sealStoreForReaders, afterEachCleanup,
   completionEvidenceOf,
 } from "./support/coordination-fixtures.js";
@@ -56,6 +56,12 @@ function mergeFeature(fixture: GitFixture): string {
     fixture.integrationPath,
   );
   return headOf(fixture.integrationPath);
+}
+
+/** A distinct real commit on the integration branch the row does not name as its base. */
+function otherBaseCheckout(fixture: GitFixture): string {
+  git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "other base"], fixture.integrationPath);
+  return fixture.integrationPath;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -164,6 +170,80 @@ describe("iteration-completion", () => {
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
   }, 30000);
+
+  test("an unrelated merge, a wrong base and a non-ancestor review head are all refused (PR241-G2)", async () => {
+    // A real integration attempt that merged an UNRELATED commit, not the plan
+    // source: the recorded `result_sha` has the wrong second parent.
+    const wrongParents = await acceptedFixture();
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "unrelated"], wrongParents.integrationPath);
+    const unrelated = headOf(wrongParents.integrationPath);
+    const beforeUnrelated = readJson(wrongParents.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        completeCall(wrongParents, PLAN_ID, completionEvidenceOf(wrongParents, wrongParents.planSha), {
+          base_sha: wrongParents.baseSha,
+          result_sha: unrelated,
+        }),
+      ),
+    ).toBe("coordination.integration-diverged");
+    expect(readJson(wrongParents.snapshotPath)).toEqual(beforeUnrelated);
+    expect(planRowOf(wrongParents, PLAN_ID).status).toBe("InReview");
+
+    // A real two-parent merge whose base is NOT the recorded base: the parents
+    // do not match `[base_sha, source_sha]`.
+    const wrongBase = await acceptedFixture();
+    const otherBase = headOf(otherBaseCheckout(wrongBase));
+    const mergeSha = mergeFeature(wrongBase);
+    const beforeWrongBase = readJson(wrongBase.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        completeCall(wrongBase, PLAN_ID, completionEvidenceOf(wrongBase, wrongBase.planSha), {
+          base_sha: otherBase,
+          result_sha: mergeSha,
+        }),
+      ),
+    ).toBe("coordination.integration-diverged");
+    expect(readJson(wrongBase.snapshotPath)).toEqual(beforeWrongBase);
+
+    // A valid merge whose recorded review head is not an ancestor of the source
+    // commit: the source ancestry check refuses.
+    const badHead = await acceptedFixture();
+    const mergeId = mergeFeature(badHead);
+    const evidence = completionEvidenceOf(badHead, badHead.planSha);
+    const beforeHead = readJson(badHead.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        completeCall(
+          badHead,
+          PLAN_ID,
+          { ...evidence, review_head: "b".repeat(40) },
+          { base_sha: badHead.baseSha, result_sha: mergeId },
+        ),
+      ),
+    ).toMatch(/^coordination\.(git-proof|integration-diverged)$/);
+    expect(readJson(badHead.snapshotPath)).toEqual(beforeHead);
+    expect(planRowOf(badHead, PLAN_ID).status).toBe("InReview");
+  }, 30000);
+
+  test("a result forced unreachable from the recorded integration branch is refused (T1-E-008)", async () => {
+    const fixture = await acceptedFixture();
+    const mergeSha = mergeFeature(fixture);
+    // The merge exists as an object but the integration branch is force-moved
+    // below it, so no commit on the live HEAD reaches the recorded result.
+    git(["reset", "-q", "--hard", fixture.baseSha], fixture.integrationPath);
+    expect(headOf(fixture.integrationPath)).toBe(fixture.baseSha);
+    const before = readJson(fixture.snapshotPath);
+    expect(
+      await errorCodeOf(() =>
+        completeCall(fixture, PLAN_ID, completionEvidenceOf(fixture, fixture.planSha), {
+          base_sha: fixture.baseSha,
+          result_sha: mergeSha,
+        }),
+      ),
+    ).toBe("coordination.integration-diverged");
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+  }, 30000);
 });
 
 /* ------------------------------------------------------------------------ *
@@ -244,6 +324,61 @@ describe("standalone-development-completion", () => {
     } finally {
       setCompleteStandaloneMutateGapForTest(undefined);
     }
+  }, 30000);
+
+  test("complete from InProgress without any prepare entails InReview and Done in one write (defaults)", async () => {
+    // No ceremonial prepare: the ordinary source facts live on the row metadata,
+    // and the effective defaults are QA mandatory + findings allow-residual.
+    const fixture = await standaloneGitFixture();
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "start", evidence_paths: [] });
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
+    const completed = await completeCall(fixture, PLAN_ID, completionEvidenceOf(fixture, fixture.planSha));
+    expect(completed.outcome).toBe("completed");
+    const row = planRowOf(fixture, PLAN_ID);
+    expect(row.status).toBe("Done");
+    expect(completionOf(row).qa.gate).toBe("mandatory");
+    // The defaults are the effective config the row records; no prepared block
+    // was ever written.
+    expect(preparedOf(row)).toBeUndefined();
+  }, 30000);
+
+  test("Todo and Blocked rows refuse complete; the same row after InProgress completes", async () => {
+    const fixture = await standaloneGitFixture();
+    const evidence = () => completionEvidenceOf(fixture, fixture.planSha);
+
+    // From Todo: refused, no write.
+    const beforeTodo = readJson(fixture.snapshotPath);
+    expect(await errorCodeOf(() => completeCall(fixture, PLAN_ID, evidence()))).toBe("coordination.plan-status");
+    expect(readJson(fixture.snapshotPath)).toEqual(beforeTodo);
+
+    // From Blocked: refused as well.
+    await progressCall(fixture, PLAN_ID, { status: "Blocked", summary: "blocked", evidence_paths: [] });
+    const beforeBlocked = readJson(fixture.snapshotPath);
+    expect(await errorCodeOf(() => completeCall(fixture, PLAN_ID, evidence()))).toBe("coordination.plan-status");
+    expect(readJson(fixture.snapshotPath)).toEqual(beforeBlocked);
+
+    // InProgress completes.
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "resume", evidence_paths: [] });
+    const completed = await completeCall(fixture, PLAN_ID, evidence());
+    expect(completed.outcome).toBe("completed");
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("Done");
+  }, 30000);
+
+  test("a replay after the Git facts moved still serves the recorded receipt unchanged", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    const evidence = completionEvidenceOf(fixture, fixture.planSha);
+    const completed = await completeCall(fixture, PLAN_ID, evidence);
+    expect(completed.outcome).toBe("completed");
+    const recorded = completionOf(planRowOf(fixture, PLAN_ID));
+    const doneSnapshot = readJson(fixture.snapshotPath);
+
+    // The source checkout moves after the commit: a replay is answered from the
+    // recorded receipt, not by re-running Git.
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "post-done"], fixture.worktreePath);
+    const replay = await completeCall(fixture, PLAN_ID, evidence);
+    expect(replay.outcome).toBe(completed.outcome);
+    expect(readJson(fixture.snapshotPath)).toEqual(doneSnapshot);
+    expect(completionOf(planRowOf(fixture, PLAN_ID)).completed_at).toBe(recorded.completed_at);
   }, 30000);
 
   test("delivery evidence is captured before Done and completes the close with a full registered tail (A19)", async () => {
@@ -360,6 +495,32 @@ describe("report-only-completion", () => {
       await errorCodeOf(() => completeCall(contaminated, PLAN_ID, completionEvidenceOf(contaminated, contaminated.planSha))),
     ).toBe("coordination.invalid-transition");
     expect(readJson(contaminated.snapshotPath)).toEqual(contaminatedBefore);
+  }, 30000);
+
+  test("a report-only row refuses integration contamination while keeping the policy, and completes without source Git fields", async () => {
+    // The registered policy and its recorded fulfilment both stand; only the
+    // completion record is removed: the refusal is the missing fulfilment, not
+    // a Git requirement.
+    const noFulfilment = await reportOnlyFixture();
+    const withoutCompletion = { ...snapshotOf(noFulfilment) };
+    delete (withoutCompletion.delivery as Record<string, unknown>).completion;
+    writeJson(noFulfilment.snapshotPath, withoutCompletion);
+    const beforeFulfilment = readJson(noFulfilment.snapshotPath);
+    expect(
+      await errorCodeOf(() => completeCall(noFulfilment, PLAN_ID, completionEvidenceOf(noFulfilment, noFulfilment.planSha))),
+    ).toBe("coordination.invalid-transition");
+    expect(readJson(noFulfilment.snapshotPath)).toEqual(beforeFulfilment);
+
+    // No source Git fields in the evidence at all: the report-only route records
+    // them as optional provenance and never requires a checkout.
+    const provenanceOnly = await reportOnlyFixture();
+    const evidence = completionEvidenceOf(provenanceOnly, provenanceOnly.planSha);
+    const withoutGit = { qc: evidence.qc, qa: evidence.qa };
+    const completed = await completeCall(provenanceOnly, PLAN_ID, withoutGit as CompletionEvidence);
+    expect(completed.outcome).toBe("completed");
+    const completion = completionOf(planRowOf(provenanceOnly, PLAN_ID));
+    expect(completion.source_sha).toBeNull();
+    expect(completion.integration).toBeUndefined();
   }, 30000);
 });
 
@@ -528,6 +689,30 @@ describe("seam-regressions", () => {
     )).not.toBe(undefined);
     expect(readJson(fixture.snapshotPath)).toEqual(before);
   });
+
+  test("outer close refuses an unfinished row and never synthesizes completion, then a direct complete allows the close", async () => {
+    const fixture = await acceptedStandaloneFixture();
+    // Capture a full registered delivery tail early (legal before Done).
+    await recordWorkflowDelivery(WORKFLOW_ID, fixture.workflowDir, {
+      sessionPath: fixture.coordinatorSession,
+      evidence: { compound: { outcome: "created" } },
+      at: "2026-09-15T01:00:00Z",
+    });
+    const before = snapshotOf(fixture);
+    // The row is InReview, not Done: the close refuses instead of completing it.
+    await expect(
+      closeWorkflow(WORKFLOW_ID, fixture.workflowDir, { sessionPath: fixture.coordinatorSession, endedAt: "2026-09-15T02:00:00Z" }),
+    ).rejects.toThrow();
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
+    expect(snapshotOf(fixture).status).not.toBe("completed");
+    void before;
+
+    // The lawful sequence: direct complete, then the close.
+    await completeCall(fixture, PLAN_ID, completionEvidenceOf(fixture, fixture.planSha));
+    expect(planRowOf(fixture, PLAN_ID).status).toBe("Done");
+    const closed = await closeWorkflow(WORKFLOW_ID, fixture.workflowDir, { sessionPath: fixture.coordinatorSession, endedAt: "2026-09-15T03:00:00Z" });
+    expect(closed.status).toBe("completed");
+  }, 30000);
 
   test("the retired register surface is refused and a status root replacement is judged", async () => {
     const fixture = makeFixture();

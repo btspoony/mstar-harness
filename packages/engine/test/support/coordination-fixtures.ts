@@ -157,8 +157,11 @@ export function makeFixture(): Fixture {
   writeText(peerPlanPath, "# plan b\n");
   mkdirSync(sddDir, { recursive: true });
   mkdirSync(peerSddDir, { recursive: true });
-  mkdirSync(worktreePath, { recursive: true });
-  mkdirSync(peerWorktreePath, { recursive: true });
+  // Real feature checkouts on the branches a `prepare` names: the ordinary
+  // config validation compares the ACTUAL checkout/branch, so an empty
+  // directory would misrepresent a valid config.
+  git(["worktree", "add", "-q", "-b", "feature/plan-a", worktreePath], root);
+  git(["worktree", "add", "-q", "-b", "feature/plan-b", peerWorktreePath], root);
 
   writeJson(join(harness, "status.json"), {
     version: 2,
@@ -378,11 +381,11 @@ export function preparedOf(row: Record<string, unknown>): Record<string, unknown
  * caller submits; the engine hashes them into recorded `EvidenceRef`s.
  */
 export function completionEvidenceOf(
-  fixture: Fixture,
+  fixture: GitFixture,
   sourceSha: string,
   overrides: Partial<CompletionEvidence> = {},
 ): CompletionEvidence {
-  const sddDir = overrides.source_sha === undefined ? fixture.sddDir : fixture.sddDir;
+  const sddDir = fixture.sddDir;
   const reports = [join(sddDir, "review", "qc1.md"), join(sddDir, "review", "qc2.md")];
   for (const path of reports) writeText(path, "# qc report\n");
   const consolidated = join(sddDir, "review", "qc.md");
@@ -425,13 +428,8 @@ export async function gitFixture(): Promise<GitFixture> {
   await storeBacked(fixture, [PLAN_ID, PEER_PLAN_ID]);
   fixture.baseSha = headOf(fixture.root);
   fixture.integrationPath = join(fixture.root, "wt-integration");
-  for (const [path, branch] of [
-    [fixture.worktreePath, "feature/plan-a"],
-    [fixture.peerWorktreePath, "feature/plan-b"],
-  ] as const) {
-    rmSync(path, { recursive: true, force: true });
-    git(["worktree", "add", "-q", "-b", branch, path], fixture.root);
-  }
+  // The two feature checkouts already exist (makeFixture created them on their
+  // branches); the iteration fixture only adds the real integration checkout.
   git(["worktree", "add", "-q", "-b", "integration/plan-a", fixture.integrationPath], fixture.root);
   writeText(join(fixture.worktreePath, "slice.txt"), "slice A\n");
   git(["add", "-A"], fixture.worktreePath);
@@ -454,8 +452,7 @@ export async function standaloneGitFixture(): Promise<GitFixture> {
   await storeBacked(fixture, [PLAN_ID]);
   fixture.baseSha = headOf(fixture.root);
   fixture.integrationPath = join(fixture.root, "wt-integration-unused");
-  rmSync(fixture.worktreePath, { recursive: true, force: true });
-  git(["worktree", "add", "-q", "-b", "feature/plan-a", fixture.worktreePath], fixture.root);
+  // The feature checkout on `feature/plan-a` already exists from makeFixture.
   writeText(join(fixture.worktreePath, "standalone.txt"), "standalone slice\n");
   git(["add", "-A"], fixture.worktreePath);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: standalone"], fixture.worktreePath);

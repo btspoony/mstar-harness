@@ -1954,7 +1954,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
         domainContext(context, sessionCaller("wf-other", "host-coord")),
         sessionBind("wf-1", workflowToken, "foreign-workflow"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
 
     expect(sessionRows(context)).toEqual([]);
     expect(executionFootprint(context)).toEqual(footprint);
@@ -1978,7 +1978,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     const currentToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
     await expect(
       bindExecutionSession(domainContext(context, sessionCaller("wf-1", "host-second")), sessionBind("wf-1", currentToken, "second")),
-    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
     // (3) The planted legacy envelope is neither read nor rewritten.
     const before = JSON.parse(readFileSync(envelope, "utf8")) as Record<string, unknown>;
     expect(before.role).toBe("coordinator");
@@ -2019,7 +2019,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
         domainContext(context, sessionCaller("wf-1", "adopter-2")),
         sessionBind("wf-1", (await readExecutionState(context)).data.workflows[0]!.workflowToken, "adopt-duplicate"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
     expect(bound.data.sessionId).toBe("adopter-1");
   });
 
@@ -2095,13 +2095,13 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
         domainContext(context, sessionCaller("wf-1", "foreign-b")),
         sessionBind("wf-1", (await readExecutionState(context)).data.workflows[0]!.workflowToken, "foreign-after-adopt"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
     await expect(
       bindExecutionSession(
         domainContext(context, sessionCaller("wf-1", "adopter-c")),
         sessionBind("wf-1", (await readExecutionState(context)).data.workflows[0]!.workflowToken, "adopt-again"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.duplicate-holder" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
     db = rawDb(storePath(context));
     try {
       expect(one(db, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({
@@ -2166,7 +2166,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
       read(sessionCaller("wf-1", "host-ghost"), { ...bound.data, sessionId: "host-ghost" }, "p-1"),
     ).rejects.toMatchObject({ code: "execution.session-unavailable" });
     await expect(read(sessionCaller("wf-1", "host-else"), bound.data, "p-1")).rejects.toMatchObject({
-      code: "coordination.session-mismatch",
+      code: "coordination.identity-mismatch",
     });
     // The coordinator reads any plan of its workflow; a missing plan is refused.
     expect((await read(coordinator, bound.data, "p-2")).token).toBe(planTokens["p-2"]);
@@ -2258,7 +2258,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     ).rejects.toMatchObject({ code: "coordination.invalid-input" });
     await expect(
       readExecutionPlan(domainContext(context, sessionCaller("wf-1", "host-else")), bound.data, "p-1"),
-    ).rejects.toMatchObject({ code: "coordination.session-mismatch" });
+    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
 
     // With no store at all the same references refuse identically: the gate
     // never opens one, so no store-open failure can answer a bad request first.
