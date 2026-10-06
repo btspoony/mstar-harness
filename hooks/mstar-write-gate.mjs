@@ -13828,10 +13828,13 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
-  for (let dir = start;; dir = dirname10(dir)) {
+  for (let dir = start;; ) {
     let linked = false;
     try {
-      linked = statSync6(join19(dir, ".git")).isFile();
+      const marker = statSync6(join19(dir, ".git"));
+      if (marker.isDirectory())
+        return resolveHarnessDir(start, { workspaceRoot: dir });
+      linked = marker.isFile();
     } catch (error) {
       const code2 = errorCode(error);
       if (code2 !== "ENOENT" && code2 !== "ENOTDIR")
