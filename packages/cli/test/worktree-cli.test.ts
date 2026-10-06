@@ -818,7 +818,7 @@ test("retained track ownership refuses main and ordinary progress repairs retire
     const foreignRoot = join(root, "foreign-control");
     mkdirSync(foreignRoot);
     const beforeForeignRead = readFileSync(snapshot, "utf8");
-    expectOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", foreignRoot], root), "refused", "coordination.scope-mismatch", 1);
+    expectOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", foreignRoot], root), "refused", "coordination.scope-mismatch", 1, "plan.show");
     expect(readFileSync(snapshot, "utf8")).toBe(beforeForeignRead);
     expect(existsSync(join(foreignRoot, "store.db"))).toBe(false);
     const corrected = commandOutput(runCli([
