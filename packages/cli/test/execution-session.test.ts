@@ -189,7 +189,9 @@ async function activeFixture(label: string): Promise<Fixture> {
   const evidencePath = join(sddDir, "evidence.md");
   writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
   writeText(evidencePath, "# evidence\n");
-  mkdirSync(worktreePath, { recursive: true });
+  // A REAL checkout on the branch prepare records: prepare validates the actual
+  // checkout and branch, not merely that a directory exists.
+  execFileSync("git", ["worktree", "add", "-q", "-b", "feature/exec-session", worktreePath], { cwd: root });
   return { root, harnessDir, context, planMarkdown, worktreePath, sddDir, evidencePath };
 }
 
@@ -1281,25 +1283,39 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(prepared.exitCode, prepared.stdout).toBe(0);
 
-    // The configuration is revisable while the row is active: a same-value
-    // re-prepare is an ordinary no-op, not a sealed admission gate.
+    // The configuration is revisable while the row is active: a CHANGED
+    // configuration — a different real checkout and branch, recorded while the
+    // row is already active — is adopted, not treated as a sealed admission
+    // gate. (A same-value re-prepare only proves an equal-config no-op.)
+    const correctedPath = join(fixture.root, "wt-corrected");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/corrected", correctedPath], { cwd: fixture.root });
     const reprepped = runCli(
       ["plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
-        ...prepareConfig(fixture, { worktreePath: fixture.featurePath, workingBranch: "feature/exec-session" }),
+        ...prepareConfig(fixture, { worktreePath: correctedPath, workingBranch: "feature/corrected" }),
         "--operation", "prepare-direct-2", "--harness", fixture.harnessDir],
       fixture,
       identity,
     );
     expect(reprepped.exitCode, reprepped.stdout).toBe(0);
+    // The corrected configuration is the one the row now records.
+    const correctedScope = objectMember(objectMember(dataOf(reprepped), "data"), "coordination");
+    expect(objectMember(objectMember(correctedScope, "prepared"), "qa_gate")).toBe("mandatory");
+    const shownAfterCorrection = runCli(["plan", "show", "--plan", PLAN_ID, "--harness", fixture.harnessDir], fixture, identity);
+    expect(stringMember(objectMember(objectMember(dataOf(shownAfterCorrection), "data"), "scope"), "workingBranch")).toBe("feature/corrected");
 
-    const progressPath = join(fixture.root, "progress-review.json");
-    writeJson(progressPath, { status: "InReview", summary: "ready for review", evidence_paths: [fixture.qaReport] });
-    const progressed = runCli(
-      ["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
-      fixture,
-      identity,
-    );
-    expect(progressed.exitCode, progressed.stdout).toBe(0);
+    // The ordinary start record first: prepare preserves row status, so the
+    // first progress report moves Todo -> InProgress and the review report then
+    // moves InProgress -> InReview.
+    for (const status of ["InProgress", "InReview"]) {
+      const progressPath = join(fixture.root, `progress-${status}.json`);
+      writeJson(progressPath, { status, summary: `direct coordinator ${status}`, evidence_paths: [fixture.qaReport] });
+      const progressed = runCli(
+        ["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
+        fixture,
+        identity,
+      );
+      expect(progressed.exitCode, progressed.stdout).toBe(0);
+    }
     expect(await storedRowStatus(fixture)).toBe("InReview");
 
     // The one direct completion: QC/QA evidence plus the source commit the row's
@@ -1392,10 +1408,12 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       identity,
     );
     expect(prepared.exitCode, prepared.stdout).toBe(0);
-    const progressPath = join(fixture.root, "progress-review.json");
-    writeJson(progressPath, { status: "InReview", summary: "ready", evidence_paths: [fixture.qaReport] });
-    const progressed = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir], fixture, identity);
-    expect(progressed.exitCode, progressed.stdout).toBe(0);
+    for (const status of ["InProgress", "InReview"]) {
+      const progressPath = join(fixture.root, `progress-${status}.json`);
+      writeJson(progressPath, { status, summary: `direct coordinator ${status}`, evidence_paths: [fixture.qaReport] });
+      const progressed = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir], fixture, identity);
+      expect(progressed.exitCode, progressed.stdout).toBe(0);
+    }
 
     const evidencePath = join(fixture.root, "completion.json");
     writeJson(evidencePath, {

@@ -106,16 +106,6 @@
  * row re-evaluated next scan) — an unverifiable record is never treated as
  * "no pick".
  *
- * The hint ALSO carries the session's VERIFIED live lease holder, read at
- * this edge from the `agents` service (`ctx.get('agents')` → `get(sessionId)`
- * → the shared {@link verifiedLeaseHolderOf} check). The dispatch gate
- * forwards the same identity, so a session whose lifecycle is only decidable
- * by its lease (two active lifecycles sharing one `control_worktree_path`)
- * records its rows under the lifecycle whose lease authorized the dispatch
- * instead of resolving unbound and excluding them permanently. A cold/resumed
- * session with no live Agent carries no holder — the hint then falls back to
- * the picker identity, exactly as before.
- *
  * Observe-only (plan Global Constraints: W3 / N5): ZERO gating — every read
  * and append is try/catch-contained; a throwing session read logs one warn
  * and the run is unaffected; all appends go through `recordWorkflowEvent`
@@ -149,7 +139,7 @@ import type { AgentFlowWorkflowEvent } from './agent-flow.ts'
 // binding at THIS composition edge and hands the resolver a plain hint, so
 // `agent-flow.ts` never imports the store (the store imports its lock).
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../engine-status-store.ts'
-import { asRecord, verifiedLeaseHolderOf } from './_shared.ts'
+import { asRecord } from './_shared.ts'
 import type { HarnessResolver } from './_shared.ts'
 // Type-only (erased at runtime): the carrying-session hint shape.
 import type { SessionHint } from './workflow-selection.ts'
@@ -682,22 +672,7 @@ export function registerWorkflowLedger(
     else if (floor > pending.floor) pending.floor = floor
   }
 
-  /**
-   * The session's VERIFIED live lease-holder id, read per observation
-   * (never captured at apply): the one identity that makes a lease-bound
-   * session's lifecycle decidable when several active lifecycles share one
-   * `control_worktree_path`. The dispatch gate forwards the same identity for
-   * the dispatch that produced the row, so the ledger must not resolve
-   * differently (an ambiguous cwd rung would exclude an authorized row
-   * permanently). No live Agent (cold/resumed session) or an unverifiable
-   * handle → `undefined`, exactly the pre-lease hint.
-   */
-  const leaseHolderOf = (sessionId: string, cwd: string | undefined): string | undefined => {
-    const agents = ctx.get('agents') as AgentsView | undefined
-    const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined
-    return verifiedLeaseHolderOf(agent, sessionId, cwd)
-  }
-
+  
   /**
    * Record one mapped row into an EXPLICITLY resolved workflow dir: the
    * append + cursor critical section (`recordWorkflowEvent`, which owns the
@@ -829,11 +804,9 @@ export function registerWorkflowLedger(
     // row is left alone (no workflow-dir write, no floor write) and
     // re-evaluated at the next scan rather than attributed to whichever
     // lifecycle happens to resolve.
-    const holder = leaseHolderOf(sid, workspace)
     const identity: SessionHint = {
       sessionId: sid,
       ...(workspace === undefined ? {} : { cwd: workspace }),
-      ...(holder === undefined ? {} : { leaseHolder: holder }),
     }
     let hint = identity
     let floor = 0
@@ -928,11 +901,9 @@ export function registerWorkflowLedger(
     // The SAME hint `consume` builds for this session (identity + lease
     // holder + pick), or the scan would start from a different workflow dir
     // than the rows belong in.
-    const holder = leaseHolderOf(sid, workspace)
     const hint: SessionHint = {
       sessionId: sid,
       cwd: workspace,
-      ...(holder === undefined ? {} : { leaseHolder: holder }),
       ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
     }
     const workflowDir = resolveAgentFlowWriteTarget(harnessDir, hint).dir

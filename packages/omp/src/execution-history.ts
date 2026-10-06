@@ -343,6 +343,10 @@ function readExecutionBindingShape(value: unknown): ExecutionHostHistoryExecutio
     return null;
   }
   if (session.role !== "coordinator") return null;
+  // No per-plan scope: a `planId` member is the removed scoped seat's field,
+  // and silently normalizing it away would re-home that seat as coordinator
+  // history. Presence alone is refused.
+  if ("planId" in session) return null;
   if (typeof session.epoch !== "number" || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return null;
   return {
     harnessRoot: value.harnessRoot,

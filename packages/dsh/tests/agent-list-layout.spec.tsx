@@ -74,7 +74,7 @@ const baseSource: MstarEngineStatusPayload = {
     pushPolicy: null,
     worktreeMode: null,
     integrationWorktreePath: null,
-    leases: [],
+    rowScopes: [],
     knowledge: null,
     direction: null,
     agentFlow: null,

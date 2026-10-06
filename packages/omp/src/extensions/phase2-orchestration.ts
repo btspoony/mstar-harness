@@ -125,6 +125,8 @@ import {
   probeCheckoutRoot,
   readExecutionAuthority,
   readMainWorktree,
+  readSessionEnvelope,
+  readWorkflowSnapshot,
   resolveExecutionReadRoute,
   resolveHarnessDir,
   resumeExecutionSession,
@@ -138,6 +140,7 @@ import type {
   ExecutionRead,
   ExecutionState,
   PlanRow,
+  WorkflowSnapshot,
 } from "@mstar-harness/engine";
 import {
   decidePhase2Reminder,
@@ -283,9 +286,11 @@ function engineCodeOf(error: unknown, fallback: string): string {
 /**
  * Structural guard for the §3.1 binding value a record persists. Its rules are
  * the engine's own reference shape (`execution-session.ts` `assertRefShape`):
- * the workflow's coordinator seat — its role, and no per-plan scope — so an
- * "ACTIVE" binding this guard admits is one the engine could actually accept; a
- * record whose declared shape is impossible is history, not a binding.
+ * the workflow's coordinator seat — its role, and no per-plan scope at all — so
+ * an "ACTIVE" binding this guard admits is one the engine could actually accept;
+ * a record whose declared shape is impossible is history, not a binding. A
+ * `planId` member is rejected outright rather than normalized away: silently
+ * dropping it would re-home the removed scoped seat as coordinator history.
  */
 function isExecutionBinding(value: unknown): value is ExecutionBinding {
   if (!isPlainObject(value) || value.version !== 1 || !isNonEmptyString(value.harnessRoot)) return false;
@@ -293,6 +298,7 @@ function isExecutionBinding(value: unknown): value is ExecutionBinding {
   if (!isPlainObject(session)) return false;
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) return false;
   if (session.role !== "coordinator") return false;
+  if ("planId" in session) return false;
   return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
 }
 

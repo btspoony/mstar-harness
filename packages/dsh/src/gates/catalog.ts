@@ -14,7 +14,7 @@
  * `workflow-selection.ts`): the session's lease/cwd/durable pick, else the
  * only active entry, else the latest terminal snapshot by mtime for an EMPTY
  * active registry; N>1 with no binding is the picker error, never first entry.
- * `state.plans[]` / leases come from the selected snapshot's `plans[]` rows
+ * `state.plans[]` / row scopes come from the selected snapshot's `plans[]` rows
  * verbatim, `agentFlow` from the workflow dir's `agent-flow.jsonl`, open issues
  * from the issue authority, and roadmap milestones from the store roadmap
  * authority — never a root v1 `plans[]` / root `agent-flow.jsonl` read.
@@ -59,8 +59,8 @@ import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
   AgentFlowView,
-  HarnessLeaseView,
   HarnessPlanView,
+  HarnessRowScopeView,
   HarnessResidualSeverity,
   HarnessResidualView,
   IterationGateView,
@@ -351,7 +351,6 @@ export function catalogCacheKey(
     harnessDir ?? '',
     sessionId,
     cwd,
-    hint?.leaseHolder ?? '',
     hint?.selectedWorkflowId ?? '',
   ])
 }
@@ -529,7 +528,10 @@ function renderEngineStatusCatalog(source: MstarEngineStatusPayload): string {
         state.integrationWorktreePath !== null ? `integration ${state.integrationWorktreePath}` : null,
       ].filter((part): part is string => part !== null).join('; ')
       if (policy !== '') lines.push(`policy: ${policy}`)
-      lines.push(`leases: ${state.leases.length === 0 ? 'none active' : joinCapped(state.leases, CATALOG_STATE_JOIN_LIMIT, '; ', (l) => `${l.planId} → ${l.holder}${l.worktreePath !== null ? ` (${l.worktreePath})` : ''}`)}`)
+      // Row scope: the plan rows' own recorded worktree + branch. This is NOT
+      // an ownership claim — a Todo or Done row keeps its recorded scope — so it
+      // is labelled as scope, never as a lease/holder.
+      lines.push(`row scope: ${state.rowScopes.length === 0 ? 'none recorded' : joinCapped(state.rowScopes, CATALOG_STATE_JOIN_LIMIT, '; ', (s) => `${s.planId} → ${s.workingBranch}${s.worktreePath !== null ? ` (${s.worktreePath})` : ''}`)}`)
       if (state.knowledge !== null) {
         lines.push(`knowledge: ${state.knowledge.docCount} doc${state.knowledge.docCount === 1 ? '' : 's'} (${state.knowledge.categories.join(', ')})`)
       }
@@ -586,7 +588,7 @@ function hhmm(ts: number): string {
 
 /**
  * The workspace-state catalog source: the plan registry, open-issue counts,
- * branch/policy anchors, active leases, knowledge catalog digest and the
+ * branch/policy anchors, per-row recorded scope, knowledge catalog digest and the
  * steering compass direction one-liner — the "where are we" facts the model
  * would otherwise have to read status.json / the compass / the catalog for.
  * Built from the SAME cached cycle as the sibling rows (one status.json +
@@ -600,7 +602,7 @@ function hhmm(ts: number): string {
  * v3 per-lifecycle aggregation (compass v3.0.0 § Catalog selection rule):
  * the state section aggregates the SELECTED workflow lifecycle — resolved
  * ONCE by the caller (D4: the same selection the iteration gate consumes).
- * `state.plans[]` / `leases` come from the selected snapshot's `plans[]` rows
+ * `state.plans[]` / `rowScopes` come from the selected snapshot's `plans[]` rows
  * verbatim (root action JSON stays the execution authority), `agentFlow` from
  * the workflow dir's `agent-flow.jsonl`, and the open-item facts from
  * `{HARNESS_DIR}/store.db` (the issue/catalog authority). Never a root v1
@@ -694,7 +696,7 @@ function harnessStateSource(
     const compass = selectedCompass(harnessDir, selection.workflowId, snapshot)
     const compassFields = compass?.doc
     const plans: HarnessPlanView[] = []
-    const leases: HarnessLeaseView[] = []
+    const rowScopes: HarnessRowScopeView[] = []
     if (Array.isArray(snapshot.plans)) {
       for (const row of snapshot.plans.map(asRecord)) {
         if (row === undefined) continue
@@ -712,13 +714,13 @@ function harnessStateSource(
           // → [] (an ALWAYS-present array — lossless JSON, never omitted).
           iterationRefs: iterationRefsOf(metadata?.iteration_refs),
         })
-        // Row scope: the plan row's own recorded worktree/branch metadata.
-        const metadataForScope = asRecord(row.metadata)
-        if (typeof metadataForScope?.worktree_path === 'string') {
-          leases.push({
+        // The row's own recorded writable scope: ordinary metadata a Todo or
+        // Done row keeps, never a concurrent-ownership claim.
+        if (typeof metadata?.worktree_path === 'string') {
+          rowScopes.push({
             planId: id,
-            holder: str(metadataForScope.working_branch),
-            worktreePath: str(metadataForScope.worktree_path),
+            workingBranch: str(metadata.working_branch) ?? '',
+            worktreePath: str(metadata.worktree_path),
           })
         }
       }
@@ -744,7 +746,7 @@ function harnessStateSource(
       pushPolicy: str(executionPolicy?.push_policy),
       worktreeMode: str(executionPolicy?.worktree_mode),
       integrationWorktreePath: str(snapshot.integration_worktree_path),
-      leases,
+      rowScopes,
       knowledge: facts.knowledge,
       storeFacts: facts.source,
       direction: compass !== undefined ? compassDirection(compass.compassPath) : null,
@@ -798,7 +800,7 @@ function selectionErrorState(
     pushPolicy: null,
     worktreeMode: null,
     integrationWorktreePath: null,
-    leases: [],
+    rowScopes: [],
     knowledge: facts.knowledge,
     storeFacts: facts.source,
     direction: null,

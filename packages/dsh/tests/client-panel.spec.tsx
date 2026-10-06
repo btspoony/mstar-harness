@@ -222,10 +222,10 @@ const fullSource: MstarEngineStatusPayload = {
     pushPolicy: 'push authorized',
     worktreeMode: 'feature-worktree',
     integrationWorktreePath: '/tmp/mstar-fixture/workflow',
-    leases: [
+    row scope: [
       {
         planId: '00000809-dsh-workflow-viz-panel',
-        holder: 'dsh-web-mstar-workflow',
+        workingBranch: 'dsh-web-mstar-workflow',
         worktreePath: '/tmp/mstar-fixture/workflow/.worktrees/mstar-workflow-workflow-viz',
       },
     ],
@@ -265,7 +265,7 @@ const noGateSource: MstarEngineStatusPayload = {
     pushPolicy: null,
     worktreeMode: null,
     integrationWorktreePath: null,
-    leases: [],
+    rowScopes: [],
     knowledge: null,
     direction: null,
     agentFlow: null,
@@ -589,7 +589,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(partial).toContain('P1')
   })
 
-  it('renders the state section: plans board, residual findings, policy (enforcement first), leases, knowledge, direction', async () => {
+  it('renders the state section: plans board, residual findings, policy (enforcement first), row scope, knowledge, direction', async () => {
     expect(html).toContain('data-mstar-section="state"')
     // Plan status board: id(status) rows.
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
@@ -682,7 +682,7 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
     // Empty state lists degrade to "none" rather than crashing.
     expect(html).toContain('data-mstar-empty="no-residuals"')
-    expect(html).toContain('data-mstar-empty="no-leases"')
+    expect(html).toContain('data-mstar-empty="no-row-scope"')
     expect(html).toContain('data-mstar-empty="no-knowledge"')
   })
 
@@ -712,13 +712,13 @@ describe('workflow panel — empty states and degradation (spec §3, §2.4)', ()
       state: {
         ...fullSource.state!,
         direction: null,
-        leases: [],
+        rowScopes: [],
         knowledge: null,
       },
     })
     expect(html).toContain('data-mstar-section="state"')
     expect(html).toContain('data-direction')
-    expect(html).toContain('data-mstar-empty="no-leases"')
+    expect(html).toContain('data-mstar-empty="no-row-scope"')
     expect(html).toContain('data-mstar-empty="no-knowledge"')
   })
 })

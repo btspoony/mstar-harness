@@ -315,12 +315,56 @@ function expectNoRegister(fixture: Fixture): void {
 }
 
 describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", () => {
+  test("captures into the issue store, links the plan, and closes under the issue CAS without a register", async () => {
+    const fixture = await makeFixture();
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+
+    const entriesPath = join(fixture.root, "entries.json");
+    writeJson(entriesPath, [issueEntryOf()]);
+    const added = runCli(
+      [
+        "plan",
+        "issue-add",
+        "--session-ref",
+        fixture.coordinatorRef,
+        "--plan",
+        PLAN_ID,
+        "--file",
+        entriesPath,
+        "--expect",
+        planToken(fixture),
+        "--operation",
+        "issue-add-1",
+        "--session-id",
+        fixture.coordinatorSessionId,
+        "--harness",
+        fixture.harness,
+      ],
+      fixture.root,
+    );
+    expect(added.exitCode, added.stdout).toBe(0);
+    expect(jsonOf(added).status).toBe("ok");
+
+    // The DB is the only target: the CLI's own `issue list` reads it back, and
+    // no project register appeared anywhere under the harness.
+    const open = listedIssues(fixture);
+    expect(open).toHaveLength(1);
+    const issueId = String(open[0]!.id);
+
+    const evidencePath = join(fixture.root, "evidence.json");
+    writeJson(evidencePath, {
+      reason: "fixed by the reviewer round",
+      references: ["packages/cli/src/index.ts"],
+      alignmentRef: "QA gate acceptance 2026-09-19",
+    });
     const closed = runCli(
       [
         "plan",
         "issue-close",
         "--session-ref",
         fixture.coordinatorRef,
+        "--plan",
+        PLAN_ID,
         "--issue",
         issueId,
         "--disposition",
@@ -340,7 +384,7 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
       ],
       fixture.root,
     );
-    expect(closed.exitCode).toBe(0);
+    expect(closed.exitCode, closed.stdout).toBe(0);
     expect(jsonOf(closed).status).toBe("ok");
 
     expect(listedIssues(fixture)).toHaveLength(0);
@@ -351,12 +395,11 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
       ["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"],
       fixture.root,
     );
-    expect(released.exitCode).toBe(0);
+    expect(released.exitCode, released.stdout).toBe(0);
     expect(jsonOf(released).data).toMatchObject({ planId: PLAN_ID, violations: [] });
     expectNoRegister(fixture);
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
   }, 30000);
-
 });
 
 describe("mstar issue — the retired commands refuse with the migration path (G2b)", () => {

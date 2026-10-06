@@ -194,7 +194,7 @@ function leaseViolation(code: string, message: string, fix?: string): Validation
  * The authority readiness of the plugin's SYNCHRONOUS reads of the LEGACY
  * execution files (finding R-1).
  *
- * The dispatch gate re-verifies a plan's `execution_lease` and the L1 topology
+ * The dispatch gate re-verifies a plan row's own recorded scope and the L1 topology
  * from the root register + the ACTIVE workflow snapshot through the LEGACY file
  * route, and the adapter's own admission hooks (`beforeDispatch`'s
  * catalog-registration selection, `beforeMerge`'s snapshot lease read) derive
@@ -242,7 +242,7 @@ function executionReadRefusal(harnessDir: string): ValidationResult | null {
   return leaseViolation(
     refusal.code,
     `${refusal.message} — the dispatch gate refuses instead of deriving a lease verdict from the retired files`,
-    'run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm an execution_lease',
+    'run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm the row's recorded scope',
   )
 }
 
@@ -397,7 +397,7 @@ export function sessionIdOf(exec: ToolExecution): string | undefined {
  * for sdd dispatches (the lease state cannot be confirmed — the status gate
  * already guards the next write); unreadable docs never harden a soft
  * workflow. A missing status.json is NOT a silent fail-open for sdd: the
- * claim-before-InProgress red line needs the plan's execution_lease, and a
+ * claim-before-InProgress red line needs the row's recorded scope, and a
  * missing root/snapshot cannot confirm it — `lease.dispatch.unverifiable`
  * fires (advisory in warn, deny under hard).
  * @param hint - the carrying session's selection hint: it decides WHICH
@@ -425,7 +425,7 @@ export function leaseGateViolations(
   // refuses instead of verifying the lease against retired bytes.
   const refusal = executionReadRefusal(harnessDir)
   if (refusal !== null) return [refusal]
-  // v3 lease home: the plan row + its execution_lease live on the ACTIVE
+  // The row and its recorded scope live on the ACTIVE
   // workflow snapshot (`workflows/<id>/snapshot.json`). The root v2
   // `status.json` still gates the read: it holds the active `workflows[]`
   // the selection resolves from.
@@ -439,13 +439,13 @@ export function leaseGateViolations(
     if (selection.kind === 'error' && selection.code === 'status.unreadable') {
       return [leaseViolation(
         'lease.dispatch.unreadable',
-        `cannot read ${join(harnessDir, STATUS_FILE)}: the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+        `cannot read ${join(harnessDir, STATUS_FILE)}: the row's recorded scope is unverifiable; STOP before writable dispatch`,
         'restore a valid status.json (the status gate refuses invalid writes)',
       )]
     }
     return [leaseViolation(
       'lease.dispatch.unverifiable',
-      `${join(harnessDir, STATUS_FILE)}: ${selection.kind === 'error' ? selection.message : 'no active workflow'} — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      `${join(harnessDir, STATUS_FILE)}: ${selection.kind === 'error' ? selection.message : 'no active workflow'} — the row's recorded scope is unverifiable; STOP before writable dispatch`,
       'create a valid v2 status.json registering an active workflow (first implement dispatch requires a plan row + lease)',
     )]
   }
@@ -454,7 +454,7 @@ export function leaseGateViolations(
     if (!sdd) return []
     return [leaseViolation(
       'lease.dispatch.unverifiable',
-      `${snapshotPath} is missing — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      `${snapshotPath} is missing — the row's recorded scope is unverifiable; STOP before writable dispatch`,
       'create a valid workflow snapshot registering the plan row (first implement dispatch requires a plan row)',
     )]
   }
@@ -466,7 +466,7 @@ export function leaseGateViolations(
     if (!sdd) return []
     return [leaseViolation(
       'lease.dispatch.unreadable',
-      `cannot read ${snapshotPath}: ${(error as Error).message} — the plan's execution_lease state is unverifiable; STOP before writable dispatch`,
+      `cannot read ${snapshotPath}: ${(error as Error).message} — the row's recorded scope is unverifiable; STOP before writable dispatch`,
       'restore a valid workflow snapshot (the status gate refuses invalid writes)',
     )]
   }
@@ -478,7 +478,7 @@ export function leaseGateViolations(
     if (!sdd) return []
     return [leaseViolation(
       'lease.dispatch.plan-not-found',
-      `plan ${planId} is not registered in ${snapshotPath} — cannot verify its execution_lease before writable dispatch`,
+      `plan ${planId} is not registered in ${snapshotPath} — cannot verify its recorded row scope before writable dispatch`,
       'register the plan row in the workflow snapshot (first implement dispatch requires a plan row)',
     )]
   }
@@ -672,7 +672,7 @@ function activeSnapshotRows(harnessDir: string, hint?: SessionHint): ActiveSnaps
 /**
  * L1 cross-plan isolation (engine `l1PreDispatchCheck` FULL input): when
  * the Assignment resolves a plan id AND the ACTIVE workflow snapshot
- * carries a plan `execution_lease` (worktree_path + working_branch), the
+ * records a plan row scope (metadata.worktree_path + metadata.working_branch), the
  * gate assembles the full three-domain topology — the Git-derived main
  * worktree (`readMainWorktree` from the harness root: the main worktree of
  * the repo containing `{HARNESS_DIR}`; null is a failure row, never a
@@ -685,7 +685,7 @@ function activeSnapshotRows(harnessDir: string, hint?: SessionHint): ActiveSnaps
  * the v2 register — a scan refusal is a high violation, CLI parity, never
  * a silent skip).
  *
- * Fires ONLY when the lease metadata is present (the "L1 checks when
+ * Fires ONLY when the row scope metadata is present (the "L1 checks when
  * metadata present" contract): no harness dir, unresolvable plan id,
  * missing/unattributable snapshot (selection failure, unreadable), or a
  * lease without the two path/branch fields all degrade to silence — the
@@ -743,7 +743,7 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
 /**
  * P-b lease attribution for the workflow/ralph gate: the calling workspace's ACTIVE
  * workflow snapshot has any plan `InProgress` LACKING matching
- * `execution_lease` coverage. Iterates ALL snapshot plan rows (no
+ * recorded scope. Iterates ALL snapshot plan rows (no
  * Assignment header exists on the workflow/ralph branch — unlike
  * {@link leaseGateViolations} / {@link worktreeL1Violations}, which are
  * Assignment-keyed) and REUSES the named plumbing: the
@@ -888,7 +888,7 @@ export interface WorkflowGateInput {
   exec: ToolExecution
   /**
    * P-b lease attribution: the calling workspace's first
-   * `InProgress` plan lacking `execution_lease` coverage (computed by
+   * `InProgress` plan lacking a recorded row scope (computed by
    * {@link writableFanOutUncovered} from the status.json read through the
    * contained resolver path — `preExecuteListener` already resolved the
    * harness dir from the calling agent's session workspace). Undefined → no

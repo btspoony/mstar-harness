@@ -328,9 +328,14 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         : await readExecutionPlan(contextForCaller, ref, input.plan);
       return ok(id, result);
     }
-    const sparseSelectors = context.executionIdentity !== undefined ||
-      (input.workflow !== undefined && input.coordinator === true);
-    if (input.sessionRef !== undefined || input.session === undefined && sparseSelectors) {
+    // An explicit workflow with no file session is a coordinator intent: the
+    // coordinator is the only remaining seat, so an ordinary `--workflow
+    // --plan --session-id` call routes to the ACTIVE operation without an extra
+    // `--coordinator` / `--session-ref` / minted-tuple ceremony (the same
+    // default `show` already applies).
+    const activeRoute = input.sessionRef !== undefined ||
+      (input.session === undefined && input.workflow !== undefined);
+    if (activeRoute) {
       if (context.sessionId === undefined) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).` });
       }

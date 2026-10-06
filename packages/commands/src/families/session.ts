@@ -50,7 +50,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           return refusalEnvelope({ command: "session.run", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session run requires --workflow, --role coordinator, and a child argv" });
         }
         const root = resolveProcessHarnessDir(context.cwd, harness);
-        const identity = createLocalExecutionIdentity({ workflowId: workflow, role, planId: null });
+        const identity = createLocalExecutionIdentity({ workflowId: workflow, role });
         const env: Record<string, string> = { ...process.env as Record<string, string>, MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(identity) };
         delete env.MSTAR_HOST_SESSION_ID;
         if (root !== null) env.MSTAR_HARNESS_DIR = root;

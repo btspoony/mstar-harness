@@ -173,7 +173,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
               ...(input.operation === undefined ? ["operation"] : []),
             ]);
           }
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow!, role: "coordinator", planId: null };
+          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow!, role: "coordinator" };
           const { catalogRevision } = await readCatalogRevisions({ harnessDir });
           const canonicalPlanAbs = path.isAbsolute(input.planFile!) ? path.resolve(input.planFile!) : path.join(harnessDir, input.planFile!);
           const plansRelative = path.relative(resolvePlanDir(harnessDir), canonicalPlanAbs);
@@ -220,7 +220,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
             return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired identity must address the selected workflow's coordinator seat" });
           }
-          const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator", planId: null };
+          const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
           return ok("workflow.evidence", await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
             workflowId: input.workflow,
             ...(ref === undefined ? {} : { session: ref }),
@@ -260,7 +260,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         return ok("workflow.recover-coordinator", await recoverPrepareCoordinator({
           cwd: context.cwd,
           harnessDir: prior.harness_root,
-          identity: { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: prior.workflow_id, role: "coordinator", planId: null },
+          identity: { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: prior.workflow_id, role: "coordinator" },
           priorSessionPath,
           priorSessionId: prior.session_id,
           operationId: input.operationId,
@@ -295,7 +295,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             : transition.name === "execution-policy"
               ? { kind: "execution-policy", policy: JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) }
               : { kind: "integration-worktree", path: absolute(input.path, "path") };
-        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator", planId: null };
+        const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" };
         setArtifactStore(createFsStore(root));
         return ok(id, await mutateExecutionWorkflow(executionContextFor({ harnessDir: root }, identity), {
           workflowId,
@@ -341,7 +341,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
             ...(input.operation === undefined ? ["operation"] : []),
           ]);
         }
-        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow, role: "coordinator", planId: null };
+        const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId ?? "", workflowId: input.workflow, role: "coordinator" };
         const { catalogRevision } = await readCatalogRevisions({ harnessDir });
         // Creator attribution is optional: an unset session id registers a
         // NULL creator that the first coordinator bind adopts.

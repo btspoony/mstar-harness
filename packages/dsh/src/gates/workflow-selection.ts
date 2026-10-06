@@ -65,7 +65,7 @@ export type ActiveWorkflowSelection = WorkflowSelectionView
  * What the carrying session can tell the resolver (structural — no
  * dsh-session import, so cold/raw Session consumers can build one too).
  * `sessionId` is the durable picker key (`session.header.id`), NEVER a
- * holder fallback; `leaseHolder` is the dispatching dsh `Agent.id` when an
+ * scope fallback;
  * Agent exists; `selectedWorkflowId` is the session's durable pick (loaded
  * by the caller from the engine-status store). Every field is optional —
  * an omitted hint just misses the corresponding rung.
@@ -73,7 +73,6 @@ export type ActiveWorkflowSelection = WorkflowSelectionView
 export interface SessionHint {
   cwd?: string
   sessionId?: string
-  leaseHolder?: string
   selectedWorkflowId?: string
 }
 
@@ -306,7 +305,7 @@ function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWor
 /**
  * The normalized ACTIVE-SET source the binding order below runs on: the
  * validated registry rows plus each entry's materialized state (the plan rows
- * with their `execution_lease` and the lifecycle's integration topology). The
+ * with their own recorded scope and the lifecycle's integration topology). The
  * FILE route assembles it from `status.json` + the workflow snapshots; the
  * execution DB route normalizes `readExecutionAuthority`'s state into the SAME
  * shape (primary spec §5: source consumers normalize into the existing pure
@@ -505,7 +504,7 @@ export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): A
  * - `active` — the execution authority is ACTIVE. The state comes from
  *   `readExecutionAuthority` in ONE read transaction and is normalized into
  *   the SAME active-set input the file route builds (registry rows, plan rows
- *   with their `execution_lease`, integration topology), so the binding order
+ *   with their own recorded scope, integration topology), so the binding order
  *   is shared and can never disagree between the routes. The retired
  *   `status.json` / snapshots are NOT read: the DB registry is the whole
  *   active set, its ids are addressed exactly (no newest/unique guess), and a

@@ -425,8 +425,8 @@ function writeLeaseSnapshot(harness: string, workflowId: string, plans: unknown[
   }));
 }
 
-/** The workflow snapshot carrying a claimed integration merge lease. */
-function writeWorkflowSnapshotWithLease(harness: string, workflowId: string, integrationLease: Record<string, unknown>): void {
+/** The workflow snapshot carrying an integration merge lease (or a `null` tombstone). */
+function writeWorkflowSnapshotWithLease(harness: string, workflowId: string, integrationLease: Record<string, unknown> | null): void {
   const workflowDir = join(harness, "workflows", workflowId);
   mkdirSync(workflowDir, { recursive: true });
   writeFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
@@ -770,6 +770,29 @@ describe("lease witness", () => {
 
     // The write was withheld: no route toward the claimed integration lane was executed.
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 3 });
+  });
+
+  test("a malformed integration merge lease refuses: a null tombstone and a missing holder are invalid, never unclaimed", async () => {
+    const { harness, context } = leaseContext();
+    const workflowId = "bounded-merge-lease-workflow";
+    const interaction: Interaction = { label: "integration lease shape", context: "warm", extraDependency: "", calls: [] };
+
+    // A `null` top-level record is a tombstone, not "no claim": it fails closed.
+    writeWorkflowSnapshotWithLease(harness, workflowId, null);
+    const tombstone = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
+    expect(tombstone).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.invalid" });
+
+    // A claimed lane missing its holder names the missing field.
+    writeWorkflowSnapshotWithLease(harness, workflowId, {
+      claimed_at: "2026-09-30T00:00:00Z",
+      source_branch: "feature/f",
+      target_branch: "main",
+    });
+    const missingHolder = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
+    expect(missingHolder).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.missing-holder" });
+
+    // The interaction stopped on the malformed record; nothing was repaired.
+    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 2 });
   });
 });
 
