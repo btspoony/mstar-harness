@@ -5,7 +5,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
 import { readFileSync as readFileSync2, readlinkSync, realpathSync, statSync as statSync3, writeSync } from "node:fs";
-import { basename as basename3, dirname as dirname6, isAbsolute as isAbsolute3, join as join6, relative as relative6, resolve as resolve5 } from "node:path";
+import { basename as basename3, dirname as dirname10, isAbsolute as isAbsolute3, join as join6, relative as relative6, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
-import { dirname as dirname3, join as join3, resolve as resolvePath, sep } from "node:path";
+import { dirname as dirname3, join as join3, sep } from "node:path";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { mkdirSync as mkdirSync2, rmdirSync, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
@@ -23,10 +23,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { basename as basename4, isAbsolute as isAbsolute5, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname7, isAbsolute as isAbsolute6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
+import { dirname as dirname6, isAbsolute as isAbsolute6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname7, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
 import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync12, realpathSync as realpathSync5 } from "node:fs";
 import { createHash as createHash6 } from "node:crypto";
@@ -44,7 +44,7 @@ import {
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename9, dirname as dirname9, join as join18, relative as relative4, resolve as resolve13, sep as sep9 } from "node:path";
+import { basename as basename9, dirname as dirname8, join as join18, relative as relative4, resolve as resolve13, sep as sep9 } from "node:path";
 import {
   existsSync as existsSync14,
   lstatSync as lstatSync4,
@@ -55,12 +55,12 @@ import {
   unlinkSync as unlinkSync5,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { dirname as dirname10, isAbsolute as isAbsolute10, join as join19, relative as relative5, resolve as resolve14, sep as sep10 } from "node:path";
+import { dirname as dirname9, isAbsolute as isAbsolute10, join as join19, relative as relative5, resolve as resolve14, sep as sep10 } from "node:path";
 import { createRequire as createRequire22 } from "node:module";
 import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync6 } from "node:fs";
 import { join as join20, resolve as resolve15 } from "node:path";
 import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
-import { basename as basename13, dirname as dirname14, join as join23, relative as relative7, resolve as resolve17 } from "node:path";
+import { basename as basename13, dirname as dirname13, join as join23, relative as relative7, resolve as resolve17 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash14 } from "node:crypto";
 import { readFileSync as readFileSync20 } from "node:fs";
@@ -491,8 +491,7 @@ function catalogRootDir(context, rootKind) {
   if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
     throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
   }
-  const start = resolvePath(context.harnessDir);
-  const harness = resolveProcessHarnessDir(start) ?? start;
+  const harness = dirname3(storeDbPath(context));
   switch (rootKind) {
     case "repository":
       return dirname3(harness);
@@ -517,7 +516,6 @@ var LIFECYCLES;
 var RELATIONS;
 var CatalogError;
 var init_catalog = __esm(() => {
-  init_coordination();
   init_path();
   init_store_db();
   ENTITY_KINDS = {
@@ -10710,6 +10708,7 @@ var URI_SCHEME_RE;
 var init_store = __esm(() => {
   init_core();
   init_coordination_write();
+  init_coordination();
   init_path();
   init_store_db();
   PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
@@ -11178,7 +11177,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname7(resolve7(docOrPath));
+      harnessDir = dirname6(resolve7(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -11313,7 +11312,7 @@ function resolveCompassEnforcement(harnessDir) {
 }
 function resolveMstarcEnforcement(harnessDir) {
   const dir = resolve7(harnessDir);
-  const rc = loadMstarc(dir, dirname7(dir));
+  const rc = loadMstarc(dir, dirname6(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -11922,7 +11921,7 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
     }
     if (dir === boundary)
       return null;
-    const parent = dirname8(dir);
+    const parent = dirname7(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -11940,7 +11939,7 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname8(boundary);
+        boundary = dirname7(boundary);
     }
     return resolve8(boundary);
   } catch {}
@@ -11952,7 +11951,7 @@ function isAtOrBelow2(dir, root) {
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname8(dir));
+  const rc = loadMstarc(dir, dirname7(dir));
   const declared = rc?.config[key];
   return declared ? resolve8(rc.dir, declared) : null;
 }
@@ -11964,7 +11963,7 @@ function resolveSpecsDir(harnessDir, opts = {}) {
     return declared;
   }
   const harness = resolve8(harnessDir);
-  const repoRoot = dirname8(harness);
+  const repoRoot = dirname7(harness);
   const candidates = [
     join13(harness, "specs"),
     join13(repoRoot, "docs", "specs"),
@@ -12544,8 +12543,8 @@ function scalar2(db, sql) {
   return typeof row?.n === "number" ? row.n : 0;
 }
 function writeTextAtomic(path2, text4) {
-  mkdirSync6(dirname9(path2), { recursive: true });
-  const tmp = join18(dirname9(path2), `.${basename9(path2)}.${process.pid}.tmp`);
+  mkdirSync6(dirname8(path2), { recursive: true });
+  const tmp = join18(dirname8(path2), `.${basename9(path2)}.${process.pid}.tmp`);
   try {
     writeFileSync4(tmp, text4, "utf8");
     renameSync2(tmp, path2);
@@ -12628,7 +12627,7 @@ function canonicalPath(value) {
     try {
       return join18(realpathSync6(current), ...[...trailing].reverse());
     } catch {
-      const parent = dirname9(current);
+      const parent = dirname8(current);
       if (parent === current)
         return resolve13(value);
       trailing.push(basename9(current));
@@ -12664,8 +12663,8 @@ async function assertAuthorityCurrent(context, handle) {
   refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
 }
 async function withExecutionMaintenanceLock(context, fn) {
-  const key = join18(canonicalPath(dirname9(storeDbPath(context))), ".execution-maintenance", "execution-migration");
-  mkdirSync6(dirname9(key), { recursive: true });
+  const key = join18(canonicalPath(dirname8(storeDbPath(context))), ".execution-maintenance", "execution-migration");
+  mkdirSync6(dirname8(key), { recursive: true });
   return withStatusWriteLock(key, fn, { timeoutMs: executionMaintenanceLockWaitMs() });
 }
 function executionMaintenanceLockWaitMs() {
@@ -12728,7 +12727,7 @@ function checkpointRetainedBody(root, relativeBodyPath, selection) {
   };
 }
 function readRetainedBodyCheckpoints(context) {
-  const root = canonicalPath(dirname9(storeDbPath(context)));
+  const root = canonicalPath(dirname8(storeDbPath(context)));
   const paths = [];
   if (existsSync13(join18(root, ...ENGINE_STATUS_BODY.split("/")))) {
     paths.push({ path: ENGINE_STATUS_BODY, selection: true });
@@ -12928,7 +12927,7 @@ function sameCounts(a, b) {
 }
 function defaultBackupPath(context, meta, label) {
   const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
-  return join18(dirname9(storeDbPath(context)), "archived", "store-migration", "backups", name);
+  return join18(dirname8(storeDbPath(context)), "archived", "store-migration", "backups", name);
 }
 async function takeVerifiedBackup(context, options) {
   const dbPath = storeDbPath(context);
@@ -12980,7 +12979,7 @@ async function takeVerifiedBackup(context, options) {
         retained: recorded
       };
     }
-    mkdirSync6(dirname9(targetPath), { recursive: true });
+    mkdirSync6(dirname8(targetPath), { recursive: true });
     handle.db.prepare("vacuum into ?").run(targetPath);
     let verified;
     try {
@@ -13011,7 +13010,7 @@ async function backupStoreUnderExclusion(context, options = {}) {
   return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
 }
 async function backupStore(context, options = {}) {
-  const root = canonicalPath(dirname9(storeDbPath(context)));
+  const root = canonicalPath(dirname8(storeDbPath(context)));
   return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join18(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
 }
 async function assertBackupDescribesStore(context, receipt, reviewed) {
@@ -13021,7 +13020,7 @@ async function assertBackupDescribesStore(context, receipt, reviewed) {
   if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
     stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and apply the manifest that names it.");
   }
-  const controlRoot = dirname9(storeDbPath(context));
+  const controlRoot = dirname8(storeDbPath(context));
   if (!isPathWithin(controlRoot, receipt.backupPath)) {
     stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration recovery point must live inside the root it protects.`);
   }
@@ -13478,7 +13477,7 @@ function retireRegister(context, ledgerPath, ledger, item) {
   const livePath = join18(catalogRootDir(context, "projects"), item.relativePath);
   const liveBytes = readIfExists(livePath);
   if (liveBytes !== undefined) {
-    mkdirSync6(dirname9(item.archivePath), { recursive: true });
+    mkdirSync6(dirname8(item.archivePath), { recursive: true });
     rmSync2(item.archivePath, { force: true });
     copyFileSync(livePath, item.archivePath);
     item.state = "archived";
@@ -13550,7 +13549,7 @@ function retireSection(context, ledgerPath, ledger, item) {
   const excised = live.split(`
 `).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
 `);
-  mkdirSync6(dirname9(item.archivePath), { recursive: true });
+  mkdirSync6(dirname8(item.archivePath), { recursive: true });
   rmSync2(item.archivePath, { force: true });
   copyFileSync(livePath, item.archivePath);
   item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
@@ -13601,7 +13600,7 @@ async function retireStoreSources(context, activationReceipt) {
     const manifest = JSON.parse(appliedRow.manifest_json);
     const registers = manifest.retirement.registers;
     const sections = manifest.catalog.retirementSections;
-    const archiveDir = join18(dirname9(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const archiveDir = join18(dirname8(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
     const ledgerPath = join18(archiveDir, "ledger.json");
     const retirementHash = sha256Bytes3(Buffer.from(`retirement\x00${JSON.stringify({
       activationReceiptId: activationReceipt.receiptId,
@@ -13843,7 +13842,7 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
     if (linked) {
       throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join19(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join19(dir, ".git") });
     }
-    const parent = dirname10(dir);
+    const parent = dirname9(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -14009,10 +14008,8 @@ async function loadSqliteDriver() {
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const start = resolve15(context.harnessDir);
-  const resolved = resolveProcessHarnessDir(start);
-  const hijackedPlansFallback = resolved !== null && resolved === join20(start, "plans");
-  return join20(hijackedPlansFallback ? start : resolved ?? start, "store.db");
+  const root = resolve15(context.harnessDir);
+  return join20(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -14431,7 +14428,7 @@ async function openStore(context, mode) {
   const dbPath = storeDbPath(context);
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync15(dbPath)) {
-    throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace (or the staged migration for an existing workspace). Nothing was created.`);
+    throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. For a genuinely empty workspace, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to create and activate the selected store (or "mstar store init" with the same --harness when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`);
   }
   let db;
   try {
@@ -15089,7 +15086,7 @@ function resolveHarnessRootOf(target) {
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname14(dir);
+    const parent = dirname13(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -15123,8 +15120,8 @@ function harnessDocKindOfTarget(targetPath) {
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -15132,7 +15129,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname14(resolved));
+  const fallbackDir = resolveHarnessDir(dirname13(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -17458,7 +17455,7 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname6(dir));
+  const parentResolved = resolveHarnessDir(dirname10(dir));
   return parentResolved !== null && resolve5(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
@@ -17466,14 +17463,14 @@ function landedPathOf(resolved) {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve5(dirname6(resolved), readlinkSync(resolved));
+      return resolve5(dirname10(resolved), readlinkSync(resolved));
     } catch {
-      let dir = dirname6(resolved);
+      let dir = dirname10(resolved);
       for (;; ) {
         try {
           return join6(realpathSync(dir), relative6(dir, resolved));
         } catch {
-          const parent = dirname6(dir);
+          const parent = dirname10(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -17485,13 +17482,13 @@ function landedPathOf(resolved) {
 function isStoreAuthorityTarget(target) {
   if (!STORE_AUTHORITY_NAMES.includes(basename3(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname6(target));
+  return isHarnessRootDir(dirname10(target));
 }
 function caseFoldedRegisterRoot(candidate) {
   const target = resolve5(candidate);
   if (!REGISTER_BASENAME.test(basename3(target)))
     return null;
-  let dir = dirname6(target);
+  let dir = dirname10(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
@@ -17503,7 +17500,7 @@ function caseFoldedRegisterRoot(candidate) {
       if (REGISTER_SHAPE.test(relative6(projectDir, target)))
         return dir;
     }
-    const parent = dirname6(dir);
+    const parent = dirname10(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -17633,7 +17630,7 @@ try {
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname6(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname10(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }
