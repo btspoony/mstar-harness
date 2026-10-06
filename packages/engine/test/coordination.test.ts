@@ -564,6 +564,10 @@ describe("intent resolution — trusted root, explicit target, authority change 
     const linkedChild = join(fixture.peerWorktreePath, "child");
     const linkedGrandchild = join(linkedChild, "child");
     mkdirSync(linkedGrandchild, { recursive: true });
+    // With Git available, the linked checkout still resolves its main control
+    // root; the independent repository resolves only its own bounded layout.
+    expect(resolveProcessHarnessDir(linkedGrandchild)).toBe(fixture.harness);
+    expect(resolveProcessHarnessDir(independentGrandchild)).toBe(independentHarness);
     const binDir = join(fixture.root, "no-git");
     mkdirSync(binDir);
     const script = join(fixture.root, "resolve-roots.ts");
