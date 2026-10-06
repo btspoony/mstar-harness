@@ -2,7 +2,7 @@
  * Adapter-only execution identity (prerequisite contract §3.1 / phase2b
  * execution contract §3.1).
  *
- * The tuple `(source, sessionId, workflowId, role, planId)` is how one adapter
+ * The tuple `(source, sessionId, workflowId, role)` is how one adapter
  * hands an **already acquired** identity to the engine. It is never a
  * model-request field: nothing here reads the global environment, the latest
  * workflow or a path name to choose it. `source` is the adapter's provenance —
@@ -18,7 +18,7 @@
  * a missing one refuses. It never synthesizes an id and never accepts an
  * inherited environment value as authorization.
  */
-import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
+import { CoordinationError, assertExactKeys, isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent } from "./path.js";
 
 /** The sole execution identity role: a workflow coordinator. */
@@ -72,7 +72,7 @@ export function assertSafeSessionId(value: unknown, what = "session id"): string
 }
 
 /**
- * One acquired identity: provenance + workflow/role/plan scope + session id.
+ * One acquired identity: provenance + workflow coordinator + session id.
  * This is the §3.1 type SSOT the DB session task imports — not a second shape.
  */
 export type ExecutionIdentity = Readonly<{
@@ -110,10 +110,9 @@ function isSource(value: unknown): value is "host" | "local" {
 /**
  * Validate one adapter-supplied identity against the scope it addresses.
  *
- * Refuses (never repairs) a missing/blank session id or workflow id, a missing
- * or unknown provenance source, a non-coordination role, a coordinator carrying
- * a plan scope, a plan-pm without one, and any workflow/role/plan disagreement
- * with `scope`. Canonical-root equality is the caller's explicit check, not
+ * Refuses a missing/blank session id or workflow id, unknown provenance,
+ * non-coordinator role, and workflow/role disagreement with `scope`.
+ * Canonical-root equality is the caller's explicit check, not
  * this function's: the root is not a member of the identity.
  *
  * `allowUnsetSessionId` is the ACTIVE registration exception: the empty string
@@ -129,6 +128,7 @@ export function validateExecutionIdentity(
     throw new CoordinationError("coordination.identity-missing", "an execution identity tuple is required");
   }
   const value = identity as unknown as Record<string, unknown>;
+  assertExactKeys(value, ["source", "sessionId", "workflowId", "role"], "execution identity");
 
   if (!isSource(value.source)) {
     // An absent provenance is identity-missing; a present but unknown value is
@@ -159,6 +159,7 @@ export function validateExecutionIdentity(
       );
     }
   }
+  if (isNonEmptyString(value.sessionId)) assertSafeSessionId(value.sessionId);
   if (!isRole(value.role)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",

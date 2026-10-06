@@ -1,35 +1,8 @@
 /**
- * Engine lease module — `execution_lease` / `integration_merge_lease` state
- * machines + same-host status write lock.
- *
- * Spec sources (each export cites the skill/reference section it enforces):
- * - Lease objects + required fields: `mstar-artifacts`
- *   `references/status-and-residuals.md` § `plans[].execution_lease` +
- *   § Snapshot top-level `integration_merge_lease` (v3 — relocated from the
- *   v1 root `metadata.integration_merge_lease` in the workflow-engine-core
- *   hard cutover), and the iteration-worktree-plan-lease maintenance ADR
- *   (normative field names — `holder`, `claimed_at` RFC 3339 UTC with
- *   explicit `Z`, `worktree_path`, `working_branch`; merge lease adds
- *   `plan_id`, `source_branch`, `target_branch`; `session_label`
- *   display-only).
- * - `null` / tombstone lease objects are invalid; writers delete the key on
- *   release, never write `null`: § "Hold, release, and override" + § Agent
- *   prohibitions.
- * - Claim-before-`InProgress` (Todo/Blocked → InProgress + full lease),
- *   same-holder resume with verify-held-lease (worktree_path +
- *   working_branch match the Assignment), different-holder → Blocked ("no
- *   timestamp makes it stealable"), InProgress-without-lease orphan (STOP,
- *   never invent a lease): § Claim-before-`InProgress` + § Orphan recovery;
- *   `mstar-iteration/references/phase-2-worktree-lease.md` § Execution lease.
- * - Steal override requires explicit current-turn user instruction + audit
- *   `plans[].notes`: § "Hold, release, and override" + § Agent prohibitions.
- * - Same-host exclusive write lock: § "Same-host exclusive write lock
- *   (control status.json)" — `flock` on `{HARNESS_DIR}/.status-write.lock`
- *   preferred, atomic `mkdir` on `{HARNESS_DIR}/.status-write.lockdir/`
- *   alternative (success acquires; existing dir → another writer holds the
- *   lock; remove only after success/rollback). Bun 1.2 has no `node:fs`
- *   flock (`flockSync` undefined), so this module implements the documented
- *   mkdir alternative.
+ * Workflow integration merge mutex validation and same-host status write locks.
+ * Plan-row authority is ordinary coordinator state, not an execution lease.
+ * The mutex protects serial integration; absence means unclaimed and release
+ * deletes the key rather than writing a null or tombstone.
  */
 import { mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -82,12 +55,7 @@ const RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+
 /** Repo local-date convention: `YYYY-MM-DD` (used by the real control status.json lease). */
 const DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
 
-/**
- * A `claimed_at` is valid as RFC 3339 UTC with explicit `Z` (normative) or as
- * a `YYYY-MM-DD` date (repo convention — the real control status.json
- * execution_lease uses `"claimed_at": "2026-08-08"` and `mstar lease verify`
- * must pass on it).
- */
+/** A merge claim accepts RFC3339 UTC or the repository's YYYY-MM-DD convention. */
 function isValidClaimedAt(value: unknown): value is string {
   return typeof value === "string" && (RFC3339_Z_RE.test(value) || DATE_ONLY_RE.test(value));
 }

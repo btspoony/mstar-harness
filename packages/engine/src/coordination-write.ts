@@ -38,18 +38,13 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ValidationResult } from "./core.js";
 
-/** Stable refusal codes of the scoped coordination surface (spec §C4). */
+/** Stable refusal codes of ordinary coordinator and protected workflow writes. */
 export const COORDINATION_ERROR_CODES = [
   "coordination.harness-not-found",
   "coordination.workflow-not-found",
   "coordination.plan-not-found",
   "coordination.scope-mismatch",
   "coordination.path-mismatch",
-  "coordination.assignment-invalid",
-  "coordination.assignment-stale",
-  "coordination.not-prepared",
-  "coordination.duplicate-holder",
-  "coordination.session-mismatch",
   "coordination.session-not-found",
   "coordination.session-role",
   "coordination.invalid-session-id",
@@ -62,13 +57,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.identity-mismatch",
   "coordination.version-conflict",
   "coordination.invalid-transition",
-  "coordination.handoff-state",
-  "coordination.handoff-missing",
-  "coordination.handoff-pin",
-  "coordination.execution-lease-required",
-  "coordination.prepare-already-prepared",
-  "coordination.prepare-session-bound",
-  "coordination.prepare-handoff-active",
   "coordination.prepare-status",
   "coordination.progress-phase",
   "coordination.progress-transition",
@@ -89,7 +77,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.direct-write-refused",
   "coordination.scoped-writer-required",
   "coordination.unknown-operation",
-  "coordination.legacy-only-operation",
   "coordination.store",
   // Prepare amendment refusals (the guarded Prepare-stage amendment contract
   // § Admission and mutation): one code per documented reason, so a caller
@@ -113,12 +100,6 @@ export const COORDINATION_ERROR_CODES = [
   "coordination.identity-recovery.foreign-owner",
   "coordination.identity-recovery.unauthorized",
   "coordination.identity-recovery.operation-conflict",
-  "coordination.delivery-source-repair.unsupported-workflow",
-  "coordination.delivery-source-repair.terminal",
-  "coordination.delivery-source-repair.no-accepted-handoff",
-  "coordination.delivery-source-repair.already-aligned",
-  "coordination.delivery-source-repair.not-legacy-shape",
-  "coordination.delivery-source-repair.pr-conflict",
   // The close's root-removal step (plan-workflow-lifecycle-contract §3 close
   // row): the terminal state is committed, but the root register could not be
   // read as a v2 register, so its entry could not be removed — an explicit
@@ -265,7 +246,7 @@ export function assertProtectedWriteAuthorized(
   if (isWriteAuthorized(canonical, operation)) return;
   throw new CoordinationError(
     "coordination.direct-write-refused",
-    `${canonical} is a protected coordination document (${kind}) \u2014 a raw store.${operation} is refused; use the coordination API (bind/prepare/progress/residual/handoff/accept/return/complete) or the locked writer`,
+    `${canonical} is a protected coordination document (${kind}); raw store.${operation} is refused. Use plan prepare/progress/issue-add/issue-close/complete or the documented workflow writer for this artifact`,
     { path: canonical, operation, kind },
   );
 }
@@ -314,7 +295,7 @@ export type CompletionEvidence = {
 };
 export type IntegrationResultInput = { base_sha: string; result_sha: string };
 export type CompletionRecord = {
-  source_branch: string;
+  source_branch: string | null;
   source_sha: string | null;
   worktree_path: string | null;
   review_base: string | null;
@@ -436,30 +417,65 @@ export function validatePreparedCoordination(value: unknown, what = "coordinatio
   return violations;
 }
 
-function validateCompletionRecord(value: unknown, what: string): ValidationResult[] {
+function validateCompletionRecord(value: unknown, what: string, route: RowValidationRoute): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.row.completion-shape", `${what} must be an object`)];
   const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"];
   const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.completion-field", `${what} has unexpected key: ${key}`));
-  for (const key of ["source_branch", "completed_by", "completed_at"]) if (!isNonEmptyString(value[key])) violations.push(invalid("coordination.row.completion-field", `${what}.${key} is required`));
+  const reportOnly = route === "standalone-report-only";
+  if (!(reportOnly && value.source_branch === null) && !isNonEmptyString(value.source_branch)) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.source_branch must identify the recorded source branch`));
+  }
+  for (const key of ["completed_by", "completed_at"]) {
+    if (!isNonEmptyString(value[key])) violations.push(invalid("coordination.row.completion-field", `${what}.${key} is required`));
+  }
   for (const key of ["source_sha", "review_base", "review_head"]) {
     const item = value[key];
-    if (item !== null && item !== undefined && (typeof item !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(item))) {
-      violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id or null`));
+    if (!(reportOnly && item === null) && (typeof item !== "string" || !GIT_SHA.test(item))) {
+      violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id${reportOnly ? " or null" : ""}`));
     }
   }
-  if (!isPlainObject(value.qc) || !Array.isArray(value.qc.reports) || !isPlainObject(value.qc.consolidated)) violations.push(invalid("coordination.row.completion-field", `${what}.qc is invalid`));
-  if (!isPlainObject(value.qa) || !isPlainObject(value.qa.report)) violations.push(invalid("coordination.row.completion-field", `${what}.qa is invalid`));
+  if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.worktree_path must be an absolute source checkout${reportOnly ? " or null" : ""}`));
+  }
+  if (!isPlainObject(value.qc) || !["Approve", "Approve with residuals"].includes(String(value.qc.decision)) || !Array.isArray(value.qc.reports) || value.qc.reports.length === 0) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.qc must record approved QC reports`));
+  } else {
+    for (const [index, report] of value.qc.reports.entries()) violations.push(...validateEvidenceRef(report, `${what}.qc.reports[${index}]`));
+    violations.push(...validateEvidenceRef(value.qc.consolidated, `${what}.qc.consolidated`));
+  }
+  if (!isPlainObject(value.qa) || !["mandatory", "pm-acceptance"].includes(String(value.qa.gate)) || value.qa.decision !== "pass") {
+    violations.push(invalid("coordination.row.completion-field", `${what}.qa must record passing acceptance evidence`));
+  } else {
+    violations.push(...validateEvidenceRef(value.qa.report, `${what}.qa.report`));
+  }
+  if (route !== "integration" && value.integration !== undefined) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.integration is only valid for integration delivery`));
+  }
+  if (route === "integration" && value.integration === undefined) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.integration is required for verified integration delivery`));
+  }
+  if (value.integration !== undefined) {
+    if (!isPlainObject(value.integration)) {
+      violations.push(invalid("coordination.row.completion-field", `${what}.integration must be a verified merge record`));
+    } else {
+      const fields = ["target_branch", "worktree_path", "base_sha", "result_sha", "verified_at"];
+      for (const key of Object.keys(value.integration)) if (!fields.includes(key)) violations.push(invalid("coordination.row.completion-field", `${what}.integration has unexpected key: ${key}`));
+      for (const key of fields) if (!isNonEmptyString(value.integration[key])) violations.push(invalid("coordination.row.completion-field", `${what}.integration.${key} is required`));
+      for (const key of ["base_sha", "result_sha"]) if (typeof value.integration[key] !== "string" || !GIT_SHA.test(value.integration[key])) violations.push(invalid("coordination.row.completion-field", `${what}.integration.${key} must be a full Git object id`));
+      if (typeof value.integration.worktree_path !== "string" || !isAbsolute(value.integration.worktree_path)) violations.push(invalid("coordination.row.completion-field", `${what}.integration.worktree_path must be absolute`));
+    }
+  }
   return violations;
 }
 
-export function validateRowCoordination(value: unknown, what = "coordination", _route: RowValidationRoute = "integration"): ValidationResult[] {
+export function validateRowCoordination(value: unknown, what = "coordination", route: RowValidationRoute = "integration"): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.row.shape", `${what} must be an object`)];
   const allowed = ["revision", "prepared", "progress", "completion"];
   const violations: ValidationResult[] = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.field", `${what} has unexpected key: ${key}`));
   if (!Number.isInteger(value.revision) || (value.revision as number) < 0) violations.push(invalid("coordination.row.revision", `${what}.revision must be a non-negative integer`));
   if (value.prepared !== undefined) violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
   if (value.progress !== undefined) violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
-  if (value.completion !== undefined) violations.push(...validateCompletionRecord(value.completion, `${what}.completion`));
+  if (value.completion !== undefined) violations.push(...validateCompletionRecord(value.completion, `${what}.completion`, route));
   return violations;
 }
 
