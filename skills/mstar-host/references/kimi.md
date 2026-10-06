@@ -53,7 +53,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless mai
 | **AgentSwarm** | Parallel batch when **same** role/profile and prompts differ only by task slice; prefer **N× Agent** when roles differ |
 | **AskUserQuestion** | Structured clarify (1–4 questions, 2–4 options each); prefer over free-form when choices are known |
 | **EnterPlanMode** / **ExitPlanMode** | Plan mode entry/approval → **`kimi-plan-mode-bridge.md`** |
-| **TodoList** | Session UX only; mirror to SSOT plan / workflow snapshot (`{WORKFLOW_DIR}/<id>/snapshot.json`) when durable |
+| **TodoList** | Session UX only; mirror to authored SSOT plan / store-backed plan row through public plan verbs (snapshot file only pre-activation) when durable |
 | **Bash** | Commands, git, tests — evidence per `mstar-coding-behavior` |
 | **Read** / **ReadMediaFile** | File reads |
 | **Glob** / **Grep** | Search (prefer over shell find/grep) |

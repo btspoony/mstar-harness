@@ -14,7 +14,7 @@ Lease mutations happen on the **control copy** of the coordination file — the 
 
 **Same-host exclusive write lock** — all control-path lease mutations (claim, release, transfer, plan-status transitions that touch the lease, merge-lease claim/release) MUST run inside a same-host exclusive write lock for the full **read-check-replace-verify** sequence. Hold from first read through post-write verify; release on all exit paths.
 
-- Engine writers acquire the lock automatically: `writeWorkflowSnapshot` / `registerWorkflow` atomic-`mkdir` the lockdir at `<status-file dir>/.status-write.lockdir/` — for the snapshot the lockdir lands **inside `workflows/<id>/`** (next to `snapshot.json`).
+- Pre-activation file-route engine writers acquire the lock automatically (ACTIVE refuses these file writers and uses store.db `withExecutionTransaction` instead): `writeWorkflowSnapshot` / `registerWorkflow` atomic-`mkdir` the lockdir at `<status-file dir>/.status-write.lockdir/` — for the snapshot the lockdir lands **inside `workflows/<id>/`** (next to `snapshot.json`).
 - Manual fallback when no engine writer exists: atomic `mkdir` on `{WORKFLOW_DIR}/<id>/.status-write.lockdir/` — success acquires; existing dir → **Blocked** (another writer holds the lock); `rmdir` the directory only after successful verify or explicit rollback. The dsh notes-ledger writer uses the same lockdir pattern (`{WORKFLOW_DIR}/<id>/.ledger-write.lockdir`). Do **not** invent a distributed CAS CLI.
 
 ```bash

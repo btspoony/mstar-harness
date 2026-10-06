@@ -23,39 +23,16 @@ Bootstrap todos `harness-init` / `spec-register` / `mirror-plan` (emit first, in
 
 ### `spec-register` minimum fields
 
-Add a root `workflows[]` entry to `status.json` (v2) + one `plans[]` object to the workflow snapshot:
+Use `mstar workflow register` to create store.db registry/workflow/plan rows and declare delivery kind; use `mstar plan prepare` for the prepared Assignment and frozen inputs. Read registration through `mstar status validate` / `mstar plan show`. Required fields and tokens follow the producer's `--help` and `mstar-artifacts`; do not hand-write JSON templates.
 
-```json
-// {HARNESS_DIR}/status.json (v2 root) — active lifecycle entry
-{
-  "id": "<plan-id>",
-  "type": "plan",
-  "started_at": "YYYY-MM-DD",
-  "dir": "workflows/<plan-id>"
-}
-```
-
-```json
-// {WORKFLOW_DIR}/<plan-id>/snapshot.json — plan row (schema_version 1)
-{
-  "id": "<plan-id>",
-  "status": "Todo",
-  "file": ".mstar/plans/<plan-id>-<short-name>.md",
-  "metadata": {
-    "primary_spec": "<spec-id or path if known>",
-    "description": "<one-line summary>"
-  }
-}
-```
-
-Set `updated_at` on `status.json` / the snapshot to today (`YYYY-MM-DD`). Commit **tracked results** in the business repo when applicable: `{HARNESS_DIR}/AGENTS.md`, `{KNOWLEDGE_DIR}/`, `{SPECS_DIR}/` (default git policy — see `mstar-conventions`). Do **not** default `git add` for `status.json`, `workflows/`, `projects/`, `plans/`, or `iterations/`.
+Only pre-activation / engine-absent fallback uses root `status.json` + workflow snapshot; ACTIVE reads and writes refuse those files. Commit tracked results when applicable (`AGENTS.md`, knowledge, specs); process artifacts remain gitignored per `mstar-conventions`.
 
 ### `mirror-plan` minimum content
 
 - YAML or markdown frontmatter with `plan_id`, title, status (`Todo` / `InProgress` — not `Done` unless PM/QA authority).
 - **Task list** as markdown checkboxes (`- [ ]` / `- [x]`) matching CreatePlan implement todos.
 - **Roadmap / deferred scope** section when delivery is staged, partial, or uses a temporary workaround.
-- Link: “SSOT status: `{HARNESS_DIR}/status.json` (v2 `workflows[]`) → `{WORKFLOW_DIR}/<id>/snapshot.json` `plans[]`; open residuals → `{PROJECT_DIR}/<id>/residuals.json`.”
+- Link: “Execution status: store.db registered workflow/plan rows (`mstar status validate` / `mstar plan show`); open findings: store.db issues (`mstar plan issue-add` / `mstar issue add`).”
 
 After **CreatePlan**, keep CreatePlan body and mirror file **in sync** when scope changes (update both in the same coordination round).
 
@@ -69,7 +46,7 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 **plan_id**: <plan-id>
 **HARNESS_DIR**: .mstar/
 **Plan file (SSOT)**: .mstar/plans/<plan-id>-<short-name>.md
-**status.json**: .mstar/status.json
+**Execution authority**: .mstar/store.db (read through public status/plan verbs)
 
 ## Prepare gates
 
@@ -89,8 +66,8 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ### Bootstrap (fixed prefix — complete before implement)
 
-1. harness-init — init .mstar/, status.json (v2), process-artifact gitignore set
-2. spec-register — register the root `workflows[]` entry + snapshot plan row; spec stub if applicable
+1. harness-init — initialize harness directories and process-artifact gitignore; empty status template is pre-activation bootstrap only
+2. spec-register — register workflow/plan rows through the authorized engine producer; spec stub if applicable
 3. mirror-plan — write .mstar/plans/<plan-id>-<short-name>.md
 
 ### Implement
@@ -110,14 +87,14 @@ Use this structure in CreatePlan `plan` markdown; mirror the same sections into 
 
 ## Implement todo completion gate (every code todo)
 
-Commit → SSOT checkbox → `status.json` sync → `git log -1 --oneline` evidence; NEVER list → core. Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
+Commit → SSOT checkbox → PM public plan-state update in store.db → `git log -1 --oneline` evidence; NEVER list → core. Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/references/fullstack-dev-shared.md` (Git NEVER).
 
 ## SwitchMode → Agent (pre-flight)
 
 Before switching from Plan to Agent for implementation (or declaring Plan phase complete):
 
 - [ ] `{PLAN_DIR}/<plan-id>-<name>.md` exists on disk
-- [ ] Root `status.json` `workflows[]` contains the entry and `{WORKFLOW_DIR}/<id>/snapshot.json` contains the `plans[]` row with matching `id` and `file`
+- [ ] `mstar status validate` / `mstar plan show` confirms the registered workflow/plan row with matching `id` and authored plan `file`; no ACTIVE file sync
 - [ ] Bootstrap todos `harness-init`, `spec-register`, `mirror-plan` are **done**
 - [ ] CreatePlan implement todos reference **task ids** traceable to SSOT plan checkboxes
 - [ ] If staged/partial/temporary, CreatePlan and SSOT plan both contain `Roadmap / deferred scope`
