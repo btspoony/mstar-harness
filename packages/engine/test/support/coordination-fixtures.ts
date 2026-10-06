@@ -497,8 +497,8 @@ export async function reportOnlyGitFixture(): Promise<GitFixture> {
 export async function acceptedFixture(): Promise<GitFixture> {
   const fixture = await gitFixture();
   await prepareCall(fixture, PLAN_ID);
-  await progressCall(fixture, PLAN_ID, { status: "InProgress" });
-  await progressCall(fixture, PLAN_ID, { status: "InReview" });
+  await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "feature commit ready for review", evidence_paths: [] });
+  await progressCall(fixture, PLAN_ID, { status: "InReview", summary: "feature commit submitted for QC and QA", evidence_paths: [] });
   return fixture;
 }
 
@@ -506,8 +506,8 @@ export async function acceptedFixture(): Promise<GitFixture> {
 export async function acceptedStandaloneFixture(): Promise<GitFixture> {
   const fixture = await standaloneGitFixture();
   await prepareCall(fixture, PLAN_ID);
-  await progressCall(fixture, PLAN_ID, { status: "InProgress" });
-  await progressCall(fixture, PLAN_ID, { status: "InReview" });
+  await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "standalone source commit ready for review", evidence_paths: [] });
+  await progressCall(fixture, PLAN_ID, { status: "InReview", summary: "standalone source submitted for QC and QA", evidence_paths: [] });
   return fixture;
 }
 

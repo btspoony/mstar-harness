@@ -21,7 +21,7 @@ import { openStore } from "../src/store-db.js";
 import { CoordinationError, validateSnapshotCoordination } from "../src/coordination-write.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, FIXTURE_COORDINATOR_ID,
-  git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureCode,
+  git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureCode, failureOf,
   ensureCoordinator, coordinatorCall, prepareCall, progressCall,
   gitFixture, planRowOf, headOf,
   completionEvidenceOf, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
@@ -517,15 +517,20 @@ describe("findings-gate — issue authority (G2a)", () => {
     // An unresolved critical blocks approval under the plan's cleanup mode —
     // read from the issue store, never from a register.
     const snapshotBefore = readJson(fixture.snapshotPath);
-    expect(
-      await errorCodeOf(() =>
-        coordinatorCall(fixture, PLAN_ID, {
-          kind: "complete",
-          evidence: completionEvidenceOf(fixture, fixture.planSha),
-          integration,
-        }),
-      ),
-    ).toBe("coordination.findings-open");
+    const refusal = await failureOf(() =>
+      coordinatorCall(fixture, PLAN_ID, {
+        kind: "complete",
+        evidence: completionEvidenceOf(fixture, fixture.planSha),
+        integration,
+      }),
+    );
+    expect(refusal).toBeInstanceOf(CoordinationError);
+    if (!(refusal instanceof CoordinationError)) throw refusal;
+    expect(refusal.code).toBe("coordination.invalid-transition");
+    expect(refusal.details).toMatchObject({ plan_id: PLAN_ID, findings_cleanup: "allow-residual" });
+    expect(await linkedOpenIssues(fixture, PLAN_ID)).toEqual([
+      { id: critical.issue_id, severity: "critical", disposition: "open" },
+    ]);
     expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InReview");
 
@@ -533,7 +538,7 @@ describe("findings-gate — issue authority (G2a)", () => {
     const closed = await mutatePlanCoordination({
       sessionPath: fixture.coordinatorSession,
       planId: PLAN_ID,
-      expectedRevision: view.revision,
+      expectedRevision: (await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root)).revision,
       operation: closeOp(critical.issue_id, critical.revision) as never,
     });
     expect(closed.outcome).toBe("residual-closed");
@@ -650,24 +655,36 @@ describe("scope-and-revisions", () => {
     expect((await readPlanCoordination(unassociated.coordinatorSession, PLAN_ID, unassociated.root)).revision).toBe(before.revision);
   });
 
-  test("a drifted revision token is a disclosed retry, not a conflict", async () => {
+  test("a stale report cannot overwrite newer progress; rereading permits the intended transition", async () => {
     const fixture = makeFixture();
     const sessionPath = await ensureCoordinator(fixture);
     const evidence = join(fixture.sddDir, "evidence.txt");
     writeText(evidence, "proof\n");
     const view = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
 
-    // A first progress report moves the row; the stale token of the earlier read
-    // is transport freshness, so the second report is judged on its own effect.
+    // This field changed after the presented token, unlike an unrelated row
+    // revision: preserve the recorded report and require an explicit reread.
     await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "one", evidence_paths: [evidence] });
-    const second = await mutatePlanCoordination({
+    const before = readJson(fixture.snapshotPath);
+    const refusal = await failureOf(() => mutatePlanCoordination({
       sessionPath,
       planId: PLAN_ID,
       expectedRevision: view.revision,
       operation: { kind: "progress", progress: { status: "InReview", summary: "two", evidence_paths: [evidence] } },
+    }));
+    expect(refusal).toBeInstanceOf(CoordinationError);
+    if (!(refusal instanceof CoordinationError)) throw refusal;
+    expect(refusal.code).toBe("coordination.version-conflict");
+    expect(refusal.details).toMatchObject({ plan_id: PLAN_ID, path: "coordination.progress", expected: view.revision });
+    expect(readJson(fixture.snapshotPath)).toEqual(before);
+    const current = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
+    const second = await mutatePlanCoordination({
+      sessionPath,
+      planId: PLAN_ID,
+      expectedRevision: current.revision,
+      operation: { kind: "progress", progress: { status: "InReview", summary: "two", evidence_paths: [evidence] } },
     });
     expect(second.outcome).toBe("progressed");
-    expect(second.recovery?.warnings?.map((entry) => entry.code)).toContain("coordination.token-drifted");
     expect(second.view?.row.status).toBe("InReview");
   });
 
@@ -721,6 +738,7 @@ describe("scope-and-revisions", () => {
     expect(metadata.track_branches).toEqual(["feature/plan-a"]);
 
     // The track branch may never be a snapshot branch or another plan's branch.
+    const beforeForeignTracks = readJson(fixture.snapshotPath);
     for (const foreign of ["main", "feature/plan-b"]) {
       expect(
         await errorCodeOf(() =>
@@ -735,8 +753,9 @@ describe("scope-and-revisions", () => {
           }),
         ),
         foreign,
-      ).toBe("coordination.invalid-input");
+      ).toBe("coordination.scope-mismatch");
     }
+    expect(readJson(fixture.snapshotPath)).toEqual(beforeForeignTracks);
 
     const blocked = await mutatePlanCoordination({
       sessionPath,

@@ -19,7 +19,7 @@
  * checkout's control store.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   mutatePlanCoordination,
@@ -28,7 +28,6 @@ import {
   resolveIntentRoot,
   resolveIntentTarget,
   resolveProcessHarnessDir,
-  type CompletionEvidence,
   type CoordinationResult,
 } from "../src/coordination.js";
 import { commitExecutionRegistration } from "../src/execution-registration.js";
@@ -36,14 +35,14 @@ import { initializeExecutionAuthority } from "../src/execution-store.js";
 import { initializeStore, openStore } from "../src/store-db.js";
 import { resolveCurrentAuthority } from "../src/store-read.js";
 import { assertAuthorityCurrent, currentAuthorityHandle } from "../src/store-activation.js";
-import { CoordinationError } from "../src/coordination-write.js";
+import { CoordinationError, type CompletionEvidence } from "../src/coordination-write.js";
 import type { RecoveryDetails } from "../src/recovery-intent.js";
 import { withStatusWriteLock } from "../src/lease.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import { registerIterationWorkflow, type WorkflowSnapshot } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, FIXTURE_COORDINATOR_ID,
-  writeText, writeJson, readJson, makeFixture, errorCodeOf, failureOf, failureCode,
+  git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureOf, failureCode,
   ensureCoordinator, prepareCall,
   storeBacked, afterEachCleanup, finding, linkedOpenIssues,
 } from "./support/coordination-fixtures.js";
@@ -332,6 +331,10 @@ describe("registration route parity — one canonical plan pointer (E07 fold)", 
     expect(filePlans[0]!.file).toBe(canonicalRowPointer(fileRoot.harness, ROUTE_PLAN));
 
     // The ACTIVE DB route, on its own control root.
+    // This fixture exercises fresh authority initialization, not migration of
+    // the unrelated FILE workflow that makeFixture seeds for other cases.
+    rmSync(join(dbRoot.harness, "status.json"));
+    rmSync(join(dbRoot.harness, "workflows"), { recursive: true });
     const store = await initializeStore({ harnessDir: dbRoot.harness });
     store.close();
     const initialized = await initializeExecutionAuthority({ harnessDir: dbRoot.harness });
@@ -548,6 +551,61 @@ describe("intent resolution — trusted root, explicit target, authority change 
     expect(resolved.warnings.map((entry) => entry.code)).toEqual(["coordination.git-unavailable"]);
   });
 
+  test("process root without Git stops at a nested independent repository and refuses unresolved linked checkout boundaries at every depth", async () => {
+    const fixture = makeFixture();
+    const independent = join(fixture.worktreePath, "independent");
+    mkdirSync(independent);
+    git(["init", "-q", "-b", "main"], independent);
+    const independentHarness = join(independent, ".mstar");
+    mkdirSync(independentHarness);
+    const independentChild = join(independent, "child");
+    const independentGrandchild = join(independentChild, "child");
+    mkdirSync(independentGrandchild, { recursive: true });
+    const linkedChild = join(fixture.peerWorktreePath, "child");
+    const linkedGrandchild = join(linkedChild, "child");
+    mkdirSync(linkedGrandchild, { recursive: true });
+    // With Git available, the linked checkout still resolves its main control
+    // root; the independent repository resolves only its own bounded layout.
+    expect(resolveProcessHarnessDir(linkedGrandchild)).toBe(fixture.harness);
+    expect(resolveProcessHarnessDir(independentGrandchild)).toBe(independentHarness);
+    const binDir = join(fixture.root, "no-git");
+    mkdirSync(binDir);
+    const script = join(fixture.root, "resolve-roots.ts");
+    writeText(script, [
+      `import { resolveProcessHarnessDir } from ${JSON.stringify(join(import.meta.dir, "..", "src", "coordination.ts"))};`,
+      `const results = process.argv.slice(2).map((cwd) => {`,
+      `  try { return { root: resolveProcessHarnessDir(cwd) }; }`,
+      `  catch (error) {`,
+      `    if (error === null || typeof error !== "object" || !("code" in error)) throw error;`,
+      `    return { code: error.code };`,
+      `  }`,
+      `});`,
+      `console.log(JSON.stringify(results));`,
+      "",
+    ].join("\n"));
+    const before = readFileSync(fixture.snapshotPath, "utf8");
+    const child = Bun.spawn([
+      process.execPath, script,
+      independent, independentChild, independentGrandchild,
+      fixture.peerWorktreePath, linkedChild, linkedGrandchild,
+    ], {
+      // Import-time process root discovery is part of the observed CLI failure.
+      cwd: independentGrandchild,
+      env: { ...process.env, PATH: binDir, MSTAR_HARNESS_DIR: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exitCode = await child.exited;
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    expect(exitCode, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([
+      { root: independentHarness }, { root: independentHarness }, { root: independentHarness },
+      { code: "coordination.not-in-git" }, { code: "coordination.not-in-git" }, { code: "coordination.not-in-git" },
+    ]);
+    expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
+  }, 30000);
+
   test("an unresolvable trusted root is a typed report, never a guessed root (A25)", async () => {
     const fixture = makeFixture();
     const linked = unreadableLinkedCheckout(fixture);
@@ -631,6 +689,7 @@ describe("intent resolution — trusted root, explicit target, authority change 
 describe("file-route direct completion", () => {
   test("a coordinator completes a standalone row through the file route with QC/QA evidence", async () => {
     const fixture = makeFixture();
+    await storeBacked(fixture, [PLAN_ID]);
     const sessionPath = await ensureCoordinator(fixture);
     const snapshot = readJson(fixture.snapshotPath) as unknown as WorkflowSnapshot;
     snapshot.type = "plan";
@@ -659,19 +718,22 @@ describe("file-route direct completion", () => {
     expect(completed.view?.row.status).toBe("Done");
   });
 
-  test("a plan document that no longer exists refuses the row address, not a seal", async () => {
+  test("a missing plan document remains readable as row state but refuses prepare until restored", async () => {
     const fixture = makeFixture();
     const sessionPath = await ensureCoordinator(fixture);
     const prepared = await prepareCall(fixture, PLAN_ID);
     expect(prepared.outcome).toBe("prepared");
     rmSync(fixture.planPath);
 
-    // The row's own document is missing: the read refuses with its own code and
-    // the snapshot the row lives in is unchanged.
+    // Reading current row state does not reseal documentary inputs. A prepare
+    // still resolves the registered plan pointer and refuses its missing file.
     const before = readJson(fixture.snapshotPath);
-    const code = await errorCodeOf(() => readPlanCoordination(sessionPath, PLAN_ID, fixture.root));
-    expect(typeof code).toBe("string");
+    const current = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
+    expect(current.prepared).toEqual(prepared.view?.prepared);
+    expect(await errorCodeOf(() => prepareCall(fixture, PLAN_ID))).toBe("plan-path.not-a-file");
     expect(readJson(fixture.snapshotPath)).toEqual(before);
+    writeText(fixture.planPath, "---\nplan_id: plan-a\n---\n# restored plan a\n");
+    expect((await prepareCall(fixture, PLAN_ID)).outcome).toBe("already-satisfied");
   });
 
   test("a session that is not the coordinator cannot address a row, for read or mutation", async () => {

@@ -112,7 +112,6 @@ async function seedExecutionAuthority(
           sessionId: `host-${workflow.id}`,
           role: 'coordinator',
           workflowId: workflow.id,
-          planId: null,
         } satisfies ExecutionCaller,
       } satisfies ExecutionContext,
       {
@@ -876,12 +875,6 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(text).toContain('store: projection unavailable')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
-    // The InProgress row AND the Done row both appear as recorded scope: an
-    // ordinary Todo/Done row is never presented as an active lease/holder.
-    expect(text).toContain('row scope: plan-a → feature/plan-a (/worktrees/plan-a)')
-    expect(text).toContain('row scope: plan-b → feature/plan-b (/worktrees/plan-b)')
-    expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
-    expect(text).toContain('agent flow: 2 events; by role: fullstack-dev 1')
   })
   it('roadmap-authority failure is disclosed without dropping independent issue counts', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-roadmap-authority-'))

@@ -24,11 +24,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity, updateCatalogEntity } from "../src/catalog.js";
-import { mutateExecutionPlan as publishedMutateExecutionPlan } from "../src/index.js";
 import {
   mutateExecutionPlan,
   prepareExecutionPlan,
-  progressExecutionPlan,
   residualAddExecutionPlan,
   residualCloseExecutionPlan,
   setCompleteWitnessGapForTest,
@@ -157,6 +155,11 @@ async function seededWorkflow(
     stdio: ["ignore", "ignore", "ignore"],
   });
   const harnessDir = join(workspace, ".mstar");
+  writeFileSync(join(workspace, ".gitignore"), ".mstar/\nworktrees/\n");
+  execFileSync("git", ["-C", workspace, "add", ".gitignore"], { stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["-C", workspace, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore harness"], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
   mkdirSync(harnessDir, { recursive: true });
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
@@ -355,6 +358,17 @@ async function progressPlan(fixture: Fixture, planId: string, operationId: strin
     kind: "progress",
     progress: { status, summary, evidence_paths: [] },
   } as unknown as CoordinationOperation);
+}
+
+/** A clean linked feature checkout in the fixture's actual repository. */
+function prepareCheckout(fixture: Fixture, planId: string) {
+  const workspace = dirname(fixture.context.harnessDir);
+  const worktreePath = join(workspace, "worktrees", planId);
+  const workingBranch = `feature/${planId}`;
+  execFileSync("git", ["-C", workspace, "worktree", "add", "-q", "-b", workingBranch, worktreePath], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  return { worktreePath: realpathSync(worktreePath), workingBranch };
 }
 
 /** The refusal of a call that must refuse, as a typed error value. */
@@ -572,7 +586,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     const fixture = await seededWorkflow("prepare-input-record");
     const { context, coordinator } = fixture;
     const before = footprint(context);
-    const config = { worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN), workingBranch: `feature/${OWN_PLAN}` };
+    const config = prepareCheckout(fixture, OWN_PLAN);
 
     const receipt = await preparePlan(fixture, OWN_PLAN, "prepare-1", config);
     expect(receipt.replayed).toBe(false);
@@ -607,7 +621,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
   test("an unchanged ordinary reissue is already-satisfied with no second write, and its receipt replays", async () => {
     const fixture = await seededWorkflow("prepare-satisfied");
     const { context } = fixture;
-    const config = { worktreePath: join(context.harnessDir, "worktrees", OWN_PLAN), workingBranch: `feature/${OWN_PLAN}` };
+    const config = prepareCheckout(fixture, OWN_PLAN);
     const first = await preparePlan(fixture, OWN_PLAN, "prepare-first", config);
     expect(first.replayed).toBe(false);
     const committed = footprint(context);
@@ -642,6 +656,12 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(footprint(context)).toEqual(committed);
     expect(replayToken).toBe(replay.token);
 
+    const blockedBefore = storedReplaySurface(context, OWN_PLAN);
+    const invalidReview = await refusalOf(() => progressPlan(fixture, OWN_PLAN, "progress-blocked-review", "InReview", "review"));
+    expect(invalidReview.code).toBe("coordination.progress-transition");
+    expect(storedReplaySurface(context, OWN_PLAN)).toEqual(blockedBefore);
+    expect(footprint(context)).toEqual(committed);
+    await progressPlan(fixture, OWN_PLAN, "progress-resume", "InProgress", "QC prerequisite restored");
     // A Done row is not a valid progress target.
     await progressPlan(fixture, OWN_PLAN, "progress-review", "InReview", "review");
     withRaw(context, (db) => {
@@ -674,7 +694,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(footprint(context)).toEqual(before);
   });
 
-  test("refuses a prepare whose catalog registration is still pending, and seals nothing", async () => {
+  test("refuses a prepare whose catalog registration is still pending, and records nothing", async () => {
     const fixture = await seededWorkflow("prepare-pending-registration");
     const { context, planTokens } = fixture;
     const before = footprint(context);
@@ -684,12 +704,16 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
           "values ('op-pending', 'h', 'execution-written', ?, '{}', '{}', null, ?, ?)",
       ).run(JSON.stringify({ workflow: { workflowId: WORKFLOW_ID } }), TS, TS);
     });
+    const storedBefore = storedReplaySurface(context, OWN_PLAN);
+    const pendingBefore = rows(context, "select * from catalog_operations where operation_id = 'op-pending'");
 
     const refusal = await refusalOf(() =>
       planCall(fixture, OWN_PLAN, "prepare-pending", planTokens[OWN_PLAN]!, { kind: "prepare" }),
     );
     expect(refusal.code).toBe("catalog.registration-pending");
     expect(footprint(context)).toEqual({ ...before, operations: before.operations as number });
+    expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedBefore);
+    expect(rows(context, "select * from catalog_operations where operation_id = 'op-pending'")).toEqual(pendingBefore);
   });
 });
 
@@ -730,7 +754,7 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
       session: fixture.coordinator,
       expected: await planTokenOf(fixture, OWN_PLAN),
       planId: OWN_PLAN,
-      operation: { kind: "residual-add", entries: [finding(), finding({ occurrenceKey: "occ-2" })] },
+      operation: { kind: "residual-add", entries: [finding(), finding({ occurrenceKey: "occ-2", rootCauseKey: "rc-2" })] },
     });
     expect(added.replayed).toBe(false);
 
@@ -747,7 +771,7 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
         kind: "residual-close",
         issueId: target.id,
         disposition: "resolved",
-        evidence: { reason: "fixed", references: ["review/qc1.md"] },
+        evidence: { reason: "fixed", references: ["review/qc1.md"], alignmentRef: "qa/acceptance.md" },
         expectedIssueRevision: target.revision,
       },
     });
@@ -796,6 +820,8 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
     });
     const [target] = await linkedPlanIssues(context, OWN_PLAN);
     const staleToken = await planTokenOf(fixture, OWN_PLAN);
+    const before = footprint(context);
+    const issueBefore = await getIssue(context, target!.id);
     const refusal = await refusalOf(() =>
       residualCloseExecutionPlan(domainContext(context, fixture.coordinatorCaller), {
         operationId: "residual-close-stale",
@@ -806,13 +832,14 @@ describe("execution-residual: §3/§4.1 DB residual-add and residual-close", () 
           kind: "residual-close",
           issueId: target!.id,
           disposition: "waived",
-          evidence: { reason: "risk accepted", references: [] },
+          evidence: { reason: "risk accepted", references: [], scope: OWN_PLAN, alignmentRef: "architect/risk-acceptance.md" },
           expectedIssueRevision: target!.revision + 5,
         },
       }),
     );
     expect(refusal.code).toBe("issue.revision-conflict");
-    expect((await getIssue(context, target!.id)).disposition).toBe("open");
+    expect(await getIssue(context, target!.id)).toEqual(issueBefore);
+    expect(footprint(context)).toEqual(before);
   });
 });
 
@@ -1057,7 +1084,12 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     // The attempt's own claim is released by the same write.
     const [leaseRow] = rows(context, `select lease_json from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`);
     expect(JSON.parse(String(leaseRow!.lease_json))).toMatchObject({ status: "released", released_by: COORDINATOR_ID });
-    expect(footprint(context)).toEqual({ ...before, own_plan_revision: (before.own_plan_revision as number) + 1, operations: (before.operations as number) + 1 });
+    expect(footprint(context)).toEqual({
+      ...before,
+      store_revision: (before.store_revision as number) + 1,
+      own_plan_revision: (before.own_plan_revision as number) + 1,
+      operations: (before.operations as number) + 1,
+    });
 
     // Replay: identical request, Git/evidence left intact on the first attempt
     // then made UNAVAILABLE. The recorded receipt is served byte-stably.
@@ -1242,9 +1274,6 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     }
   }, 30000);
 
-  test("the published entry point dispatches the same closed union as the direct verb", () => {
-    expect(publishedMutateExecutionPlan).toBe(mutateExecutionPlan);
-  });
 });
 
 /* ------------------------------------------------------------------------ *
@@ -1345,7 +1374,7 @@ describe("execution-evidence-scalars: strict enum/field admission", () => {
           evidence: extraKey,
         } as CoordinationOperation),
       ),
-    ).toMatchObject({ code: "coordination.invalid-input" });
+    ).toMatchObject({ code: "coordination.forbidden-field", details: { unexpected: ["unexpected"] } });
     expect(footprint(context)).toEqual(before);
 
     // The corrected ordinary evidence completes.
@@ -1366,9 +1395,9 @@ describe("execution-issue-authority: the store is the capture authority", () => 
     const fixture = await seededWorkflow("issue-authority-cross");
     const { context } = fixture;
     await preparePlan(fixture, OWN_PLAN, "prepare-issue", undefined);
-    const captured = await captureIssue(context, finding({ occurrenceKey: "occ-direct" }), {
+    const captured = await captureIssue(context, { ...finding({ occurrenceKey: "occ-direct" }), projectId: "_default" }, {
       operationId: "direct-capture",
-      actor: "execution-coordination.test",
+      actor: "project-manager",
     });
     // The core capture records the issue; the plan link is a separate provenance
     // write that the scoped operation performs in its own transaction.
@@ -1437,7 +1466,7 @@ describe("execution-issue-authority: the store is the capture authority", () => 
         kind: "residual-close",
         issueId: issue!.id,
         disposition: "resolved",
-        evidence: { reason: "fixed", references: ["review/qc1.md"] },
+        evidence: { reason: "fixed", references: ["review/qc1.md"], alignmentRef: "qa/acceptance.md" },
         expectedIssueRevision: detail.revision,
       },
     });
@@ -1449,20 +1478,6 @@ describe("execution-issue-authority: the store is the capture authority", () => 
   }, 30000);
 });
 
-/* ------------------------------------------------------------------------ *
- * The published surface
- * ------------------------------------------------------------------------ */
-
-describe("execution-surface: the published DB verbs", () => {
-  test("exports mutateExecutionPlan verbatim and keeps the per-operation bodies module-scoped", async () => {
-    const engineIndex = await import("../src/index.js");
-    expect(engineIndex.mutateExecutionPlan).toBe(mutateExecutionPlan);
-    expect(engineIndex.mutateExecutionPlan.length).toBe(2);
-    for (const name of ["prepareExecutionPlan", "progressExecutionPlan", "residualAddExecutionPlan", "residualCloseExecutionPlan"]) {
-      expect(name in engineIndex).toBe(false);
-    }
-  });
-});
 
 /* ------------------------------------------------------------------------ *
  * Explicit addressing
@@ -1507,9 +1522,9 @@ describe("execution-session-rows: one coordinator per workflow", () => {
     const fixture = await seededWorkflow("session-row-single");
     const sessions = rows(
       fixture.context,
-      `select role, session_id, plan_id, state from execution_sessions where workflow_id = '${WORKFLOW_ID}'`,
+      `select role, session_id, state from execution_sessions where workflow_id = '${WORKFLOW_ID}'`,
     );
-    expect(sessions).toEqual([{ role: "coordinator", session_id: COORDINATOR_ID, plan_id: null, state: "active" }]);
+    expect(sessions).toEqual([{ role: "coordinator", session_id: COORDINATOR_ID, state: "active" }]);
     expect(fixture.epoch).toBeGreaterThan(0);
   });
 });

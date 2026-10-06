@@ -473,10 +473,13 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
   const start = resolve(cwd);
   const main: MainWorktreeInfo | null = readMainWorktree(start);
   if (main !== null) return resolveHarnessDir(main.root);
-  for (let dir = start; ; dir = dirname(dir)) {
+  for (let dir = start; ;) {
     let linked = false;
     try {
-      linked = statSync(join(dir, ".git")).isFile();
+      const marker = statSync(join(dir, ".git"));
+      // Stop at the nearest independent repository, not its enclosing checkout.
+      if (marker.isDirectory()) return resolveHarnessDir(start, { workspaceRoot: dir });
+      linked = marker.isFile();
     } catch (error) {
       const code = errorCode(error);
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
@@ -2213,9 +2216,7 @@ function assertEvidenceInsidePlan(scope: ResolvedPlanScope, paths: readonly stri
 
 /**
  * §D the two areas a plan's own evidence may live in: `{PLAN_DIR}` and
- * `{SDD_DIR}/<plan-id>`. A prepared plan's Assignment is required to name
- * exactly these (see `scopeFromAssignment`), so a transport that reads its plan
- * identity from the store derives them here instead of trusting a caller file.
+ * `{SDD_DIR}/<plan-id>`, derived from the harness configuration and plan identity.
  */
 export function planAreaRoots(harnessRoot: string, planId: string): string[] {
   return [
@@ -2225,9 +2226,8 @@ export function planAreaRoots(harnessRoot: string, planId: string): string[] {
 }
 
 /**
- * Absolute, existing evidence inside one plan's own plan/SDD area. Shared by
- * both transports: the file route passes the areas its prepared scope pins, the
- * DB route the areas its own plan identity derives.
+ * Absolute, existing evidence inside one plan's own plan/SDD area. Both
+ * transports derive their areas from the addressed plan and harness layout.
  */
 export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: readonly string[]): void {
   for (const path of paths) {

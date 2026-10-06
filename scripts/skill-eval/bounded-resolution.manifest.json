@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "258870b59749885365a0d3ee960f9716f561ef203f82b010ad0d4098f935ca09",
+  "casesHash": "24fc055475c7a7a65427d2d5ba2b6bc4f072d362bb48a314aa715e4413d37e9f",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -668,7 +668,7 @@
       "route": "audit",
       "split": "dev",
       "fixture": {
-        "hash": "734af8473a5c5107c575a6fa7f2a70d8c7e21576a2a055019f702d5e0e9169fe",
+        "hash": "73e7b7c1d639d0a99894472ccf8aa78b91504e6879e25ed167925cb778fc29f6",
         "files": [
           {
             "path": "AGENTS.md",
@@ -676,7 +676,7 @@
           },
           {
             "path": "store/fixture.json",
-            "sha256": "69e59a4dc06d1c9137d349e77b8b87ded579f5f00a5a9039492fcee37615ae9e"
+            "sha256": "d0d4cf37855d6ba49814c6004e8f00f37fa7d695a6f910e957efc63b3d581c8e"
           }
         ]
       },
@@ -784,7 +784,7 @@
         "context": "warm",
         "evidence": "lease record present in the fixture"
       },
-      "integrityHash": "ec888593b4695a071da8a58468d911452998be0159d1d868efea31ce31fe98af"
+      "integrityHash": "9a5aa54bb1484117a305a263d9fac64b96a59004cd2e216caee2a56844ecd3e4"
     },
     {
       "id": "bounded-res-slash-iteration-cold",
@@ -1002,7 +1002,7 @@
       },
       "bounded-res-lease-boundary": {
         "inputs": [
-          "workflow integration exclusion record at store/fixture.json containing integration_merge_lease holder session-foreign-fixture, source feature/demo and target integration/demo"
+          "workflow integration merge lease boundary at store/fixture.json containing integration_merge_lease holder session-foreign-fixture, source feature/demo and target integration/demo"
         ],
         "unavailable": [
           "authorization to take over the foreign lease"
@@ -1202,6 +1202,9 @@
       },
       "catalog.reconcile": {
         "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"
+      },
+      "catalog.purge-registration": {
+        "excluded": "requires a producer-written registration snapshot and its recorded identity digest; no bounded interaction scenario is represented"
       },
       "roadmap.import": {
         "excluded": "store-backed mutation route; only the ungrouped close refusal is represented concretely"

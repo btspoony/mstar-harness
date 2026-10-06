@@ -31,8 +31,8 @@ import {
   readPlanCoordination,
   replaceCoordinatedArtifact,
   setCompleteStandaloneMutateGapForTest,
-  type CompletionEvidence,
 } from "../src/coordination.js";
+import type { CompletionEvidence } from "../src/coordination-write.js";
 import { closeWorkflow, recordWorkflowDelivery } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID,
@@ -42,7 +42,7 @@ import {
   headOf, snapshotOf, planRowOf, updatePlanRow,
   completionOf, preparedOf, metadataOf, recordField, arrayField, sha256OfFile,
   acceptedFixture, acceptedStandaloneFixture, reportOnlyGitFixture, standaloneGitFixture,
-  sealStoreForReaders, afterEachCleanup,
+  sealStoreForReaders, afterEachCleanup, finding,
   completionEvidenceOf,
 } from "./support/coordination-fixtures.js";
 
@@ -472,6 +472,7 @@ describe("standalone-development-completion", () => {
 
   test("Todo and Blocked rows refuse complete; the same row after InProgress completes", async () => {
     const fixture = await standaloneGitFixture();
+    await ensureCoordinator(fixture);
     const evidence = () => completionEvidenceOf(fixture, fixture.planSha);
 
     // From Todo: refused, no write.
@@ -551,8 +552,8 @@ describe("report-only-completion", () => {
   async function reportOnlyFixture(): Promise<GitFixture> {
     const fixture = await reportOnlyGitFixture();
     await prepareCall(fixture, PLAN_ID);
-    await progressCall(fixture, PLAN_ID, { status: "InProgress" });
-    await progressCall(fixture, PLAN_ID, { status: "InReview" });
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "acceptance report ready for review", evidence_paths: [] });
+    await progressCall(fixture, PLAN_ID, { status: "InReview", summary: "acceptance report submitted for QC and QA", evidence_paths: [] });
     return fixture;
   }
 
@@ -702,7 +703,7 @@ describe("report-only-completion", () => {
     const provenanceOnly = await reportOnlyFixture();
     const evidence = completionEvidenceOf(provenanceOnly, provenanceOnly.planSha);
     const withoutGit = { qc: evidence.qc, qa: evidence.qa };
-    const completed = await completeCall(provenanceOnly, PLAN_ID, withoutGit as CompletionEvidence);
+    const completed = await completeCall(provenanceOnly, PLAN_ID, withoutGit);
     expect(completed.outcome).toBe("completed");
     const completion = completionOf(planRowOf(provenanceOnly, PLAN_ID));
     expect(completion.source_sha).toBeNull();
@@ -760,7 +761,7 @@ describe("seam-regressions", () => {
 
     // A mistaken config naming a branch the ACTUAL checkout is not on refuses and
     // leaves the WHOLE snapshot and the row's progress untouched.
-    await progressCall(fixture, PLAN_ID, { status: "InProgress" });
+    await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "source execution started", evidence_paths: [] });
     const activeView = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
     const progressBefore = activeView.row.coordination?.progress;
     const refusedBefore = readJson(fixture.snapshotPath);
@@ -833,7 +834,7 @@ describe("seam-regressions", () => {
       }),
     )).toBe("coordination.invalid-input");
 
-    // Todo is not a legal *target*; Blocked→InReview is not an allowed transition.
+    // A protected snapshot branch is not an owned plan track.
     expect(await errorCodeOf(() =>
       mutatePlanCoordination({
         sessionPath,
@@ -841,7 +842,7 @@ describe("seam-regressions", () => {
         expectedRevision: view.revision,
         operation: { kind: "progress", progress: { status: "InProgress", summary: "x", evidence_paths: [evidence], track_branches: ["main"] } },
       }),
-    )).toBe("coordination.invalid-input");
+    )).toBe("coordination.scope-mismatch");
 
     const blocked = await progressCall(fixture, PLAN_ID, { status: "Blocked", summary: "waiting", evidence_paths: [evidence] });
     expect(blocked.outcome).toBe("progressed");

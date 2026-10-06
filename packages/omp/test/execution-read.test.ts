@@ -205,7 +205,7 @@ async function seedActiveAuthority(
   );
   const context: ExecutionContext = {
     harnessDir: fixture.harness,
-    caller: { sessionId: SESSION_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+    caller: { sessionId: SESSION_ID, role: "coordinator", workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
   };
   await createExecutionWorkflow(context, {
     entry: { id: WORKFLOW_ID, type: lifecycleType, started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
@@ -229,7 +229,6 @@ async function seedActiveAuthority(
   const workflowToken = (await readExecutionAuthority({ harnessDir: fixture.harness }, { workflowId: WORKFLOW_ID })).token;
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
-    planId: null,
     role: "coordinator",
     expected: workflowToken,
     operationId: `bind-${SESSION_ID}`,
@@ -413,7 +412,6 @@ function phase2ActiveBindingEntry(fixture: Fixture, ref: ExecutionSessionRef): S
           workflowId: ref.workflowId,
           role: ref.role,
           sessionId: ref.sessionId,
-          planId: ref.planId,
         },
       },
     },

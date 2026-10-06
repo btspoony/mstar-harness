@@ -791,7 +791,7 @@ function writePreparedConfig(
     : canonicalTarget(inputs.config.worktreePath);
   const nextBranch = inputs.config.workingBranch ??
     (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
-  assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), workflowId);
+  assertCatalogExecutionCommittedOn(tx.db, workflowId);
   const sealed = readExecutionSealedInput(tx, workflowId, planId);
   if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
     throw new ExecutionPinConflictError(
