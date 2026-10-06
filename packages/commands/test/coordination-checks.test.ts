@@ -74,6 +74,7 @@ async function activeWorkflow(cwd: string, workflowId: string, rowDone = false) 
   return { harness, storeContext, planId, execution, workflowToken: created.data.workflows[0]!.workflowToken };
 }
 
+/** Inject inconsistent terminal histories only for the isolated negative gate fixtures. */
 async function completeAndUnregister(
   context: { harnessDir: string },
   workflowId: string,
@@ -118,7 +119,7 @@ async function completeAndUnregister(
     const bound = await bindExecutionSession(execution, { workflowId: "wf-active-closed", expected: workflowToken, operationId: "bind-closed" });
     await mutateExecutionWorkflow(execution, {
       workflowId: "wf-active-closed", session: bound.data, operationId: "evidence-closed",
-      operation: { kind: "evidence", evidence: {
+      operation: { kind: "delivery", delivery: {
         compound: { outcome: "updated" },
         pr: { repo: "fixture/repo", head: "feature/test", target: "main" },
         merge: { provider: "fixture", evidence: "merged" },
