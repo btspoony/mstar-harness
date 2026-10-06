@@ -95,7 +95,7 @@ async function seedNativeAuthority(harnessDir: string): Promise<string> {
   const created = await createExecutionWorkflow(
     {
       harnessDir,
-      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
     } satisfies ExecutionContext,
     {
       entry: { id: WORKFLOW_ID, type: 'plan', started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
@@ -119,9 +119,9 @@ async function seedNativeAuthority(harnessDir: string): Promise<string> {
   const bound = await bindExecutionSession(
     {
       harnessDir,
-      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
     } satisfies ExecutionContext,
-    { workflowId: WORKFLOW_ID, planId: null, role: 'coordinator', expected: workflowToken, operationId: `bind-${WORKFLOW_ID}` },
+    { workflowId: WORKFLOW_ID, expected: workflowToken, operationId: `bind-${WORKFLOW_ID}` },
   )
   return encodeExecutionSessionRef(bound.data)
 }
@@ -134,12 +134,12 @@ describe('mstar-execution — authoritative non-leaf eligibility', () => {
     const handler = productionHandler(harnessDir)
     const leafAgent = agentOf(root, { origin: 'subagent', delegationDepth: 1 })
     const ref = encodeExecutionSessionRef({
-      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID, planId: null,
+      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID,
     })
     for (const input of [
       JSON.stringify({ operation: 'adopt', sessionRef: ref }),
       '{"operation":"clear"}',
-      JSON.stringify({ operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', planId: null, argv: [process.execPath, '-e', '0'] }),
+      JSON.stringify({ operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', argv: [process.execPath, '-e', '0'] }),
     ]) {
       await expect(handler(invocationOf(leafAgent, input))).rejects.toThrow('known leaf sessions cannot adopt, clear, or launch execution')
     }
@@ -228,10 +228,10 @@ describe('mstar-execution — canonical native adoption', () => {
     const ref = await seedNativeAuthority(harnessDir)
     const handler = productionHandler(harnessDir)
     const foreign = encodeExecutionSessionRef({
-      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: 'other-session', planId: null,
+      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: 'other-session',
     })
     const copied = encodeExecutionSessionRef({
-      storeId: '00000000-0000-4000-8000-000000000001', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID, planId: null,
+      storeId: '00000000-0000-4000-8000-000000000001', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID,
     })
     await expect(handler(invocationOf(agentOf(root), JSON.stringify({ operation: 'adopt', sessionRef: foreign }))))
       .rejects.toThrow('session reference does not match the native carrying session')
