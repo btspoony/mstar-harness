@@ -37,7 +37,7 @@ description: "Morning Star QC orchestration — **SDD mandatory plan QC tri-revi
 
 ## Findings 留档门禁（PM）
 
-- 先读 Assignment **`Findings cleanup`**（`plans[].metadata.findings_cleanup` mirror 已删——Assignment 是唯一 mode 来源）→ **`mstar-artifacts/references/status-and-residuals.md`**「Findings cleanup modes」。
+- Use the effective coordinator QA/cleanup configuration; absent cleanup is allow-residual. Leaf Assignments mirror it for evidence duties. Configuration remains revisable through ordinary prepare, never sealed by Assignment bytes → mstar-artifacts/references/status-and-residuals.md.
 - **捕获契约（唯一权威）→ `mstar-project-governance`「Issue capture」**：QC 的 must-fix / 保留 findings 由**确认其结论的席位**落为 `{HARNESS_DIR}/store.db` 的 issue —— 计划内 `mstar plan issue-add`，计划外 `mstar issue add`；同一 finding 再次出现用 `mstar issue occurrence` 追加 occurrence，**不**新开第二个 issue。PM 席位在 consolidated 决策后捕获；leaf QC 席位**只回证据，不写 store**（本 skill 不复述捕获契约）。
 - **`Findings cleanup: zero-residual`**（显式 opt-in）：可修的 **Warning / Suggestion / Critical** → **fix-now + targeted re-review**，**禁止**把可修项留为 open issue 后用 `Approve with residuals` 收口；**`nit`** 当场修或丢弃（不捕获）。仅**真 blocker-defer**（外部依赖 / 须下轮产品决策 / 用户本轮显式 defer + Durable Roadmap）可留 open，且**不含 `critical`**（不安全后果本次 merge 可达，见「Findings cleanup modes」）；`critical` 当场修复，或走显式 risk acceptance 并按 §4 关闭，**不得**作为批准遗留项。
 - **`Findings cleanup: allow-residual`**（iteration Phase 2 / standalone / hotfix / inline 默认）：阻断项修复后仍有 **Warning / Suggestion** 或技术债 → 必须在离 InReview 前捕获为该 plan 的 **linked open issues**；**`Approve with residuals`** 仅当无 open **Critical**；PM 汇总结论与各报告面须披露 open 清单 —— 每条含 issue id + severity + 跟踪位置（close 面另含 blocker-defer 标记；无 open 时 `N/A — none open`）。

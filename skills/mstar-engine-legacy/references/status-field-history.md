@@ -77,17 +77,9 @@ Closed residual entries added: `lifecycle`, `closed_at`, `closure_note`; optiona
 | `qc_status` / `tests` / `commits` | string | InReview/Done snapshots — not a substitute for durable gate summaries or root `residual_findings`. |
 | `sdd_dir` / `sdd_progress` / `review_bundle` / `task_commits` | string / array | SDD scratch path, progress ledger pointer, review bundle pointer, `{task_id,base,head}[]`. |
 
-### v1 `plans[].execution_lease` (iteration Phase 2)
+### Removed historical per-row execution exclusion
 
-| Field | Type | Required | Semantics |
-| --- | --- | --- | --- |
-| `holder` | non-empty string | Yes | Opaque cooperative owner identity (recommended `<host>:<stable-session-id>`, e.g. `cursor:bc-1234`); stable for claim lifetime; **no credentials**; used for ownership comparison — not `session_label`. |
-| `claimed_at` | RFC 3339 UTC (`Z`) | Yes | Acquisition time (audit only; **not** an expiry clock). |
-| `worktree_path` | absolute path string | Yes | Dedicated feature-worktree root; **MUST** differ from `metadata.control_worktree_path` (v1-historical name; canonical snapshot member = `integration_worktree_path`). |
-| `working_branch` | non-empty string | Yes | Feature branch at `worktree_path`; MUST agree with Assignment `Working branch`. |
-| `session_label` | string | No | Human display only — **MUST NOT** authorize or compare ownership. |
-
-Writers **delete** `execution_lease` on release; `null` and tombstone objects are invalid.
+Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS. Historical fields never authorize takeover or require recreating a claim.
 
 ## v1 root `metadata` standard optional fields
 
@@ -161,7 +153,7 @@ Legacy read paths (root `residual_findings` / `metadata.residual_findings` / `ar
 | v1 surface | v2 home |
 | --- | --- |
 | root `plans[]` rows | `{WORKFLOW_DIR}/<id>/snapshot.json` → `plans[]` (legacy PlanRow shape verbatim) |
-| root `plans[].execution_lease` | snapshot plan row `execution_lease` |
+| Historical row execution_lease | Removed admission model; source scope is current row metadata, not a holder protocol |
 | root `metadata.integration_merge_lease` | snapshot top-level `integration_merge_lease` |
 | root `metadata.control_worktree_path` | snapshot top-level `integration_worktree_path` (v1 key is a read-alias; canonical writers emit only the new name) |
 | root `metadata.iteration_base_branch` / `target_branch` / `spec_integration_branch` / `merge_target` | snapshot top-level `branch.{base,integration,target}` |

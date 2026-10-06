@@ -59,6 +59,12 @@ dsh plugin --profile headless add @mstar-harness/dsh
 - **无交互通道**——没有可用应答者时，`ask_user_question` 与审批提示会 fail-closed。无人值守运行应保留受限权限预设（`workspace-write` 搭配 approval `ask`，或使用 `read-only` 进行只读检查），并在开始工作前核实会话实际生效的权限。仅执行该边界内已允许的操作；若某项操作需要审批，停止该操作并通过 web profile 获取审批。不要通过解除沙箱限制来绕过缺失的审批通道。交互式 Prepare 流程（grill-me）属于 web profile。
 - **默认模型解析**——headless 不组合 fallbacks 行，因此 settings 里 `agent-default-model` 钉在 `FallbacksChain` 会以 `NO_ADAPTER` 失败（web profile 的产物）。把默认模型指向真实 provider，或同样把 `dsh-llm-fallbacks` 装进 headless profile（注意：已发布的 dsh 0.1.0-rc.6 上，fallbacks 的 settings 集成早于 `SettingsProvider.installSection` API，虚拟适配器不会注册——随 dsh ≥ 0.1.2-alpha 解决）。
 
+### 直接计划协调
+
+唯一 primary workflow coordinator 通过普通 prepare/progress/complete 和原生 leaf 派发推进明确选定的行。Configuration/source metadata 保持可修订；默认 mandatory QA 与 allow-residual cleanup，不要求 sealed Assignment 或逐行 claim/bind。`/iteration-drive` 只接受无参数调用；旧 scoped 输入在 boot 前拒绝，不启动第二个 primary，也不扩大 scope。
+
+迭代完成验证实际串行合并并保留父级交付。Standalone development 验证登记 source 并保留 compound/PR/核实合并/close。Report-only 在 Done 前要求明确匹配的策略履行，再凭证据 close，不虚构 Git/PR。保留 SDD、QC 三审、QA、L1/L2 隔离与 coordinator transaction/CAS/receipts。Session run/recovery 仅限 coordinator。精确形状见 mstar-use-cli/references/plan-and-workflow.md。
+
 ### Configuration
 
 | Key | Type | Default | Meaning |
@@ -119,7 +125,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 ### Lease gate
 
-在 opencode 字段集之上新增：对声明 `Execution mode: sdd` 或 plan 行为 `InProgress` 的可写派发，对照 `{HARNESS_DIR}/status.json` 运行 `verifyPlanExecutionLease` 与派发上下文比对（`holder`、`worktree_path`、`working_branch`）。违规使用 dsh 侧 `lease.dispatch.*` 命名空间；只读角色完全跳过该检查。**缺失** `status.json` 对 sdd 派发不再是静默放行：发出 `lease.dispatch.unverifiable`（告警模式下为 advisory，hard 下为 deny）——没有状态文件就无法确认 execution_lease。非 SDD 派发保持降级放行（无租约义务）。所有 Assignment 字段读取都限定在 engine `assignmentHeaderRegion` 内（正文中引用的示例不会泄漏进头字段）。
+在 opencode 字段之上：声明 Execution mode: sdd 或行处于 InProgress 的可写 Assignment 派发，将 Worktree path/Working branch 与权威行 metadata.worktree_path/metadata.working_branch 比对，不读取 holder 或逐行 lease。缺少登记 scope 产生 lease.dispatch.unverifiable（可写派发前 STOP）。权威/status/snapshot/row 缺失或不可读仍产生 lease.dispatch.unverifiable 或 lease.dispatch.unreadable；warn 咨询，hard 拒绝。Worktree/branch 不匹配保留 lease.dispatch.worktree-mismatch/branch-mismatch；holder-mismatch 已删除。只读角色跳过；其他非 SDD/非 InProgress 派发保持降级放行。读取限定 assignmentHeaderRegion。
 
 ### Skill lint gate
 
@@ -129,11 +135,11 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 `tools/pre-execute` 的一个分支（位于 subagent prompt 分支**之前**）把关 **`workflow`** 与 **`ralph`** 工具调用——这是剩余的不携带 Assignment 文本、模型可达的扇出路径。它匹配**固定**工具名（`workflow` / `ralph`）；重命名后的 `workflow` 实例不在范围（名字守卫是固定默认）。非 workflow 工具不受影响——subagent 分支照旧拥有它们，语义不变。
 
-**四级模式**（Config `workflowGate`，默认 `warn`）：`off`（直通，无 verdict 行）、`warn`（仅咨询）、`ask`（首见名字走 dsh 审批瀑布——`{kind:'ask'}`，上游 fail-closed；本闸门不自造应答器）、`hard`（策略违规在任何子进程启动前否决）。策略是**单一**决策点——P-b 租约归属**最先**运行并抢占 P-a/P-c，然后才是 P-a 名字白名单，最后 P-c 首见 ask。
+WorkflowGate 的 off/warn/ask/hard 四级模式仍独立于 Enforcement。P-b 先检查登记的可写 scope，再检查 P-a 名字与 P-c 首见审批；不再逐行 holder 准入。
 
 | 策略 | `off` | `warn`（默认） | `ask` | `hard` |
 | --- | --- | --- | --- | --- |
-| **P-b**：调用工作区存在 `InProgress` 且无 `execution_lease` 覆盖的 plan | allow（闸门短路 `off`） | **warn**——放行 + 咨询（`workflow.lease.uncovered`）+ 一条 warn | **warn**——放行 + 咨询 + 一条 warn（ask 通道只服务首见**名字**，绝不替代工作区红线） | **deny**——在任何子进程启动前否决（`workflow.lease.uncovered`），reason 引用 plan id |
+| **P-b**：InProgress 行缺少 metadata.worktree_path/metadata.working_branch | allow（off） | warn/咨询，workflow.lease.uncovered | warn/咨询；ask 仅服务名字 | 子进程前 deny，workflow.lease.uncovered，点名该行 |
 | **P-a**：workflow 名字 ∈ `workflowNames`（非空列表） | allow（短路） | allow——无咨询（P-a 在任何模式下都放行） | allow——无 ask | allow |
 | **P-a**：workflow 名字 unknown（空/缺省列表 ⇒ **每个**名字都 unknown） | allow（短路） | **warn**——放行 + 咨询（`workflow.name.unknown`）+ 一条 warn | **ask**（首见）→ `{kind:'ask'}`；之后复用缓存决策（allow/deny）——已解析名字**绝不**再 ask | **deny**——在任何子进程启动前否决（`workflow.name.unknown`），reason 点名该名字 |
 | **ralph**（无 `meta.name`——无白名单身份） | allow（短路） | allow——P-a/P-c 永不适用 | allow——P-a/P-c 永不适用 | allow——P-a/P-c 永不适用；P-b 仍适用（uncovered 时 deny） |
@@ -148,7 +154,7 @@ profile bundle 组合出以下行——注册表行来自 `@deepseek-ai/dsh-base
 
 **P-c 答案观测 seam。** 闸门无法观测 ask 结果——工具注册表的 `serviceAsk` 在内部消费审批结果。**run-start 观测就是答案 seam**：被 ALLOW 的 ask 执行调用 → 持久化 `tool-workflow/run-start` 会话事件落入父会话日志 → workflow-ledger 消费者记录 W-B2 `workflow-run` 行**并**把 `allow` 按运行名缓存进 apply 作用域的 `WorkflowAskCache`。被 DENY 的答案不产生运行 → 无观测 → `ask` 模式下下一次同名调用**重新 ask**（fail-closed——无授权证据，绝不发明 allow）。缓存键在两个 seam 都是**归一化**（剥离 ASCII 控制字符）**不截断**的名字——闸门合成 `meta.name` 与观测记录 `runName` 都走同一个 `normalizeWorkflowName`，因此含控制字符的名字（`au\u0000dit`）永远无法卡死缓存（ask 一次、同一键观测），>1024 字符的名字仍以完整名字为键（账本行的展示名字单独截断；身份轴从不截断）。缓存是 apply 作用域的——新 apply（HMR 重载）从空开始，因此未解析的首见名字每次调用都会重新 ask，直到一次观测（或显式 `record()`）落地。缓存记录抛错时观测降级为一条 warn——账本行已追加，运行不受影响。
 
-**P-b 抢占。** 租约红线最先运行：调用工作区存在 uncovered 的 `InProgress` plan 意味着在 plan 恢复前**不应**启动任何可写扇出子进程——与 workflow 名字无关（与 Assignment 键控的租约闸门同一条红线），对 ralph 同样适用。`warn`/`ask` 下仅咨询（放行 + 一条 warn）；ask 通道绝不替代工作区红线。
+**P-b 抢占：** InProgress 行缺少登记 source scope 优先于名字策略，对 ralph 同样适用。在可写派发前通过普通 prepare 配置实际 source 事实，不逐行恢复或 claim lease。Warn/ask 仍仅咨询，hard 否决。
 
 ## LLM fallbacks integration
 

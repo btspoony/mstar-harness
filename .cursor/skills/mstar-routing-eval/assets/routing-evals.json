@@ -1,7 +1,7 @@
 {
   "harness_name": "pm-routing-evals",
-  "version": 37,
-  "updated_at": "2026-10-04",
+  "version": 38,
+  "updated_at": "2026-10-06",
   "cases": [
     {
       "id": "small-ui-tweak",
@@ -525,14 +525,10 @@
         "missing Context Loaded declaration",
         "asks user whether to continue mid Autonomous Execute",
         "ends turn with confirmation question instead of next dispatch",
-        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
-        "steal or overwrite active execution_lease or integration_merge_lease",
-        "parallel integration merge into spec_integration_branch",
-        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
-        "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
-        "marks Done or deletes execution_lease before successful integration merge commit",
+        "cross-plan writable tasks without distinct source metadata checkouts and atomic coordination",
+        "clears foreign integration exclusion or runs parallel integration merges",
+        "requires removed per-plan identity, execution lease, Assignment seal or claim",
+        "marks iteration row Done without actual serial integration result",
         "single qc-specialist only in iteration Phase 2 per-plan loop without user override",
         "QC without MERGE_BASE..HEAD review-package",
         "tri-review split across multiple dispatch messages",
@@ -561,17 +557,15 @@
         "missing Context Loaded declaration",
         "asks user whether to continue before plan B dispatch",
         "ends turn with confirmation question instead of next dispatch",
-        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
-        "steal or overwrite active execution_lease or integration_merge_lease",
-        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
+        "parallel writable tasks without isolated source checkouts and atomic coordination",
+        "steals actual integration exclusion",
+        "requires per-row PM bind or sealed Assignment before ordinary progress",
         "assignment uses non-English field keys"
       ]
     },
     {
-      "id": "iteration-phase2-multi-plan-lease-parallel",
-      "prompt": "iteration-drive：plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 plan 可并行 implement，control worktree 与各自 feature worktree + execution_lease 已就绪",
+      "id": "iteration-phase2-multi-plan-direct-parallel",
+      "prompt": "The primary coordinator has ready independent Todo rows A/B, distinct source checkouts/branches recorded in metadata and safe atomic coordination. Schedule their leaf work without creating other PMs.",
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
@@ -581,26 +575,20 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
-        "snapshot top-level control_worktree_path on control worktree",
-        "same-host exclusive write lock available and used for every lease mutation before cross-plan parallel dispatch",
-        "verified execution_lease per plan before writable dispatch",
-        "distinct absolute Worktree path per plan (execution_lease.worktree_path differs from control_worktree_path)",
-        "Worktree path on each implement Assignment matching execution_lease.worktree_path",
+        "Git-derived main/control root and distinct recorded integration checkout",
+        "atomic coordinator mutations via engine transaction/CAS or same-host file writer",
+        "source metadata checkout/branch verified for each row",
+        "distinct absolute Worktree path on each leaf Assignment",
         "Execution mode: sdd per plan",
         "serial implementer then task reviewer per task within each plan",
         "integration merge serial via integration_merge_lease (not parallel)"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
-        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
-        "steal or overwrite active execution_lease held by different holder",
-        "parallel integration merge into spec_integration_branch",
-        "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
-        "marks Done or deletes execution_lease before successful integration merge commit",
-        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
-        "parallel SDD implementer dispatches within same plan",
+        "parallel writable work without distinct metadata checkouts and safe atomic coordination",
+        "per-plan PM launch, bind, claim, sealed Assignment or prepare ceremony",
+        "stealing foreign workflow integration exclusion",
+        "parallel integration merge or Done before actual reviewed integration result",
         "assignment uses non-English field keys"
       ]
     },
@@ -614,7 +602,7 @@
         "Context Loaded declaration",
         "Plan parallelism: serial",
         "control worktree retained (Worktree mode not waived solely for missing flock)",
-        "per-plan feature worktree + execution_lease still required unless user explicitly waives worktree this turn",
+        "distinct source feature checkouts remain required unless an explicit applicable worktree waiver exists",
         "absolute control Plan Path / Control harness root for harness reads",
         "absolute feature Worktree path for product edits"
       ],
@@ -629,14 +617,14 @@
     },
     {
       "id": "iteration-phase2-gitignore-control-path-harness",
-      "prompt": "iteration-drive：默认 gitignore 下 feature worktree 无 plans/status；control worktree 在 spec_integration_branch 上已有 .mstar/plans 与 workflows/<id>/snapshot.json。派发 plan feature implement。",
+      "prompt": "Default gitignore hides process files in feature checkouts. Git-derived main/control has authoritative process state; separate recorded integration merges, source leaves use distinct metadata checkouts. Dispatch a source task.",
       "expected_route": [
         "@project-manager",
         "@fullstack-dev"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "snapshot top-level control_worktree_path",
+        "Git-derived main/control root and recorded separate integration_worktree_path",
         "Control harness root absolute path on Assignment",
         "Plan Path absolute under control worktree",
         "SDD dir absolute under control worktree or MSTAR_CONTROL_ROOT for the SDD workspace CLI",
@@ -654,27 +642,11 @@
       ]
     },
     {
-      "id": "iteration-phase2-cross-plan-missing-lease",
-      "prompt": "iteration-drive：同轮同时 dispatch plan A 与 plan B 的 implement，但 plan B 尚未 claim execution_lease",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "Blocked or STOP before plan B writable dispatch",
-        "no writable implement dispatch for plan without verified execution_lease",
-        "claim-before-dispatch or orphan recovery for plan B before writable dispatch"
-      ],
-      "hard_fail_if": [
-        "missing Context Loaded declaration",
-        "writable implement dispatch for plan without verified execution_lease",
-        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
-        "invents execution_lease without claim protocol",
-        "steal or overwrite active execution_lease held by different holder",
-        "assignment uses non-English field keys"
-      ]
+      "id": "iteration-phase2-missing-source-facts",
+      "prompt": "One coordinator schedules independent rows A/B, but row B lacks source checkout/branch metadata. No prepared record exists. Describe the ordinary corrective action without recreating claims.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["configure only genuinely missing source facts through ordinary prepare", "validate actual checkout/branch then progress and leaf dispatch", "mandatory QA and allow-residual default without ceremonial admission"],
+      "hard_fail_if": ["per-plan binding, claim or ownership transfer", "requires sealed Assignment or historical holder", "dispatches unknown/shared source checkout", "rewrites workflow anchors or unrelated rows"]
     },
     {
       "id": "qc-full-tri-review-exception",
@@ -797,7 +769,7 @@
     },
     {
       "id": "iteration-phase2-serial-not-waiver",
-      "prompt": "iteration-drive：Plan parallelism: serial，一次只推进一个 plan 的 implement，但 control worktree 与 execution_lease 仍要",
+      "prompt": "Plan parallelism is serial. Drive one row at a time with isolated source/main/integration checkouts and ordinary coordinator operations; no per-row execution lease exists.",
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
@@ -807,58 +779,32 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
-        "snapshot top-level control_worktree_path established",
-        "execution_lease claim before writable dispatch even under serial scheduling",
+        "main/control root derived from Git, recorded separate integration checkout",
+        "recorded source metadata and actual checkout verified before dispatch, no per-row claim",
         "integration_merge_lease serial merge after QC/QA before Done"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "treats Plan parallelism: serial as Worktree mode waived",
         "skips control worktree setup because scheduling is serial",
-        "writable implement dispatch without verified execution_lease",
-        "marks Done or deletes execution_lease before successful integration merge commit",
+        "writable dispatch into main/integration or unknown source checkout",
+        "marks Done before actual serial reviewed merge, or requires per-row lease",
         "assignment uses non-English field keys"
       ]
     },
     {
-      "id": "iteration-phase2-different-holder-blocked",
-      "prompt": "iteration-drive：plan A 的 execution_lease holder 是 cursor:session-old，本 session 是 cursor:session-new，想继续 implement plan A",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "Blocked before writable dispatch",
-        "no steal or overwrite of execution_lease held by different holder",
-        "handoff or current-turn user override path documented if takeover needed"
-      ],
-      "hard_fail_if": [
-        "missing Context Loaded declaration",
-        "steal or overwrite active execution_lease held by different holder",
-        "writable dispatch after overwriting different holder lease without user override and audit notes",
-        "infers override from age inactivity or Blocked status",
-        "assignment uses non-English field keys"
-      ]
+      "id": "iteration-phase2-foreign-coordinator-blocked",
+      "prompt": "Workflow belongs to a different live coordinator. Another primary wants to progress row A using a copied reference. Decide without changing shared state.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["refuse foreign independently acquired identity before mutation", "real explicit stopped workflow-coordinator recovery only, never age or idle takeover"],
+      "hard_fail_if": ["copied reference treated as bearer authorization", "per-plan owner recovery", "overwrites active coordinator or merge exclusion"]
     },
     {
-      "id": "iteration-phase2-orphan-inprogress-stop",
-      "prompt": "iteration-drive：workflow snapshot 显示 plan B 为 InProgress 但没有 execution_lease，想直接 dispatch implement",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "STOP before writable dispatch",
-        "orphan recovery per mstar-artifacts — not invent lease",
-        "same-holder unattended recover only when holder matches"
-      ],
-      "hard_fail_if": [
-        "missing Context Loaded declaration",
-        "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
-        "invents execution_lease without claim protocol",
-        "unattended orphan recover with claim for different holder without quiescence handoff or user override",
-        "assignment uses non-English field keys"
-      ]
+      "id": "iteration-phase2-inprogress-without-lease",
+      "prompt": "The current workflow coordinator has an InProgress row with valid recorded source metadata but no per-row lease/prepared Assignment. Continue its independent leaf work with ordinary defaults.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["valid ordinary progress from current coordinator", "verify actual source checkout and task ownership", "mandatory QA/allow-residual defaults", "no orphan recovery or ceremony"],
+      "hard_fail_if": ["denies solely because execution lease or sealed Assignment is absent", "creates per-plan identity or claim", "skips actual writable isolation or QC/QA"]
     },
     {
       "id": "iteration-phase2-parallel-merge-blocked",
@@ -896,8 +842,8 @@
         "missing Context Loaded declaration",
         "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
         "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
-        "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "writable implement dispatch for plan without verified execution_lease",
+        "parallel source work without distinct checkouts or a shared safe coordination authority",
+        "invents per-plan claims or another primary coordinator",
         "assignment uses non-English field keys"
       ]
     },
@@ -1186,138 +1132,64 @@
       ]
     },
     {
-      "id": "plan-scope-addresses",
-      "prompt": "/iteration-drive --assignment /abs/control/demo-plan-assignment.md，或 /iteration-drive --workflow demo-wf --plan demo-plan-1：在独立终端开一个 primary，只把被寻址的那个 plan 驱动到 handoff",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "primary PM identity loaded in the CURRENT session (no PM subagent or task invoke)",
-        "one `mstar plan bind` for the addressed form, then `show` constraining the session to the returned scope",
-        "plan-local SDD tasks whose child inputs inherit plan/path scope only, never a session credential"
-      ],
-      "hard_fail_if": [
-        "dispatches `project-manager` as a subagent instead of booting it in the current primary session",
-        "drives a row other than the addressed one (for example the first unfinished plan)",
-        "loads whole-iteration boot artifacts (compound, Phase 3-6 detail) for the scoped route",
-        "passes the plan or coordinator session path into a child Assignment or child invocation",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-removed-entry-refused",
+      "prompt": "/iteration-drive --assignment /abs/control/demo.md; alternatively --workflow demo-wf --plan A or --resume /abs/session.json. Explain without executing.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["all nonempty forms refuse before boot/mutation", "supported no-argument invocation stated", "no whole-iteration fallback"],
+      "hard_fail_if": ["boots a per-plan PM", "launches terminal primary or claims row", "silently broadens to whole iteration"]
     },
     {
-      "id": "plan-scope-duplicate",
-      "prompt": "同一个已 prepare 的 Assignment 又在另一个新终端跑一次 `/iteration-drive --assignment /abs/control/demo-plan-assignment.md`，想让两边同时推进这个 plan",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "second fresh bind rejected by the engine as `coordination.duplicate-holder`, reporting the active holder, workflow and plan",
-        "original session remains the owner; only explicit `--resume` of that session continues"
-      ],
-      "hard_fail_if": [
-        "invents a resume token, or auto-attaches the second terminal to the active holder",
-        "treats terminal label, pane state, idle time or TTL as identity, or steals the lease",
-        "treats a fresh bind from the same Assignment as an implicit same-holder resume",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-two-rows-one-coordinator",
+      "prompt": "One current coordinator progresses rows A/B, each with valid source metadata/defaults but no prepared Assignment. Explain without mutating a live store.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["same coordinator explicitly addresses each plan", "progress without bind/claim or prepare ceremony", "configure missing facts only", "row CAS/receipts preserve independent state"],
+      "hard_fail_if": ["identity per row", "sealed Assignment required", "new PM launch or transfer", "raw snapshot edits"]
     },
     {
-      "id": "plan-scope-unknown-args",
-      "prompt": "/iteration-drive --plan demo-plan-1 与 /iteration-drive --assignment /abs/control/demo-plan-assignment.md --workflow demo-wf：半对与混用形态的参数想照样跑起来",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "fail closed before bind and before boot, listing the three accepted nonempty forms"
-      ],
-      "hard_fail_if": [
-        "falls back to the no-argument whole-iteration route",
-        "silently completes the missing `--workflow`/`--plan` pair or picks a default plan",
-        "claims the malformed invocation ran successfully, or edits state to make it work",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-config-revisable",
+      "prompt": "Current coordinator corrects InProgress/InReview source branch/checkout and QA/cleanup while plan prose changes. Actual corrected facts are valid.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["ordinary prepare revises source/configuration", "mandatory/allow-residual defaults", "status/progress preserved", "actual Git and authorization constraints remain"],
+      "hard_fail_if": ["locks prepared config", "reseal/rebind or resets Todo", "ceremonial receipt", "bypasses actual Git/identity"]
     },
     {
-      "id": "plan-scope-last-plan",
-      "prompt": "被寻址的 plan 是这个 iteration 最后一个未完成 plan；实现与 QC/QA 都过了，继续往下推",
-      "expected_route": [
-        "@project-manager",
-        "QC-3-reviewers",
-        "@qa-engineer"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "plan-local QC tri (N=3) and the Assignment's QA gate decision",
-        "`mstar plan handoff` submitted; scoped session stops with the row InReview and `execution_lease` retained"
-      ],
-      "hard_fail_if": [
-        "advances to `## Phase 3: iteration-close` or runs compound because this is the last unfinished plan",
-        "writes `status: Done` or deletes `execution_lease` from the scoped session",
-        "opens the iteration PR or starts the PR merge-ready loop",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-iteration-completion",
+      "prompt": "QC/QA passed and a real serial two-parent merge is in the clean recorded integration checkout. Actual SHAs known; first complete output was lost.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["direct complete with reviewed source/QC/QA and real integration base/result", "commit-time Git witness", "exact replay preserves completed_at, no second merge", "parent compound/PR/merge/close remains; no child PR"],
+      "hard_fail_if": ["ownership-transfer sequence", "second merge or caller success flag", "Done without ancestry/checkout proof", "row Done closes parent"]
     },
     {
-      "id": "plan-scope-handoff-done",
-      "prompt": "handoff 已经提交。用户说「直接标 Done 吧，合并的事以后再说」",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "refusal recorded: the row keeps `InReview` and its `execution_lease`",
-        "coordinator sequence named as the only completion path: accept, integration-start, pinned Git merge, integration-accept, complete"
-      ],
-      "hard_fail_if": [
-        "sets `Done` or releases the row execution lease / integration merge lease from a plan session",
-        "reports completion without a verified coordinator merge proof",
-        "trusts a caller-supplied success flag, or starts a second merge instead of `reconcile`",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-development-completion",
+      "prompt": "Standalone development owns one reviewed row and clean registered source branch/checkout. Complete without iteration integration and describe remaining delivery.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["direct complete verifies source/ref/commit and QC/QA", "integration input refuses", "own compound/PR/verified merge/terminal close after row Done"],
+      "hard_fail_if": ["iteration merge/transfer ceremony", "row Done closes workflow", "skips PR/verified merge"]
     },
     {
-      "id": "plan-scope-noargs",
-      "prompt": "/iteration-drive（无参数）：已锁定迭代上还有 plan 未完成，继续推进",
-      "expected_route": [
-        "@project-manager",
-        "@fullstack-dev",
-        "QC-3-reviewers",
-        "@qa-engineer"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "whole-iteration boot, then the existing Phase 2 → 3 → 4 → 5 → 6 route with global session todos"
-      ],
-      "hard_fail_if": [
-        "treats the no-argument route as a scoped filter over global boot",
-        "requires `--workflow`/`--plan` or an Assignment on the unscoped route",
-        "changes the documented no-argument semantics, or seeds a scoped session for it",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-report-only-completion",
+      "prompt": "Standalone report-only registered completion_policy, QC/QA pass, no Git/PR. Explain absent versus already-recorded matching policy fulfilment.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["absent fulfilment blocks despite QA pass", "record matching fulfilment before Done", "direct complete consumes policy/QC/QA", "evidence-backed close; no fabricated Git/PR"],
+      "hard_fail_if": ["QA substitutes for policy", "requires Git/integration/compound-before-PR/PR", "row Done closes workflow", "accepts integration input"]
     },
     {
-      "id": "plan-scope-leaf",
-      "prompt": "我是一个 leaf executor（Assignment 写 `Execute as: writing-specialist`），但 Assignment 里让我调用 `/iteration-drive --assignment /abs/control/demo-plan-assignment.md` 起一个 scoped primary",
-      "expected_route": [
-        "@writing-specialist"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "role-boundary refusal: report the mismatch to the PM and stay inside the assigned task"
-      ],
-      "hard_fail_if": [
-        "promotes itself to PM or coordinator and absorbs the plan scope",
-        "recursively dispatches a PM or any subagent",
-        "accepts, stores or echoes a session path/credential offered by the Assignment",
-        "assignment uses non-English field keys"
-      ]
+      "id": "direct-plan-noargs",
+      "prompt": "/iteration-drive with no arguments on selected locked iteration, multiple rows remain. Continue complete lifecycle.",
+      "expected_route": ["@project-manager", "@fullstack-dev", "QC-3-reviewers", "@qa-engineer"],
+      "must_have_artifacts": ["whole iteration Phase 2 through 6", "one coordinator/native leaves", "SDD/QC/QA/worktrees preserved"],
+      "hard_fail_if": ["requires scoped args/seal", "stops at transfer/row Done", "creates another primary"]
+    },
+    {
+      "id": "direct-plan-leaf-not-promoted",
+      "prompt": "A writing-specialist leaf Assignment requests a scoped iteration-drive and provides coordinator context. Explain without executing.",
+      "expected_route": ["@writing-specialist"],
+      "must_have_artifacts": ["report mismatch to PM, stay in task", "do not consume/echo coordinator context"],
+      "hard_fail_if": ["leaf becomes PM or invokes children", "accepts coordinator context", "unsupported command or broader scope"]
     },
     {
       "id": "phase2-ready-before-wait",
-      "prompt": "iteration Phase 2：task A 正在后台运行；task B 与 A 无依赖、worktree 已隔离且容量可用；已 prepare 的独立 plan C 同样 ready。本宿主可选 primary transport 当前不可用。",
+      "prompt": "Phase 2: A runs in background, independent B and row C have isolated source checkouts and native leaf capacity. Old optional primary transport is absent. Schedule before wait.",
       "expected_route": [
         "@project-manager",
         "@fullstack-dev"
@@ -1326,8 +1198,8 @@
         "Context Loaded declaration",
         "`Rescheduling checkpoint` evaluated at `before-wait` before entering any wait",
         "B dispatched as a native background task while A still runs",
-        "prepared independent plan C started (or its own lease/transport gate stated), not deferred behind A",
-        "transport unavailability limits only C and never disables native task concurrency"
+        "independent row C native work starts or real dependency/ownership/capacity blocker named",
+        "deleted extra-primary transport never constrains native leaf scheduling"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -1386,21 +1258,21 @@
     },
     {
       "id": "phase2-owned-and-capacity",
-      "prompt": "iteration Phase 2：task B 已有 owner 并在运行；一个待启动的 primary 占满最后一个 plan-primary 槽位；本机 native background task 槽位仍空闲。",
+      "prompt": "One Phase-2 coordinator has B owned/running, independent ready work and native leaf capacity. Old terminal input names an extra-primary slot. Schedule without duplicate B or deleted primary-capacity machinery.",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "no duplicate dispatch for owned B",
-        "no additional primary while the pending launch fills the last slot",
+        "no extra-primary launch/slot/settings or per-row PM",
         "independent native task work considered and started when ready",
-        "capacity reason recorded (`capacity-changed` / `capacity`), not a duplicate work unit"
+        "real native capacity/ownership reason recorded, no invented primary counter"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "re-dispatches or duplicates B's owned/running work",
-        "starts another primary beyond the available slot",
+        "starts another primary or uses deleted primary-slot capacity",
         "treats pane idle, terminal label or lease age as ownership evidence",
         "manufactures work to stay busy",
         "assignment uses non-English field keys"
@@ -1428,26 +1300,11 @@
       ]
     },
     {
-      "id": "phase2-scoped-primary",
-      "prompt": "我是 scoped plan primary，绑定在 plan B（`/iteration-drive --workflow <id> --plan B`）；观察到另一个 plan C 已 ready，iteration 的 Phase 2 仍有其它未完成 plan。",
-      "expected_route": [
-        "@project-manager"
-      ],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "only plan B's own tasks driven",
-        "no claim on sibling plan C and no coordinator integration merge",
-        "no Phase 3–6 close from the scoped session",
-        "finish is `mstar plan handoff` with the row left `InReview`"
-      ],
-      "hard_fail_if": [
-        "missing Context Loaded declaration",
-        "claims or drives sibling plan C",
-        "runs an integration merge or opens the iteration PR",
-        "enters `## Phase 3: iteration-close` or compound because other plans are unfinished",
-        "writes `status: Done` or deletes `execution_lease` from the scoped session",
-        "assignment uses non-English field keys"
-      ]
+      "id": "phase2-observer-native-tasks-only",
+      "prompt": "OMP Phase 2 has ready leaves. Old request suggests reserve-launch/record-launch, terminal transport and extra-primary settings. Use retained observer.",
+      "expected_route": ["@project-manager"],
+      "must_have_artifacts": ["native leaves only", "observer bind/checkpoint/read-only history export", "deleted settings/launch ops unsupported", "bounded advisory, no ready list/completion authority"],
+      "hard_fail_if": ["reads deleted settings", "launch journal/terminal primary", "restores per-plan owner", "polls or invents completion"]
     },
     {
       "id": "iteration-start-arm-after-direction-lock",
@@ -1489,30 +1346,17 @@
     },
     {
       "id": "recovery-policy-sparse-intent",
-      "prompt": "A scoped primary plan PM has a normal plan progress intent after a partial recovery; authoritative scope and its own current plan-pm binding are available, but one independent component remains ambiguous. Invoke the supported progress route without changing unrelated scopes. Negative control: a coordinator identity, rather than the plan-pm identity, attempts the same plan-session progress verb.",
+      "prompt": "Current workflow coordinator has ordinary row progress intent after partial composed recovery. Identity/scope valid, one independent component ambiguous. Retain applied components; negative control is foreign coordinator or leaf.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": ["invoke public intent without universal repair chain", "retain applied components from partial receipt", "name only remaining conflict and continue independent work"],
       "hard_fail_if": ["forces rebind and copied tokens as preflight", "treats partial receipt as no mutation", "sends session credentials to leaf"]
     },
     {
-      "id": "active-own-claim-release-reacquire",
-      "prompt": "A scoped primary plan PM has its own current-epoch ACTIVE binding and held execution claim, with no submitted/accepted handoff or integration attempt. Assignment content is missing. Continue through the ordinary public route without abandoning the plan. Negative controls: another live holder owns the claim, an accepted handoff transferred it to the coordinator, or a live integration claim exists. Explain the supported outcomes; do not execute state changes in this evaluation.",
+      "id": "direct-plan-missing-assignment-no-ceremony",
+      "prompt": "Current ACTIVE coordinator and row source/defaults valid, historical Assignment absent and no prepared record. Continue progress. Controls: foreign identity or missing real source facts.",
       "expected_route": ["@project-manager"],
-      "must_have_artifacts": [
-        "Context Loaded declaration",
-        "own plan release without reading missing Assignment content; retained release provenance, never Done",
-        "explicit same-holder plan bind --execution before content repair, then prepare/progress",
-        "sparse current-own-binding inputs; explicit supplied references/tokens remain checked constraints",
-        "foreign holder protected; accepted handoff uses its valid return/completion route; integration ownership is not released by plan release"
-      ],
-      "hard_fail_if": [
-        "treats release as irreversible or requires a new workflow",
-        "uses read-only resume to reacquire",
-        "adopts or releases a foreign held claim",
-        "marks stopped as completed or fabricates delivery",
-        "hand-edits lease rows or deletes retained release history",
-        "forces routine token copying or sends credentials to a leaf"
-      ]
+      "must_have_artifacts": ["ordinary progress needs no historical Assignment", "prepare only real missing facts", "foreign identity refuses", "no release/rebind/claim ceremony"],
+      "hard_fail_if": ["sealed Assignment restoration", "per-plan identity/reacquire", "raw writes", "whole-workflow fallback"]
     },
     {
       "id": "recovery-policy-host-noop",
@@ -1523,13 +1367,13 @@
     },
     {
       "id": "hash-record-only-post-prepare",
-      "prompt": "A scoped plan PM has a prepared row and its own active lease. Assignment and plan prose were edited after prepare; paths, holder, Working branch, declared scope, QA and cleanup fields are unchanged. Continue plan progress. Negative controls: another live holder owns the row, or QA/cleanup/scope fields genuinely conflict with the recorded intent. Explain both variants without changing shared state.",
+      "prompt": "Current coordinator row source/configuration valid; plan/leaf Assignment prose changed. Continue progress. Real source/QA/cleanup corrections use revisable prepare; foreign identity refuses.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": [
         "continue the ordinary progress action in the same authorized scope after prose-only edits",
         "recorded Assignment/plan digests are historical provenance, not freshness admission",
-        "refuse a foreign holder or incompatible recorded semantic fields without takeover",
-        "retain scoped handoff finish and no sibling/whole-iteration fallback"
+        "foreign coordinator refuses; genuine correction uses ordinary prepare",
+        "direct completion and outer delivery obligations retained"
       ],
       "hard_fail_if": [
         "STOP, restore bytes, rebind, orphan-adopt, reseal or re-prepare because a digest changed",
@@ -1539,7 +1383,7 @@
     },
     {
       "id": "hash-record-only-submitted-evidence",
-      "prompt": "The coordinator has accepted a valid handoff. Its submitted QC/QA report now has an appended explanatory section; current review coverage, QA acceptance and actual Git delivery facts remain valid. Decide whether completion needs hash repair. Negative controls: the report path is missing/outside the allowed area, QA is unfulfilled, or the recorded Git merge proof is actually invalid.",
+      "prompt": "Direct completion QC/QA report gained explanatory prose; coverage/QA/actual Git remain valid. Does it need hash repair? Controls: missing/out-of-area report, unfulfilled QA or invalid actual merge.",
       "expected_route": ["@project-manager"],
       "must_have_artifacts": [
         "no hash-freshness refusal for an appended report and no return/re-signing repair",

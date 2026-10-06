@@ -62,6 +62,12 @@ The shipped headless template auto-initializes on first use (`@deepseek-ai/dsh-b
 - **Default model resolution** — headless composes no fallbacks row, so an `agent-default-model` settings pin of `FallbacksChain` fails with `NO_ADAPTER` (the web-profile artifact). Point the default model at a real provider, or install `dsh-llm-fallbacks` into the headless profile too (note: on the published dsh 0.1.0-rc.6 the fallbacks settings integration predates the `SettingsProvider.installSection` API, so the virtual adapter does not register — this resolves with dsh ≥ 0.1.2-alpha).
 - **Config via the profile user layer** — profile-level `cordis.patch.yml` overrides work as documented (e.g. `enforcement: hard` + `dispatchBinding` on the mstar row); the mstar row's own `config: {}` stays neutral.
 
+### Direct plan coordination
+
+One primary workflow coordinator advances explicitly selected rows with ordinary prepare/progress/complete and native leaf dispatch. Configuration/source metadata remain revisable; defaults are mandatory QA and allow-residual cleanup, without sealed Assignment or per-row claim/bind. `/iteration-drive` accepts no arguments; unsupported scoped input refuses before boot, never launches a second primary or broadens scope.
+
+Iteration completion verifies the actual serial merge and leaves parent delivery intact. Standalone development verifies registered source and retains compound/PR/verified-merge/close. Report-only requires explicit matching policy fulfilment before Done and evidence-backed close, without invented Git/PR. SDD, QC tri, QA, L1/L2 isolation and coordinator transaction/CAS/receipts remain. Session run/recovery is coordinator-only. Exact shapes live in mstar-use-cli/references/plan-and-workflow.md.
+
 ### Configuration
 
 | Key | Type | Default | Meaning |
@@ -122,7 +128,7 @@ Warn-only by default: gate violations log and emit advisory events (`mstar/statu
 
 ### Lease gate
 
-Additive beyond the opencode field set: for writable dispatches whose Assignment declares `Execution mode: sdd` or whose plan row is `InProgress`, `verifyPlanExecutionLease` + dispatch-context comparisons (`holder`, `worktree_path`, `working_branch`) run against the ACTIVE workflow snapshot's plan rows (`workflows/<id>/snapshot.json` — the v3 lease home; the root v2 `status.json` supplies the active `workflows[]`). Violations use the dsh-side `lease.dispatch.*` namespace; read-only roles skip the check entirely. A **missing** `status.json` on an sdd dispatch is NOT a silent fail-open: it surfaces `lease.dispatch.unverifiable` (advisory in warn, deny under hard) — the execution_lease cannot be confirmed without the status file. Non-SDD dispatches keep the degrade-allow (no lease obligation). All Assignment field reads are scoped to the engine `assignmentHeaderRegion` (body-quoted examples never leak into header fields).
+Additive beyond the opencode fields: writable Assignment dispatch with Execution mode: sdd or an InProgress row compares Worktree path/Working branch to authoritative row metadata.worktree_path/metadata.working_branch, never a holder or per-row lease. Missing recorded scope is lease.dispatch.unverifiable (STOP before writable dispatch). Missing/unreadable authority/status/snapshot/row still produces lease.dispatch.unverifiable or lease.dispatch.unreadable; warn is advisory, hard denies. Worktree/branch mismatches retain lease.dispatch.worktree-mismatch/branch-mismatch; holder-mismatch is removed. Read-only roles skip it; other non-SDD/non-InProgress dispatch remains degrade-allow. Reads stay in assignmentHeaderRegion.
 
 ### Skill lint gate
 
@@ -132,11 +138,11 @@ Additive beyond the opencode field set: for writable dispatches whose Assignment
 
 A `tools/pre-execute` branch (BEFORE the subagent prompt branch) gates the **`workflow`** and **`ralph`** tool calls — the remaining model-reachable fan-out that carries no Assignment text. It matches the FIXED tool names (`workflow` / `ralph`); a renamed `workflow` instance is out of scope (the name guard is the fixed default). Non-workflow tools are untouched — the subagent branch owns them, semantics unchanged.
 
-**Four-tier mode** (Config `workflowGate`, default `warn`): `off` (pass-through, no verdict row), `warn` (advisory-only), `ask` (first-seen names route through dsh's approval waterfall — `{kind:'ask'}`, fail-closed upstream; this gate invents no answerer), `hard` (policy violations veto before any child starts). The policy is the SINGLE decision point — P-b lease attribution runs FIRST and preempts P-a/P-c, then the P-a name allowlist, then P-c first-seen ask.
+Four-tier workflowGate remains independent of Enforcement: off/warn/ask/hard. P-b checks recorded writable scope first, then P-a names and P-c first-seen approval; no per-row holder qualification.
 
 | Policy | `off` | `warn` (default) | `ask` | `hard` |
 | --- | --- | --- | --- | --- |
-| **P-b**: workspace has an `InProgress` plan without `execution_lease` coverage | allow (gate short-circuits `off`) | **warn** — allowed + advisory (`workflow.lease.uncovered`) + one warn | **warn** — allowed + advisory + one warn (the ask channel is for first-seen NAMES, never the workspace red line) | **deny** — veto before any child starts (`workflow.lease.uncovered`), reason cites the plan id |
+| **P-b**: an InProgress row lacks metadata.worktree_path/metadata.working_branch | allow (off) | warn/advisory, workflow.lease.uncovered | warn/advisory; ask is for names only | deny before child start, workflow.lease.uncovered, naming row |
 | **P-a**: workflow name ∈ `workflowNames` (non-empty list) | allow (short-circuit) | allow — no advisory (P-a passes under every mode) | allow — no ask | allow |
 | **P-a**: workflow name unknown (empty/absent list ⇒ **every** name unknown) | allow (short-circuit) | **warn** — allowed + advisory (`workflow.name.unknown`) + one warn | **ask** (first-seen) → `{kind:'ask'}`; the cached decision (allow/deny) is reused afterwards — never a re-ask for a resolved name | **deny** — veto before any child starts (`workflow.name.unknown`), reason names the name |
 | **ralph** (no `meta.name` — no allowlist identity) | allow (short-circuit) | allow — P-a/P-c NEVER apply | allow — P-a/P-c NEVER apply | allow — P-a/P-c NEVER apply; P-b still applies (deny when uncovered) |
@@ -151,7 +157,7 @@ A `tools/pre-execute` branch (BEFORE the subagent prompt branch) gates the **`wo
 
 **P-c answer-observation seam.** The gate cannot observe the ask outcome — the tool registry's `serviceAsk` consumes the approval result internally. The **run-start observation IS the answer seam**: an ALLOWED ask executes the call → the durable `tool-workflow/run-start` session event lands in the parent session log → the workflow-ledger consumer records the W-B2 `workflow-run` row AND caches `allow` for the run's name into the apply-scoped `WorkflowAskCache`. A DENIED answer produces no run → no observation → the next same-name call under `ask` **re-asks** (fail-closed — no grant evidence, never an invented allow). Cache keys are the **normalized** (ASCII control chars stripped) **uncapped** name at BOTH seams — the gate composes `meta.name` and the observation records `runName` through the SAME `normalizeWorkflowName`, so a control-char name (`au\u0000dit`) can never wedge the cache (asks once, observes under the same key), and a >1024-char name still keys on the full name (the ledger ROW display name is capped separately; the identity axis is never truncated). The cache is apply-scoped — a fresh apply (HMR reload) starts empty, so an unresolved first-seen re-asks per call until an observation (or an explicit `record()`) lands. A throwing cache record degrades the observation with one warn — the ledger row is already appended, the run is never affected.
 
-**P-b preemption.** The lease red line runs FIRST: an uncovered `InProgress` plan in the calling workspace means NO writable fan-out should start children until the plan is recovered — independent of the workflow name (the same red line as the Assignment-keyed lease gate), and it applies to ralph too. Under `warn`/`ask` it is advisory-only (allowed + one warn); the ask channel never substitutes for the workspace red line.
+**P-b preemption:** missing recorded source scope on an InProgress row precedes name policy and applies to ralph. Configure actual source facts through ordinary prepare before writable dispatch; no per-row recovery/lease claim. Warn/ask remains advisory-only, hard vetoes.
 
 ## LLM fallbacks integration
 

@@ -1,213 +1,106 @@
 # Plan and workflow transport
 
-This file carries the two coordination command families: scoped plan coordination (`plan`) and the guarded Prepare amendment plus standalone registration (`workflow`). They share one protocol — one document under a same-host write lock, one engine call per verb, the same token and failure discipline.
+This reference owns coordinator command address/parameter shapes, token discipline and recovery. Fields/lifecycle belong to `mstar-artifacts`; iteration procedure to `mstar-iteration`; checkout safety to `mstar-branch-worktree`.
 
-What lives elsewhere: field schemas, snapshot shape and lifecycle semantics belong to `mstar-artifacts`; phase semantics to `mstar-iteration`; checkout rules to `mstar-branch-worktree`. This file records only what command help cannot express — role boundaries, tokens, refusal codes, envelopes and sequence order.
+## Normal route
 
-Normal route: choose the intended public verb from current help and invoke it with its required inputs; inspect the receipt before deciding what remains. Do not interpose a mandatory top-down `persist`/rebind/repair ladder merely to replay normal progress. Active plan/workflow mutations and `status workflow-close` derive the caller's current own session/token where unambiguous, and generate one operation id when omitted; supplied references and tokens remain checked constraints. Ambiguous scope needs an explicit supported selector, never a search for a sole/latest stored session. Registration still uses the root creation token; workflow and plan mutations use their own scope tokens. Pre-activation writes take the session envelope and row revision; a fresh plan-PM bind takes explicit operator `--session-id`. A refusal identifies the missing input or genuine conflict.
+One primary coordinator operates every row in its explicitly selected workflow. Choose the intended ordinary action, supply only genuinely missing facts and inspect its applied/partial/replay receipt. Do not insert a bind/claim/repair ladder before normal progress. Leaves receive task scope/path/evidence instructions, never coordinator state authority.
 
-Payload discovery: `mstar-harness schema PlanProgress` describes `plan progress` JSON and `mstar-harness schema HandoffEvidence` describes `plan handoff` JSON, including nested QC/QA fields. Build a complete JSON object from the schema before invoking `--file`; the CLI accepts an absolute JSON file, not a one-field-at-a-time trial. The payload carries the caller's own business facts (status, summary, evidence, revisions, review decisions) — never transport: on the active route the session reference, current token and operation id are the acquired caller's own defaults unless the caller states them as constraints. Historical `submit` is not a plan verb: bounded non-authoritative advice is `mstar-harness judgment review-advice` with its own help and review-pack input, not a lifecycle submission.
+ACTIVE writes derive the caller's current own coordinator reference, scope token and a fresh operation id where unambiguous. Explicit values remain checked constraints. Ambiguous workflow selection needs a supported explicit selector, never the latest/sole stored session. New registration uses the root creation token; workflow and row actions use their respective tokens.
 
 ## Transports
 
-Execution coordination is selected by `execution_meta.authority_state`. Use `mstar status validate` as the discriminating read. For `state: legacy`, the supported upgrade is always `mstar store upgrade --operator <name>`: it opens or creates the local store, imports recognizable records, activates authority, and reports skipped sources without moving them. `unreadable` reports the cause and recovery needed to make the store readable.
+`mstar status validate` reports execution authority. ACTIVE operations use DB transactions, independent caller identity, CAS and receipts. File operations are available only before activation under the workflow coordinator envelope and row revision, using the domain writer's same-host lock/atomic replacement. File forms on an ACTIVE root refuse instead of falling back. Store upgrade remains the supported operator transition from legacy authority; never edit live store/config/credentials to change routes.
 
-| State | Supported action |
+| Transport | Address and concurrency context |
 |---|---|
-| `active` | Use the active DB route below. |
-| `legacy` | Do not use file-form operation flags; run `mstar store upgrade --operator <name>` to import recognizable records and activate authority. |
-| `unreadable` | Follow the reported self-check recovery, then rerun `mstar status validate`. |
+| ACTIVE | Own coordinator reference and acquired identity; token/operation defaults may be derived. Explicit `--session-ref`, `--expect`, `--operation`, `--harness`, `--session-id` constrain that context. |
+| File | `--session <absolute-json>` plus applicable row `--expect <revision>`; no per-row envelope. Coordinator bootstrap uses an explicitly acquired `--session-id`, never a generated identity. |
 
-| Transport | Write flags | Caller identity |
-|---|---|---|
-| **Active** (execution authority active) | Current own-binding plan/workflow mutations and close may omit session reference, expectation and operation id; an omitted id is fresh once per invocation. Explicit references/tokens and scope selectors remain checked constraints. Fresh binds use the token for their addressed scope; registrations remain root-token creates. | acquired caller identity (minted workflow/role/plan or explicit supported selector); never a reference-derived identity or a foreign stored row |
-| **Pre-activation** (file route, only while that authority is not active) | `--session <absolute-json>` + `--expect <revision>`; a fresh operator coordinator bootstrap also states `--session-id <id>` | the role-scoped envelope obtained from the bind verb, re-checked against its document inside the write lock |
+A reference is a lookup, not bearer authorization. Copying another reference never acquires its identity. Row scope comes from explicit `--plan` and the coordinator's selected workflow, not prepared Assignment bytes.
 
-- An active operation id supplied explicitly is the replay key; when omitted, the CLI creates one fresh id for that invocation. A supplied session reference or token is never ignored. Missing/ambiguous caller scope refuses and names the public bind/selector route.
-- On a harness whose execution authority is **active**, the pre-activation forms are retired rather than reinterpreted: they refuse with `execution.consumer-not-ready`, whose message names the active form of the same verb. `mstar plan show --workflow <id> --plan <id>` stays the public authoritative read, and `mstar status validate` reports root and per-workflow tokens. Root creation, workflow mutation and plan mutation use distinct scope tokens.
-- `mstar status validate` reports the root and per-workflow tokens when state is active; `mstar plan show` reports the addressed plan token. Use the token matching the mutation scope.
-- Legacy file-form operation routes are retired; their flags are not a supported alternative to the active route.
+## Public parameter shapes
 
-- The **reference is a lookup, not a bearer credential**: it names a stored session row, grants no authority by itself, and the engine compares the independently acquired caller inside its own transaction — so a copied reference under another identity refuses without writing.
-- Launching: `mstar session run --workflow <id> --role <coordinator|plan-pm> [--plan <id>] [--harness <absolute-path>] -- <argv>` mints **one** local identity for the child, overwrites the identity channel, deletes the legacy one, and propagates the child's exit code (or re-raises the signal that killed it). Repeated CLI invocations inside that child share the identity; a **new** launcher is a new identity and cannot claim the old one — a stopped owner needs the explicit recovery verb (→ § Recovery), never a copied id.
+The same coordinator owns all retained plan verbs:
 
-## Issue-store writes
-
-Unscoped `mstar issue` writes are actor-only store mutations: every write verb (`add`, `occurrence`, `triage`, `close`, `waive`, `duplicate`, `supersede`, and `link`) requires `--actor` + `--operation-id` and a payload via `--payload` or `--file`. `--expect` is required for `triage`, each terminal disposition (`close`, `waive`, `duplicate`, `supersede`), and `link` row-CAS; omitting it refuses with `issue.revision-conflict`. They do not take a session, envelope, workflow, or execution-authority address. The plan-scoped `mstar plan issue-add` and `mstar plan issue-close` routes remain inside their plan session and retain the plan coordination protocol described below.
-
-For example: `mstar issue link --id <issue-id> --actor project-manager --operation-id link-1 --expect <revision> --payload '{"kind":"plan","target":"<id>"}'`. The target is recorded as a provenance label; the issue store does not verify that the plan or iteration exists. A future read-only `issue doctor` report for dangling provenance is deferred and would not gate writes.
-
-## Session and address model
-
-- **Pre-activation only:** `--session <absolute-json>` names an **engine-generated envelope**. It is never a caller-declared identity: the engine re-checks it against the document inside the write lock, so an envelope issued for another role, workflow or plan refuses instead of acting.
-- There is no force flag, no implicit holder transfer, no takeover and no automatic lease expiry. The public `mstar plan release` verb lets the acquired current holder release only its own execution claim; it does not replace `accept` / `return` / `complete` ownership transitions and does not discard accepted integration state.
-- A plan session is bound to one plan; a coordinator session serves one workflow and is the only session allowed to amend, register, record evidence or close it. Coordinator bootstrap is limited to one per workflow and always requires an **acquired** identity — the engine never generates a coordinator id. `session.run` launches a child with its minted identity but does not bind it; use `plan bind` to establish the binding. Active consumers use the minted tuple or an explicit supported selector; a session reference is never caller identity.
-- Two address forms reach the same prepared row: the pinned Assignment path, or the workflow + plan pair, which reads the row's registered Assignment path. A second fresh claim of the same row refuses with `coordination.duplicate-holder`, naming the live holder.
-- A resume is read-only on **both** transports — `mstar plan bind --execution --resume-ref <wire>` (active; the reference carries its own whole scope and the call takes no `--expect`) or `mstar plan bind --resume <absolute-json>` (pre-activation). It reports the current context; it never reacquires a released lease, never restarts execution, and never re-identifies the caller. **Resume is never recovery.**
-- A fresh **bind** reads, checks and claims atomically against current ownership. A fresh **active** bind states the independently acquired session identity and the addressed workflow plus its own seat selector (`--coordinator`, or `--plan <id>` for a plan session); the caller-owned operation id and the scope's execution token may equally be omitted — the CLI generates one fresh id and the engine reads the current token (the workflow's for a coordinator, the plan's for a plan-pm), while an explicitly supplied `--expect` remains the checked constraint. The **pre-activation** bind is the token-free form that names a session envelope instead.
-
-**Missing Assignment after an ACTIVE plan-pm bind:** ordinary progress still needs the reviewed content; read-only resume does not repair that prerequisite. A current plan-pm holder with no submitted/accepted handoff or integration attempt has two public paths:
-
-- Continue: `mstar plan release` under its own bound plan scope → explicit same-holder `mstar plan bind --execution --workflow <id> --plan <id>` **before** restoring content → restore the reviewed Assignment → coordinator `plan prepare` / holder `plan progress`. Release retains history and never writes Done; no new workflow or routine token copying is required.
-- Stop truthfully: own `plan release` → coordinator `mstar workflow lifecycle --workflow <id> --status stopped --reason <text>`. Stopped is not successful delivery. A foreign held claim cannot be released; an accepted handoff uses its valid coordinator return/completion path, and `plan release` never releases an integration claim.
-
-## Recovery (active coordinator or named plan-owner replacement)
-
-While execution authority is active, recover through `mstar session recover` under the current, independently acquired coordinator identity. Without `--plan`, this retains coordinator replacement; with `--plan`, it replaces only that plan's stopped plan-PM owner:
-
-```sh
-mstar session recover --workflow <id> [--plan <plan-id>] \
-  (--prior-session <stopped-holder> | --unowned) --reason <text> \
-  --attestation <absolute-json> --expect <full-scope-token> --operation <id> \
-  [--harness <absolute-path>] [--json]
+```text
+mstar plan bind [--execution] --workflow <id> (--coordinator | --resume <path> | --resume-ref <ref>) [--expect <token>] [--operation <id>] [--harness <path>] [--session-id <id>]
+mstar plan show --plan <id> [--session <path> | --session-ref <ref>] [--workflow <id>] [--harness <path>] [--session-id <id>]
+mstar plan prepare --plan <id> [--worktree-path <absolute-path>] [--working-branch <branch>] [--qa-gate mandatory|pm-acceptance] [--findings-cleanup zero-residual|allow-residual]
+mstar plan progress --plan <id> (--progress <json> | --file <json>)
+mstar plan issue-add --plan <id> (--entries <json-array> | --file <json>)
+mstar plan issue-close --plan <id> --issue <id> --disposition resolved|waived|duplicate|superseded (--evidence <json> | --file <json>) --expect-issue <revision>
+mstar plan complete --plan <id> (--evidence <json> | --file <json>) [--integration-base-sha <full-sha> --integration-result-sha <full-sha>]
 ```
 
-- `--plan <plan-id>` selects exact plan-owner recovery and requires `--prior-session` naming the actual stopped owner. `--unowned` is coordinator-only; a plan owner is never inferred.
-- Without `--plan`, `--prior-session` names the prior coordinator, or `--unowned` explicitly declares that no coordinator holder is recorded. These choices are mutually exclusive.
-- The stop attestation must name the holder stopped/reloaded. `--expect` is the exact workflow token for coordinator recovery or the exact addressed plan token for plan recovery; `--operation` is the replay key.
-- Plan recovery creates a plan-PM reference for the current coordinator's own independently acquired session identity and transfers only that plan's held claim. It does not borrow the stopped identity, resume a session, adopt integration ownership, or change another plan. Continue with the ordinary plan-owner flow; a genuine reviewed handoff still goes through `plan handoff` → coordinator `plan accept` → `plan complete`.
+Mutation lines also accept their applicable transport context described above, including explicit workflow selection. Consult current source-built verb help for the complete transport option set. No retired verbs/flags or compatibility aliases are supported.
 
-A coordinator’s plan-PM binding is retained across plan completion and remains tied to that native identity; completion does not erase it or make that identity available for another plan. For two stopped plan owners in one workflow, finish the first recovered plan through genuine reviewed completion, then explicitly stop the old coordinator and acquire a genuinely new native coordinator identity. The native launcher form is `mstar session run --workflow <workflow-id> --role coordinator --harness <absolute-harness-path> -- <argv>`; alternatively use the host’s supported native session launch. The new coordinator uses the existing coordinator recovery (no `--plan`) with the previous coordinator as `--prior-session`, its actual stop attestation, the current workflow token and a fresh operation id; then it recovers the second exact plan with that plan’s actual stopped owner, stop attestation, current plan token and a fresh operation id:
+`show` needs no preliminary bind when the acquired caller already has a live coordinator binding. `prepare` is revisable configuration and source metadata, not admission sealing: QA defaults to mandatory, cleanup to allow-residual; an existing valid source/default configuration needs no ceremonial prepare record. Changes while InProgress/InReview do not reset status or seal plan/Assignment bytes. A missing or corrected source checkout/branch uses ordinary prepare, validated against actual Git. `progress` records start/review/block states; Done is complete-only.
 
-```sh
-mstar session recover --workflow <workflow-id> \
-  --prior-session <previous-coordinator-session-id> --reason <reason> \
-  --attestation <previous-coordinator-stop-attestation.json> \
-  --expect <current-workflow-token> --operation <coordinator-recovery-operation-id> \
-  --session-id <new-native-coordinator-session-id>
-mstar session recover --workflow <workflow-id> --plan <second-plan-id> \
-  --prior-session <second-stopped-plan-owner-session-id> --reason <reason> \
-  --attestation <second-plan-owner-stop-attestation.json> \
-  --expect <current-second-plan-token> --operation <second-plan-recovery-operation-id> \
-  --session-id <same-new-native-coordinator-session-id>
+## Direct completion
+
+Supply one complete evidence document:
+
+```json
+{
+  "source_sha": "<actual source SHA>",
+  "review_base": "<actual review base SHA>",
+  "review_head": "<actual reviewed head SHA>",
+  "qc": {"decision": "Approve", "reports": ["<absolute report path>"], "consolidated": "<absolute summary path>"},
+  "qa": {"gate": "mandatory", "decision": "pass", "report": "<absolute report path>"}
+}
 ```
 
-Both recoveries run as the genuinely new coordinator identity acquired by the native host launcher or `mstar session run`; on the CLI route, supply that actual identity as `--session-id` on each invocation. The operation id must be fresh for each action. Each placeholder must be replaced with the real identifier, evidence path, token or operation id from the corresponding current authority; the stop evidence must assert that exact named holder stopped. Reusing the old `nativeID` or copying its `--session-ref` is not a new acquisition and cannot retarget the retained binding. Coordinator recovery with no `--plan` does not transfer any plan-PM binding; if the new coordinator has no applicable plan-PM binding, the documented default/unowned behavior remains unchanged. Never fabricate a first-plan Done or stop state to reach the second recovery.
+Use actual reports/source facts, not placeholders. The integration CLI pair must be supplied together, or the document may carry `integration: {base_sha,result_sha}`. Evidence paths are existing absolute files; hashes are informational provenance, not resealing requirements.
 
-- If a valid handoff is already submitted or accepted, continue its normal accept/completion route instead of resetting ownership through recovery.
-- Recovery is active DB only. Pre-activation Prepare recovery is retired; do not use file/JSON snapshot forms.
-- `authorizationRef` is an audit reference, not an authorization source: it MUST identify a real external authorization event (explicit user/operator instruction or confirmation). An agent MUST NOT synthesize it from its own task or assignment.
-
-## Verb → role boundary
-
-| Session | Verbs |
-|---|---|
-| plan session | `mstar plan show`, `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close`, `mstar plan handoff` |
-| acquired **ACTIVE holder** (either seat) | `mstar plan release` — releases only the caller's own held execution claim; continue through an explicit same-holder `plan bind` |
-| coordinator session | `mstar plan prepare`, `mstar plan accept`, `mstar plan return`, `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile`, `mstar plan repair-delivery-source`, `mstar workflow evidence` |
-| either (active bootstrap / read / claim) | `mstar plan bind` |
-
-A plan session mutates only its own row and the issues that row's plan captures or closes; the retired register bucket is never a write target. It never prepares itself: registration of the reviewed Assignment is the coordinator's act, and it is what releases the row's dependencies.
-
-## Tokens
-
-| Token | Where it comes from | Meaning |
+| Engine-selected route | Proof before direct complete | After row Done |
 |---|---|---|
-| Root execution token | `mstar status validate` → `.token` | `root` token; used only for new workflow registration |
-| Workflow execution token | `mstar status validate` → matching `.workflows[]` entry, or an authoritative workflow read | `workflow` token; used only for that workflow |
-| Plan execution token | `mstar plan show` → addressed plan | `plan` token; used only for that plan |
-| operation id (**active replay key**) | the caller | caller-supplied id of this one operation: an exact retry replays the recorded receipt, a changed request against the same id refuses |
-| session reference (active address) | the active bind or recovery result: `exec-session-v1:` + base64url of canonical JSON `{storeId, epoch, workflowId, role, sessionId, planId}` | stored session-row address; not a bearer credential |
-| issue revision | the scoped capture's report, or the read verb | the DB mutation's CAS value for one issue; `plan issue-close` takes it as `--expect-issue` |
-| handoff id | the same read | the row's live handoff; only the handoff verb mints one |
-| byte version | retired file-route comparison value; not an execution token or a supported mutation credential |
+| Iteration/non-standalone | QC/QA and source/review ancestry plus already-performed serial two-parent merge in the clean recorded integration checkout on its target branch. Supply real base/result. The engine re-witnesses Git at commit. | Parent still owes compound/PR/verified merge/terminal close; no child PR. |
+| Standalone development, exactly one row | QC/QA and clean registered source checkout/ref/commit; integration input refuses. | Own compound/PR/verified merge/terminal close; workflow stays running. |
+| Standalone verification/report-only, exactly one row | Record explicit fulfilment matching registered completion_policy before Done, then supply QC/QA. Git fields are provenance only, not an invented source/integration requirement. Integration input refuses. | Evidence-backed terminal close; no invented compound-before-PR, PR or merge. |
 
-Every token is **consumed** by the call that uses it. Read again after every successful mutation; a token carried across a write refuses rather than applying a stale edit.
+Example report-only fulfilment: `mstar workflow evidence --workflow <id> --file <absolute-json>` with `{"completion":{"policy":"<registered policy>","evidence":"<real fulfilment reference>"}}`. QA pass alone is never fulfilment.
 
-## JSON envelopes
+Complete may atomically entail InProgress → InReview → Done with sufficient reviewed evidence. It retains source ownership metadata and completion evidence, releases only applicable workflow merge exclusion and preserves completed_at on exact replay. Per-plan execution leases are removed. Completion never runs Git merge: the coordinator explicitly performs it once in the recorded integration checkout, then submits actual SHAs. If merge output/state response is lost, retry complete against the real result, never merge again. Resolve or explicitly abort a real conflict in Git; never force state to Done.
 
-Machine output is a single object on stdout, with no color and no banner. In human mode stdout stays empty and the summary goes to stderr, so stdout can be piped without filtering.
+## Coordinator identity and recovery
 
-Success carries operation/workflow/plan scope, the fresh token, store id, epoch, operation id, replay flag, role and applicable handoff/state/outcome. Read verbs return their applicable scope and row; active resume carries no mutation receipt.
+```text
+mstar session run --workflow <id> --role coordinator <argv...> [--harness <path>]
+mstar session recover --workflow <id> (--prior-session <id> | --unowned) --reason <text> --attestation <absolute-json> --expect <workflow-token> --operation <id> [--harness <path>] [--session-id <id>]
+```
 
-Failure carries `ok: false`, the operation, a stable `code`, a message, and whichever of workflow id, plan id, holder, path, expected and actual the refusal can name. The refusal object is the contract; the message is for humans. A usage-class failure of the active transport is reported in the same shape, and no diagnostic echoes a legacy envelope body or the identity-channel payload.
+The launcher mints one child-local coordinator identity, overwrites the identity channel and propagates exit/signal. It does not bind a workflow. Coordinator bootstrap remains workflow-wide and limited to one owner. Read-only resume reports current own context; it never restarts execution or replaces a stopped owner. Recovery replaces the explicitly stopped workflow coordinator, never a row identity. The stop attestation must name the real prior owner; `--unowned` explicitly means no recorded coordinator. No age/idle/TTL takeover. Any authorizationRef names a real external user/operator authorization event, not an agent-invented task reference.
 
-## Refusals
+Public recovery output exposes workflow/public session ids and receipt/replay/token/version facts, never envelope paths/body. Independent caller identity is revalidated within the transaction. A copied session id/reference or repeated launcher is not acquisition of the old identity.
 
-Refusal commit-state is action-local: read the receipt instead of assuming. On the coordinated plan route a refused operation is transactional — no row, receipt or counter change (verified there) — so its recovery is a fresh read, never an undo; where a verb documents action-local partial application, committed components stay committed and only the documented remaining action is replayed. There is no force flag to escalate to.
+## Issue writes
 
-| Code | When |
+Unscoped `mstar issue` remains actor-only: write verbs require `--actor`, `--operation-id` and payload/file; triage/terminal disposition/link require issue CAS `--expect`. Plan issue-add/issue-close compose issue mutations under the workflow coordinator and selected row, preserving closure authority and issue CAS. The legacy residual register is migration history, never a live dual-write target.
+
+## Tokens, receipts and failure
+
+| Value | Meaning/source |
 |---|---|
-The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvidence`); the coordinator accepts it and follows the registered delivery kind in the table above. On the iteration route, start a pinned integration attempt, perform and verify the recorded Git merge, accept integration and complete. On standalone development, complete after accept; on report-only, record fulfilment of its registered policy before complete without inventing a Git step. At each point consult current verb help and supply the required address for the active or pre-activation route — plan operations may omit `--expect` under the verified resolver (an explicitly held token stays a constraint), while workflow-level writes retain their documented expectation contract — and inspect the `applied` or `replayed` receipt. Do not turn those explicit inputs into a ceremonial top-down preflight ladder.
-| `coordination.scope-mismatch` | the request reaches outside the session's scope |
-| `coordination.workflow-not-found` | no workflow for that id under the resolved root |
-| `coordination.not-prepared` | the workflow has no coordinator binding yet |
-| `coordination.identity-missing` / `coordination.identity-mismatch` | a coordinator bootstrap lacks an explicitly acquired identity, or the identity does not address the requested workflow / role / plan scope |
-| `coordination.duplicate-holder` | a second fresh claim of an already-held row, or of an already-bound coordinator |
-| `coordination.handoff-pin` | the handoff flag names something other than the row's live handoff |
-| `coordination.invalid-transition` | the proposed document fails validation for the requested transition |
-| `coordination.handoff-state` | a plan session attempts a transition while a non-returned handoff owns the plan |
-| `coordination.handoff-missing` | a handoff transition is requested when no handoff exists |
-| `coordination.execution-lease-required` | an operation requires a valid active execution lease, but lease validation fails |
-| `coordination.prepare-already-prepared` | prepare is attempted on an already-prepared row |
-| `coordination.prepare-session-bound` | prepare is attempted after another session is bound (non-claimant) |
-| `coordination.prepare-handoff-active` | prepare is attempted after a handoff exists |
-| `coordination.prepare-status` | prepare is attempted when the row is not Todo or Blocked |
-| `coordination.progress-phase` | progress is attempted from a status with no progress transitions (including absent status) |
-| `coordination.progress-transition` | the requested progress status edge is not allowed from the current status |
-| `coordination.plan-status` | a transition requires a particular current row status, but the row differs |
-| `coordination.workflow-not-running` | a plan operation is attempted when the lifecycle is not running |
-| `coordination.merge-lease-foreign` | a merge lease claims another plan/source attempt and must not be reused or released |
-| `coordination.merge-lease-stopped-owner` | a merge lease belongs to an inactive/stopped session; only reconcile may act |
-| `coordination.findings-open` | completion or transition is blocked because findings remain open |
-| `coordination.git-unavailable` | a Git-derived fact the verb needs cannot be established |
-| shared lock failure | another writer holds the same-host lock |
+| Root token | `status validate`, new workflow registration only |
+| Workflow token | Authoritative workflow read, coordinator bind/workflow transitions/evidence/recovery/close |
+| Plan token | `plan show`, selected row mutations |
+| Session reference | Stored coordinator lookup `{storeId,epoch,workflowId,role,sessionId}`; no row identity |
+| Operation id | Exact-request replay key; changed semantics under the same id refuse |
+| Issue revision | Issue read/capture receipt, passed as `--expect-issue` |
 
-## Completion sequence
+After a mutation use its new token or derive current own context; an explicitly supplied stale token refuses. Machine output is one JSON object; human summaries go to stderr. Success names operation/scope/fresh token/store/epoch/id/replay and action-local outcome. Failure names stable code plus safe current/expected scope facts, never credential/identity-channel payloads. Consult the refusal instead of inventing a top-down repair sequence. Transactional row refusal changes no row/receipt/counter; where a composed action documents partial application, retain applied components and retry only the remaining action.
 
-The plan session hands off; the coordinator drives the rest. The engine selects **one of three routes** from the workflow's own type and delivery kind — never inferred from anchors that happen to be absent.
+Refusals cover absent/ambiguous scope, missing/mismatched independent identity, duplicate coordinator, invalid status/configuration, stopped workflow, foreign real merge exclusion, open critical/findings-cleanup failure and unavailable/mismatched Git facts. No force option or silent scope broadening exists.
 
-| Route | When | After `accept` | What `complete` does |
-|---|---|---|---|
-| **Iteration** | `type: iteration`, or any non-standalone workflow | `integration-start` → the operator's pinned `git merge --no-ff` in the recorded integration checkout → `integration-accept` → `complete` | Done, the handoff completed, and **both** leases released — the row's execution lease and the workflow's integration-merge lease |
-| **Standalone development** | `type: plan` with `delivery_kind: development` owning exactly one row | `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until its delivery evidence and the close |
-| **Standalone report-only** | `type: plan` with `delivery_kind: verification/report-only` owning exactly one row | record the fulfilment of the registered completion policy, then `complete` straight from the accepted handoff — no integration verb, no merge record | Done and the handoff completed with no integration record; only the row's execution lease is released, and the workflow stays running until the close |
+## Registration and outer delivery
 
-Common prefix: **handoff** (plan side, leaves the row InReview) → **accept** (ownership transfer, not integration acceptance). Invoke the intended public action under the correct actor with its required session address and operation id — the current expectation only as an explicitly held constraint, since plan operations derive it — then inspect its receipt; use a refusal to identify a missing input or conflict rather than running a mandatory preflight ladder. Explicit pinned Git merge is the operator's action, never a verb side effect.
+Standalone `workflow register` is create-only and declares project, plan pointer, delivery kind, anchors and report-only completion policy. `--plan-file` accepts harness-relative `plans/<id>.md` or canonical absolute path, not repository-relative `.mstar/plans/<id>.md`. ACTIVE creation uses root token + operation under independently acquired identity, no pre-existing session reference. Delivery evidence/close use workflow context and token. Source facts are corrected through ordinary prepare, never a legacy repair verb.
 
-| Step | Session | What it records | Notes |
-|---|---|---|---|
-| handoff | plan | the submitted handoff identity/state record, with recorded Git facts and evidence provenance; the row stays InReview | the plan's finish line; execution ownership has not moved yet |
-| accept | coordinator | execution ownership transfers to the coordinator | no merge happens here; this is ownership, not integration acceptance |
-| integration-start | coordinator | the integration attempt and its pinned base, before any Git runs | **iteration route only**; reads the clean recorded integration checkout and refuses a foreign merge lease — the attempt is pinned *before* Git so a crash mid-merge stays reconcilable |
-| merge | operator | the merge itself | **iteration route only**; an explicit pinned merge in the recorded integration worktree |
-| integration-accept | coordinator | verified evidence of the pinned Git result | **iteration route only**; never runs a merge and never completes the row |
-| completion evidence | coordinator | the fulfilment of the registered `completion_policy` (policy + evidence) | **report-only route only**, and it comes *before* Done: the completion step refuses an absent, empty or nonmatching fulfilment, so the row cannot be marked Done on a policy nothing fulfilled |
-| complete | coordinator | Done, atomically | the last step of **every** route: it releases only the row's execution lease on both standalone routes, and both leases on the iteration route |
-| return / reconcile | coordinator | a failed attempt / crash recovery | `return` restores the plan owner; `reconcile` observes Git and finishes the iteration attempt without a second merge — on either standalone route it only replays an already-completed row |
-| repair-delivery-source | coordinator | a corrected `branch.source` only | **not a normal step**: a pre-fix-snapshot exception for a registered source that wrongly equals the target, derived from the accepted handoff's Git source facts, never replayable |
-
-A retried start never moves the recorded base; that is what makes the pinned attempt, not the retry, the unit of recovery.
-
-The handoff records evidence paths and digests as provenance; it does not freeze report bytes. Editing or appending a cited report does not cause a digest-freshness refusal or require return/re-signing. Current semantic QC/QA, acceptance, ownership and evidence-path requirements remain; Git branch/ref/commit and integration proofs remain actual delivery constraints.
-
-### Intent-first walkthrough
-
-The plan PM submits the final handoff evidence (`mstar-harness schema HandoffEvidence`); the coordinator accepts it and follows the registered delivery kind in the table above. On the iteration route, start a pinned integration attempt, perform and verify the recorded Git merge, accept integration and complete. On standalone development, complete after accept; on report-only, record fulfilment of its registered policy before complete without inventing a Git step. At each point consult current verb help and supply the required address for the active or pre-activation route — plan operations may omit `--expect` under the verified resolver (an explicitly held token stays a constraint), while workflow-level writes retain their documented expectation contract — and inspect the action's `applied`, `partial` or `replayed` receipt. Do not turn those explicit inputs into a ceremonial top-down preflight ladder. A foreign owner, missing independent actor identity or ambiguous target is still an action-local refusal; preserve completed independent components only where the verb documents partial-applied semantics.
-
-The failure object at any step names the code; the row is unchanged, so the retry starts from a fresh read of the same row rather than from the step that failed.
-
-## Retired file-route operations
-
-Pre-activation file-route forms (Prepare amendments, coordinator recovery and session envelopes) are not supported operating procedures in this release: when `mstar status validate` reports `state: legacy`, run `mstar store upgrade --operator <name>` to import legacy state; do not invoke retired file forms.
-
-Historical snapshot/compass versions and recovery audit digests are informational records, not admission tokens. The retained Prepare contracts concern current coordinator authorization, a registered running Prepare workflow with no execution ownership, canonical plan pointers, permitted append/correction deltas, and compass plan-id set/branch/path declarations. Set membership is order-insensitive. Recovery concerns the named prior holder, explicit replacement identity, authorization and stop assertion; it transfers no lease. Same operation id with a different request remains a replay conflict; receipt replay does not depend on current output-byte equality. No snapshot/compass hash preflight or byte-restoration recipe applies.
-
-## Standalone plan registration and delivery evidence
-
-- Registration is create-only: it writes the workflow snapshot and root register under one lock, recording the owned plan row, project, delivery kind and branch anchors. The delivery kind is declared, never inferred. Supply `--plan-file` as `plans/<id>.md` (harness-relative) or the canonical absolute path — both are accepted; the repository-relative `.mstar/plans/<id>.md` form is refused. The active creation call uses the root token from `mstar status validate` plus an operation id under an independently acquired identity; it takes no session reference because no session row exists before the workflow.
-- Delivery evidence uses the active DB route and workflow-scope token. Legacy file-route forms are unsupported; on `state: legacy`, run `mstar store upgrade --operator <name>` first.
-- **Completion ordering per kind.** Development records compound disposition, PR identity and verified merge after every row is `Done`; report-only records fulfilment of its registered completion policy before `Done`. No merge or integration branch is synthesized for report-only.
-- A registered `branch.source` is not amended by ordinary evidence; the legacy repair verb is not a general anchor editor. The close consults evidence before writing terminal state. See `references/status-and-registers.md` for close order and refusal conditions.
-
-## Iteration workflow registration
-
-An iteration does not go through `mstar workflow register`. It registers through `mstar iteration register` — the same create-only, one-lock contract and the same crash recovery (existing snapshot bytes kept, only the missing root entry written on re-run), and the same active root-token creation (`--expect <the store's root execution token>` + `--operation <id>`, no `--session-ref`) — with a compass ref, the three branch anchors and Todo plan rows in place of a delivery kind; no delivery kind or evidence declaration applies to it, and plan-row metadata is derived by the producer rather than supplied. Each row's plan pointer goes through the one registered-plan resolver and what gets stored is the **canonical absolute** `{PLAN_DIR}/<plan-id>.md`, never a copy of the caller's spelling: a canonical absolute or normalized harness-relative input is accepted, and the repository-relative `.mstar/plans/<id>.md` spelling is refused — before the first journal row, the snapshot or any root write. Lifecycle semantics: `mstar-artifacts`; flag set: the command help.
+Iteration registration uses `mstar iteration register`, not standalone registration: compass ref, explicit base/integration/target anchors and Todo rows; canonical absolute plan pointers and producer-derived metadata. Registration cannot silently overwrite an existing lifecycle; recover partial registration through the supported catalog/registration receipt route.
 
 ## Exit codes
 
-| Code | When |
-|---|---|
-| `0` | the operation succeeded, including an idempotent no-op, a replayed operation id and a read-only resume |
-| `1` | engine refusal — every code above, returned with a stable code and no change to authoritative bytes; the refusal's commit state is action-local (on the coordinated plan route a refused operation writes no row, receipt or counter change) |
-| `2` | usage: missing or mixed address forms, missing or mixed active address/operation inputs, unknown flag, an unsupported retired file-form argument, an active route carrying a pre-activation flag, a token that is neither the absent literal nor a version token or is of the wrong kind, a relative path where an absolute one is required, or an unreadable or unparseable payload file |
+- `0`: success, idempotent no-op, exact replay or read-only resume.
+- `1`: engine refusal; commit-state is action-local and visible in its receipt.
+- `2`: usage, unsupported option/verb, mixed/missing address forms, malformed token/file/path or incomplete integration pair. Unsupported scoped command arguments refuse before any workflow action; they never start the whole iteration.
