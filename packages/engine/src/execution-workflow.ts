@@ -1704,20 +1704,7 @@ export async function recoverExecutionCoordinator(
       epoch: tx.epoch,
       now,
     });
-    // A crashed coordinator can leave its OWN integration merge claim behind. The
-    // recovery already authenticated the exact named prior holder against live
-    // stop evidence and revoked that holder above, so its claim is safe to
-    // settle — and only a claim whose holder IS that named prior holder is
-    // touched. A LIVE holder's claim, the current caller's own claim, and any
-    // other session's claim stay exactly where they are; `releaseStoppedMergeClaim`
-    // re-checks liveness at this instant and is a no-op for them.
-    if (priorSessionId !== null && priorSessionId !== caller.sessionId) {
-      const graph = readExecutionStateGraph(tx);
-      const claim = graph.data.workflows.find((workflow) => workflow.state.id === workflowId)?.integrationLease ?? null;
-      if (claim !== null && claim.holder === priorSessionId) {
-        releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: caller.sessionId, at: now });
-      }
-    }
+    settleStoppedIntegrationClaim(tx, { workflowId, priorSessionId, callerId: caller.sessionId, at: now });
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data: {
@@ -1758,6 +1745,43 @@ export async function recoverExecutionCoordinator(
 /** §2.2 the coordinator rows of one workflow, including the non-active ones. */
 function readCoordinatorRows(tx: ExecutionTransaction, workflowId: string): SessionRow[] {
   return readWorkflowSessionRows(tx, workflowId, "coordinator");
+}
+
+/**
+ * §4.2/§E the ONE ownership a coordinator recovery may settle beyond the session
+ * binding: the workflow's integration merge claim when the recovery has already
+ * authenticated the exact named prior holder against live stop evidence.
+ *
+ * The boundary is deliberately narrow, because a lease is a LIVE concurrency
+ * exclusion, not bookkeeping:
+ *
+ * - the claim's holder must BE the named prior holder the recovery revoked — a
+ *   foreign claim, the caller's own claim, or any other session's claim is left
+ *   exactly where it is;
+ * - the claim must have been taken at or before this recovery — a claim that
+ *   appeared after the recovery began is a NEWER attempt and belongs to whoever
+ *   holds it;
+ * - `releaseStoppedMergeClaim` re-checks liveness at THIS instant, so a holder
+ *   that is still active is never released.
+ *
+ * The claim is released, never transferred: the released tombstone keeps its
+ * prior holder and epoch, and row/business state is untouched. This is the
+ * supported recovery for a legacy per-plan holder's integration mutex and for a
+ * coordinator that crashed mid-integration — no plan-PM seat, reconcile, or
+ * transfer verb is reintroduced.
+ */
+function settleStoppedIntegrationClaim(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; priorSessionId: string | null; callerId: string; at: string },
+): void {
+  const { workflowId, priorSessionId, callerId, at } = input;
+  if (priorSessionId === null || priorSessionId === callerId) return;
+  const graph = readExecutionStateGraph(tx);
+  const claim = graph.data.workflows.find((workflow) => workflow.state.id === workflowId)?.integrationLease ?? null;
+  if (claim === null || claim.holder !== priorSessionId) return;
+  // A claim taken after this recovery started belongs to a newer attempt.
+  if (isNonEmptyString(claim.claimed_at) && claim.claimed_at > at) return;
+  releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: callerId, at });
 }
 
 /** §2.3 a replay's authority revalidation: the caller must still hold its binding. */
