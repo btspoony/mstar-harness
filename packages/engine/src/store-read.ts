@@ -95,6 +95,7 @@ export type DashboardView =
   | "workflow-detail"
   | "iterations"
   | "iteration-detail"
+  | "projects"
   | "roadmap"
   | "issue-flow";
 
@@ -233,6 +234,11 @@ export type IterationDTO = {
 
 export type IterationListDTO = { items: IterationDTO[]; total: number };
 
+/** One project and its current open-issue count. */
+export type ProjectListItem = { project: CatalogIdentityDTO; openIssues: number };
+
+export type ProjectListDTO = { items: ProjectListItem[]; total: number };
+
 export type RoadmapDTO = {
   projectId: string;
   catalog: CatalogIdentityDTO;
@@ -283,6 +289,7 @@ export type DashboardViewData = {
   "workflow-detail": WorkflowDTO | null;
   iterations: IterationListDTO;
   "iteration-detail": IterationDTO | null;
+  projects: ProjectListDTO;
   roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
 };
@@ -295,10 +302,10 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   "workflow-detail": { needsProjection: true },
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
+  projects: { needsProjection: false },
   roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
 };
-
 // ---------------------------------------------------------------------------
 // Small conversions
 // ---------------------------------------------------------------------------
@@ -609,6 +616,8 @@ function dashboardView(view: DashboardView, handle: StoreHandle, filters: Dashbo
       return readIterationDetail(handle.db, filters);
     case "roadmap":
       return readRoadmap(handle.db, filters);
+    case "projects":
+      return readProjectList(handle.db);
     case "issue-flow":
       return readIssueFlow(handle.db, text(filters.projectId) ?? undefined);
   }
@@ -1063,6 +1072,20 @@ function catalogIdentities(db: StoreDb, keys: readonly CatalogKey[]): Map<string
     .all(...params) as IdentityRow[];
   for (const row of rows) found.set(identityToken(row.kind, row.id), toIdentity(row));
   return found;
+}
+
+function readProjectList(db: StoreDb): ProjectListDTO {
+  const rows = db
+    .prepare(
+      `select catalog_entities.*, count(issues.id) as open_issues
+       from (select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'project') catalog_entities
+       left join issues on issues.project_id = catalog_entities.id and issues.disposition = 'open'
+       group by catalog_entities.id
+       order by catalog_entities.title asc, catalog_entities.id asc`,
+    )
+    .all() as (IdentityRow & { open_issues: number })[];
+  const items = rows.map((row) => ({ project: toIdentity(row), openIssues: row.open_issues }));
+  return { items, total: items.length };
 }
 
 /** Project membership per catalog entity (`belongs-to` → project). */

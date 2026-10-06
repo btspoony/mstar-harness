@@ -1290,3 +1290,46 @@ describe("projection views", () => {
     // already gone: no source read could have produced this data.
   });
 });
+
+describe("projects view", () => {
+  test("projects returns every project in deterministic title/id order with identity and open issue counts", async () => {
+    const { context } = await workspace("projects-");
+    await registerCatalogEntity(context, { kind: "project", id: "z-project", title: "Same", rootKind: "projects", relativePath: "z" }, op("project-z"));
+    await registerCatalogEntity(context, { kind: "project", id: "a-project", title: "Same", rootKind: "projects", relativePath: "a" }, op("project-a"));
+    for (let i = 0; i < 53; i++) {
+      await registerCatalogEntity(context, {
+        kind: "project", id: `project-${String(i).padStart(2, "0")}`, title: `Project ${String(i).padStart(2, "0")}`,
+        rootKind: "projects", relativePath: `project-${i}`,
+      }, op(`project-${i}`));
+    }
+    await registerCatalogEntity(context, { kind: "plan", id: "plan-only", title: "Plan", rootKind: "plans", relativePath: "plan" }, op("plan-only"));
+    await registerCatalogEntity(context, { kind: "iteration", id: "iteration-only", title: "Iteration", rootKind: "plans", relativePath: "iteration" }, op("iteration-only"));
+    await registerCatalogEntity(context, { kind: "document", id: "document-only", title: "Document", rootKind: "projects", relativePath: "document", documentKind: "spec" }, op("document-only"));
+    await withWrite(context, (db) => {
+      seedIssue(db, { id: "project-issue-open", title: "Open", projectId: "a-project" });
+      seedIssue(db, { id: "project-issue-open-2", title: "Open 2", projectId: "a-project" });
+      seedIssue(db, { id: "project-issue-closed", title: "Resolved", projectId: "a-project", disposition: "resolved" });
+    });
+    const first = await withStoreRead(context, queryDashboard("projects", { limit: 1, offset: 3 }));
+    const second = await withStoreRead(context, queryDashboard("projects"));
+    expect(first.data.items).toHaveLength(55);
+    expect(first.data.total).toBe(55);
+    expect(first.data.items.map(({ project }) => project.id)).toEqual(second.data.items.map(({ project }) => project.id));
+    expect(first.data.items.filter(({ project }) => project.title === "Same").map(({ project }) => project.id)).toEqual(["a-project", "z-project"]);
+    expect(first.data.items.find(({ project }) => project.id === "a-project")).toEqual({
+      project: expect.objectContaining({
+        kind: "project", id: "a-project", title: "Same", description: null, rootKind: "projects",
+        relativePath: "a", documentKind: null, lifecycle: "active", revision: expect.any(Number),
+        registeredAt: expect.any(String), updatedAt: expect.any(String),
+      }),
+      openIssues: 2,
+    });
+    expect(first.data.items.find(({ project }) => project.id === "z-project")?.openIssues).toBe(0);
+    expect(first.data.items.some(({ project }) => ["plan-only", "iteration-only", "document-only"].includes(project.id))).toBe(false);
+  });
+
+  test("projects empty catalog returns an empty successful list", async () => {
+    const { context } = await workspace("projects-empty-");
+    expect((await withStoreRead(context, queryDashboard("projects"))).data).toEqual({ items: [], total: 0 });
+  });
+});

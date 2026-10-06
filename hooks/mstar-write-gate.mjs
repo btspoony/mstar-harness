@@ -13856,6 +13856,7 @@ var DASHBOARD_VIEWS = {
   "workflow-detail": { needsProjection: true },
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
+  projects: { needsProjection: false },
   roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false }
 };
@@ -14017,6 +14018,8 @@ function dashboardView(view, handle, filters) {
       return readIterationDetail(handle.db, filters);
     case "roadmap":
       return readRoadmap(handle.db, filters);
+    case "projects":
+      return readProjectList(handle.db);
     case "issue-flow":
       return readIssueFlow(handle.db, text5(filters.projectId) ?? undefined);
   }
@@ -14298,6 +14301,15 @@ function catalogIdentities(db, keys) {
   for (const row of rows)
     found.set(identityToken(row.kind, row.id), toIdentity(row));
   return found;
+}
+function readProjectList(db) {
+  const rows = db.prepare(`select catalog_entities.*, count(issues.id) as open_issues
+       from (select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'project') catalog_entities
+       left join issues on issues.project_id = catalog_entities.id and issues.disposition = 'open'
+       group by catalog_entities.id
+       order by catalog_entities.title asc, catalog_entities.id asc`).all();
+  const items = rows.map((row) => ({ project: toIdentity(row), openIssues: row.open_issues }));
+  return { items, total: items.length };
 }
 function projectMembership(db) {
   const membership = new Map;

@@ -897,6 +897,8 @@ export type {
   IterationPlanDTO,
   LeaseDTO,
   MilestoneDTO,
+  ProjectListDTO,
+  ProjectListItem,
   ReadEnvelope,
   ReadProjection,
   RoadmapDTO,

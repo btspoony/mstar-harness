@@ -180,6 +180,28 @@ describe("API over a real store", () => {
   });
   afterAll(() => server.close());
 
+  test("GET /api/projects answers the unpaged project list envelope", async () => {
+    await registerCatalogEntity(context, {
+      kind: "project", id: "proj-dashboard", title: "Dashboard project", rootKind: "projects", relativePath: "proj-dashboard",
+    }, { operationId: "register-dashboard-project", actor: "dashboard-test" });
+    const response = await raw(new URL("/api/projects", server.url).href);
+    expect(response.status).toBe(200);
+    const envelope = JSON.parse(response.body) as {
+      data: { items: Array<{ project: { id: string; title: string }; openIssues: number }>; total: number };
+      storeRevision: number;
+      catalogRevision: number;
+      projection: { freshness: string; diagnostics: unknown[] };
+    };
+    expect(envelope.data.items).toContainEqual(expect.objectContaining({
+      project: expect.objectContaining({ id: "proj-dashboard", title: "Dashboard project" }),
+      openIssues: 0,
+    }));
+    expect(envelope.data.total).toBe(envelope.data.items.length);
+    expect(typeof envelope.storeRevision).toBe("number");
+    expect(typeof envelope.catalogRevision).toBe("number");
+    expect(envelope.projection).toEqual(expect.objectContaining({ freshness: expect.any(String), diagnostics: expect.any(Array) }));
+  });
+
   test("GET /api/issues answers the P6 envelope matching the authoritative rows", async () => {
     const before = await listIssues(context, {});
     const res = await raw(new URL("/api/issues", server.url).href);
@@ -253,7 +275,7 @@ describe("API over a real store", () => {
   });
 
   test("traversal and unknown paths are refused without touching the filesystem", async () => {
-    for (const pathname of ["/api/issues/../../etc/passwd", "/api/projects", "/api/issues/%2e%2e", "/api/issues/a%2Fb", "/api/roadmap/deep/path"]) {
+    for (const pathname of ["/api/issues/../../etc/passwd", "/api/project", "/api/issues/%2e%2e", "/api/issues/a%2Fb", "/api/roadmap/deep/path"]) {
       const res = await raw(new URL(`http://127.0.0.1:${new URL(server.url).port}${pathname}`));
       expect([400, 404]).toContain(res.status);
       const body = JSON.parse(res.body) as { error: { code: string } };
