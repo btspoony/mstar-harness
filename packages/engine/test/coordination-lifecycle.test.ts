@@ -26,6 +26,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CoordinationError,
   mutatePlanCoordination,
   readPlanCoordination,
   replaceCoordinatedArtifact,
@@ -36,7 +37,7 @@ import { closeWorkflow, recordWorkflowDelivery } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID,
   type GitFixture,
-  git, writeText, writeJson, readJson, makeFixture, sleep, errorCodeOf,
+  git, writeText, writeJson, readJson, makeFixture, sleep, errorCodeOf, failureOf, failureCode,
   ensureCoordinator, prepareCall, progressCall, completeCall,
   headOf, snapshotOf, planRowOf, updatePlanRow,
   completionOf, preparedOf, metadataOf, recordField, arrayField, sha256OfFile,
@@ -48,6 +49,13 @@ import {
 afterEach(() => {
   afterEachCleanup();
 });
+
+/** The thrown error of a call that must fail, as a `CoordinationError`. */
+async function refusalError(run: () => Promise<unknown>): Promise<CoordinationError> {
+  const failure = await failureOf(run);
+  if (failure instanceof CoordinationError) return failure;
+  throw failure;
+}
 
 /** The coordinator merge: a real two-parent merge of the pinned source. */
 function mergeFeature(fixture: GitFixture): string {
@@ -245,6 +253,10 @@ describe("iteration-completion", () => {
     ).toBe("coordination.git-proof");
     expect(readJson(badHead.snapshotPath)).toEqual(beforeHead);
     expect(planRowOf(badHead, PLAN_ID).status).toBe("InReview");
+    // Correcting ONLY the review head completes the same valid merge.
+    const corrected = await completeCall(badHead, PLAN_ID, evidence, { base_sha: badHead.baseSha, result_sha: mergeId });
+    expect(corrected.outcome).toBe("completed");
+    expect(planRowOf(badHead, PLAN_ID).status).toBe("Done");
   }, 30000);
 
   test("an integration ref moved between the proof and the commit refuses with no completion (commit boundary)", async () => {
@@ -380,20 +392,31 @@ describe("standalone-development-completion", () => {
     const good = completionEvidenceOf(fixture, fixture.planSha);
     const before = readJson(fixture.snapshotPath);
 
+    // Each deliberately malformed payload crosses an explicit unknown boundary into
+    // the published `CompletionEvidence` type; the production type is not widened.
+    const malformed = (override: Record<string, unknown>): CompletionEvidence =>
+      override as unknown as CompletionEvidence;
+
     // `["Approve"]` is a non-scalar the strict enum must refuse.
-    expect(
-      await errorCodeOf(() => completeCall(fixture, PLAN_ID, { ...good, qc: { ...good.qc, decision: ["Approve"] as unknown as "Approve" } })),
-    ).toBe("coordination.invalid-input");
+    const decisionRefusal = await refusalError(() =>
+      completeCall(fixture, PLAN_ID, malformed({ ...good, qc: { ...good.qc, decision: ["Approve"] } })),
+    );
+    expect(failureCode(decisionRefusal)).toBe("coordination.invalid-input");
+    expect(decisionRefusal.message).toMatch(/decision|Approve/);
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     // An array QA gate is refused the same way.
-    expect(
-      await errorCodeOf(() => completeCall(fixture, PLAN_ID, { ...good, qa: { ...good.qa, gate: ["mandatory"] as unknown as "mandatory" } })),
-    ).toBe("coordination.invalid-input");
+    const gateRefusal = await refusalError(() =>
+      completeCall(fixture, PLAN_ID, malformed({ ...good, qa: { ...good.qa, gate: ["mandatory"] } })),
+    );
+    expect(failureCode(gateRefusal)).toBe("coordination.invalid-input");
+    expect(gateRefusal.message).toMatch(/gate|mandatory/);
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     // An unknown nested QC member is refused by the exact-key rule.
-    expect(
-      await errorCodeOf(() => completeCall(fixture, PLAN_ID, { ...good, qc: { ...good.qc, unexpected: "x" } })),
-    ).toBe("coordination.invalid-input");
+    const keyRefusal = await refusalError(() =>
+      completeCall(fixture, PLAN_ID, malformed({ ...good, qc: { ...good.qc, unexpected: "x" } })),
+    );
+    expect(failureCode(keyRefusal)).toBe("coordination.invalid-input");
+    expect(keyRefusal.message).toMatch(/unexpected|unknown|field/i);
     expect(readJson(fixture.snapshotPath)).toEqual(before);
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
 
@@ -576,9 +599,12 @@ describe("report-only-completion", () => {
 
   test("a report-only completion succeeds in a child whose PATH has no git at all", async () => {
     const fixture = await reportOnlyFixture();
-    const evidence = completionEvidenceOf(fixture, fixture.planSha);
-    // An isolated PATH dir with nothing in it: any Git work by the route would
-    // fail as unavailable, so success here proves the route consults no Git.
+    // No source Git fields at all: only the QC/QA evidence, so the route has nothing
+    // to verify in Git and must record null provenance.
+    const full = completionEvidenceOf(fixture, fixture.planSha);
+    const evidence: CompletionEvidence = { qc: full.qc, qa: full.qa };
+    // An isolated PATH dir with nothing in it: any Git work by the route would fail
+    // as unavailable, so success here proves the route consults no Git.
     const binDir = join(fixture.root, "bin-empty-report-only");
     mkdirSync(binDir);
     const evidencePath = join(fixture.root, "ro-evidence.json");
@@ -592,10 +618,12 @@ describe("report-only-completion", () => {
       `setArtifactStore(createFsStore(harness));`,
       `const resumed = await bindPlanSession({ resumePath: sessionPath, cwd: root });`,
       `if (resumed.outcome !== "resumed") throw new Error("bad resume: " + String(resumed.outcome));`,
-      `const view = await readPlanCoordination(sessionPath, planId, root);`,
       `const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));`,
+      `const view = await readPlanCoordination(sessionPath, planId, root);`,
       `const completed = await mutatePlanCoordination({ sessionPath, planId, expectedRevision: view.revision, operation: { kind: "complete", evidence } });`,
-      `console.log(JSON.stringify({ outcome: completed.outcome }));`,
+      `// Replay the IDENTICAL request in the SAME no-Git child.`,
+      `const replay = await mutatePlanCoordination({ sessionPath, planId, expectedRevision: view.revision, operation: { kind: "complete", evidence } });`,
+      `console.log(JSON.stringify({ outcome: completed.outcome, replay: replay.outcome, completedAt: completed.view.row.coordination.completion.completed_at, replayAt: replay.view.row.coordination.completion.completed_at, snapshot: completed.view.revision }));`,
       ``,
     ].join("\n"));
     await sealStoreForReaders(fixture);
@@ -607,12 +635,17 @@ describe("report-only-completion", () => {
     const stdout = await new Response(child.stdout).text();
     const stderr = await new Response(child.stderr).text();
     expect(exitCode, `child stderr: ${stderr}`).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({ outcome: "completed" });
-    // The parent reads the committed row: Done with null provenance, no integration.
+    const report = JSON.parse(stdout) as { outcome: string; replay: string; completedAt: string; replayAt: string };
+    expect(report.outcome).toBe("completed");
+    // The replay, in the same no-Git child, is already-satisfied with an unchanged timestamp.
+    expect(report.replay).toBe("already-satisfied");
+    expect(report.replayAt).toBe(report.completedAt);
+    // The parent reads the committed row: Done with all-null provenance, no integration.
     const row = planRowOf(fixture, PLAN_ID);
     expect(row.status).toBe("Done");
-    expect(completionOf(row).source_sha).toBeNull();
-    expect(completionOf(row).integration).toBeUndefined();
+    const completion = completionOf(row);
+    expect(completion).toMatchObject({ source_branch: null, source_sha: null, worktree_path: null, review_base: null, review_head: null });
+    expect(completion.integration).toBeUndefined();
   }, 90000);
 
   test("a report-only row refuses an integration input and integration contamination", async () => {
@@ -719,6 +752,7 @@ describe("seam-regressions", () => {
     // leaves the WHOLE snapshot and the row's progress untouched.
     await progressCall(fixture, PLAN_ID, { status: "InProgress" });
     const activeView = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
+    const progressBefore = activeView.row.coordination?.progress;
     const refusedBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() =>
@@ -729,7 +763,7 @@ describe("seam-regressions", () => {
           operation: { kind: "prepare", config: { workingBranch: "feature/plan-a-v2" } },
         }),
       ),
-    ).toMatch(/^coordination\.(git-proof|scope-mismatch|invalid-input)$/);
+    ).toBe("coordination.invalid-input");
     expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
     expect(metadataOf(planRowOf(fixture, PLAN_ID)).working_branch).toBe("feature/plan-a");
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
@@ -750,7 +784,8 @@ describe("seam-regressions", () => {
     // retained by a config revision.
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
     const afterRevision = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
-    expect(afterRevision.row.coordination?.progress).toMatchObject({ status: "InProgress" });
+    // The FULL recorded progress block is retained, not just its status.
+    expect(afterRevision.row.coordination?.progress).toEqual(progressBefore);
   });
 
   test("progress is transition-guarded and evidence-scoped", async () => {

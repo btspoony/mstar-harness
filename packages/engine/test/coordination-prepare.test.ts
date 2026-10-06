@@ -2750,6 +2750,124 @@ describe("prepare coordinator recovery", () => {
     
   }, 30000);
 
+  test("recovery removes the recorded predecessor's interrupted integration claim atomically, with attestedAt, leaving rows/anchors/evidence untouched", async () => {
+    const fixture = makePrepareFixture();
+    await ensurePrepareCoordinator(fixture);
+    // A REAL interrupted claim held by the EXACT recorded predecessor. Removing it
+    // now requires an explicit stop attestation: claimed_at <= attestedAt <= recoveredAt.
+    const ownedLease = {
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T00:00:00Z",
+      plan_id: PREPARE_ROW,
+      source_branch: `feature/${PREPARE_ROW}`,
+      target_branch: PREPARE_INTEGRATION_BRANCH,
+    };
+    const seeded = prepareSnapshotOf(fixture);
+    seeded.integration_merge_lease = ownedLease;
+    writeJson(fixture.snapshotPath, seeded);
+    const planRowsBefore = JSON.stringify(seeded.plans);
+    const branchBefore = JSON.stringify(seeded.branch);
+    const integrationPathBefore = seeded.integration_worktree_path;
+
+    // Without attestedAt the mutex recovery refuses: there is no stop time to bracket it.
+    const noAttestation = await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(fixture)));
+    expect(noAttestation.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(prepareSnapshotOf(fixture).integration_merge_lease).toEqual(ownedLease);
+
+    const recovered = await recoverPrepareCoordinator(recoveryInputOf(fixture, { attestedAt: "2026-09-15T01:00:00Z" }));
+    expect(recovered.recovery.replay).toBe(false);
+    const after = prepareSnapshotOf(fixture);
+    // The predecessor's own claim is dropped; row state, branch anchors and the
+    // recorded integration checkout are unchanged; the audit records the attestation.
+    expect(after.integration_merge_lease).toBeUndefined();
+    expect(JSON.stringify(after.plans)).toBe(planRowsBefore);
+    expect(JSON.stringify(after.branch)).toBe(branchBefore);
+    expect(after.integration_worktree_path).toBe(integrationPathBefore);
+    expect(recordedCoordinatorOf(fixture)).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
+    expect(recoveryAuditOf(fixture)[0]).toMatchObject({ attested_at: "2026-09-15T01:00:00Z" });
+
+    // An EXACT retry replays the recorded receipt and does not rewrite the audit.
+    const auditAfterFirst = JSON.stringify(recoveryAuditOf(fixture));
+    const replay = await recoverPrepareCoordinator(recoveryInputOf(fixture, { attestedAt: "2026-09-15T01:00:00Z" }));
+    expect(replay.recovery.replay).toBe(true);
+    expect(JSON.stringify(recoveryAuditOf(fixture))).toBe(auditAfterFirst);
+
+    // A stop list that never names the holder does not remove the claim.
+    const stopListOnly = makePrepareFixture();
+    await ensurePrepareCoordinator(stopListOnly);
+    const stopDoc = prepareSnapshotOf(stopListOnly);
+    stopDoc.integration_merge_lease = ownedLease;
+    writeJson(stopListOnly.snapshotPath, stopDoc);
+    const stopBefore = protectedBytes(stopListOnly);
+    const unrelated = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(recoveryInputOf(stopListOnly, { stoppedSessionIds: ["some-unrelated-session"], attestedAt: "2026-09-15T01:00:00Z" })),
+    );
+    expect(unrelated.code).toBe("coordination.identity-recovery.unauthorized");
+    expect(protectedBytes(stopListOnly)).toEqual(stopBefore);
+    expect(prepareSnapshotOf(stopListOnly).integration_merge_lease).toEqual(ownedLease);
+  }, 60000);
+
+  test("recovery refuses a foreign claim, a claim newer than attestedAt and a replacement named as stopped, without mutating", async () => {
+    // A claim held by a DIFFERENT coordinator than the recorded predecessor is not
+    // this recovery's to drop.
+    const foreign = makePrepareFixture();
+    await ensurePrepareCoordinator(foreign);
+    const foreignDoc = prepareSnapshotOf(foreign);
+    foreignDoc.integration_merge_lease = {
+      holder: "11111111-1111-1111-1111-111111111111",
+      claimed_at: "2026-09-15T00:00:00Z",
+      plan_id: PREPARE_ROW,
+      source_branch: `feature/${PREPARE_ROW}`,
+      target_branch: PREPARE_INTEGRATION_BRANCH,
+    };
+    writeJson(foreign.snapshotPath, foreignDoc);
+    const foreignBefore = protectedBytes(foreign);
+    const foreignRefusal = await prepareRefusalOf(() =>
+      recoverPrepareCoordinator(recoveryInputOf(foreign, { attestedAt: "2026-09-15T01:00:00Z" })),
+    );
+    expect(typeof foreignRefusal.code).toBe("string");
+    expect(protectedBytes(foreign)).toEqual(foreignBefore);
+    expect(prepareSnapshotOf(foreign).integration_merge_lease).toEqual(foreignDoc.integration_merge_lease);
+
+    // A claim whose claimed_at is AFTER the attestation refuses: the holder had not
+    // stopped when the claim was taken.
+    const newer = makePrepareFixture();
+    await ensurePrepareCoordinator(newer);
+    const newerDoc = prepareSnapshotOf(newer);
+    newerDoc.integration_merge_lease = {
+      holder: FIXTURE_COORDINATOR_ID,
+      claimed_at: "2026-09-15T02:00:00Z",
+      plan_id: PREPARE_ROW,
+      source_branch: `feature/${PREPARE_ROW}`,
+      target_branch: PREPARE_INTEGRATION_BRANCH,
+    };
+    writeJson(newer.snapshotPath, newerDoc);
+    const newerBefore = protectedBytes(newer);
+    expect(
+      (await prepareRefusalOf(() => recoverPrepareCoordinator(recoveryInputOf(newer, { attestedAt: "2026-09-15T01:00:00Z" })))).code,
+    ).toBe("coordination.identity-recovery.unauthorized");
+    expect(protectedBytes(newer)).toEqual(newerBefore);
+    expect(prepareSnapshotOf(newer).integration_merge_lease).toEqual(newerDoc.integration_merge_lease);
+
+    // The replacement must never appear in the stop list.
+    const selfStopped = makePrepareFixture();
+    await ensurePrepareCoordinator(selfStopped);
+    const selfBefore = protectedBytes(selfStopped);
+    expect(
+      (
+        await prepareRefusalOf(() =>
+          recoverPrepareCoordinator(
+            recoveryInputOf(selfStopped, {
+              stoppedSessionIds: [FIXTURE_COORDINATOR_ID, RECOVERED_COORDINATOR_ID],
+              attestedAt: "2026-09-15T01:00:00Z",
+            }),
+          ),
+        )
+      ).code,
+    ).toBe("coordination.identity-recovery.unauthorized");
+    expect(protectedBytes(selfStopped)).toEqual(selfBefore);
+  }, 60000);
+
   test("prepare coordinator recovery replaces the binding under explicit authorization and the old reference refuses", async () => {
     const fixture = makePrepareFixture();
     await ensurePrepareCoordinator(fixture);
@@ -3202,7 +3320,7 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     const refusedBefore = readJson(fixture.snapshotPath);
     expect(
       await errorCodeOf(() => reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" })),
-    ).toMatch(/^coordination\.(git-proof|scope-mismatch|invalid-input)$/);
+    ).toBe("coordination.invalid-input");
     expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
 
     // The real correction: switch the disposable feature checkout onto the new
@@ -3216,7 +3334,8 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     // A config revision never resets the row's own status or progress.
     expect(row.status).toBe("InProgress");
     const afterRevision = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    expect(afterRevision.row.coordination?.progress).toMatchObject({ summary: "start" });
+    // The FULL recorded progress block is retained, not just one member.
+    expect(afterRevision.row.coordination?.progress).toEqual({ status: "InProgress", summary: "start", evidence_paths: [] });
 
     // A Done row is not revisable configuration any more.
     updatePlanRow(fixture, PLAN_ID, (current) => ({ ...current, status: "Done" }));

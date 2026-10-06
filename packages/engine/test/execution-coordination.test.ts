@@ -272,6 +272,35 @@ function storedWorkflowState(context: StoreContext): string {
   return String(row!.state_json);
 }
 
+/** The raw stored JSON of one plan row's state. */
+function storedPlanState(context: StoreContext, planId: string): string {
+  const [row] = rows(
+    context,
+    `select state_json from execution_plans where workflow_id = '${WORKFLOW_ID}' and plan_id = '${planId}'`,
+  );
+  return String(row!.state_json);
+}
+
+/** The raw stored JSON of the workflow's integration merge lease row, or `"(none)"`. */
+function storedLeaseText(context: StoreContext): string {
+  const [row] = rows(
+    context,
+    `select lease_json from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`,
+  );
+  return row === undefined ? "(none)" : String(row.lease_json);
+}
+
+/** Every stored string one replay must leave byte-identical, as one value. */
+function storedReplaySurface(context: StoreContext, planId: string): Record<string, string> {
+  return {
+    planState: storedPlanState(context, planId),
+    coordination: storedCoordinationText(context, planId),
+    workflowState: storedWorkflowState(context),
+    lease: storedLeaseText(context),
+    receipts: storedOperationReceipts(context),
+  };
+}
+
 /** The recorded completion block of a coordination view, or a failed assertion. */
 function completionOf2(coordination: { completion?: unknown } | null | undefined): Record<string, unknown> {
   const completion = coordination?.completion;
@@ -1032,8 +1061,7 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     // Replay: identical request, Git/evidence left intact on the first attempt
     // then made UNAVAILABLE. The recorded receipt is served byte-stably.
     rmSync(fixture.integrationPath, { recursive: true, force: true });
-    const storedBefore = storedCoordinationText(context, OWN_PLAN);
-    const receiptsBefore = storedOperationReceipts(context);
+    const storedBefore = storedReplaySurface(context, OWN_PLAN);
     const replayToken = await planTokenOf(fixture, OWN_PLAN);
     const afterFirst = footprint(context);
     const replay = await planCall(fixture, OWN_PLAN, "complete-int", replayToken, {
@@ -1042,11 +1070,12 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
       integration: { base_sha: baseSha, result_sha: resultSha },
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
-    // Byte-stable: the stored coordination JSON and every operation receipt are
-    // exactly what the first attempt committed.
-    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedBefore);
-    expect(storedOperationReceipts(context)).toBe(receiptsBefore);
-    expect(replay.data.coordination?.completion).toEqual(receipt.data.coordination?.completion);
+    // Byte-stable across the whole storage surface: plan state, coordination,
+    // workflow header, released lease and every operation receipt.
+    expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedBefore);
+    // The full returned receipt is the recorded one (the replay transport flag is
+    // the only documented difference).
+    expect({ ...replay, replayed: false }).toEqual(receipt);
     expect(footprint(context)).toEqual(afterFirst);
   }, 30000);
 
@@ -1082,17 +1111,17 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
 
     // The development replay is a recorded-receipt read even after the source
     // checkout is removed: no Git is re-run.
-    const storedBefore = storedCoordinationText(context, OWN_PLAN);
-    const storedWorkflowBefore = storedWorkflowState(context);
+    const storedBefore = storedReplaySurface(context, OWN_PLAN);
+    const footprintBefore = footprint(context);
     rmSync(fixture.worktree, { recursive: true, force: true });
     const replay = await planCall(fixture, OWN_PLAN, "complete-sa", await planTokenOf(fixture, OWN_PLAN), {
       kind: "complete",
       evidence,
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
-    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedBefore);
-    expect(storedWorkflowState(context)).toBe(storedWorkflowBefore);
-    expect(replay.data.coordination?.completion).toEqual(receipt.data.coordination?.completion);
+    expect(storedReplaySurface(context, OWN_PLAN)).toEqual(storedBefore);
+    expect(footprint(context)).toEqual(footprintBefore);
+    expect({ ...replay, replayed: false }).toEqual(receipt);
   }, 30000);
 
   test("the report-only route completes on its recorded policy fulfilment with no source Git at all", async () => {
@@ -1132,14 +1161,39 @@ describe("execution-completion: §3/§4.1 DB completion and its route selection"
     });
     expect(completion?.integration).toBeUndefined();
 
-    // Replay is byte-stable and does not require the registered fulfilment twice.
-    const storedAfter = storedCoordinationText(context, OWN_PLAN);
+    // Replay is byte-stable and does NOT re-consume the recorded fulfilment: remove
+    // it from the header before retrying the identical request.
+    const storedAfter = storedReplaySurface(context, OWN_PLAN);
+    const footprintAfter = footprint(context);
+    withRaw(context, (db) => {
+      const [row] = db
+        .prepare("select state_json from execution_workflows where workflow_id = ?")
+        .all(WORKFLOW_ID) as Array<{ state_json?: unknown }>;
+      const state = JSON.parse(String(row!.state_json)) as Record<string, unknown>;
+      delete (state.delivery as Record<string, unknown>).completion;
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
     const replay = await planCall(fixture, OWN_PLAN, "complete-ro", await planTokenOf(fixture, OWN_PLAN), {
       kind: "complete",
       evidence,
     } as CoordinationOperation);
     expect(replay.replayed).toBe(true);
-    expect(storedCoordinationText(context, OWN_PLAN)).toBe(storedAfter);
+    // The header was mutated by the fixture above, so compare the plan/lease/receipt
+    // surface only (the workflow header is intentionally changed).
+    const afterSurface = storedReplaySurface(context, OWN_PLAN);
+    expect({
+      planState: afterSurface.planState,
+      coordination: afterSurface.coordination,
+      lease: afterSurface.lease,
+      receipts: afterSurface.receipts,
+    }).toEqual({
+      planState: storedAfter.planState,
+      coordination: storedAfter.coordination,
+      lease: storedAfter.lease,
+      receipts: storedAfter.receipts,
+    });
+    expect(footprint(context)).toEqual(footprintAfter);
+    expect({ ...replay, replayed: false }).toEqual(receipt);
   }, 30000);
 
   test("a report-only row whose registered fulfilment is missing refuses with its own cause", async () => {
