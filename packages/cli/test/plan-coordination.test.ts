@@ -574,8 +574,8 @@ describe("mstar plan — strict-input", () => {
       ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payload, "--expect", "0"],
       fixture.root,
     );
-    expect(refused.exitCode).toBe(2);
-    expect(jsonOf(refused)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused)).toMatchObject({ status: "refused", code: "coordination.invalid-input" });
     expect(snapshotState(fixture)).toEqual(before);
   });
 
@@ -627,15 +627,16 @@ describe("mstar plan — linked-control-root", () => {
     expect(dataOf(here).row).toMatchObject({ id: PLAN_ID });
   });
 
-  test("a control root that cannot resolve a harness refuses instead of reading another one", () => {
+  test("an explicitly unavailable harness refuses instead of reading another one", () => {
     const fixture = makeFixture();
+    const before = snapshotState(fixture);
     const refused = runCli(
       ["plan", "show", "--workflow", WORKFLOW_ID, "--session-id", FIXTURE_COORDINATOR_ID, "--plan", PLAN_ID, "--harness", join(fixture.root, "absent")],
       fixture.root,
     );
-    expect(refused.exitCode).toBe(2);
-    expect(jsonOf(refused)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    expect(rowOf(fixture).status).toBe("Todo");
+    expect(refused.exitCode).toBe(1);
+    expect(jsonOf(refused)).toMatchObject({ status: "refused", code: "store.not-initialized" });
+    expect(snapshotState(fixture)).toEqual(before);
   });
 });
 
@@ -701,8 +702,8 @@ describe("mstar plan — coordinator operations", () => {
       ["plan", "progress", "--session", coordinator, "--plan", PLAN_ID, "--file", payloadPath, "--expect", String(revision)],
       fixture.root,
     );
-    expect(injected.exitCode).toBe(2);
-    expect(jsonOf(injected)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(injected.exitCode).toBe(1);
+    expect(jsonOf(injected)).toMatchObject({ status: "refused", code: "coordination.invalid-input" });
     expect(snapshotState(fixture)).toEqual(before);
   });
 
