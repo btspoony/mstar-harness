@@ -792,7 +792,7 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
 });
 
 
-test("retained track ownership prevents main from carrying an active track", () => {
+test("retained track ownership refuses main and ordinary progress repairs retired tracks", () => {
   const root = tmpRoot("mstar-retained-track-");
   try {
     const linked = worktreeFixture(root);
@@ -807,6 +807,22 @@ test("retained track ownership prevents main from carrying an active track", () 
     expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.main.residency-switched", severity: "high" }));
     expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
     expect(readFileSync(register, "utf8")).toBe(beforeRegister);
+
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "plan-a.md"), `# Plan A\n\n**plan_id:** plan-a\n**Main worktree branch:** ${mainBranch}\n**Working branch:** feature/plan-a\n`);
+    const bound = commandOutput(runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", root], root));
+    if (bound.status !== "ok" || typeof bound.data?.session_file !== "string") throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
+    const session = bound.data.session_file;
+    const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a"], root));
+    if (shown.status !== "ok" || typeof shown.data?.revision !== "number") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
+    const corrected = commandOutput(runCli([
+      "plan", "progress", "--session", session, "--plan", "plan-a", "--expect", String(shown.data.revision),
+      "--progress", JSON.stringify({ status: "InProgress", summary: "retire the mistaken main track", evidence_paths: [], track_branches: [] }),
+    ], root));
+    if (corrected.status !== "ok") throw new Error(`track correction failed: ${JSON.stringify(corrected)}`);
+    const repairedRow = (JSON.parse(readFileSync(snapshot, "utf8")).plans as Array<{ id: string; metadata: Record<string, unknown> }>).find((plan) => plan.id === "plan-a")!;
+    expect(repairedRow.metadata).toMatchObject({ worktree_path: linked, working_branch: "feature/plan-a", track_branches: [] });
+    expectOutput(runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root), "ok", "worktree.check.ok", 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
