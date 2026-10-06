@@ -81,9 +81,11 @@ const inputSchema = z.object({
   integrationResultSha: z.string().min(1).optional(),
   expectIssue: z.number().int().nonnegative().optional(),
 });
+const bindInputSchema = inputSchema.omit({ plan: true }).passthrough();
 type PlanInput = z.infer<typeof inputSchema>;
 
 const optionKeys = Object.keys(inputSchema.shape);
+const bindOptionKeys = optionKeys.filter((key) => key !== "plan");
 class PlanInputError extends Error {}
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
@@ -196,6 +198,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "pre-activation and active transports are disjoint" });
     }
     if (id === "plan.bind") {
+      if (input.plan !== undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
+      }
       const cwd = context.cwd;
       if (input.resumeRef !== undefined) {
         if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active resume requires runtime session identity (${IDENTITY_SUPPLIES}).` });
@@ -219,9 +224,6 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         }
         if (input.coordinator !== true) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires --coordinator; the coordinator seat is the only active bind" });
-        }
-        if (input.plan !== undefined) {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
         }
         if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires a full execution token" });
         const acquired = context.executionIdentity;
@@ -444,7 +446,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         aliases: [],
         arguments: [],
         options: [
-          ...optionKeys.map((key) => ({
+          ...(verb === "bind" ? bindOptionKeys : optionKeys).map((key) => ({
             key,
             flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`,
             required: false,
@@ -453,7 +455,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
           { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
         ],
       },
-      input: inputSchema,
+      input: verb === "bind" ? bindInputSchema : inputSchema,
       payloads: Object.fromEntries(
         (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
       ),

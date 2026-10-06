@@ -20,14 +20,14 @@
  * the document and performs the authority discrimination; the CLI only reads
  * the absolute JSON file and passes it through). The deeper engine matrix
  * (exact identity/time bounds, schema-8 cutover orphans) stays with the engine
- * suites — this file proves the CLI admits, refuses and forwards.
+ * suites — this file proves the public refusal, nonmutation and supported retry.
  */
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { WORKFLOW_SNAPSHOT_FILE, initializeStore } from "@mstar-harness/engine";
+import { WORKFLOW_SNAPSHOT_FILE, initializeStore, type IntegrationMergeLease } from "@mstar-harness/engine";
 import { executeCommand } from "../definitions.js";
 import type { InvocationContext } from "../types.js";
 
@@ -115,12 +115,14 @@ async function boundRecoveryFixture(): Promise<{
   // The workflow's held integration-merge claim, planted the way the engine's
   // own prepare-recovery suite does: the recorded predecessor is its holder.
   const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as Record<string, unknown>;
-  snapshot.integration_merge_lease = {
+  const claim: IntegrationMergeLease = {
     holder: PRIOR_HOLDER,
+    plan_id: PLAN_ID,
     claimed_at: claimHolderAt,
     source_branch: `feature/${PLAN_ID}`,
     target_branch: "main",
   };
+  snapshot.integration_merge_lease = claim;
   writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
 
   return { root, harness, priorEnvelope: join(workflowDir, "sessions", `coordinator-${PRIOR_HOLDER}.json`), snapshotPath, claimHolderAt };

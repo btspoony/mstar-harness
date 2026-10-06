@@ -16,6 +16,8 @@ import {
   storeDbPath,
   type ExecutionCaller,
   type ExecutionIdentity,
+  type ExecutionPlanView,
+  type ExecutionRead,
   type ExecutionSessionRef,
   type ExecutionToken,
   type StoreContext,
@@ -193,9 +195,6 @@ type GroupedFacts = {
   current_facts?: unknown[];
   sources_tried?: unknown[];
   available_work?: unknown[];
-  caller_session?: unknown;
-  reference_session?: unknown;
-  row_state?: unknown;
   recovery?: { outcome?: unknown; commitState?: unknown; unresolved?: Array<{ code?: unknown }> };
 };
 
@@ -277,7 +276,9 @@ describe("sparse plan intent admission", () => {
   });
 
   test("the coordinator reads a row with no session reference at all", async () => {
-    const { repoRoot } = await buildFixture("sparse-direct-show");
+    const { context: storeContext, repoRoot } = await buildFixture("sparse-direct-show");
+    const before = executionFootprint(storeContext);
+    const planBefore = planRowJson(storeContext, PLAN_ID);
     const context: InvocationContext = {
       cwd: repoRoot,
       controlRoot: null,
@@ -291,11 +292,13 @@ describe("sparse plan intent admission", () => {
         openBrowser: async () => { throw new Error("unused"); },
       },
     };
-    const envelope = await executeCommand("plan.show", { plan: PLAN_ID, harness: join(repoRoot, ".mstar") }, context);
+    const envelope = await executeCommand("plan.show", { workflow: WORKFLOW_ID, plan: PLAN_ID, harness: join(repoRoot, ".mstar") }, context);
     expect(envelope.status).toBe("ok");
     if (envelope.status !== "ok") throw new Error(envelope.message);
-    const data = envelope.data as { plan?: { id?: string } };
-    expect(data.plan?.id).toBe(PLAN_ID);
+    const data = envelope.data as ExecutionRead<ExecutionPlanView>;
+    expect(data.data.plan.id).toBe(PLAN_ID);
+    expect(executionFootprint(storeContext)).toEqual(before);
+    expect(planRowJson(storeContext, PLAN_ID)).toEqual(planBefore);
   });
 
   test("a sparse active operation without an addressed plan is a usage refusal", async () => {
@@ -378,29 +381,18 @@ describe("sparse plan intent admission", () => {
     const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-copied");
     const before = executionFootprint(context);
     const planRowsBefore = planRowJson(context, PLAN_ID);
-    // The same wire under a DIFFERENT acquired identity is not that session:
-    // the engine compares the caller inside its own transaction.
+    // A copied reference cannot authorize the independently acquired caller.
     const envelope = await runPlanCommand(
       repoRoot,
       { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-copied", progress: PROGRESS },
       OTHER_ID,
     );
-    expect(envelope).toMatchObject({ status: "refused", code: "coordination.session-mismatch" });
+    expect(envelope).toMatchObject({ status: "refused", code: "coordination.identity-mismatch", exitCode: 1 });
     expect(envelope.status).not.toBe("ok");
     expect(envelope.status).not.toBe("usage");
     expect(executionFootprint(context)).toEqual(before);
     expect(planRowJson(context, PLAN_ID)).toEqual(planRowsBefore);
     expect(operationReceiptJson(context, "op-sparse-copied")).toBeNull();
-    // The refusal keeps its flat identity facts AND carries the engine's
-    // grouped recovery contract beside them.
-    const details = envelope.details as GroupedFacts;
-    expect(details.caller_session).toBe(OTHER_ID);
-    expect(details.reference_session).toBe(COORDINATOR_ID);
-    expect(details.current_facts?.length).toBeGreaterThan(0);
-    expect(details.sources_tried?.length).toBeGreaterThan(0);
-    expect(details.available_work?.length).toBeGreaterThan(0);
-    expect(details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
-    expect(details.recovery?.unresolved?.[0]).toMatchObject({ code: "coordination.session-mismatch" });
   });
 
   test("a self-consistent but unbound session reference is refused at the authority boundary", async () => {

@@ -29,4 +29,4 @@ export const TOKEN_SUPPLIES = {
  * validates, matching the `plan bind --execution` receipt's session object.
  */
 export const SESSION_REF_SUPPLIES =
-  "the active session reference returned by the `plan bind --execution` receipt: wire format exec-session-v1:<base64url JSON carrying storeId, epoch, workflowId, role, sessionId, planId>";
+  "the active session reference returned by the `plan bind --execution` receipt: wire format exec-session-v1:<base64url JSON carrying storeId, epoch, workflowId, role, sessionId>";

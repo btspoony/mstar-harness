@@ -24,7 +24,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFsStore, initializeStore, openStore, setArtifactStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
+import { createFsStore, initializeStore, openStore, setArtifactStore, WORKFLOW_SNAPSHOT_FILE, type IntegrationMergeLease } from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions, getPayloadSchema } from "../src/index.js";
 import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -744,24 +744,26 @@ describe("lease witness", () => {
     writeLeaseSnapshot(harness, workflowId, [
       { id: "plan-a", plan_id: "plan-a", title: "Integration fixture", file: "plan.md", status: "InProgress" },
     ]);
+    const snapshotPath = join(harness, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    const unclaimedBytes = readFileSync(snapshotPath);
     const unclaimed = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
     expect(unclaimed).toMatchObject({ status: "ok", data: { claimed: false } });
+    expect(readFileSync(snapshotPath)).toEqual(unclaimedBytes);
 
     // A claimed lane is surfaced verbatim; the honest interaction stops —
     // the write is withheld pending explicit user authorization.
-    writeWorkflowSnapshotWithLease(harness, workflowId, {
+    const claim: IntegrationMergeLease = {
       holder: "session-foreign-fixture",
+      plan_id: "plan-a",
       claimed_at: "2026-09-30T00:00:00Z",
       source_branch: "feature/foreign-fixture",
       target_branch: "main",
-    });
+    };
+    writeWorkflowSnapshotWithLease(harness, workflowId, claim);
+    const claimedBytes = readFileSync(snapshotPath);
     const verified = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
-    expect(verified.status).toBe("ok");
-    if (verified.status === "ok") {
-      const receipt = verified.data as { claimed: boolean; lease: { holder: string } };
-      expect(receipt.claimed).toBe(true);
-      expect(receipt.lease.holder).toBe("session-foreign-fixture");
-    }
+    expect(verified).toMatchObject({ status: "ok", data: { claimed: true, lease: claim } });
+    expect(readFileSync(snapshotPath)).toEqual(claimedBytes);
 
     // A missing snapshot refuses with the exact target named.
     const absent = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: "bounded-absent-workflow" }, context);
@@ -784,6 +786,7 @@ describe("lease witness", () => {
 
     // A claimed lane missing its holder names the missing field.
     writeWorkflowSnapshotWithLease(harness, workflowId, {
+      plan_id: "plan-a",
       claimed_at: "2026-09-30T00:00:00Z",
       source_branch: "feature/f",
       target_branch: "main",
