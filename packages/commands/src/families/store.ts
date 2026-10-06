@@ -114,7 +114,20 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       }
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
-        return ok(id, await upgradeStoreMinimal({ context, operator: required(input.operator, "--operator"), operationId: randomUUID() }));
+        // The schema cutover's safety disposal needs the existing operator/stop
+        // attestation when a retired plan-PM claim is present. The engine's own
+        // validator is the authority; the CLI reads the absolute JSON file and
+        // hands the parsed document through unchanged. Omitting it is valid when
+        // no retired claim exists.
+        const attestation = input.attestation === undefined
+          ? undefined
+          : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
+        return ok(id, await upgradeStoreMinimal({
+          context,
+          operator: required(input.operator, "--operator"),
+          operationId: randomUUID(),
+          ...(attestation === undefined ? {} : { attestation }),
+        }));
       }
       case "store.backup": {
         const out = outputPath(input.out, invocation.cwd);
@@ -176,7 +189,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   };
   const optionsByVerb: Record<(typeof verbs)[number], (keyof StoreInput)[]> = {
     init: ["harness"],
-    upgrade: ["harness", "operator"],
+    upgrade: ["harness", "operator", "attestation"],
     migrate: ["harness", "apply", "manifest", "out"],
     backup: ["harness", "out"],
     activate: ["harness", "manifest", "attestation", "out"],

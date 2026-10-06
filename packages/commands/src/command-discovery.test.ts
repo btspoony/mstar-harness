@@ -264,3 +264,19 @@ describe("command discovery", () => {
     }
   });
 });
+
+test("workflow.evidence publishes the delivery evidence file contract and recover-coordinator publishes its attestation option", () => {
+  const evidence = getCommandDefinitions().find((entry) => entry.id === "workflow.evidence");
+  if (evidence === undefined) throw new Error("missing workflow.evidence definition");
+  // The `--file` document's shape is published, not left to the bare option key.
+  expect(evidence.payloads?.file).toBeDefined();
+  const fileSchema = evidence.payloads!.file.schema.toJSONSchema() as { properties?: Record<string, unknown>; required?: string[] };
+  expect(Object.keys(fileSchema.properties ?? {})).toEqual(["completion"]);
+  expect(fileSchema.required).toEqual(["completion"]);
+
+  const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
+  if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
+  const attestation = recovery.cli.options.find((option) => option.key === "attestation");
+  expect(attestation).toBeDefined();
+  expect(String(attestation!.help)).toContain("ActivationAttestation");
+});

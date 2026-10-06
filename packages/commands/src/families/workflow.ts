@@ -94,7 +94,7 @@ function schema() {
     operation: z.string().min(1).optional(), file: z.string().min(1).optional(), declareKind: z.string().min(1).optional(),
     at: z.string().min(1).optional(), session: z.string().min(1).optional(), sessionRef: z.string().min(1).optional(),
     sessionId: z.string().min(1).optional(), priorSession: z.string().min(1).optional(), reason: z.string().min(1).optional(),
-    stopped: z.array(z.string()).optional(),
+    stopped: z.array(z.string()).optional(), attestation: z.string().min(1).optional(),
     operationId: z.string().min(1).optional(), authorizationRef: z.string().min(1).optional(), input: z.unknown().optional(),
     phase: z.string().min(1).optional(), status: z.string().min(1).optional(), path: z.string().min(1).optional(),
     compass: z.string().min(1).optional(), policy: z.unknown().optional(), json: z.boolean().optional(),
@@ -111,6 +111,7 @@ function makeDefinition(
   execute: (input: z.infer<ReturnType<typeof schema>>, context: InvocationContext) => Promise<CommandEnvelope<unknown>>,
   contextOptions: readonly { key: string; context: "sessionId" }[] = [],
   optionHelp: Readonly<Record<string, string>> = {},
+  payloadOverride: Readonly<Record<string, z.ZodType>> = {},
 ): CommandDefinition {
   const input = schema().pick(Object.fromEntries(keys.map((key) => [key, true])) as never);
   const optionNames = [...keys, ...contextOptions.map(({ key }) => key)];
@@ -145,7 +146,8 @@ function makeDefinition(
     payloads: Object.fromEntries(keys.flatMap((key): [string, { schema: z.ZodType }][] => {
       if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
       if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
-      return [];
+      const override = payloadOverride[key];
+      return override === undefined ? [] : [[key, { schema: override }]];
     })),
     output: commandEnvelopeSchema,
     effects: [effect],
@@ -153,6 +155,19 @@ function makeDefinition(
     execute,
   };
 }
+
+/**
+ * The delivery-evidence document `workflow.evidence --file <absolute path>`
+ * reads: the recorded completion fulfilment of a registered completion policy.
+ * The CLI reads the file (it is a path, never inline JSON) and passes the parsed
+ * object as the operation's delivery payload.
+ */
+const deliveryEvidenceSchema = z.object({
+  completion: z.object({
+    policy: z.string().min(1),
+    evidence: z.string().min(1),
+  }),
+});
 
 export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
   const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
@@ -189,7 +204,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       expect: `CAS expectation: ${TOKEN_SUPPLIES.root}`,
       planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
     }),
-    makeDefinition("workflow.evidence", "Record delivery evidence or one-time kind declaration; legacy file writes and active DB transitions stay disjoint.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
+    makeDefinition("workflow.evidence", "Record delivery evidence or a one-time kind declaration. The `--file` document is the recorded completion fulfilment: an absolute JSON path holding {completion:{policy,evidence}} — policy is the workflow's registered completion_policy and evidence names the explicit fulfilment reference. On an ACTIVE authority use the acquired coordinator identity (--session-id or a minted launch) with --session-ref/--expect; --session and --at are the pre-activation FILE transports.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
       try {
         if (input.workflow === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow is required" });
         if ((input.file === undefined) === (input.declareKind === undefined)) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "provide exactly one of file or declareKind" });
@@ -235,7 +250,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, [{ key: "sessionId", context: "sessionId" }], {
       expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
-    }),
+    }, { file: deliveryEvidenceSchema }),
     makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
       try { if (input.session === undefined) return refusalEnvelope({ command: "workflow.show-prepare", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session is required" }); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return engineRefusal("workflow.show-prepare", error); }
     }),
@@ -248,9 +263,15 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, patch: object(input.input, "input") as never }));
       } catch (error) { return engineRefusal("workflow.amend-prepare", error); }
     }),
-    makeDefinition("workflow.recover-coordinator", "Recover a pre-activation Prepare coordinator binding; this does not resume or transfer a lease.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped"], async (input, context) => {
+    makeDefinition("workflow.recover-coordinator", "Recover a stopped workflow coordinator: the prior session's coordinator binding is replaced under an explicit operator attestation. `--attestation <absolute-json>` carries the full ActivationAttestation (required when an interrupted integration-merge mutex claim must be disposed of; optional for a Prepare-stage recovery with no mutex). This does not resume a session, transfer a lease or release a claim.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation"], async (input, context) => {
       try {
         if (input.session === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session, operationId, reason, authorizationRef and stopped are required" });
+        // An interrupted integration-merge mutex claim needs the operator's full
+        // stop attestation; a Prepare-stage recovery with no mutex omits it. The
+        // engine validates the document itself.
+        const attestation = input.attestation === undefined
+          ? undefined
+          : JSON.parse(readFileSync(absolute(input.attestation, "attestation"), "utf8")) as Record<string, unknown>;
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
           return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: `recovery requires the main conversation session identity (${IDENTITY_SUPPLIES}).` });
         }
@@ -267,9 +288,12 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           reason: input.reason,
           authorizationRef: input.authorizationRef,
           stoppedSessionIds: input.stopped,
+          ...(attestation === undefined ? {} : { attestation }),
         }));
       } catch (error) { return engineRefusal("workflow.recover-coordinator", error); }
-    }, [{ key: "sessionId", context: "sessionId" }]),
+    }, [{ key: "sessionId", context: "sessionId" }], {
+      attestation: "absolute path to the operator's ActivationAttestation JSON (required when an interrupted integration-merge claim exists)",
+    }),
   ];
   for (const transition of transitions) {
     const id = `workflow.${transition.name}`;

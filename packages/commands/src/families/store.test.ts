@@ -127,3 +127,49 @@ test("default registration removes only staged protocol faces and keeps independ
   expect(ids.has("store.execution.restore")).toBe(true);
   expect(ids.has("store.execution.export")).toBe(true);
 });
+
+test("store.upgrade reads the operator's --attestation document and passes it to the engine", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-attestation-"));
+  try {
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    legacyWorkspace(harness);
+    const attestationPath = join(root, "attestation.json");
+    writeFileSync(attestationPath, JSON.stringify({
+      version: 1,
+      attestedAt: "2026-10-04T00:00:00.000Z",
+      operator: { actor: "fixture-operator", authorizationRef: "fixture-authorization" },
+      consumers: [{
+        entryId: "mstar-cli",
+        kind: "coordinator",
+        entrypoint: "packages/cli/src/index.ts",
+        runtime: "bun",
+        runtimeVersion: "1.4.0",
+        version: "0.0.0-test",
+        current: true,
+        disposition: "reloaded",
+      }],
+      stoppedSessions: [{ sessionId: "fixture-coordinator", host: "omp", state: "stopped" }],
+    }));
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+
+    // The published CLI surface exposes the option.
+    expect(definition.cli.options.some((option) => option.key === "attestation")).toBe(true);
+    // The file path must be absolute (the adapter reads the source).
+    const relative = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", attestation: "attestation.json" }),
+      invocation(root),
+    );
+    expect(relative).toMatchObject({ status: "usage", message: "--attestation must be an absolute path" });
+
+    const result = await definition.execute(
+      definition.input.parse({ harness, operator: "fixture-operator", attestation: attestationPath }),
+      invocation(root),
+    );
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
