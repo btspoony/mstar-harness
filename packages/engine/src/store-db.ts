@@ -924,9 +924,15 @@ alter table execution_migrations add column coverage_json text;
  * One append-only migration. `normalize`, when present, performs the JSON
  * transformation the version's SQL cannot express (the members it removes or
  * rewrites live inside stored JSON), running in the SAME exclusive transaction
- * as this version's row.
+ * as this version's row. Its context carries the operator facts the upgrade was
+ * invoked with — the one supported authorization a cutover may act on.
  */
-export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb) => void };
+export type MigrationContext = {
+  /** The operator's stop evidence, when the upgrade supplied it (§ operator barrier). */
+  attestation?: { attestedAt: string; stoppedSessions: ReadonlyArray<{ sessionId: string }> };
+};
+
+export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
 
 /** Migration 6 — durable roadmap content authority; never import disposable projection rows. */
 export const MIGRATION_6_SQL = `
@@ -1182,7 +1188,7 @@ function readLeaseCutover(db: StoreDb): Map<string, JsonRecord> {
  * hand — so a store that needs operator attention refuses through the normal
  * read/validation path instead of being silently mangled.
  */
-function normalizeExecutionState(db: StoreDb): void {
+function normalizeExecutionState(db: StoreDb, context: MigrationContext): void {
   const tables = new Set(
     (db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>)
       .map((row) => (typeof row.name === "string" ? row.name : ""))
@@ -1236,6 +1242,63 @@ function normalizeExecutionState(db: StoreDb): void {
       next.identity_recoveries = coordination.identity_recoveries;
     }
     updateWorkflow.run(JSON.stringify(next), workflowId);
+  }
+  settleRetiredPlanPmIntegrationClaims(db, context);
+}
+
+/**
+ * The per-plan integration merges the removed plan-PM seat left held are an
+ * UNSUPPORTED orphan once their holder rows are gone: they can never be released
+ * through the surviving API. This pass settles exactly the claims the operator's
+ * existing stop evidence names as stopped, in the SAME cutover that retires the
+ * holder rows, so the store never retains an unreachable mutex:
+ *
+ * - a claim whose `plan_id` names a plan whose plan-PM session row was still
+ *   present at the start of this cutover (a legacy seat holder);
+ * - whose `holder` is NAMED in the operator's stop attestation;
+ * - whose `claimed_at` does not postdate that attestation.
+ *
+ * A claim held by a workflow's still-live coordinator, a claim with no stop
+ * evidence, and a claim taken after the attestation are all left exactly as they
+ * are — never silently rewritten, never released on an arbitrary stopped id.
+ */
+function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationContext): void {
+  const attestation = context.attestation;
+  if (attestation === undefined) return;
+  const stopped = new Set(attestation.stoppedSessions.map((session) => session.sessionId));
+  const rows = db
+    .prepare("select workflow_id, lease_json from execution_integration_leases")
+    .all() as Array<{ workflow_id?: unknown; lease_json?: unknown }>;
+  const retired = new Set(
+    (db.prepare("select workflow_id, plan_id from execution_lease_cutover").all() as Array<{ workflow_id?: unknown; plan_id?: unknown }>)
+      .filter((row) => row.plan_id !== null && row.plan_id !== undefined)
+      .map((row) => String(row.plan_id)),
+  );
+  const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
+  for (const row of rows) {
+    const workflowId = String(row.workflow_id ?? "");
+    const raw: unknown = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
+    if (!isRecord(raw)) {
+      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
+    }
+    const claim = raw as Record<string, unknown>;
+    if (claim.status === "released") continue;
+    const holder = claim.holder;
+    const planId = claim.plan_id;
+    if (typeof holder !== "string" || holder === "" || typeof planId !== "string" || planId === "") continue;
+    if (!stopped.has(holder)) continue;
+    if (!retired.has(planId)) continue;
+    const claimedAt = typeof claim.claimed_at === "string" && claim.claimed_at !== "" ? claim.claimed_at : null;
+    if (claimedAt === null || claimedAt > attestation.attestedAt) continue;
+    const tombstone = {
+      ...claim,
+      status: "released",
+      prior_holder: holder,
+      released_by: "store-upgrade",
+      released_at: attestation.attestedAt,
+      release_reason: `retired-plan-pm-seat:${holder}`,
+    };
+    update.run(JSON.stringify(tombstone), workflowId);
   }
 }
 
@@ -1361,7 +1424,10 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
  * vocabulary declares it here and the pass runs in the SAME transaction as its
  * version row.
  */
-function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: boolean } = {}): number {
+function applyPendingMigrations(
+  db: StoreDb,
+  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"] } = {},
+): number {
   const own = !options.alreadyInTransaction;
   const prior = readAppliedMigrations(db, true);
   const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
@@ -1371,7 +1437,7 @@ function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: b
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
-      if (migration.normalize !== undefined) migration.normalize(db);
+      if (migration.normalize !== undefined) migration.normalize(db, { attestation: options.attestation });
       // A migration's temporary staging tables are the normalizer's input only:
       // they never survive the batch, so a rolled-back or committed store holds
       // exactly the version's declared schema.
@@ -1867,7 +1933,10 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
  * path this process did not create refuses `store.already-exists` and is not
  * touched; a failed init cleans up only the file this process created.
  */
-export async function initializeStore(context: StoreContext): Promise<StoreHandle> {
+export async function initializeStore(
+  context: StoreContext,
+  options: { attestation?: MigrationContext["attestation"] } = {},
+): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   const alreadyExists = (): StoreError =>
@@ -1906,7 +1975,7 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
         db.exec("rollback");
         throw alreadyExists();
       }
-      applyPendingMigrations(db, { alreadyInTransaction: true });
+      applyPendingMigrations(db, { alreadyInTransaction: true, attestation: options.attestation });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
     } catch (error) {
@@ -1962,7 +2031,10 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
  * this function itself is atomic: the whole pending batch commits or rolls
  * back together. Idempotent when the store is already current.
  */
-export async function upgradeStore(context: StoreContext): Promise<{ schemaVersion: number }> {
+export async function upgradeStore(
+  context: StoreContext,
+  options: { attestation?: MigrationContext["attestation"] } = {},
+): Promise<{ schemaVersion: number }> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   if (!existsSync(dbPath)) {
@@ -1979,7 +2051,7 @@ export async function upgradeStore(context: StoreContext): Promise<{ schemaVersi
     refuseOpenFailure(error, dbPath);
   }
   try {
-    const schemaVersion = applyPendingMigrations(db);
+    const schemaVersion = applyPendingMigrations(db, { attestation: options.attestation });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.

@@ -1704,7 +1704,14 @@ export async function recoverExecutionCoordinator(
       epoch: tx.epoch,
       now,
     });
-    settleStoppedIntegrationClaim(tx, { workflowId, priorSessionId, callerId: caller.sessionId, at: now });
+    settleStoppedIntegrationClaim(tx, {
+      workflowId,
+      priorSessionId,
+      callerId: caller.sessionId,
+      attestedAt: attestation.attestedAt,
+      stoppedSessionIds: attestation.stoppedSessions.map((session) => session.sessionId),
+      at: now,
+    });
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data: {
@@ -1772,15 +1779,20 @@ function readCoordinatorRows(tx: ExecutionTransaction, workflowId: string): Sess
  */
 function settleStoppedIntegrationClaim(
   tx: ExecutionTransaction,
-  input: { workflowId: string; priorSessionId: string | null; callerId: string; at: string },
+  input: { workflowId: string; priorSessionId: string | null; callerId: string; attestedAt: string; stoppedSessionIds: readonly string[]; at: string },
 ): void {
-  const { workflowId, priorSessionId, callerId, at } = input;
+  const { workflowId, priorSessionId, callerId, attestedAt, stoppedSessionIds, at } = input;
+  // The prior holder must be NAMED by the operator's stop evidence, the caller
+  // must not be one of the attested-stopped sessions, and the claimed instant must
+  // not postdate the stop attestation (a claim taken after the holder was observed
+  // stopped belongs to a newer attempt).
   if (priorSessionId === null || priorSessionId === callerId) return;
+  if (!stoppedSessionIds.includes(priorSessionId) || stoppedSessionIds.includes(callerId)) return;
   const graph = readExecutionStateGraph(tx);
   const claim = graph.data.workflows.find((workflow) => workflow.state.id === workflowId)?.integrationLease ?? null;
   if (claim === null || claim.holder !== priorSessionId) return;
-  // A claim taken after this recovery started belongs to a newer attempt.
-  if (isNonEmptyString(claim.claimed_at) && claim.claimed_at > at) return;
+  const claimedAt = isNonEmptyString(claim.claimed_at) ? claim.claimed_at : null;
+  if (claimedAt === null || claimedAt > attestedAt || attestedAt > at) return;
   releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: callerId, at });
 }
 

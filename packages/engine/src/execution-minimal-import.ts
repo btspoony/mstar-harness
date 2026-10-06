@@ -9,7 +9,7 @@ import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
 import { canonicalPath, isPathWithin } from "./store-activation.js";
 import { projectLegacySnapshot, writeImportedExecutionWorkflow, type ImportedPlan, type ImportedSessionBinding } from "./execution-import-rows.js";
-import { initializeStore, storeDbPath, upgradeStore, type StoreContext } from "./store-db.js";
+import { initializeStore, storeDbPath, upgradeStore, type MigrationContext, type StoreContext } from "./store-db.js";
 
 export type MinimalImportResult = {
   verdict: "upgraded";
@@ -306,16 +306,22 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
   });
 }
 
-export async function upgradeStoreMinimal(input: { context: StoreContext; operator: string; operationId: string }): Promise<MinimalImportResult & { schemaVersion: number; authorityState: "active" }> {
-  const { context } = input;
+export async function upgradeStoreMinimal(input: {
+  context: StoreContext;
+  operator: string;
+  operationId: string;
+  /** The operator's stop evidence for the plan-PM holders this cutover retires. */
+  attestation?: MigrationContext["attestation"];
+}): Promise<MinimalImportResult & { schemaVersion: number; authorityState: "active" }> {
+  const { context, attestation } = input;
   const dbPath = storeDbPath(context);
   let schemaVersion: number;
   mkdirSync(dirname(dbPath), { recursive: true });
   if (!existsSync(dbPath)) {
-    const initialized = await initializeStore(context);
+    const initialized = await initializeStore(context, { attestation });
     schemaVersion = initialized.schemaVersion;
     initialized.close();
-  } else schemaVersion = (await upgradeStore(context)).schemaVersion;
+  } else schemaVersion = (await upgradeStore(context, { attestation })).schemaVersion;
   const result = await importExecutionMinimal(input);
   return { ...result, schemaVersion, authorityState: "active" };
 }
