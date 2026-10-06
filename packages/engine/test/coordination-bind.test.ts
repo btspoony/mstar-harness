@@ -9,7 +9,7 @@
  * the findings gate reads.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   bindPlanSession,
@@ -23,7 +23,7 @@ import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, FIXTURE_COORDINATOR_ID,
   git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureCode,
   ensureCoordinator, coordinatorCall, prepareCall, progressCall,
-  gitFixture, snapshotOf, planRowOf,
+  gitFixture, planRowOf,
   completionEvidenceOf, sealStoreForReaders, afterEachCleanup, finding, linkedOpenIssues,
 } from "./support/coordination-fixtures.js";
 
