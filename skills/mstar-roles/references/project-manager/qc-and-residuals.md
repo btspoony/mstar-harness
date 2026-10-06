@@ -65,19 +65,11 @@ Use this reference when PM is dispatching QC, consolidating review verdicts, or 
 
 Read Assignment **`Findings cleanup`** first (`mstar-artifacts` — Findings cleanup modes). Capture contract and authorization → **`mstar-project-governance`「Issue capture」**.
 
-### When `Findings cleanup: zero-residual` (explicit opt-in)
+### PM operational duties
 
-- Prefer **fix-now + targeted re-review** for Critical / Warning / Suggestion that can be fixed this session.
-- **NEVER** park fixable findings as open issues or use `Approve with residuals` for them.
-- Capture an open issue **only** for true blocker-defers (`decision: defer` + Durable Roadmap + `target` next iteration/milestone) — never a `critical` (`mstar-artifacts` Findings cleanup modes).
-- `nit`: fix or drop (no issue).
-- Plan Done: prefer an empty open list; any remaining open issue must all be blocker-defer + roadmap — never a `critical` (`mstar-artifacts` Findings cleanup modes).
+Mode semantics (fix-now / defer / blocking rules; default versus explicit opt-in) live only in **`mstar-artifacts`「Findings cleanup modes」**. Apply the Assignment's mode when routing fixes and targeted re-review.
 
-### When `Findings cleanup: allow-residual` (default)
-
-The default mode (iteration Phase 2 included; `zero-residual` is the explicit opt-in). When blocking issues are fixed but non-blocking warnings/suggestions remain:
-
-- Confirmed findings must be captured as **issues linked to this plan** before the plan leaves InReview (do not leave as chat-only) — plan-scoped `mstar plan issue-add`, unscoped `mstar issue add`.
+- Capture confirmed findings as **issues linked to this plan** before leaving InReview — `mstar plan issue-add`, or unscoped `mstar issue add`.
 - Severity on each captured issue must follow `mstar-artifacts` SSOT.
 - Where the findings live: issues in `{HARNESS_DIR}/store.db`, linked to this plan; the project `residuals.json` register is migration history with no write path.
 - Required durable gate summary in main plan should list issue ids and decisions, but never replace the store as the SSOT.

@@ -147,7 +147,7 @@ mkdir -p "$SDD_DIR/review"
 mstar sdd review-package "$MERGE_BASE" HEAD --context "$SDD_DIR/context.json" "$SDD_DIR/review/branch-review-....diff"
 ```
 
-Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in **local** plan / workflow snapshot + project register (`workflows/<id>/snapshot.json`, `projects/<id>/residuals.json` — session SSOT) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-conventions` git policy.
+Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in authored main plan / store.db-backed plan row through public plan verbs, and captures open findings as store.db issues (`mstar plan issue-add` / `mstar issue add`; snapshot files only pre-activation, project register only migration history) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-conventions` git policy.
 
 ## PM context hygiene
 

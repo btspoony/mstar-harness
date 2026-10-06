@@ -40,7 +40,7 @@ Batch all findings for the human in one message. If clean, proceed silently.
 
 ## Ready-task scheduling (PM only · Decision Rules)
 
-Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep one canonical per-plan `{SDD_DIR}`. PM alone writes its `context.json`, `progress.md` and workflow snapshot; prepare context-dependent helper outputs serially. Each writable track has its own worktree/branch and immutable task-specific absolute brief/report/diff paths. Artifact subdirectories are namespaces inside that SDD root, never a second SDD root. Parallel leaves use the supplied paths directly and do not invoke shared-context helpers or read mutable context to choose their checkout; never share a writable session or `implementer-session.json`. Use **fresh** implementers for parallel tasks. Serialize only actual dependencies, overlapping write ownership, one sticky session, and integration merges; state the dependency when serializing. A task reviewer may run alongside an unrelated ready implementer. PM alone reconciles reports into the shared `progress.md` and workflow snapshot.
+Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep one canonical per-plan `{SDD_DIR}`. PM alone writes its `context.json`, `progress.md` and store.db-backed workflow/plan state through public verbs (snapshot files only pre-activation); prepare context-dependent helper outputs serially. Each writable track has its own worktree/branch and immutable task-specific absolute brief/report/diff paths. Artifact subdirectories are namespaces inside that SDD root, never a second SDD root. Parallel leaves use the supplied paths directly and do not invoke shared-context helpers or read mutable context to choose their checkout; never share a writable session or `implementer-session.json`. Use **fresh** implementers for parallel tasks. Serialize only actual dependencies, overlapping write ownership, one sticky session, and integration merges; state the dependency when serializing. A task reviewer may run alongside an unrelated ready implementer. PM alone reconciles reports into the shared `progress.md` and workflow snapshot.
 
 **Rescheduling checkpoint:** a running background task is never a reason to stop scheduling. Re-run this ready-task check at the Phase-2 checkpoints named in **`mstar-iteration/references/phase-2-worktree-lease.md` §2.4** — that file is the single authoritative home for the five checkpoint names and their reason vocabulary, and they are deliberately not re-listed here — and start every authorized independent ready task before waiting for an unrelated running task or plan. Waiting is valid only when nothing useful is ready: state the wait reason once and do not re-check or remind on unchanged facts.
 
@@ -51,7 +51,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；先完成派生验证，fail-closed 守卫在其后）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式值必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 以 v2 根 `status.json`（`workflows[]`）或 workflow snapshot 存在为准，linked worktree 缺文件会 fail closed）
+2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；先完成派生验证，fail-closed 守卫在其后）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式值必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 仅查 `status.json` 或任一 workflow snapshot 文件存在性，不校验 `workflows[]`（这是当前发现探针，不是 ACTIVE 状态读写路由），linked worktree 缺文件会 fail closed）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
     - Copy the plan task's budget into the Assignment header field **`Task budget (implement / ops rounds)`** (canonical template → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; one-round capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — header region only, before the body markers
@@ -126,9 +126,10 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 
 | Command | Usage |
 |--------|--------|
-| `mstar sdd workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without `status.json` |
+| `mstar sdd workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without either an existing `status.json` or workflow snapshot (existence probe, not state validation) |
 | `mstar sdd task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
 | `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
+| `mstar sdd check-context` | Action-seam gate against resolved SDD context; arguments and refusal recovery → command `--help` |
 
 Developer check evidence: `mstar sdd evidence capture|verify` — capture runs an already-authorized argv once and retains raw evidence; verify is read-only. Command shapes, exit meanings and role boundaries → **`references/file-handoffs.md`** § Verification evidence. `mstar sdd exec` stays PM-only.
 
