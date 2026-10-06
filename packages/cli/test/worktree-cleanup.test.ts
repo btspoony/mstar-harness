@@ -1092,6 +1092,62 @@ describe("mstar worktree cleanup — apply executes exactly the current remove r
     }
   });
 
+  for (const malformed of [false, true]) {
+    test(`canonical completion never grants a displaced ${malformed ? "malformed" : "stale"} handoff cleanup ownership`, async () => {
+      const fx = basicFixture("mstar-cleanup-displaced-handoff-");
+      try {
+        const historicalB = completedHandoff("feature/done-a", fx.doneWt, fx.intWt);
+        const completion = {
+          source_branch: historicalB.source_branch,
+          source_sha: historicalB.source_sha,
+          worktree_path: historicalB.worktree_path,
+          review_base: historicalB.review_base,
+          review_head: historicalB.review_head,
+          qc: historicalB.qc,
+          qa: historicalB.qa,
+          integration: historicalB.integration,
+          completed_by: historicalB.accepted_by,
+          completed_at: historicalB.completed_at,
+        };
+        // A has its own real source and merge, but B is the accepted completion.
+        writeFileSync(join(fx.foreignWt, "historical-a.txt"), "separate historical source\n");
+        git(["add", "-A"], fx.foreignWt);
+        git(["commit", "-q", "-m", "historical source A"], fx.foreignWt);
+        git(["merge", "-q", "--no-ff", "-m", "merge historical A", "feature/stranger"], fx.intWt);
+        const handoff = malformed
+          ? { state: "completed", source_branch: "feature/stranger", worktree_path: fx.foreignWt }
+          : completedHandoff("feature/stranger", fx.foreignWt, fx.intWt);
+        updateWorkflow(fx.root, "wf-1", (snapshot) => {
+          const plan = snapshot.plans[0];
+          delete plan.metadata;
+          plan.coordination = { revision: 3, completion, handoff };
+        });
+
+        upgradeHistoricalWorkspace(fx.root);
+        const imported = await readExecutionState({ harnessDir: fx.root });
+        const retained = imported.data.workflows.find((entry) => entry.state.id === "wf-1")!.plans[0]!;
+        expect(retained.coordination?.completion).toEqual(completion);
+        expect(retained.plan.metadata).toMatchObject({ working_branch: "feature/done-a", worktree_path: fx.doneWt });
+
+        const args = ["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"];
+        const dry = runCli(args, fx.root);
+        expect(dry.exitCode, dry.stdout).toBe(0);
+        expect(decisionRows(dry)).toContain(`refuse | worktree | ${fx.foreignWt} | cleanup.refuse.foreign-worktree`);
+        expect(decisionRows(dry)).toContain("refuse | local-branch | feature/stranger | cleanup.refuse.foreign-branch");
+        expect(decisionRows(dry)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+
+        const applied = runCli([...args, "--apply"], fx.root);
+        expect(applied.exitCode, applied.stdout).toBe(0);
+        expect(git(["worktree", "list", "--porcelain"], fx.root)).toContain(fx.foreignWt);
+        expect(git(["for-each-ref", "refs/heads/feature/stranger"], fx.root)).not.toBe("");
+        expect(git(["worktree", "list", "--porcelain"], fx.root)).not.toContain(fx.doneWt);
+        expect(git(["for-each-ref", "refs/heads/feature/done-a"], fx.root)).toBe("");
+      } finally {
+        rmSync(fx.root, { recursive: true, force: true });
+      }
+    });
+  }
+
   test("a completed handoff on a non-Done row grants no cleanup ownership", async () => {
     const fx = basicFixture("mstar-cleanup-handoff-nondone-");
     try {

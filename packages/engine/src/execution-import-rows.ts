@@ -184,18 +184,18 @@ export function projectLegacySnapshot(raw: unknown): WorkflowSnapshot {
   snapshot.plans = plans.map((plan) => {
     if (!isPlainObject(plan)) return plan;
     const row: Record<string, unknown> = { ...plan };
-    row.coordination = projectLegacyRowCoordination(row);
+    const coordination = projectLegacyRowCoordination(row);
+    row.coordination = coordination;
     const scope = projectLegacyLeaseScope(row);
-    const legacy = isPlainObject(plan.coordination) ? plan.coordination : {};
-    const handoff = legacy.handoff;
-    // A finished historical attempt retains its source ownership after the
-    // removed protocol is projected away. Current row configuration wins over
-    // protocol copies, as with lease scope; separate rows retain separate claims.
-    if (plan.status === "Done" && isPlainObject(handoff) && handoff.state === "completed" &&
-        isNonEmptyString(handoff.source_branch) && isNonEmptyString(handoff.worktree_path)) {
+    const completion = coordination.completion;
+    // Source ownership comes from the accepted completion, not a displaced
+    // handoff. Current configuration and established lease scope still win;
+    // separate rows retain separate claims.
+    if (plan.status === "Done" && isPlainObject(completion) &&
+        isNonEmptyString(completion.source_branch) && isNonEmptyString(completion.worktree_path)) {
       const metadata = isPlainObject(plan.metadata) ? plan.metadata : {};
-      if (!isNonEmptyString(metadata.working_branch) && scope.working_branch === undefined) scope.working_branch = handoff.source_branch;
-      if (!isNonEmptyString(metadata.worktree_path) && scope.worktree_path === undefined) scope.worktree_path = handoff.worktree_path;
+      if (!isNonEmptyString(metadata.working_branch) && scope.working_branch === undefined) scope.working_branch = completion.source_branch;
+      if (!isNonEmptyString(metadata.worktree_path) && scope.worktree_path === undefined) scope.worktree_path = completion.worktree_path;
     }
     if (Object.keys(scope).length > 0) {
       const metadata = isPlainObject(row.metadata) ? row.metadata : {};
