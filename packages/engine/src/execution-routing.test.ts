@@ -573,6 +573,7 @@ describe("execution-path-safety \u2014 canonical-target classification, not base
     const fx = workspace("exec-routing-future-");
     try {
       await activeExecution(fx);
+      setArtifactStore(createFsStore(fx.harnessDir));
       const options = planOptions(fx, PLANTED_ID);
       const futureDir = join(fx.harnessDir, "workflows", PLANTED_ID);
       const before = await readExecutionState(fx.context);

@@ -63,6 +63,8 @@ import {
   listPendingCatalogRegistrations,
   reconcileCatalogExecution,
   registerCatalogExecution,
+  resolveCatalogRegistrationState,
+  type CatalogExecutionRequest,
 } from "../src/catalog-registration.js";
 import { bindPlanSession, mutatePlanCoordination, readPlanCoordination, recoverPrepareCoordinator } from "../src/coordination.js";
 import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
@@ -2551,7 +2553,9 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
 // ---------------------------------------------------------------------------
 describe("catalog registration — the journal joins this producer to the catalog", () => {
   const roots: string[] = [];
+  const originalCwd = process.cwd();
   afterEach(() => {
+    process.chdir(originalCwd);
     setArtifactStore(undefined);
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
@@ -2569,6 +2573,7 @@ describe("catalog registration — the journal joins this producer to the catalo
     const handle = await initializeStore(context);
     handle.close();
     setArtifactStore(createFsStore(context.harnessDir));
+    process.chdir(context.harnessDir);
     return { root: context.harnessDir, context };
   }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { registerCatalogEntity } from "../src/catalog.js";
@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 async function activeWorkspace(): Promise<{ root: string; context: StoreContext; storeId: string }> {
-  const root = mkdtempSync(join(tmpdir(), "mstar-root-selection-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-root-selection-")));
   roots.push(root);
   execFileSync("git", ["init", "-q"], { cwd: root });
   const context = { harnessDir: join(root, ".mstar") };
