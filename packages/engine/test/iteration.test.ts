@@ -812,9 +812,8 @@ describe("pushCadenceProbe — §5.1a push gate (never push while CI or AI revie
 describe("catalog discovery — the completeness query that replaced the iteration index obligation", () => {
   /**
    * A workspace whose stores exist as files (iterations with compasses, plan
-   * files) and whose catalog is a real `store.db`. The store context is the
-   * workspace root, so `resolveHarnessDir` stops at the `.mstar` marker rung
-   * (the same fixture shape the catalog authority tests use).
+   * files) and whose catalog is a real `store.db` in the selected `.mstar`
+   * harness directory.
    */
   async function catalogRoot(name: string, files: string[]): Promise<{ root: string; harness: string; context: StoreContext }> {
     const root = tmpRoot(name);
@@ -824,7 +823,7 @@ describe("catalog discovery — the completeness query that replaced the iterati
       mkdirSync(dirname(join(harness, relative)), { recursive: true });
       writeFileSync(join(harness, relative), "---\n", "utf8");
     }
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
     return { root, harness, context };
@@ -876,7 +875,7 @@ describe("catalog discovery — the completeness query that replaced the iterati
     const root = tmpRoot("mstar-discovery-nostore-");
     try {
       mkdirSync(join(root, ".mstar", "plans"), { recursive: true });
-      const report = await readCatalogCompleteness({ harnessDir: root }, ["plans"]);
+      const report = await readCatalogCompleteness({ harnessDir: join(root, ".mstar") }, ["plans"]);
       expect(report.ok).toBe(false);
       expect(report.registered).toBe(0);
       expect(report.violations.map((violation) => violation.code)).toEqual(["store.not-initialized"]);

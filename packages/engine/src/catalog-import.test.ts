@@ -40,9 +40,9 @@ async function freshWorkspace(name: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, name));
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const handle = await initializeStore({ harnessDir: workspace });
+  const handle = await initializeStore({ harnessDir: harness });
   handle.close();
-  return { context: { harnessDir: workspace }, workspace, harness };
+  return { context: { harnessDir: harness }, workspace, harness };
 }
 
 /**

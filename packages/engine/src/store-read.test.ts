@@ -63,7 +63,7 @@ async function workspace(name: string): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: dir };
+  const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
   return { dir, harness, context };
@@ -727,7 +727,7 @@ describe("read envelope and transaction", () => {
   test("a missing store fails instead of returning empty findings", async () => {
     const dir = mkdtempSync(join(ROOT, "no-store-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const context: StoreContext = { harnessDir: dir };
+    const context: StoreContext = { harnessDir: join(dir, ".mstar") };
     await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({ code: "store.not-initialized" });
     await expect(withStoreRead(context, queryDashboard("workflows"))).rejects.toMatchObject({ code: "store.not-initialized" });
     await expect(withStoreRead(context, queryIssueFlow())).rejects.toMatchObject({ code: "store.not-initialized" });
