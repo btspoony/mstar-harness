@@ -1295,12 +1295,17 @@ function requirePinnedDeliveryRoute(
   }
 }
 
+type CompletionEvidenceRefs = {
+  qc: CompletionRecord["qc"];
+  qa: CompletionRecord["qa"];
+};
+
 /**
  * §E the recorded evidence of one completion, hashed from disk. It runs BEFORE
  * SQLite ownership because hashing reads files (§4.1), and the returned refs are
  * the provenance the completion record commits.
  */
-function completionEvidenceRefs(evidence: ValidatedCompletionEvidence): { qc: CompletionRecord["qc"]; qa: CompletionRecord["qa"] } {
+function completionEvidenceRefs(evidence: ValidatedCompletionEvidence): CompletionEvidenceRefs {
   return {
     qc: {
       decision: evidence.qc_decision,
@@ -1623,12 +1628,16 @@ export async function completeExecutionPlan(
       // proof.
       for (const captured of witnesses.git) revalidateGitProofWitness(captured);
     },
-    (witness, tx, at) => completeInTransaction(witness, tx, at, resolved.read, operation),
+    (witness, tx, at) => completeInTransaction(witness, tx, at, resolved.read, operation, witnesses),
   );
 }
 
-/** The pre-transaction observations `complete` re-validates at the commit boundary. */
-type CompletionWitnesses = { git: readonly GitProofWitness[] };
+/** External proof and evidence observations reused by the first-attempt commit. */
+type CompletionWitnesses = {
+  git: readonly GitProofWitness[];
+  planAreas: readonly string[];
+  evidenceRefs: CompletionEvidenceRefs;
+};
 
 /**
  * §4.1 the pre-transaction half of `complete`: the route/policy pair, the actual
@@ -1657,9 +1666,12 @@ async function captureCompletionWitnesses(
   const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
+  const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
+  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_paths);
+  const evidenceRefs = completionEvidenceRefs(evidence);
   if (route === "report-only") {
     assertReportOnlyCompletionEvidence(snapshot, read.planId, "complete");
-    return { git: [] };
+    return { git: [], planAreas, evidenceRefs };
   }
   const scope = planScopeOf(before.data, read.planId);
   if (route === "development") {
@@ -1672,7 +1684,7 @@ async function captureCompletionWitnesses(
       );
     }
     assertSourceReviewProof(scope.worktreePath, evidence, anchors.sourceBranch, read.planId);
-    return { git: [captureGitProofWitness(scope.worktreePath)] };
+    return { git: [captureGitProofWitness(scope.worktreePath)], planAreas, evidenceRefs };
   }
   const anchors = integrationAnchors(snapshot, read.planId);
   const checkout = assertIntegrationCheckout(anchors, read.planId);
@@ -1680,6 +1692,8 @@ async function captureCompletionWitnesses(
   const proven = assertSourceReviewProof(scope.worktreePath, evidence, scope.workingBranch, read.planId);
   assertExactMergeResult(anchors.worktreePath, read.planId, requested.result_sha, requested.base_sha, proven.source_sha, checkout.head);
   return {
+    planAreas,
+    evidenceRefs,
     git: [
       captureGitProofWitness(scope.worktreePath),
       captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged"),
@@ -1694,6 +1708,7 @@ function completeInTransaction(
   at: string,
   read: ResolvedPlanRead,
   operation: CompleteOperation,
+  witnesses: CompletionWitnesses,
 ): ExecutionRead<ExecutionPlanView> {
   const planId = witness.planId;
   // §E admission: the reviewed state is already recorded (`InReview`) or the one
@@ -1714,7 +1729,10 @@ function completeInTransaction(
   const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
   const prepared = effectivePrepareConfig(witness.view);
   assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
-  const refs = completionEvidenceRefs(evidence);
+  // Revalidate aliases/existence after the proof gap, before committing captured
+  // evidence. Body hashes stay outside SQLite ownership and committed replays.
+  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_paths);
+  const refs = witnesses.evidenceRefs;
   const scope = route === "report-only" ? null : planScopeOf(witness.view, planId);
   const record: CompletionRecord = {
     source_branch: scope === null ? null : scope.workingBranch,
