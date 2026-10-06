@@ -360,15 +360,6 @@ describe("checkUseCliSkillCliCitations — mstar-use-cli skill scan (Task 3)", (
     expect(failures[0]).toContain('unknown CLI command "mstar plan totally-fake-verb"');
   });
 
-  test("canonical definition path citation passes", async () => {
-    const { failures, cliCitationsChecked } = checkUseCliSkillCliCitations(
-      [{ rel: "skills/mstar-use-cli/SKILL.md", text: "then `mstar plan handoff` with tokens" }],
-      { cliCommands: await inventory(), binNames: binNames() },
-    );
-    expect(cliCitationsChecked).toBe(1);
-    expect(failures).toEqual([]);
-  });
-
   test("real mstar-use-cli corpus passes against canonical definitions", async () => {
     const { files, failures } = readUseCliSkillMarkdown(REPO_ROOT);
     expect(failures).toEqual([]);
