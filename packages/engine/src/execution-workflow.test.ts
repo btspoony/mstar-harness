@@ -2388,7 +2388,7 @@ async function heldMergeClaim(context: StoreContext) {
   const current = await readExecutionState(context);
   const claim = current.data.workflows.find((workflow) => workflow.state.id === WORKFLOW_ID)?.integrationLease;
   expect(claim).not.toBeNull();
-  expect(claim).toEqual(storedMergeClaim(context));
+  expect<unknown>(claim).toEqual(storedMergeClaim(context));
   return claim;
 }
 
