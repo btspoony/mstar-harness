@@ -685,13 +685,12 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
  * recorded configuration, including while the row is active; the row's status,
  * progress and completion are never reset.
  *
- * §4.1 the preflight validates the EFFECTIVE scope — the row's recorded
- * worktree/branch with the supplied members applied — against the actual
- * filesystem and Git, so a branch-only or path-only edit is checked too and a
- * `Done` row is refused before the transaction (as is the already-equal no-op).
- * An equal configuration whose requested checkout is genuinely unchanged is
- * `already-satisfied`: it writes no receipt and no byte, so its result is
- * resolved from its own read rather than from a fabricated identity.
+ * §4.1 the transaction preflight validates the EFFECTIVE scope — the row's
+ * recorded worktree/branch with supplied members applied — against actual
+ * filesystem and Git before equality or domain writes. Done rows refuse there.
+ * An equal valid configuration is `already-satisfied`: plan/header/store
+ * revisions do not advance, while its operation receipt is retained with the
+ * actual transaction store/epoch so an identical retry can replay it.
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
@@ -1768,10 +1767,9 @@ function completeInTransaction(
       result_sha: resultSha,
       verified_at: at,
     };
-    // §4.2 the merge mutex: this completion may release only THIS coordinator's
-    // own claim for this plan and source. A live foreign holder refuses with the
-    // ordinary recovery route; a claim left by a stopped owner is settled by
-    // `releaseStoppedMergeClaim`, never silently here.
+    // This completion releases only its current coordinator's matching attempt.
+    // A stopped predecessor's claim is settled by ordinary coordinator recovery,
+    // never inferred or discarded by completion.
     requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch);
   }
   // §4.1 the authoritative findings gate on THIS transaction's handle: an issue
@@ -1785,13 +1783,9 @@ function completeInTransaction(
 }
 
 /**
- * §4.2 the merge-mutex admission of one iteration completion: the workflow's
- * merge claim may be released by this completion ONLY when it is this
- * coordinator's own claim for THIS plan and source branch. A claim held by a
- * different live session is that session's claim — refused with the ordinary
- * recovery route, never stolen; a claim left by a stopped owner is settled by
- * the close's own `releaseStoppedMergeClaim`, so it refuses here rather than
- * being silently dropped by a row completion.
+ * Merge-mutex admission: only the current coordinator's exact attempt is this
+ * completion's to release. The recorded holder completes another active attempt;
+ * applicable explicit stop evidence goes through ordinary coordinator recovery.
  */
 function requireOwnMergeClaim(
   tx: ExecutionTransaction,
@@ -1806,9 +1800,19 @@ function requireOwnMergeClaim(
     throw new CoordinationError(
       "coordination.merge-lease-foreign",
       `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
-        `not this attempt (${planId} source ${sourceBranch} target ${targetBranch}) — a foreign claim is never reused or released`,
+        `not this attempt (${planId} source ${sourceBranch} target ${targetBranch}); holder ${JSON.stringify(lease.holder)} ` +
+        `must complete its claimed plan through mstar plan complete --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
+        `with that holder's own current binding, actual recorded checkout, QC/QA evidence and verified integration result. ` +
+        `If the recorded source facts for that claimed plan are wrong, correct them through mstar plan prepare --workflow ` +
+        `${witness.workflowId} --plan ${lease.plan_id} --config <actual-source-config-json> before its holder completes it. ` +
+        `If the holder actually stopped, use mstar session recover --workflow ${witness.workflowId} --prior-session ` +
+        `${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> --expect <current-workflow-token> ` +
+        `--operation <fresh-id> under the independently acquired replacement; an already-current replacement needs its ` +
+        `recorded predecessor relationship and renewed applicable stop evidence. This caller cannot release a foreign attempt.`,
       {
         plan_id: planId,
+        workflow_id: witness.workflowId,
+        holder: lease.holder,
         holder_plan_id: lease.plan_id,
         holder_source_branch: lease.source_branch,
         holder_target_branch: lease.target_branch,
@@ -1830,8 +1834,10 @@ function requireOwnMergeClaim(
         `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released. The claim belongs to the attempt ` +
         `its holder is executing: that holder completes plan ${JSON.stringify(lease.plan_id)} from its own recorded scope ` +
         `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or — when this row's recorded ` +
-        `scope is mistaken — correct it through the ordinary plan prepare. Run recoverExecutionCoordinator naming ` +
-        `${JSON.stringify(lease.holder)} with its stop/reload attestation only if that holder is actually stopped.`,
+        `scope is mistaken — correct it through mstar plan prepare --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
+        `--config <actual-source-config-json>. Only after that holder actually stopped, use mstar session recover --workflow ` +
+        `${witness.workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> ` +
+        `--expect <current-workflow-token> --operation <fresh-id> under the independently acquired replacement.`,
       { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
     );
   }
@@ -1852,10 +1858,11 @@ function requireOwnMergeClaim(
       `coordinator session is not active at epoch ${tx.epoch}, and this completing coordinator ` +
       `${JSON.stringify(witness.session.sessionId)} does not hold it. This completion does not take over or release another ` +
       `holder's claim. The supported route is the coordinator recovery RENEWAL for this recorded relationship: ` +
-      `\`recoverExecutionCoordinator --workflow ${workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <fresh ` +
-      `full stop document naming ${lease.holder} and NOT the current binding, with claimed_at <= stop <= now> --expect <current ` +
-      `workflow token> --operation <fresh operation id>\`, run under the independently acquired replacement binding this caller ` +
-      `already holds. That recovery re-recognises the recorded prior→replacement relationship (previous recovery receipt, revoked ` +
+      `\`mstar session recover --workflow ${witness.workflowId} --prior-session ${lease.holder} --reason <reason> ` +
+      `--attestation <absolute-full-stop-document> --expect <current-workflow-token> --operation <fresh-id>\`, ` +
+      `with renewed evidence naming ${lease.holder} stopped after its claim and NOT naming the current binding, run under ` +
+      `the independently acquired replacement binding this caller already holds. ` +
+      `That recovery re-recognises the recorded prior→replacement relationship (previous recovery receipt, revoked ` +
       `prior session row, this exact held claim row), keeps the current binding, settles this claim row, and then this completion ` +
       `retries as the same recovered coordinator.`,
     {
@@ -1866,7 +1873,7 @@ function requireOwnMergeClaim(
       claim_target_branch: lease.target_branch,
       claim_holder: lease.holder,
       claim_taken_at: lease.claimed_at ?? null,
-      supported_route: "recoverExecutionCoordinator renewal (--workflow, --prior-session, --reason, --attestation, --expect, --operation)",
+      supported_route: "mstar session recover (--workflow, --prior-session, --reason, --attestation, --expect, --operation)",
     },
   );
 }
