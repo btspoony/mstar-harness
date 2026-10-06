@@ -636,7 +636,7 @@ describe("mstar plan — linked-control-root", () => {
       fixture.root,
     );
     expect(refused.exitCode).toBe(1);
-    expect(jsonOf(refused)).toMatchObject({ status: "refused", code: "execution.not-active" });
+    expect(jsonOf(refused)).toMatchObject({ status: "refused", code: "store.not-initialized" });
     expect(snapshotState(fixture)).toEqual(before);
   });
 });
