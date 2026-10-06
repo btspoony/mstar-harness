@@ -6,7 +6,6 @@ import {
   WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
   commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
-  recoverExecutionCoordinator,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
   type ActivationAttestation, type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
@@ -144,12 +143,19 @@ function makeDefinition(
       }),
     },
     input,
-    payloads: Object.fromEntries(keys.flatMap((key): [string, { schema: z.ZodType }][] => {
-      if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
-      if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
-      const override = payloadOverride[key];
-      return override === undefined ? [] : [[key, { schema: override }]];
-    })),
+    payloads: Object.fromEntries([
+      ...keys.flatMap((key): [string, { schema: z.ZodType }][] => {
+        if (key === "row") return [[key, { schema: z.array(z.unknown()) }]];
+        if (key === "input" || key === "policy") return [[key, { schema: z.record(z.string(), z.unknown()) }]];
+        const override = payloadOverride[key];
+        return override === undefined ? [] : [[key, { schema: override }]];
+      }),
+      // An independent payload key whose option counterpart is a path (the
+      // adapter reads the document), never an inline JSON field.
+      ...Object.entries(payloadOverride)
+        .filter(([key]) => !keys.includes(key))
+        .map(([key, schema]): [string, { schema: z.ZodType }] => [key, { schema }]),
+    ]),
     output: commandEnvelopeSchema,
     effects: [effect],
     description,
@@ -251,7 +257,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, [{ key: "sessionId", context: "sessionId" }], {
       expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
-    }, { file: deliveryEvidenceSchema }),
+    }, {}, { delivery: deliveryEvidenceSchema }),
     makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
       try { if (input.session === undefined) return refusalEnvelope({ command: "workflow.show-prepare", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session is required" }); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return engineRefusal("workflow.show-prepare", error); }
     }),
@@ -264,45 +270,34 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         return ok("workflow.amend-prepare", await amendPrepareWorkflow({ sessionPath, cwd: context.cwd, patch: object(input.input, "input") as never }));
       } catch (error) { return engineRefusal("workflow.amend-prepare", error); }
     }),
-    makeDefinition("workflow.recover-coordinator", "Recover a stopped workflow coordinator. On the ACTIVE execution authority (where an interrupted integration-merge claim lives) it takes `--workflow`, `--expect`, `--operation`, `--reason`, one of `--prior-session`/`--unowned` and `--attestation <absolute-json>` carrying the operator's full ActivationAttestation. On the pre-activation FILE route it takes `--session <envelope>`, `--operation-id`, `--reason`, `--authorization-ref` and `--stopped`. This does not resume a session, transfer a lease or release a claim.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation", "workflow", "expect", "operation", "priorSession", "unowned", "harness"], async (input, context) => {
+    makeDefinition("workflow.recover-coordinator", "Recover a stopped workflow coordinator on the pre-activation FILE route: the prior session's coordinator binding is replaced and the exact prior claim is settled atomically. `--attestation <absolute-json>` supplies the operator's full ActivationAttestation, which the engine REQUIRES when an interrupted integration-merge claim is held; it is optional when no such claim exists. Reading the document is this command's admission step \u2014 the engine performs the authority discrimination. An ACTIVE execution authority is not this verb's transport: that route refuses here and points at `mstar session recover` with its existing supported flags. It does not resume a session: the engine settles the exact prior claim atomically as part of the replacement.", "write", ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation", "harness"], async (input, context) => {
       try {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
           return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: `recovery requires the main conversation session identity (${IDENTITY_SUPPLIES}).` });
         }
-        // An interrupted integration-merge mutex claim lives in the ACTIVE
-        // execution authority, so recovery routes by that authority rather than
-        // by a caller selector. The operator's stop document is the trust
-        // boundary in both arms; the engine validates it.
-        const root = resolveProcessHarnessDir(context.cwd, input.harness);
-        const route = root === null ? "files" : await resolveExecutionReadRoute({ harnessDir: root });
-        if (route === "execution") {
-          // ACTIVE DB route.
-          if (root === null || input.workflow === undefined || input.expect === undefined || input.operation === undefined || input.reason === undefined || input.attestation === undefined) {
-            return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active recovery requires workflow, expect, operation, reason and attestation" });
-          }
-          if ((input.priorSession === undefined) === (input.unowned !== true)) {
-            return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active recovery requires exactly one prior-session or unowned" });
-          }
-          setArtifactStore(createFsStore(root));
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator" };
-          const attestation = JSON.parse(readFileSync(absolute(input.attestation, "attestation"), "utf8")) as ActivationAttestation;
-          return ok("workflow.recover-coordinator", await recoverExecutionCoordinator(executionContextFor({ harnessDir: root }, identity), {
-            expected: input.expect as never,
-            operationId: input.operation,
-            priorSessionId: input.unowned === true ? null : input.priorSession!,
-            reason: input.reason,
-            attestation,
-          }));
-        }
-        // Pre-activation FILE route: the Prepare-stage recovery.
         if (input.session === undefined || input.operationId === undefined || input.reason === undefined || input.authorizationRef === undefined || input.stopped === undefined) {
-          return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "file recovery requires session, operationId, reason, authorizationRef and stopped" });
+          return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session, operationId, reason, authorizationRef and stopped are required" });
         }
-        if (input.attestation !== undefined) {
-          return refusalEnvelope({ command: "workflow.recover-coordinator", status: "usage", code: "command.invalid-input", exitCode: 2, message: "the file-route recovery takes authorizationRef and stopped, not an activation attestation" });
-        }
+        // The admission step is reading the operator's stop document. The
+        // engine requires it when an interrupted mutex claim is held and
+        // performs the authority discrimination itself; the CLI never decides
+        // which transport applies.
+        const attestation = input.attestation === undefined
+          ? undefined
+          : JSON.parse(readFileSync(absolute(input.attestation, "attestation"), "utf8")) as ActivationAttestation;
         const priorSessionPath = absolute(input.session, "session");
         const prior = readSessionEnvelope(priorSessionPath);
+        // The ACTIVE authority is a different transport with its own supported
+        // verb (`mstar session recover`); this FILE verb never doubles as it.
+        if (await resolveExecutionReadRoute({ harnessDir: prior.harness_root }) === "execution") {
+          return refusalEnvelope({
+            command: "workflow.recover-coordinator",
+            status: "usage",
+            code: "command.invalid-input",
+            exitCode: 2,
+            message: "this FILE-route recovery does not apply on an ACTIVE execution authority; use `mstar session recover --workflow <id> (--prior-session <id>|--unowned) --reason <text> --attestation <absolute-json> --expect <token> --operation <id>` instead",
+          });
+        }
         setArtifactStore(createFsStore(prior.harness_root));
         return ok("workflow.recover-coordinator", await recoverPrepareCoordinator({
           cwd: context.cwd,
@@ -314,10 +309,11 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           reason: input.reason,
           authorizationRef: input.authorizationRef,
           stoppedSessionIds: input.stopped,
+          ...(attestation === undefined ? {} : { attestation }),
         }));
       } catch (error) { return engineRefusal("workflow.recover-coordinator", error); }
     }, [{ key: "sessionId", context: "sessionId" }], {
-      attestation: "absolute path to the operator's ActivationAttestation JSON (required when an interrupted integration-merge claim exists)",
+      attestation: "absolute path to the operator's ActivationAttestation JSON \u2014 the engine requires it when an interrupted integration-merge claim is held",
     }),
   ];
   for (const transition of transitions) {
