@@ -221,8 +221,6 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     // live snapshot schema requires; the stored DB block strips it, because
     // there that value belongs to the dedicated revision column alone.
     const projected = isPlainObject(row.coordination) ? row.coordination : {};
-    const block: Record<string, unknown> = { ...projected };
-    delete block.revision;
     // Source/cleanup ownership survives the removed lease: its recorded
     // worktree/branch move into the ordinary row metadata the target shape uses,
     // so L1 facts and cleanup ownership are never lost with the seat. The
@@ -235,19 +233,26 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     if (!isNonEmptyString(state.status) || state.status === "Todo") {
       // A migrated completion is a finished row: promote it exactly as the
       // migration normalizer does, preserving every other recorded status.
-      if (isPlainObject(block.completion)) state.status = "Done";
+      if (isPlainObject(projected.completion)) state.status = "Done";
     }
     delete state.coordination;
     delete state.execution_lease;
     const stateGate = validatePlanRow(state);
     if (!stateGate.ok) conflict(`plan ${planId} of workflow ${id} has an invalid stored row (${stateGate.violations.map((v) => v.code).join(", ")}).`);
+    // Validate the full projected block (which carries the revision the live
+    // snapshot schema requires), then store the revision-free DB block whose
+    // revision lives in the dedicated `execution_plans.revision` column.
     const violations = validateRowCoordination(
-      block,
+      projected,
       `execution_plans(${id},${planId}).coordination_json`,
       rowValidationRoute(routeSnapshot, state as never),
     );
     if (violations.length > 0) conflict(`plan ${planId} of workflow ${id} has malformed coordination data (${violations.map((v) => v.code).join(", ")}).`);
-    insertPlan.run(id, planId, ordinal, JSON.stringify(state), JSON.stringify(block));
+    // The DB representation boundary: the stored coordination JSON carries no
+    // revision, because the dedicated column is the single revision authority.
+    const stored = { ...projected };
+    delete stored.revision;
+    insertPlan.run(id, planId, ordinal, JSON.stringify(state), JSON.stringify(stored));
     insertInput.run(id, planId, JSON.stringify(executionInputSelection(row, planId)), executionInputHash(row, planId), pin === null ? null : JSON.stringify(pin));
   });
   const merge = snapshot.integration_merge_lease;

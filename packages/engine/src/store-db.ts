@@ -15,24 +15,26 @@
  * Issue-domain verbs (capture/disposition/relations) are NOT implemented
  * here — they arrive with later tasks on top of this boundary.
  */
-import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
-// Type-only: the activation validator itself lives in store-activation.ts, which
-// imports this module. That cycle is safe here — the validator is only
-// dereferenced inside an async function body, never during module evaluation, so
-// the ESM live binding is already initialised by the time it runs.
-import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
+// Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
+// import of the activation validator must be loaded at call time (see
+// validatedActivationAttestation below) because store-activation.ts reads
+// MIGRATIONS from this module during its own module evaluation.
+import type { ActivationAttestation } from "./store-activation.js";
 
 /**
- * The real operator stop evidence, run through the existing activation
- * validator. Every exported upgrade/init entrypoint applies it before touching
- * schema, so a thin or malformed document is never accepted as authority.
+ * The existing operator stop evidence, run through the existing activation
+ * validator. Loaded at call time because `store-activation.ts` reads
+ * `MIGRATIONS` from this module during its own module evaluation — a static
+ * import from there would read an uninitialized binding before this module's
+ * exported consts are initialised.
  */
 async function validatedActivationAttestation(value: unknown): Promise<ActivationAttestation> {
+  const { validateActivationAttestation } = await import("./store-activation.js");
   return validateActivationAttestation(value);
 }
 
