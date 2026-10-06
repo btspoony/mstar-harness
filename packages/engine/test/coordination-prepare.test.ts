@@ -3142,10 +3142,10 @@ describe("prepare coordinator recovery", () => {
   }, 60000);
 });
 
-/* One-shot Prepare and field-value semantics; no coordinator reseal route. */
+/* A prose note beside the plan that no coordinator operation reads as a gate. */
 function rewriteAssignment(fixture: Fixture, note: string, changeQaGate = true): void {
   writeText(
-    fixture.assignmentPath,
+    join(fixture.sddDir, "assignment.md"),
     assignmentText({
       harness: fixture.harness,
       planId: PLAN_ID,

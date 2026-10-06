@@ -102,6 +102,39 @@ export function planRow(id: string, projectId: string | undefined, workingBranch
   };
 }
 
+/**
+ * An Assignment header block on disk. Nothing reads it as an admission gate any
+ * more — it is written only so a case can prove that editing prose beside a
+ * prepared row changes nothing the coordinator operation depends on.
+ */
+export function assignmentText(input: {
+  harness: string;
+  planId: string;
+  planPath: string;
+  worktreePath: string;
+  sddDir: string;
+  branch: string;
+  note: string;
+}): string {
+  return [
+    `# Assignment — ${input.planId} slice A`,
+    "",
+    `**Control harness root**: ${input.harness}`,
+    `**Workflow id**: ${WORKFLOW_ID}`,
+    `**Plan id**: ${input.planId}`,
+    `**Plan Path**: ${input.planPath}`,
+    `**Worktree path**: ${input.worktreePath}`,
+    `**Working branch**: ${input.branch}`,
+    `**SDD dir**: ${input.sddDir}`,
+    "**Execute as**: project-manager",
+    "**QA gate**: mandatory",
+    "**Findings cleanup**: allow-residual",
+    "",
+    input.note,
+    "",
+  ].join("\n");
+}
+
 /** Both plans live under one project register: cross-plan writes contend for it. */
 export function makeFixture(): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-coordination-")));
