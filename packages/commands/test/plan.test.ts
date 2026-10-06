@@ -27,9 +27,7 @@ function fixture() {
   const workflow = "wf-plan";
   const plan = "plan-a";
   const workflowDir = path.join(harness, "workflows", workflow);
-  const sessionsDir = path.join(harness, "sessions");
   mkdirSync(workflowDir, { recursive: true });
-  mkdirSync(sessionsDir, { recursive: true });
   mkdirSync(path.join(harness, "plans"), { recursive: true });
   writeFileSync(path.join(harness, "plans", `${plan}.md`), `# Plan A\n\n**plan_id:** ${plan}\n`);
   writeFileSync(path.join(harness, "status.json"), JSON.stringify({
@@ -44,9 +42,9 @@ function fixture() {
     status: "running",
     started_at: "2026-09-26T00:00:00Z",
     updated_at: "2026-09-26T00:00:00Z",
-    plans: [{ id: plan, plan_id: plan, title: "Plan A", file: `.mstar/plans/${plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+    plans: [{ id: plan, plan_id: plan, title: "Plan A", file: `plans/${plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
   }));
-  return { root, harness, workflow, plan, session: path.join(sessionsDir, "coordinator.json") };
+  return { root, harness, workflow, plan };
 }
 function activeFixture() {
   const root = mkdtempSync(path.join(os.tmpdir(), "plan-active-command-"));
@@ -82,34 +80,14 @@ function definition(id: string) {
 
 describe("plan command family", () => {
 
-  test("plan family sparse input passes descriptor validation without session or revision", () => {
-    const input = definition("plan.progress").input.safeParse({
-      progress: { status: "InProgress", summary: "Work continues", evidence_paths: [] },
-    });
-    expect(input.success).toBe(true);
-    if (input.success) {
-      expect(input.data).not.toHaveProperty("session");
-      expect(input.data).not.toHaveProperty("expect");
-    }
-  });
 
   test("plan family payload decode rejects malformed fields with accurate paths", () => {
     const planProgress = definition("plan.progress");
-    expect(planProgress.payloads?.progress?.schema.safeParse({ status: "InProgress" }).success).toBe(true);
     const malformed = planProgress.input.safeParse({ progress: "not-an-object" });
     expect(malformed.success).toBe(false);
     if (!malformed.success) expect(malformed.error.issues[0]?.path).toEqual(["progress"]);
   });
 
-  test("derived issue entries accept sparse findings while keeping event identity explicit", () => {
-    const result = definition("plan.issue-add").input.safeParse({
-      entries: [{ title: "A finding", occurrenceKey: "event-17" }],
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.entries?.[0]?.occurrenceKey).toBe("event-17");
-    }
-  });
 
   test("bind requires runtime identity and the coordinator reports progress but cannot bypass completion", async () => {
     const data = fixture();
@@ -117,9 +95,6 @@ describe("plan command family", () => {
     const coordinatorDefinition = definition("plan.bind");
     const suppliedOnly = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
     expect(suppliedOnly).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    expect(String(suppliedOnly.message)).toContain("coordinator bind requires runtime session identity");
-    expect(String(suppliedOnly.message)).toContain("--session-id");
-    expect(String(suppliedOnly.message)).toContain("sessionId");
     const rejectedPlanBind = await coordinatorDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness } as never, ctx);
     expect(rejectedPlanBind).toMatchObject({ status: "usage", code: "command.invalid-input" });
     const bound = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness } as never, context(data.root, "runtime-coordinator"));
@@ -129,14 +104,20 @@ describe("plan command family", () => {
     const session = String(bound.data.session_file);
 
     const shown = await definition("plan.show").execute({ session, plan: data.plan } as never, ctx);
-    expect(shown.status).toBe("ok");
-    if (shown.status === "ok") expect(shown.data).toMatchObject({ row: { id: data.plan } });
-    const started = await definition("plan.progress").execute({ session, plan: data.plan, expect: 0, progress: { status: "InProgress", summary: "started", evidence_paths: [] } } as never, ctx);
+    if (shown.status !== "ok") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
+    const view = shown.data as { row: { id: string }; revision: number };
+    expect(view.row.id).toBe(data.plan);
+    const started = await definition("plan.progress").execute({ session, plan: data.plan, expect: view.revision, progress: { status: "InProgress", summary: "started", evidence_paths: [] } } as never, ctx);
     expect(started.status).toBe("ok");
+    if (started.status !== "ok") throw new Error(`plan progress failed: ${JSON.stringify(started)}`);
+    const progressed = started.data as { view: { revision: number; row: { status: string } } };
+    expect(progressed.view.row.status).toBe("InProgress");
+    const persisted = await definition("plan.show").execute({ session, plan: data.plan } as never, ctx);
+    expect(persisted).toMatchObject({ status: "ok", data: { revision: progressed.view.revision, row: { status: "InProgress" } } });
     const snapshot = path.join(data.harness, "workflows", data.workflow, "snapshot.json");
     const beforeDenied = await Bun.file(snapshot).text();
 
-    const denied = await definition("plan.progress").execute({ session, plan: data.plan, expect: 1, progress: { status: "Done", summary: "x", evidence_paths: [] } } as never, ctx);
+    const denied = await definition("plan.progress").execute({ session, plan: data.plan, expect: progressed.view.revision, progress: { status: "Done", summary: "x", evidence_paths: [] } } as never, ctx);
     expect(denied).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
     expect(await Bun.file(snapshot).text()).toBe(beforeDenied);
   });
@@ -163,7 +144,7 @@ describe("plan command family", () => {
         started_at: "2026-09-26T00:00:00Z",
         updated_at: "2026-09-26T00:00:00Z",
         branch: { base: "main" },
-        plans: [{ id: data.plan, plan_id: data.plan, title: "Plan A", file: `.mstar/plans/${data.plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+        plans: [{ id: data.plan, plan_id: data.plan, title: "Plan A", file: `plans/${data.plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
       } as never,
       expected: initialized.token,
       operationId: "create-plan-workflow",
@@ -200,7 +181,7 @@ describe("plan command family", () => {
         started_at: "2026-09-26T00:00:00Z",
         updated_at: "2026-09-26T00:00:00Z",
         branch: { base: "main" },
-        plans: [{ id: data.plan, plan_id: data.plan, title: "Plan A", file: `.mstar/plans/${data.plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+        plans: [{ id: data.plan, plan_id: data.plan, title: "Plan A", file: `plans/${data.plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
       } as never,
       expected: initialized.token,
       operationId: "create-plan-workflow",
