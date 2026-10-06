@@ -275,7 +275,7 @@ Non-blocking open issues — `severity` below `critical` on the §3 axis — may
 
 ACTIVE plan 行与冻结执行输入在 store execution_* 表；读取经 `mstar plan show`，变更经公共 plan/workflow 动词。pre-activation snapshot 保留 v1 PlanRow 形状；完整历史字段表 → **`mstar-engine-legacy`** `references/status-field-history.md`，不在此重复。
 
-`id/title/file` 与规格/迭代 metadata 是 prepare 冻结输入，不是 catalog 编辑面；catalog 变更不静默刷新在途执行。知识关联用 catalog relations（`mstar catalog link`），不写 snapshot `metadata.knowledge_refs`；知识引用载体决策待定（I-000370）。SDD review bundle 与 durable gate summary 仍是文件产物（→ `references/plan-files-and-reports.md`）。
+`id/title/file` 与规格/迭代 metadata 是 prepare 冻结输入，不是 catalog 编辑面；catalog 变更不静默刷新在途执行。知识关联载体是 catalog relations（`mstar catalog link`）；`plans[].metadata.knowledge_refs` 仅为 legacy 只读字段，不再写入 snapshot。SDD review bundle 与 durable gate summary 仍是文件产物（→ `references/plan-files-and-reports.md`）。
 
 ### `plans[].execution_lease` (iteration Phase 2)
 
