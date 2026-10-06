@@ -31,12 +31,12 @@ Check what already exists and note its condition:
 |----------|-------|-----------|
 | `STRATEGY.md` | Exists? Is it current/accurate? | `absent` / `stale` / `partial` / `current` |
 | `CONCEPTS.md` | Exists? Covers core domain nouns? | `absent` / `stale` / `partial` / `current` |
-| `{KNOWLEDGE_DIR}/README.md` | Exists? Index populated? | `absent` / `empty` / `partial` / `current` |
+| `{KNOWLEDGE_DIR}/README.md` | Exists as prose navigation? Check registration completeness through `mstar catalog list`, not README rows. | `absent` / `empty` / `partial` / `current` |
 | `{KNOWLEDGE_DIR}/**/*.md` | Any knowledge docs? Are they still accurate? | `none` / `few` / `some` / `many` |
 | `{ITERATION_DIR}/README.md` | Exists? Any past iteration artifacts? | `absent` / `present` |
 | `{SPECS_DIR}/` or `designs/` | Any specs or ADRs? | `absent` / `present` |
 | `docs/` | Any architecture docs, design notes? | Count and note relevance |
-| `{HARNESS_DIR}/status.json` | Exists? Any historical plans / workflows (`workflows[]`, snapshots)? | `absent` / `present` |
+| Store-backed execution authority | Query `mstar status validate` / `mstar plan show` for workflow/plan history (status.json only pre-activation legacy probe). | `absent` / `present` |
 
 Report findings to the user: what exists, what's missing, what's stale.
 
@@ -133,7 +133,7 @@ Apply `mstar-compound-refresh` logic:
 
 ## Phase 5: Indexing & discoverability
 
-1. Create or update `{KNOWLEDGE_DIR}/README.md` index table
+1. Discover and register knowledge through reviewed `mstar catalog discover` + `mstar catalog import` (or `register`); README is prose, with no registration-row obligation
 2. Create or update `{ITERATION_DIR}/README.md` index table (if iteration artifacts exist)
 3. Check AGENTS.md references all knowledge artifacts:
    - If missing `{HARNESS_DIR}/knowledge/` → propose adding

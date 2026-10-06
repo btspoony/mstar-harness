@@ -15,13 +15,13 @@ Kimi **Plan mode** (`EnterPlanMode` / `ExitPlanMode`, `/plan`, or `Shift-Tab`) u
 
 | Step | Kimi session | Harness SSOT |
 |------|--------------|--------------|
-| Enter | `EnterPlanMode` or `/plan on` — explore read-only | Ensure `{HARNESS_DIR}` exists; register the root `workflows[]` entry + snapshot plan row when known |
+| Enter | `EnterPlanMode` or `/plan on` — explore read-only | Ensure `{HARNESS_DIR}` exists; register store-backed workflow/plan rows through public producer when known (file state only pre-activation) |
 | Design | Edit Kimi plan file with `Write` / `Edit` (when Plan mode allows writes) | Mirror main plan to `{PLAN_DIR}/<plan-id>-<name>.md` with task checkboxes |
 | Clarify | `AskUserQuestion` for blocking ambiguity only | Record decisions in plan / spec when durable |
-| Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; snapshot plan row updated |
+| Exit | `ExitPlanMode` — user approves plan to implement | SSOT plan locked; store-backed plan row updated through public plan verbs |
 | Implement | Agent mode resumes | Per-task commits, Working branch, dispatch per `mstar-dispatch-gates` |
 
-`TodoList` and Kimi UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and the workflow snapshot (`{WORKFLOW_DIR}/<id>/snapshot.json` → `plans[]`) when coordination requires it.
+`TodoList` and Kimi UI todos are **session progress only** — sync meaningful state to SSOT plan checkboxes and the store-backed plan row via public plan verbs (snapshot files only pre-activation) when coordination requires it.
 
 ## ExitPlanMode gate
 

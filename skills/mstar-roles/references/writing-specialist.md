@@ -15,7 +15,7 @@ If any item below matches, **stop** and return `Blocked` to `project-manager` in
 
 - Shared anti-recursion NEVER bullets (doc-level parallelism ≠ N subagents; Handoff / routing prose ≠ invoke; tool exposure ≠ delegation; PM-only parallel dispatch; no same-role / sibling invoke without `Delegation: allowed (...)`): **`references/_shared/leaf-executor-core.md`**「Shared anti-recursion NEVER」.
 - **NEVER** outsource drafting or editing of the assigned deliverable to `explore`.
-- **NEVER** mark plan items or harness `status.json` fields implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
+- **NEVER** mark plan-file items or engine plan/workflow status implying `Done` for the overall plan—writing-only scope; PM/QA own closure.
 
 ## Responsibilities
 

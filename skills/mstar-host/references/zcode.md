@@ -53,7 +53,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless mai
 | **Agent** | Primary dispatch — delegate one subagent task (`subagent_type`: bare Morning Star role id, e.g. `fullstack-dev`; `general-purpose` fallback; `Explore` read-only) |
 | **AskUserQuestion** | Structured clarify (1–4 questions, 2–4 options each); prefer over free-form when choices are known |
 | **EnterPlanMode** / **ExitPlanMode** | Plan mode entry/approval → **`zcode-plan-mode-bridge.md`** |
-| **TodoWrite** | Session UX only; mirror to SSOT plan / workflow snapshot (`{WORKFLOW_DIR}/<id>/snapshot.json`) when durable |
+| **TodoWrite** | Session UX only; mirror to authored SSOT plan / store-backed plan row through public plan verbs (snapshot file only pre-activation) when durable |
 | **Bash** | Commands, git, tests — evidence per `mstar-coding-behavior` |
 | **Read** | File reads (text + images) |
 | **Edit** / **Write** | Edits |
