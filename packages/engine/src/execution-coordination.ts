@@ -593,6 +593,13 @@ function withExecutionPlanOperation<T>(
     );
     assertRunningWorkflow(witness);
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
+    // §4.1 the verb's own preflight — prepare's admission and actual-checkout
+    // validation, completion's captured-witness comparison — runs HERE, after the
+    // witness, the receipt conflict, the freshness and the running-lifecycle
+    // admission and BEFORE the equality decision and any shared revision or body
+    // write. A served replay returns above and never reaches it, so a retry does
+    // not re-run Git or re-hash evidence.
+    preflight?.(witness, tx);
     // §4.1 an operation whose requested state the row ALREADY holds is decided
     // HERE — after admission, receipt conflict and freshness, but BEFORE the
     // shared revision advance and before the body: nothing about the plan row,
@@ -712,7 +719,7 @@ export async function prepareExecutionPlan(
       }
     },
     (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at),
-    (witness) => alreadyPrepared(witness.view, inputs, witness.token),
+    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx),
   );
 }
 
@@ -721,13 +728,16 @@ export async function prepareExecutionPlan(
  * exactly this configuration and its requested checkout, so the frame decides it
  * before its shared revision advance — no row, header or store revision moves,
  * and the result expresses the no-op as `already-satisfied` rather than
- * `applied`. Admission (a `Done` row) is the caller's preflight's, and the
- * checkout was validated there too.
+ * `applied`. Its envelope is the REAL transaction identity (the same store and
+ * epoch the frame commits the no-op receipt in), never a fabricated one.
+ * Admission (a `Done` row) and the checkout validation are the caller's
+ * preflight's, and both have already run by the time this is consulted.
  */
 function alreadyPrepared(
   view: ExecutionPlanView,
   inputs: PreparedInputs,
   token: ExecutionToken,
+  tx: ExecutionTransaction,
 ): ExecutionRead<ExecutionPlanView> | undefined {
   const prior = view.coordination?.prepared;
   if (prior === undefined) return undefined;
@@ -741,7 +751,7 @@ function alreadyPrepared(
   const recordedWorktree = isNonEmptyString(metadata.worktree_path) ? canonicalTarget(metadata.worktree_path) : undefined;
   const recordedBranch = isNonEmptyString(metadata.working_branch) ? metadata.working_branch : undefined;
   if (effective.worktreePath !== recordedWorktree || effective.workingBranch !== recordedBranch) return undefined;
-  return { data: view, token, storeId: "", epoch: 0 };
+  return { data: view, token, storeId: tx.storeId, epoch: tx.epoch };
 }
 
 /**
@@ -1812,28 +1822,44 @@ function requireOwnMergeClaim(
     throw new CoordinationError(
       "coordination.identity-mismatch",
       `plan ${planId} merge lease is held by the LIVE coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
-        `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released; resume that holder's own binding, ` +
-        `then retry this completion`,
+        `${JSON.stringify(witness.session.sessionId)} — a live foreign claim is never released. Resume that holder's own binding ` +
+        `and let it complete plan ${JSON.stringify(lease.plan_id)} from its own recorded scope, or run recoverExecutionCoordinator ` +
+        `naming ${JSON.stringify(lease.holder)} with its stop/reload attestation, the current workflow token (--expect), a fresh ` +
+        `--operation id, a non-empty --reason and a valid activation attestation carried by the independently acquired replacement, ` +
+        `then retry this completion as the recovered coordinator.`,
       { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
     );
   }
   // §4.2 the claim matches this attempt but names a session this epoch does NOT
   // hold active. That is NOT by itself authority to take it: a revoked, suspended,
   // epoch-invalidated or simply unrelated old row is not "the predecessor this
-  // coordinator recovered". The ONLY recorded linkage that authorises replacing
-  // such a holder is the workflow-wide recovery transition, which requires the
-  // operator's stop/reload attestation naming THIS holder and, once accepted,
-  // revokes it and settles its matching claim itself (guarded by
-  // `claimed_at <= recovery instant`, so a newer attempt's claim survives). A row
-  // that is merely non-active — or a claim taken after the stop — is refused
-  // here, with the supported route named, instead of being released on a guess.
+  // coordinator recovered", and the ordinary recovery transition REFUSES to name a
+  // predecessor while a different active coordinator — the one reaching this
+  // frame — already holds the workflow. The claim survives because it was taken at
+  // or after the stop evidence that bound the current replacement, so it belongs
+  // to a NEWER attempt, and only the ordinary actions that own it can move it: its
+  // own row's completion from its recorded scope, or its own row's ordinary
+  // prepare/config correction when that recorded scope was mistaken.
   throw new CoordinationError(
     "coordination.merge-lease-stopped-owner",
-    `plan ${planId} merge lease is held by ${JSON.stringify(lease.holder)}, whose coordinator session is not active at epoch ` +
-      `${tx.epoch}. This completion does not take over a stopped owner's claim: run recoverExecutionCoordinator naming the recorded ` +
-      `holder ${JSON.stringify(lease.holder)} with its stop/reload attestation — that transition revokes the holder and settles its ` +
-      `matching claim — then retry this completion as the recovered coordinator.`,
-    { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId, holder_epoch: lease.claimed_at ?? null },
+    `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, taken ` +
+      `by holder ${JSON.stringify(lease.holder)} at ${String(lease.claimed_at ?? "an unknown instant")}. That holder's coordinator ` +
+      `session is not active at epoch ${tx.epoch}, and this completing coordinator ${JSON.stringify(witness.session.sessionId)} ` +
+      `already holds the workflow, so recoverExecutionCoordinator CANNOT name ${JSON.stringify(lease.holder)} while this binding is ` +
+      `current. The claim belongs to the attempt it names: complete plan ${JSON.stringify(lease.plan_id)} from its recorded scope ` +
+      `(source ${lease.source_branch}, target ${lease.target_branch}) — that row's own complete releases its claim — or, when the ` +
+      `claim is this plan's but its recorded scope is mistaken, correct this row's worktree/branch through the ordinary plan ` +
+      `prepare and complete against the claim the row actually owns. This completion never takes over or releases another ` +
+      `attempt's claim.`,
+    {
+      plan_id: planId,
+      session_id: witness.session.sessionId,
+      claim_plan_id: lease.plan_id,
+      claim_source_branch: lease.source_branch,
+      claim_target_branch: lease.target_branch,
+      claim_holder: lease.holder,
+      claim_taken_at: lease.claimed_at ?? null,
+    },
   );
 }
 
