@@ -222,7 +222,7 @@ const fullSource: MstarEngineStatusPayload = {
     pushPolicy: 'push authorized',
     worktreeMode: 'feature-worktree',
     integrationWorktreePath: '/tmp/mstar-fixture/workflow',
-    row scope: [
+    rowScopes: [
       {
         planId: '00000809-dsh-workflow-viz-panel',
         workingBranch: 'dsh-web-mstar-workflow',
@@ -619,7 +619,7 @@ describe('workflow panel — full fixture renders every section (spec §2)', () 
     expect(html).not.toContain('data-field="target-branch"')
     expect(html).not.toContain('data-field="spec-integration-branch"')
     // Lease anchors.
-    expect(html).toContain('data-lease-plan="00000809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-row-scope-plan="00000809-dsh-workflow-viz-panel"')
     expect(html).toContain('dsh-web-mstar-workflow')
     // Knowledge digest.
     expect(html).toContain('data-knowledge-docs="3"')
@@ -953,7 +953,7 @@ describe('workflow panel — T2 narrow-column shell: three zones / single scroll
     expect(html).toContain('data-plan-id="00000809-dsh-workflow-viz-panel"')
     expect(html).toContain('data-residual-finding-severity="high"')
     expect(html).toContain('data-knowledge-docs="3"')
-    expect(html).toContain('data-lease-plan="00000809-dsh-workflow-viz-panel"')
+    expect(html).toContain('data-row-scope-plan="00000809-dsh-workflow-viz-panel"')
     // The digest content lives in the scroll body's flow (after the active
     // page); the pinned meta dock follows the whole scroll zone (data-plan-id
     // also appears earlier in the graph node plan rows, so order is pinned

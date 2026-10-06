@@ -11,7 +11,7 @@
  * v3 per-lifecycle aggregation :
  * the state + iteration sections aggregate the SELECTED workflow lifecycle
  * (compass v3.0.0 § Catalog selection rule — `resolveReadWorkflow` in
- * `workflow-selection.ts`): the session's lease/cwd/durable pick, else the
+ * `workflow-selection.ts`): the session's scope/cwd/durable pick, else the
  * only active entry, else the latest terminal snapshot by mtime for an EMPTY
  * active registry; N>1 with no binding is the picker error, never first entry.
  * `state.plans[]` / row scopes come from the selected snapshot's `plans[]` rows

@@ -242,7 +242,7 @@ function executionReadRefusal(harnessDir: string): ValidationResult | null {
   return leaseViolation(
     refusal.code,
     `${refusal.message} — the dispatch gate refuses instead of deriving a lease verdict from the retired files`,
-    'run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm the row's recorded scope',
+    "run this dispatch against the execution DB route (or restore the authority): a retired root register / workflow snapshot cannot confirm the row's recorded scope",
   )
 }
 

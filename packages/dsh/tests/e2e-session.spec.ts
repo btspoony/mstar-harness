@@ -491,7 +491,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // the refusal instead of claiming there are no open issues.
     expect(text).toContain('residuals: unavailable — [store.not-initialized]')
     expect(text).toContain('branch: dev-dsh → dev-dsh')
-    expect(text).toContain('row scope: none active')
+    expect(text).toContain('row scope: none recorded')
   })
 })
 

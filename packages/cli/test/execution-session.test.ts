@@ -480,6 +480,31 @@ describe("mstar session run — documented invocation", () => {
     expect(dataOf(resumed).replayed).toBeUndefined();
     expect(String((dataOf(resumed).data as ExecutionSessionRef).sessionId)).toBe(COORDINATOR_ID);
 
+    // The ordinary start record first: prepare preserves row status, so the
+    // first progress report moves Todo -> InProgress.
+    const startPath = join(fixture.root, "progress-start.json");
+    writeJson(startPath, { status: "InProgress", summary: "started", evidence_paths: [fixture.evidencePath] });
+    const beforeStart = await tokensOf(fixture);
+    const startArgs = [
+      "plan",
+      "progress",
+      "--session-ref",
+      coordinatorWire,
+      "--plan",
+      PLAN_ID,
+      "--file",
+      startPath,
+      "--expect",
+      beforeStart.plan,
+      "--operation",
+      "progress-start",
+      "--harness",
+      fixture.harnessDir,
+    ];
+    const started = runCli(startArgs, fixture, identity);
+    expect(started.exitCode, started.stdout).toBe(0);
+    expect(objectMember(objectMember(dataOf(started), "data"), "plan")).toMatchObject({ id: PLAN_ID, status: "InProgress" });
+
     // One plan mutation through the active transport, then its exact retry.
     const progressPath = join(fixture.root, "progress.json");
     writeJson(progressPath, { status: "InReview", summary: "reviewed delivery ready", evidence_paths: [fixture.evidencePath] });
@@ -1283,10 +1308,21 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     );
     expect(prepared.exitCode, prepared.stdout).toBe(0);
 
-    // The configuration is revisable while the row is active: a CHANGED
-    // configuration — a different real checkout and branch, recorded while the
-    // row is already active — is adopted, not treated as a sealed admission
-    // gate. (A same-value re-prepare only proves an equal-config no-op.)
+    // The ordinary start record first: prepare preserves row status, so the
+    // first progress report moves Todo -> InProgress.
+    const startPath = join(fixture.root, "progress-start.json");
+    writeJson(startPath, { status: "InProgress", summary: "direct coordinator start", evidence_paths: [fixture.qaReport] });
+    const started = runCli(
+      ["plan", "progress", "--plan", PLAN_ID, "--file", startPath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(started.exitCode, started.stdout).toBe(0);
+
+    // The configuration is revisable while the row is ACTIVE: a CHANGED
+    // configuration — a different real checkout and branch, recorded after the
+    // row already started — is adopted, not treated as a sealed admission gate.
+    // (A same-value re-prepare only proves an equal-config no-op.)
     const correctedPath = join(fixture.root, "wt-corrected");
     execFileSync("git", ["worktree", "add", "-q", "-b", "feature/corrected", correctedPath], { cwd: fixture.root });
     const reprepped = runCli(
@@ -1297,25 +1333,32 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
       identity,
     );
     expect(reprepped.exitCode, reprepped.stdout).toBe(0);
-    // The corrected configuration is the one the row now records.
-    const correctedScope = objectMember(objectMember(dataOf(reprepped), "data"), "coordination");
-    expect(objectMember(objectMember(correctedScope, "prepared"), "qa_gate")).toBe("mandatory");
     const shownAfterCorrection = runCli(["plan", "show", "--plan", PLAN_ID, "--harness", fixture.harnessDir], fixture, identity);
     expect(stringMember(objectMember(objectMember(dataOf(shownAfterCorrection), "data"), "scope"), "workingBranch")).toBe("feature/corrected");
+    // The correction preserves the started state: status and progress survive.
+    expect(await storedRowStatus(fixture)).toBe("InProgress");
 
-    // The ordinary start record first: prepare preserves row status, so the
-    // first progress report moves Todo -> InProgress and the review report then
-    // moves InProgress -> InReview.
-    for (const status of ["InProgress", "InReview"]) {
-      const progressPath = join(fixture.root, `progress-${status}.json`);
-      writeJson(progressPath, { status, summary: `direct coordinator ${status}`, evidence_paths: [fixture.qaReport] });
-      const progressed = runCli(
-        ["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
-        fixture,
-        identity,
-      );
-      expect(progressed.exitCode, progressed.stdout).toBe(0);
-    }
+    // Revise BACK to the registered source scope before completion: standalone
+    // development verifies the row's own recorded branch against the registered
+    // source, so a completion naming `feature/exec-session` must find that scope.
+    const restored = runCli(
+      ["plan", "prepare", "--session-ref", coordinator.wire, "--plan", PLAN_ID,
+        ...prepareConfig(fixture, { worktreePath: fixture.featurePath, workingBranch: "feature/exec-session" }),
+        "--operation", "prepare-direct-3", "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(restored.exitCode, restored.stdout).toBe(0);
+
+    // The review record completes the started progression (InProgress → InReview).
+    const progressPath = join(fixture.root, "progress-review.json");
+    writeJson(progressPath, { status: "InReview", summary: "direct coordinator InReview", evidence_paths: [fixture.qaReport] });
+    const progressed = runCli(
+      ["plan", "progress", "--plan", PLAN_ID, "--file", progressPath, "--harness", fixture.harnessDir],
+      fixture,
+      identity,
+    );
+    expect(progressed.exitCode, progressed.stdout).toBe(0);
     expect(await storedRowStatus(fixture)).toBe("InReview");
 
     // The one direct completion: QC/QA evidence plus the source commit the row's

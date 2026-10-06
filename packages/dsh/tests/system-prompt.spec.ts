@@ -69,9 +69,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
       title: 'Plan A',
       file: 'plans/plan-a.md',
       status: 'InProgress',
-      execution_lease: {
-        workingBranch: 'dsh-session-1',
-        claimed_at: '2026-08-08',
+      metadata: {
         worktree_path: '/worktrees/plan-a',
         working_branch: 'feature/plan-a',
       },
@@ -411,13 +409,13 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(section!.text).toContain('enforcement: hard')
   })
 
-  it('(l) interpolation-hazard screening — hostile dynamic values ({{x}} in plan id / lease holder / iteration id / compass direction) render without throwing and keep the screened text', async () => {
+  it('(l) interpolation-hazard screening — hostile dynamic values ({{x}} in plan id / working branch / iteration id / compass direction) render without throwing and keep the screened text', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-hostile-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     // Operator-controlled fields carrying COMPLETE `{{...}}` groups: the
     // workflow id (`{{iter}}`), the plan id (`{{plan}}`) and — fixture-only,
-    // never rendered by the slim digest — a lease holder + compass direction
+    // never rendered by the slim digest — a working branch + compass direction
     // prose.
     const HOSTILE_ROOT = v2Root([v2WorkflowEntry('{{iter}}', 'iteration')])
     const HOSTILE_SNAPSHOT = v2Snapshot('{{iter}}', {
@@ -428,7 +426,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
           title: 'Hostile',
           file: 'plans/hostile.md',
           status: 'InProgress',
-          execution_lease: { workingBranch: '{{leaser}}', claimed_at: '2026-08-08', worktree_path: '/wt/{{plan}}', working_branch: 'feature/{{plan}}' },
+          metadata: { worktree_path: '/wt/{{plan}}', working_branch: 'feature/{{plan}}' },
         },
       ],
     })

@@ -221,7 +221,7 @@ interface SessionsView {
  * Minimal structural view of the live `agents` service (`@deepseek-ai/dsh-agent`
  * `AgentRegistry` — the same read the host endpoint and the plan-mode bridge
  * perform): `get(sessionId)` yields the session's live Agent, whose own `id`
- * IS the lease holder the dispatch gate forwards. Absent service (a
+ * IS the session identity the selection hint forwards. Absent service (a
  * composition without dsh-agent, or one published after this consumer) → no
  * holder, never a guessed one.
  */

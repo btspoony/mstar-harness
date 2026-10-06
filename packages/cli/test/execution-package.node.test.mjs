@@ -193,7 +193,7 @@ async function makeActiveWorkspace(label) {
   const store = await initializeStore({ harnessDir: harness });
   store.close();
   await initializeExecutionAuthority({ harnessDir: harness });
-  return { root, harness };
+  return { root, harness, worktreePath: join(root, "wt-fixture"), evidencePath: join(root, "evidence.md") };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -238,7 +238,7 @@ function ok(result, label) {
 }
 
 function coordinatorIdentity() {
-  return { source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator", planId: null };
+  return { source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator" };
 }
 
 
@@ -252,7 +252,6 @@ function plainRef(ref) {
     workflowId: ref.workflowId,
     role: ref.role,
     sessionId: ref.sessionId,
-    planId: ref.planId,
   };
 }
 
@@ -347,7 +346,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   // checkout and branch.
   execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
   const startPath = join(fixture.root, "progress-start.json");
-  writeText(startPath, `${JSON.stringify({ status: "InProgress", summary: "r3 start record", evidence_paths: [fixture.evidencePath] })}\n`);
+  writeText(startPath, `${JSON.stringify({ status: "InProgress", summary: "r3 start record", evidence_paths: [evidencePath] })}\n`);
   const progressPath = join(fixture.root, "progress.json");
   writeJson(progressPath, { status: "InReview", summary: "r3 assembled-package regression", evidence_paths: [evidencePath] });
 
@@ -439,7 +438,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
         "--plan",
         PLAN_ID,
         "--worktree-path",
-        fixture.worktreePath,
+        worktreePath,
         "--working-branch",
         BRANCH,
         "--qa-gate",

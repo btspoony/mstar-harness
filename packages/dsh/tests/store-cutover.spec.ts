@@ -18,7 +18,7 @@
  *    empty findings, and never passes a closure gate.
  * 4. A pending catalog registration refuses dispatch, while an
  *    uninitialized/staged store (pre-activation) does not.
- * 5. The current phase/row scope still come from the JSON execution authority.
+ * 5. The current phase and the plan rows' recorded scope still come from the JSON execution authority.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
@@ -640,9 +640,9 @@ describe('store cutover — root selection is JSON-owned, registration is not', 
 })
 
 /* ===========================================================================
- * 5. Execution facts stay JSON: phase/row scope/status come from the snapshot
+ * 5. Execution facts stay JSON: phase, status and the rows' recorded scope come from the snapshot
  * ========================================================================== */
-describe('store cutover — the JSON execution authority still owns phase and row scope', () => {
+describe('store cutover — the JSON execution authority still owns phase and recorded row scope', () => {
   it('phase, status and row scope render from the snapshot even while the store is unavailable', async () => {
     const { app, harnessDir } = await appWithRoot('store-json-authority')
     const worktreePath = join(harnessDir, '..', 'wt')
@@ -657,9 +657,7 @@ describe('store cutover — the JSON execution authority still owns phase and ro
           file: 'plans/plan-a.md',
           status: 'InProgress',
           progress: '3/5 tasks',
-          execution_lease: {
-            workingBranch: 'dsh:session-1',
-            claimed_at: '2026-09-19',
+          metadata: {
             worktree_path: worktreePath,
             working_branch: 'feature/store-cutover',
           },

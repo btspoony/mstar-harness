@@ -112,29 +112,6 @@ function planRow(): Record<string, unknown> {
   };
 }
 
-function assignmentText(input: { harness: string; planPath: string; worktreePath: string; sddDir: string }): string {
-  return [
-    `# Assignment — ${PLAN_ID}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${WORKFLOW_ID}`,
-    `**Plan id**: ${PLAN_ID}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: feature/plan-issues`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: zero-residual",
-    "",
-    "Body.",
-    "",
-  ].join("\n");
-}
-
 interface Fixture {
   root: string;
   harness: string;
@@ -190,7 +167,9 @@ async function makeFixture(): Promise<Fixture> {
   const worktreePath = join(root, "wt-issues");
   writeText(planPath, "# plan issues\n");
   writeText(join(sddDir, "evidence.md"), "# evidence\n");
-  mkdirSync(worktreePath, { recursive: true });
+  // A REAL checkout on the branch prepare records: prepare validates the actual
+  // checkout and branch, not merely that a directory exists.
+  execFileSync("git", ["worktree", "add", "-q", "-b", "feature/plan-issues", worktreePath], { cwd: root });
 
   // Initialize the active DB directly; the CLI store-init command is not an
   // input surface for test setup.
@@ -206,8 +185,6 @@ async function makeFixture(): Promise<Fixture> {
     delivery_kind: "development",
     branch: { source: "feature/plan-issues", target: "main" },
   });
-
-  writeText(join(sddDir, "assignment.md"), assignmentText({ harness, planPath, worktreePath, sddDir }));
 
   const coordinatorSessionId = "fixture-coordinator";
   const coordinatorWorkflowToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID })).token;
@@ -232,7 +209,6 @@ async function makeFixture(): Promise<Fixture> {
   );
   expect(coordinatorBound).toMatchObject({ exitCode: 0 });
   const coordinatorRef = encodeExecutionSessionRef(jsonOf(coordinatorBound).data as ExecutionSessionRef);
-  const assignmentPath = join(sddDir, "assignment.md");
   const prepareToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID })).token;
   const prepared = runCli(
     [

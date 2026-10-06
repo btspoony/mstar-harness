@@ -663,9 +663,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       title: 'Plan A',
       file: 'plans/plan-a.md',
       status: 'InProgress',
-      execution_lease: {
-        workingBranch: 'dsh-session-1',
-        claimed_at: '2026-08-19',
+      metadata: {
         worktree_path: '/worktrees/plan-a',
         working_branch: 'feature/plan-a',
       },
@@ -825,7 +823,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       pushPolicy: 'no-push',
       worktreeMode: 'feature-worktree',
       integrationWorktreePath: '/integration/worktree',
-      rowScopes: [{ planId: 'plan-a', workingBranch: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
+      rowScopes: [{ planId: 'plan-a', workingBranch: 'feature/plan-a', worktreePath: '/worktrees/plan-a' }],
       knowledge: { docCount: 1, categories: ['conventions'] },
       storeFacts: {
         kind: 'store',
@@ -866,7 +864,7 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(text).toContain('store: projection unavailable')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
-    expect(text).toContain('row scope: plan-a → dsh-session-1 (/worktrees/plan-a)')
+    expect(text).toContain('row scope: plan-a → feature/plan-a (/worktrees/plan-a)')
     expect(text).toContain('agent flow: 2 events; by role: fullstack-dev 1')
   })
   it('roadmap-authority failure is disclosed without dropping independent issue counts', async () => {
@@ -1107,28 +1105,24 @@ describe('mstar-engine-status catalog — state plans/row-scope join cap (spec D
   /** The pinned cap value (spec D1) — intentionally hardcoded, NOT imported,
    * so a drift of `CATALOG_STATE_JOIN_LIMIT` fails this matrix. */
   const CAP = 8
-  /** The fixture plan-row shape (snapshot `plans[]` entry with an execution lease). */
+  /** The fixture plan-row shape (snapshot `plans[]` entry with a recorded row scope). */
   interface CapRow {
     id: string
     title: string
     file: string
     status: string
-    execution_lease: {
-      workingBranch: string
-      claimed_at: string
+    metadata: {
       worktree_path: string
       working_branch: string
     }
   }
-  /** One snapshot plan row carrying an execution lease (feeds BOTH joins). */
+  /** One snapshot plan row carrying recorded scope (feeds BOTH joins). */
   const capRow = (index: number): CapRow => ({
     id: `plan-${index}`,
     title: `Plan ${index}`,
     file: `plans/plan-${index}.md`,
     status: 'InProgress',
-    execution_lease: {
-      workingBranch: `holder-${index}`,
-      claimed_at: '2026-08-30',
+    metadata: {
       worktree_path: `/worktrees/plan-${index}`,
       working_branch: `feature/plan-${index}`,
     },
@@ -1137,7 +1131,7 @@ describe('mstar-engine-status catalog — state plans/row-scope join cap (spec D
   const uncappedPlans = (rows: CapRow[]): string => rows.map((row) => `${row.id}(${row.status})`).join(' ')
   /** The pre-cap (legacy) row-scope rendering — the byte-identical reference for ≤ CAP rows (separator `'; '`). */
   const uncappedLeases = (rows: CapRow[]): string =>
-    rows.map((row) => `${row.id} → ${row.execution_lease.holder} (${row.execution_lease.worktree_path})`).join('; ')
+    rows.map((row) => `${row.id} → ${row.metadata.working_branch} (${row.metadata.worktree_path})`).join('; ')
   /** The exact `plans:` / `row scope:` line of the catalog model text (byte-identity assertions, not substring). */
   const lineOf = (text: string, prefix: 'plans:' | 'row scope:'): string => {
     const line = text.split('\n').find((l) => l.startsWith(`${prefix} `))
@@ -1162,10 +1156,10 @@ describe('mstar-engine-status catalog — state plans/row-scope join cap (spec D
     return { text: textOf(row), state }
   }
 
-  it('empty (0) → caller ternary copy `none registered` / `none active` (joinCapped never reached)', async () => {
+  it('empty (0) → caller ternary copy `none registered` / `none recorded` (joinCapped never reached)', async () => {
     const { text, state } = await catalogFor(0)
     expect(lineOf(text, 'plans:')).toBe('plans: none registered')
-    expect(lineOf(text, 'row scope:')).toBe('row scope: none active')
+    expect(lineOf(text, 'row scope:')).toBe('row scope: none recorded')
     expect(state.plans).toEqual([])
     expect(state.rowScopes).toEqual([])
   })
@@ -1393,9 +1387,9 @@ describe('D4 catalog identity encoding + selected compass path', () => {
     // Adjacent sessionId / cwd: `\u0000`-join fused these into one key.
     expect(catalogCacheKey(harness, 's', 'a\u0000b', undefined))
       .not.toBe(catalogCacheKey(harness, 's\u0000a', 'b', undefined))
-    // Adjacent leaseHolder / selectedWorkflowId — the same delimiter-shift.
-    expect(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x\u0000y', selectedWorkflowId: 'wf-a' }))
-      .not.toBe(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x', selectedWorkflowId: 'y\u0000wf-a' }))
+    // Adjacent selectedWorkflowId / cwd — the same delimiter-shift.
+    expect(catalogCacheKey(harness, 's', '/ws', { cwd: 'x\u0000y', selectedWorkflowId: 'wf-a' }))
+      .not.toBe(catalogCacheKey(harness, 's', '/ws', { cwd: 'x', selectedWorkflowId: 'y\u0000wf-a' }))
   })
 
   const compassDoc = (id: string, direction: string): string => [

@@ -328,12 +328,13 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         : await readExecutionPlan(contextForCaller, ref, input.plan);
       return ok(id, result);
     }
-    // An explicit workflow with no file session is a coordinator intent: the
-    // coordinator is the only remaining seat, so an ordinary `--workflow
-    // --plan --session-id` call routes to the ACTIVE operation without an extra
-    // `--coordinator` / `--session-ref` / minted-tuple ceremony (the same
-    // default `show` already applies).
+    // A coordinator intent reaches the ACTIVE operation by ANY of the three
+    // supported transports: an explicit `--workflow` (with `--plan`, the same
+    // default `show` applies), a minted launch identity, or a session
+    // reference. No extra `--coordinator` ceremony is required — the
+    // coordinator is the only remaining seat.
     const activeRoute = input.sessionRef !== undefined ||
+      context.executionIdentity !== undefined ||
       (input.session === undefined && input.workflow !== undefined);
     if (activeRoute) {
       if (context.sessionId === undefined) {

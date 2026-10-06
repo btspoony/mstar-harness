@@ -77,9 +77,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
       file: 'plans/plan-a.md',
       status: 'InProgress',
       // No done_at: the always-present doneAt must project to null.
-      execution_lease: {
-        workingBranch: 'dsh-session-1',
-        claimed_at: '2026-08-08',
+      metadata: {
         worktree_path: '/worktrees/plan-a',
         working_branch: 'feature/plan-a',
       },
@@ -220,7 +218,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
       pushPolicy: 'no-push',
       worktreeMode: 'feature-worktree',
       integrationWorktreePath: '/integration/worktree',
-      rowScopes: [{ planId: 'plan-a', workingBranch: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
+      rowScopes: [{ planId: 'plan-a', workingBranch: 'feature/plan-a', worktreePath: '/worktrees/plan-a' }],
       knowledge: { docCount: 2, categories: ['architecture-patterns', 'conventions'] },
     })
     const text = textOf(row)
@@ -234,7 +232,7 @@ describe('mstar-engine-status — the unified catalog row (watermark + gate + st
     expect(text).toContain('residuals: high 1, info 1')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
-    expect(text).toContain('row scope: plan-a → dsh-session-1 (/worktrees/plan-a)')
+    expect(text).toContain('row scope: plan-a → feature/plan-a (/worktrees/plan-a)')
     expect(text).toContain('knowledge: 2 docs (architecture-patterns, conventions)')
     expect(text).toContain('direction: The dsh host plugin needs richer in-session harness context for operators.')
     expect(text).toContain('</mstar_engine_status>')

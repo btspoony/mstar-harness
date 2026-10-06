@@ -130,6 +130,10 @@ async function buildFixture(label: string): Promise<{
   for (const planId of [PLAN_ID, PLAN2_ID] as const) {
     const planPath = join(harnessRoot, "plans", `${planId}.md`);
     writeText(planPath, `# ${planId}\n`);
+    // A REAL checkout on the branch prepare records: prepare validates the
+    // actual checkout and branch, not merely that a directory exists.
+    const worktree = join(repoRoot, `wt-${planId}`);
+    runGit(["worktree", "add", "-q", "-b", `feature/${planId}`, worktree], repoRoot);
     const planToken: ExecutionToken = (await readExecutionPlan(coordinatorContext, planId)).token;
     await mutateExecutionPlan(coordinatorContext, {
       operationId: `prepare-${planId}-${label}`,
@@ -138,19 +142,25 @@ async function buildFixture(label: string): Promise<{
       planId,
       operation: {
         kind: "prepare",
-        config: { worktreePath: join(harnessRoot, "worktrees", planId), workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+        config: { worktreePath: worktree, workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
       },
     });
   }
   return { context, repoRoot, coordinatorRef: coordinatorBind.data };
 }
 
-async function runPlanCommand(repoRoot: string, input: Record<string, unknown>, sessionId?: string): Promise<CommandEnvelope> {
+async function runPlanCommand(
+  repoRoot: string,
+  input: Record<string, unknown>,
+  sessionId?: string,
+  executionIdentity?: ExecutionIdentity,
+): Promise<CommandEnvelope> {
   const context: InvocationContext = {
     cwd: repoRoot,
     controlRoot: null,
     versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     signal: new AbortController().signal,
+    ...(executionIdentity === undefined ? {} : { executionIdentity }),
     ...(sessionId === undefined ? {} : { sessionId }),
     effects: {
       readInput: async () => "",
@@ -420,6 +430,45 @@ describe("sparse plan intent admission", () => {
     const { repoRoot } = await buildFixture("sparse-file-route");
     const envelope = await runPlanCommand(repoRoot, { plan: PLAN_ID, operation: "op-file-route", progress: PROGRESS });
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+  });
+
+  test("a minted coordinator identity with no reference or workflow selector mutates its row", async () => {
+    const { repoRoot } = await buildFixture("sparse-minted");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { plan: PLAN_ID, operation: "op-sparse-minted", progress: PROGRESS },
+      COORDINATOR_ID,
+      coordinatorIdentity(),
+    );
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    const receipt = envelope.data as PlanReceiptData;
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data?.coordination?.progress?.summary).toBe("sparse intent");
+  });
+
+  test("an explicit session ID with no reference or minted transport mutates its row", async () => {
+    const { repoRoot } = await buildFixture("sparse-explicit-id");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { plan: PLAN_ID, operation: "op-sparse-explicit-id", progress: PROGRESS, workflow: WORKFLOW_ID },
+      COORDINATOR_ID,
+    );
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    expect((envelope.data as PlanReceiptData).data?.coordination?.progress?.summary).toBe("sparse intent");
+  });
+
+  test("an ambient host session ID with no reference or minted transport mutates its row", async () => {
+    const { repoRoot } = await buildFixture("sparse-ambient-id");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { plan: PLAN_ID, operation: "op-sparse-ambient", progress: PROGRESS, workflow: WORKFLOW_ID },
+      COORDINATOR_ID,
+    );
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    expect((envelope.data as PlanReceiptData).data?.coordination?.progress?.summary).toBe("sparse intent");
   });
 
   test("the legacy file route still demands its own revision token", async () => {

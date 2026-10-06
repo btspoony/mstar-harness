@@ -88,29 +88,6 @@ async function makeActiveWorkspace(label) {
 }
 
 /** The header block the engine's Assignment parser accepts. */
-function assignmentText(input) {
-  return [
-    `# Assignment — ${input.planId}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Body.",
-    "",
-  ].join("\n");
-}
-
 /* ------------------------------------------------------------------------ *
  * The MCP stdio client: newline-delimited JSON-RPC over the child's stdio
  * ------------------------------------------------------------------------ */
@@ -194,18 +171,15 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-t4");
-  const assignmentPath = join(sddDir, "assignment.md");
   writeText(planPath, `# ${PLAN_TITLE}\n\n**plan_id:** ${PLAN_ID}\n`);
-  mkdirSync(worktreePath, { recursive: true });
-  writeText(
-    assignmentPath,
-    assignmentText({ harness: fixture.harness, workflowId: WORKFLOW_ID, planId: PLAN_ID, planPath, worktreePath, branch: BRANCH, sddDir }),
-  );
+  // A REAL checkout on the branch the registration names: prepare validates the
+  // actual checkout and branch.
+  execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
+  const evidencePath = join(sddDir, "evidence.md");
+  writeText(evidencePath, "# evidence\n");
   const startPath = join(fixture.root, "progress-start.json");
   writeText(startPath, `${JSON.stringify({ status: "InProgress", summary: "t4 omp identity start record", evidence_paths: [evidencePath] })}\n`);
   const progressPath = join(fixture.root, "progress.json");
-  const evidencePath = join(sddDir, "evidence.md");
-  writeText(evidencePath, "# evidence\n");
   writeText(progressPath, `${JSON.stringify({ status: "InReview", summary: "t4 omp identity regression", evidence_paths: [evidencePath] })}\n`);
 
   const server = startMcpServer(fixture);
@@ -273,9 +247,11 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     const prePrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
     const prepared = await callTool(server, "mstar_plan_prepare", {
       workflow: WORKFLOW_ID,
-      coordinator: true,
       plan: PLAN_ID,
-      assignment: assignmentPath,
+      worktreePath,
+      workingBranch: BRANCH,
+      qaGate: "mandatory",
+      findingsCleanup: "allow-residual",
       expect: prePrepareToken,
       operation: "prepare-1",
       harness: fixture.harness,
