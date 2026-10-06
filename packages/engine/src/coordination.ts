@@ -110,7 +110,7 @@ import {
   type StoreDb,
   type StoreHandle,
 } from "./store-db.js";
-import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
+import type { ActivationAttestation } from "./store-activation.js";
 import {
   IssueError,
   assertIssueProvenanceSchema,
@@ -6548,9 +6548,8 @@ export async function recoverPrepareCoordinator(
   // holds the caller's `workflowId` and the host-derived identity together.
   const identity: ExecutionIdentity = input.identity;
   validateExecutionIdentity(identity, {
-    workflowId: (identity as unknown as Record<string, unknown>).workflowId as string,
+    workflowId: identity.workflowId,
     role: "coordinator",
-    planId: null,
   });
   const workflowId = safePlanId(identity.workflowId, "workflowId");
   const operationId = recoveryText(input.operationId, "operationId");
@@ -6558,7 +6557,10 @@ export async function recoverPrepareCoordinator(
   const authorizationRef = recoveryText(input.authorizationRef, "authorizationRef");
   const priorSessionId = recoveryText(input.priorSessionId, "priorSessionId");
   const stoppedSessionIds = recoveryStopList(input.stoppedSessionIds);
-  const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
+  // A static import closes store-db -> coordination -> activation before MIGRATIONS initializes.
+  const attestation = input.attestation === undefined
+    ? undefined
+    : (await import("./store-activation.js")).validateActivationAttestation(input.attestation);
   if (attestation !== undefined && attestation.operator.authorizationRef !== authorizationRef) {
     throw recoveryRefusal("unauthorized", "the stop attestation's operator authorization does not match authorizationRef; supply the actual operator-authorized attestation and retry recovery", { field: "attestation.operator.authorizationRef" });
   }

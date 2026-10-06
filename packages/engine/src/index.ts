@@ -303,7 +303,6 @@ export {
   validateCompassFrontmatter,
 } from "./iteration.js";
 export type {
-  FindingsCleanupMode,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
   RoadmapFrontmatter,
@@ -521,16 +520,19 @@ export {
   EXECUTION_PIN_CONFLICT_CODE,
   ExecutionPinConflictError,
   bindPlanSession,
+  amendPrepareWorkflow,
   executionInputHash,
   mutatePlanCoordination,
   readCoordinatedArtifact,
   readExecutionCatalogPin,
   readPlanCoordination,
+  recoverPrepareCoordinator,
+  replaceCoordinatedArtifact,
   readSessionEnvelope,
   resolvePlanScope,
   resolveProcessHarnessDir,
+  showPrepareCoordinatorRecovery,
   showPrepareWorkflow,
-  writeCoordinatedArtifact,
 } from "./coordination.js";
 export type {
   BindPlanSessionInput,
@@ -544,12 +546,9 @@ export type {
   ExecutionCatalogPinState,
   PlanCoordinationOperation,
   PlanCoordinationView,
-  PlanProgress,
   PlanScopeInput,
-  PreparedCoordination,
   ResidualInput,
   ResolvedPlanScope,
-  RowCoordination,
   VersionedArtifact,
 } from "./coordination.js";
 export type {
@@ -557,6 +556,9 @@ export type {
   CompletionRecord,
   IntegrationResultInput,
   PlanPrepareConfig,
+  PlanProgress,
+  PreparedCoordination,
+  RowCoordination,
   QaGate,
   FindingsCleanupMode,
 } from "./coordination-write.js";
