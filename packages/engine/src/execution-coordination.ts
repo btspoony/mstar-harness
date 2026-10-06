@@ -1804,7 +1804,7 @@ function requireOwnMergeClaim(
         `must complete its claimed plan through mstar plan complete --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
         `with that holder's own current binding, actual recorded checkout, QC/QA evidence and verified integration result. ` +
         `If the recorded source facts for that claimed plan are wrong, correct them through mstar plan prepare --workflow ` +
-        `${witness.workflowId} --plan ${lease.plan_id} --config <actual-source-config-json> before its holder completes it. ` +
+        `${witness.workflowId} --plan ${lease.plan_id} --worktree-path <actual-source-checkout> --working-branch <actual-source-branch> before its holder completes it. ` +
         `If the holder actually stopped, use mstar session recover --workflow ${witness.workflowId} --prior-session ` +
         `${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> --expect <current-workflow-token> ` +
         `--operation <fresh-id> under the independently acquired replacement; an already-current replacement needs its ` +
@@ -1835,7 +1835,7 @@ function requireOwnMergeClaim(
         `its holder is executing: that holder completes plan ${JSON.stringify(lease.plan_id)} from its own recorded scope ` +
         `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or — when this row's recorded ` +
         `scope is mistaken — correct it through mstar plan prepare --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
-        `--config <actual-source-config-json>. Only after that holder actually stopped, use mstar session recover --workflow ` +
+        `--worktree-path <actual-source-checkout> --working-branch <actual-source-branch>. Only after that holder actually stopped, use mstar session recover --workflow ` +
         `${witness.workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> ` +
         `--expect <current-workflow-token> --operation <fresh-id> under the independently acquired replacement.`,
       { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
