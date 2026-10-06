@@ -7,10 +7,10 @@
  * checkout's store.
  *
  * Scope note (explicit): the walkthrough proves the INPUT-DERIVATION contract.
- * The one lawful close this chain reaches stops at the plan-handoff domain
- * guard (`coordination.invalid-transition`): composing a full close would
- * require valid Assignment/QC/QA evidence fixtures — workflow-lifecycle
- * domain content, not #324 input discovery, and out of this plan's scope.
+ * The one lawful close this chain reaches stops at the workflow-lifecycle
+ * domain guard (`coordination.invalid-transition`): composing a full close
+ * would require valid Assignment/QC/QA evidence fixtures — lifecycle domain
+ * content, not #324 input discovery, and out of this plan's scope.
  * Every #324 input on the way IS engine-verified: the root token passes the
  * registration CAS, and the session reference, identity and workflow token
  * pass `workflow evidence`'s seat check and CAS (the operation commits).
@@ -149,9 +149,9 @@ describe("#324 fixture discovery walkthrough", () => {
     expect(recorded.status).toBe("ok");
     rmSync(evidenceDir, { recursive: true, force: true });
 
-    // The close then reaches the plan-handoff DOMAIN guard — every #324 input
-    // (identity, sessionRef, token) passed its gate; the remaining refusal is
-    // workflow-lifecycle evidence content, out of #324 scope (see header).
+    // The close then reaches the workflow-lifecycle DOMAIN guard — every #324
+    // input (identity, sessionRef, token) passed its gate; the remaining refusal
+    // is lifecycle evidence content, out of #324 scope (see header).
     const closeOut = cli([
       "status", "workflow-close",
       "--workflow", "wf-walk",
@@ -164,7 +164,6 @@ describe("#324 fixture discovery walkthrough", () => {
     const refusedClose = envelope(closeOut.stdout);
     expect(refusedClose.status).toBe("refused");
     expect(refusedClose.code).toBe("coordination.invalid-transition");
-    expect(refusedClose.message).toContain("handoff");
   }, 60000);
 
   test("a wrong-kind --expect refusal names where the expected token is read", () => {

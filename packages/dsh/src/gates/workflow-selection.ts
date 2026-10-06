@@ -729,8 +729,7 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
       source: 'host',
       sessionId,
       workflowId: executionBinding.session.workflowId,
-      role: executionBinding.session.role,
-      planId: executionBinding.session.planId,
+      role: 'coordinator',
     })
     const resumed = await resumeExecutionSession(context, executionBinding.session)
     if (resumed.storeId !== source.storeId || resumed.epoch !== source.epoch) return null

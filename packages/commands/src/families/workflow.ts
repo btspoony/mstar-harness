@@ -214,10 +214,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active evidence requires a full workflow execution token" });
           const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
           const acquired = context.executionIdentity;
-          if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator" || ref.planId !== null)) {
+          if (ref !== undefined && (ref.workflowId !== input.workflow || ref.role !== "coordinator")) {
             return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
           }
-          if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator" || acquired.planId !== null)) {
+          if (acquired !== undefined && (acquired.workflowId !== input.workflow || acquired.role !== "coordinator")) {
             return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired identity must address the selected workflow's coordinator seat" });
           }
           const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: input.workflow, role: "coordinator", planId: null };
@@ -280,10 +280,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         const acquired = context.executionIdentity;
         const workflowId = input.workflow ?? acquired?.workflowId ?? ref?.workflowId;
         if (workflowId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector or minted workflow identity is required" });
-        if (ref !== undefined && (ref.workflowId !== workflowId || ref.role !== "coordinator" || ref.planId !== null)) {
+        if (ref !== undefined && (ref.workflowId !== workflowId || ref.role !== "coordinator")) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "sessionRef must address the selected workflow's coordinator seat" });
         }
-        if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator" || acquired.planId !== null)) {
+        if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator")) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
         }
         const root = resolveProcessHarnessDir(context.cwd, input.harness);

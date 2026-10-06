@@ -29,19 +29,15 @@
  *
  *   - the host session must not be a leaf/subagent session (`session_init` in
  *     its ledger);
- *   - the last host-observed entry route must not be the scoped-plan PM family
- *     (`/iteration-drive …`), whose contract is "restore an existing binding
- *     only, never retro-arm";
  *   - the workflow's own session envelopes
  *     (`{WORKFLOW_DIR}/<id>/sessions/*.json`, read-only through the engine's
- *     `readSessionEnvelope`) must not describe this session as a `plan-pm`
- *     session, must not bind the named workflow to a *different* coordinator
- *     session, and must not bind this session to a different workflow;
+ *     `readSessionEnvelope`) must not bind the named workflow to a *different*
+ *     coordinator session, and must not bind this session to a different
+ *     workflow;
  *   - the root register's other non-terminal workflows must not already name
  *     this session as their coordinator.
  *
- * What that blocks: a task session, a session whose explicit entry was the
- * scoped-plan route, a `plan-pm` session, a session that is demonstrably not the
+ * What that blocks: a task session, a session that is demonstrably not the
  * named workflow's coordinator, and a session already coordinating another
  * running workflow. What it does **not** do: it is not cryptographic proof of
  * caller identity. For a brand-new iteration there is no envelope yet, so a
@@ -193,15 +189,13 @@ const SESSION_ID_ENV = "MSTAR_HOST_SESSION_ID";
 const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 /**
- * Route families read from the host's own `InputEvent`. The scoped-plan PM
- * family (`/iteration-drive …`) is restore-only and must never arm; the two
- * iteration commands are the two arming entry forms. Anything else (natural
- * language, skill loading, RPC/extension input) carries no route and is labelled
+ * Route families read from the host's own `InputEvent`. The two iteration
+ * commands are the two arming entry forms. Anything else (natural language,
+ * skill loading, RPC/extension input) carries no route and is labelled
  * `skill-start` for E1's frozen `entry` field. The route can only *refuse* or
  * *label* — it never authorizes: authorization is the host/engine derivation
  * below.
  */
-const SCOPED_PLAN_ROUTE_RE = /^\/iteration-drive(?:[\s]|$)/;
 const ITERATION_START_RE = /^\/iteration-start(?:[\s]|$)/;
 const ITERATION_LOOP_RE = /^\/iteration-loop(?:[\s]|$)/;
 
@@ -378,14 +372,13 @@ export function pendingCancellationReason(
 
 /* ------------------------------------------------------ host entry route --- */
 
-type RouteKind = HandoffEntry | "scoped-plan";
+type RouteKind = HandoffEntry;
 
 type RouteObservation = Readonly<{ kind: RouteKind; text: string }>;
 
 /** Route family of one host-observed input, or `null` when it carries no route. */
 function routeOf(text: string): RouteKind | null {
   const trimmed = text.trim();
-  if (SCOPED_PLAN_ROUTE_RE.test(trimmed)) return "scoped-plan";
   if (ITERATION_START_RE.test(trimmed)) return "iteration-start";
   if (ITERATION_LOOP_RE.test(trimmed)) return "iteration-loop";
   return null;
@@ -395,8 +388,6 @@ function routeOf(text: string): RouteKind | null {
 
 type AuthorityRefusalCode =
   | "task-session"
-  | "scoped-plan-route"
-  | "plan-pm-session"
   | "coordinator-elsewhere"
   | "envelope-invalid"
   | "register-invalid";
@@ -422,7 +413,7 @@ type WorkflowEnvelope = Readonly<{
   path: string;
   sessionId: string;
   workflowId: string;
-  role: "coordinator" | "plan-pm";
+  role: "coordinator";
 }>;
 
 /** Read-only engine facts inside one workflow dir: envelope path, session id, workflow id, role. */
@@ -467,14 +458,6 @@ export function deriveStartAuthority(args: {
       message: "this session is a leaf/subagent (task) session, not the iteration coordinator",
     };
   }
-  if (route !== null && route.kind === "scoped-plan") {
-    return {
-      ok: false,
-      code: "scoped-plan-route",
-      message: `the last host-observed entry of this session is the scoped-plan PM route ${JSON.stringify(route.text)}; that route restores an existing binding and never arms a new one`,
-    };
-  }
-
   const workflowDir = dirname(binding.snapshotPath);
   let envelopes: readonly WorkflowEnvelope[];
   try {
@@ -488,13 +471,6 @@ export function deriveStartAuthority(args: {
   }
   for (const envelope of envelopes) {
     if (envelope.sessionId === sessionId) {
-      if (envelope.role === "plan-pm") {
-        return {
-          ok: false,
-          code: "plan-pm-session",
-          message: `this session holds a plan-pm envelope for workflow ${envelope.workflowId}; a scoped-plan PM session never arms the iteration handoff`,
-        };
-      }
       if (envelope.workflowId !== binding.workflowId) {
         return {
           ok: false,
@@ -552,7 +528,7 @@ export function deriveStartAuthority(args: {
 /**
  * Host-derived authority for one explicit start on the **ACTIVE route** (§6).
  * The same host facts the file arm checks hold here — a leaf/subagent session
- * and the scoped-plan route never arm — but the ownership facts come from the
+ * never arms — but the ownership facts come from the
  * DB's own workflow views instead of the retired register/envelopes: the named
  * workflow must exist as a running iteration, its coordinator seat must be this
  * session, and this session must not already coordinate another non-terminal
@@ -578,13 +554,6 @@ export function deriveActiveStartAuthority(args: {
       ok: false,
       code: "task-session",
       message: "this session is a leaf/subagent (task) session, not the iteration coordinator",
-    };
-  }
-  if (route !== null && route.kind === "scoped-plan") {
-    return {
-      ok: false,
-      code: "scoped-plan-route",
-      message: `the last host-observed entry of this session is the scoped-plan PM route ${JSON.stringify(route.text)}; that route restores an existing binding and never arms a new one`,
     };
   }
   if (workflow === null) {
@@ -1053,7 +1022,7 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     const taskSession = ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init");
     const bindingInput: HandoffBindingInput = {
       workflowId: params.workflowId,
-      entry: lastRoute !== null && lastRoute.kind !== "scoped-plan" ? lastRoute.kind : "skill-start",
+      entry: lastRoute !== null ? lastRoute.kind : "skill-start",
       // Supplied by this adapter, never by the caller: they are E1's frozen input
       // shape for an explicit new-iteration start, and the derivation below is
       // what has to hold before they are true.
@@ -1078,12 +1047,6 @@ export default function modelHandoff(pi: ExtensionAPI): void {
       // --- ACTIVE route: the DB workflow/coordinator view is the authority ----
       if (taskSession) {
         return refuseStart("task-session", "this session is a leaf/subagent (task) session, not the iteration coordinator");
-      }
-      if (lastRoute !== null && lastRoute.kind === "scoped-plan") {
-        return refuseStart(
-          "scoped-plan-route",
-          `the last host-observed entry of this session is the scoped-plan PM route ${JSON.stringify(lastRoute.text)}; that route restores an existing binding and never arms a new one`,
-        );
       }
       let addressed: ExecutionRead<ExecutionState | ExecutionPlanView> | null = null;
       try {
@@ -1678,16 +1641,15 @@ export default function modelHandoff(pi: ExtensionAPI): void {
 
   /**
    * The host-derived facts one `mstar_coordinator` call reads. The native
-   * session id, cwd and control root come from the host context; leaf and
-   * scoped-plan entry are the same host ledger/route facts the start classifier
-   * uses. Nothing here is model-supplied.
+   * session id, cwd and control root come from the host context; leaf is the
+   * same host ledger fact the start classifier uses. Nothing here is
+   * model-supplied.
    */
   const coordinatorFacts = (ctx: ExtensionContext): CoordinatorIdentityFacts => ({
     sessionId: sessionIdOf(ctx),
     cwd: ctx.cwd,
     harnessRoot: resolveControlRoot(ctx.cwd),
     leaf: ctx.sessionManager.getEntries().some((entry) => entry.type === "session_init"),
-    scopedPlanEntry: lastRoute !== null && lastRoute.kind === "scoped-plan",
   });
 
   pi.registerTool({

@@ -152,7 +152,6 @@ export type ExecutionHostHistoryExecutionBinding = Readonly<{
   epoch: number;
   sessionId: string;
   role: string;
-  planId: string | null;
 }>;
 
 /**
@@ -326,11 +325,10 @@ type VerifiedRecord = Readonly<{
  * Shape-only admission of the `executionBinding` a v2 `bind` declares: an object
  * with `version: 1`, a non-empty `harnessRoot`, and a `session` object whose
  * `storeId` / `sessionId` / `workflowId` are non-empty strings, whose `role` is
- * `coordinator | plan-pm`, whose `planId` is `null | string` **paired with that
- * role** (a coordinator carries a null plan id and a plan-pm a non-empty one —
- * the engine's own `assertRefShape` rule, so an admitted value is one the engine
- * could accept) and whose `epoch` is a positive safe integer. Returns the
- * declared shape, or `null` when any of those is violated.
+ * the workflow's `coordinator` seat with no per-plan scope (the engine's own
+ * `assertRefShape` rule, so an admitted value is one the engine could accept)
+ * and whose `epoch` is a positive safe integer. Returns the declared shape, or
+ * `null` when any of those is violated.
  *
  * Nothing beyond that shape is examined: no store id, epoch or session value is
  * interpreted, resolved, compared or projected — a well-formed reference that
@@ -344,22 +342,14 @@ function readExecutionBindingShape(value: unknown): ExecutionHostHistoryExecutio
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) {
     return null;
   }
-  if (session.role === "coordinator" && session.planId !== null) return null;
-  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return null;
-  if (session.role !== "coordinator" && session.role !== "plan-pm") return null;
+  if (session.role !== "coordinator") return null;
   if (typeof session.epoch !== "number" || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return null;
-  // The two role guards above admit exactly two pairings — a coordinator's
-  // `planId` is null and a plan-pm's is a non-empty string — so re-read the
-  // field through a local and narrow it: the property itself stays `unknown`
-  // on the session object, which no guard on the role can narrow.
-  const declaredPlanId = session.planId;
   return {
     harnessRoot: value.harnessRoot,
     storeId: session.storeId,
     epoch: session.epoch,
     sessionId: session.sessionId,
     role: session.role,
-    planId: isNonEmptyString(declaredPlanId) ? declaredPlanId : null,
   };
 }
 
@@ -388,7 +378,7 @@ function checkPhase2Record(payload: Record<string, unknown>): RecordRefusal | Ve
             refused: true,
             code: "payload-record-invalid",
             message:
-              "a mstar:phase2 version 2 bind record requires an executionBinding shape: version 1, a non-empty harnessRoot, and a session object with non-empty storeId, sessionId and workflowId, a coordinator|plan-pm role, a null-or-string planId and a positive safe-integer epoch",
+              "a mstar:phase2 version 2 bind record requires an executionBinding shape: version 1, a non-empty harnessRoot, and a session object with non-empty storeId, sessionId and workflowId, a coordinator role and a positive safe-integer epoch",
           };
         }
         return { refused: false, sessionId: hostSessionId, workflowId, executionBinding };

@@ -7,7 +7,7 @@
  * parameter IS the caller identity the engine sees. omp never filled it, so a
  * standalone plan workflow registered from an omp primary session could not
  * carry its creator's identity through `workflow register -> coordinator bind
- * -> plan prepare -> plan-pm bind -> progress`. This extension closes that gap
+ * -> plan prepare -> plan progress`. This extension closes that gap
  * host-side: every eligible `mcp__morning_star_mstar_*` call whose input lacks
  * `sessionId` is revised to include the calling session's own native id.
  *

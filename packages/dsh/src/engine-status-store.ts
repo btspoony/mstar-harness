@@ -284,9 +284,8 @@ function asExecutionBinding(value: unknown): ExecutionBinding | null | undefined
   if (typeof session.storeId !== 'string' || session.storeId === '' ||
     typeof session.workflowId !== 'string' || session.workflowId === '' ||
     typeof session.sessionId !== 'string' || session.sessionId === '' ||
-    (session.role !== 'coordinator' && session.role !== 'plan-pm') ||
-    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0 ||
-    (session.role === 'coordinator' ? session.planId !== null : typeof session.planId !== 'string' || session.planId === '')) return undefined
+    session.role !== 'coordinator' ||
+    typeof session.epoch !== 'number' || !Number.isSafeInteger(session.epoch) || session.epoch <= 0) return undefined
   return value as ExecutionBinding
 }
 

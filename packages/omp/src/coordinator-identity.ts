@@ -116,8 +116,6 @@ export type CoordinatorIdentityFacts = Readonly<{
   harnessRoot: string | null;
   /** This session is a leaf/subagent (task) session. */
   leaf: boolean;
-  /** The last host-observed entry route is the scoped-plan PM family. */
-  scopedPlanEntry: boolean;
 }>;
 
 /** Observable outcome the registered tool projects into its result. */
@@ -407,12 +405,6 @@ export async function bindCoordinatorIdentity(
   if (facts.leaf) {
     return refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat");
   }
-  if (facts.scopedPlanEntry) {
-    return refuse(
-      "scoped-plan-route",
-      "the last host-observed entry of this session is the scoped-plan PM route; that route restores an existing binding and never bootstraps one",
-    );
-  }
   if (!isNonEmpty(facts.harnessRoot)) {
     return refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, {
       cwd: facts.cwd,
@@ -669,15 +661,6 @@ function coordinatorCallContext(
   }
   if (facts.leaf) {
     return { ok: false, outcome: refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat") };
-  }
-  if (facts.scopedPlanEntry) {
-    return {
-      ok: false,
-      outcome: refuse(
-        "scoped-plan-route",
-        "the last host-observed entry of this session is the scoped-plan PM route; that route restores an existing binding and never bootstraps or recovers one",
-      ),
-    };
   }
   if (!isNonEmpty(facts.harnessRoot)) {
     return {
@@ -939,12 +922,6 @@ async function recoverActiveCoordinator(
   }
   if (facts.leaf) {
     return refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat");
-  }
-  if (facts.scopedPlanEntry) {
-    return refuse(
-      "scoped-plan-route",
-      "the last host-observed entry of this session is the scoped-plan PM route; that route restores an existing binding and never recovers one",
-    );
   }
   if (!isNonEmpty(facts.harnessRoot)) {
     return refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, { cwd: facts.cwd });
