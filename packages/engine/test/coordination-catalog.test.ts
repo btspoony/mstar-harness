@@ -352,6 +352,31 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     expect(view.catalog_pin?.pin).toEqual(pinned);
   });
 
+  test("a config revision after a catalog move preserves the frozen existing pin", async () => {
+    const fixture = makeFixture();
+    const context = await storeBacked(fixture);
+    await prepareCall(fixture, PLAN_ID);
+    const pinned = pinOf(storedRow(fixture, PLAN_ID));
+    expect(pinned.entity_revision).toBe(1);
+
+    // The catalog moves: a renamed plan entity bumps its revision.
+    await updateCatalogEntity(context, { kind: "plan", id: PLAN_ID }, { title: "Renamed" }, 1, {
+      operationId: "upd-after-config",
+      actor: "project-manager",
+    });
+    // An ordinary config revision (branch) does not re-seal the existing pin: the
+    // frozen selection is EVIDENCE of the original prepare, not re-selected here.
+    const rev1 = await prepareCall(fixture, PLAN_ID, { workingBranch: "feature/plan-a" });
+    expect(rev1.outcome).toBe("prepared");
+    const rev2 = await prepareCall(fixture, PLAN_ID, { workingBranch: "feature/plan-a" });
+    void rev2;
+    const after = pinOf(storedRow(fixture, PLAN_ID));
+    expect(after).toEqual(pinned);
+    const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    expect(view.catalog_pin?.pin).toEqual(pinned);
+    expect(view.catalog_pin?.catalog_moved).toBe(true);
+  }, 30000);
+
   test("catalog pin: progress reporting does not invalidate the pin", async () => {
     const fixture = makeFixture();
     await storeBacked(fixture);
