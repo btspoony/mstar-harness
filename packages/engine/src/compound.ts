@@ -584,8 +584,8 @@ function isFileLikeRoot(root: string): boolean {
 /**
  * Guard an operation path against the allowed root set (compound-refresh
  * scope SSOT: only knowledge/**, knowledge/README.md, and CONCEPTS.md may be
- * File-like roots require an exact match; `..` traversal out of an allowed
- * root is rejected after `resolve()` normalization.
+ * written). File-like roots require an exact match; `..` traversal out of an
+ * allowed root is rejected after `resolve()` normalization.
  *
  * Limitation (documented): the guard is lexical — `resolve()` never follows
  * symlinks, so a symlink inside an allowed root that points outside is not
