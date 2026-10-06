@@ -62,7 +62,6 @@ const TS = "2026-09-22T00:00:00.000Z";
 const WF = "20260922-notes-fixture";
 const PLAN_ID = "p-1";
 const COORDINATOR_ID = "host-notes";
-const PLAN_PM_ID = "host-notes-plan";
 const LEGACY_NOTE_TS = "2026-09-01T00:00:00.000Z";
 
 /** One migrated historical line, exactly as `migrate.ts` serialized it. */
@@ -103,9 +102,6 @@ type Fixture = {
   /** The bound coordinator session (active, current epoch) and its caller context. */
   session: ExecutionSessionRef;
   coordContext: ExecutionContext;
-  /** A second, distinct active session of the same workflow (raw plan-pm row). */
-  planSession: ExecutionSessionRef;
-  planContext: ExecutionContext;
   /** Plant the exact retained bytes an append under test must respect. */
   seed: (input: { ledger?: string; snapshot?: string }) => void;
 };
@@ -134,9 +130,9 @@ function createdSnapshot(): WorkflowSnapshot {
 }
 
 /**
- * One real active authority with a created workflow and two distinct active
- * sessions. The retained workflow dir is NOT created here: the cases that need
- * it plant it through `seed`, so "no directory side effect" stays observable.
+ * One real active coordinator authority with a created workflow. The retained
+ * workflow dir is NOT created here: cases that need it plant it through `seed`,
+ * so "no directory side effect" stays observable.
  */
 async function notesFixture(label: string): Promise<Fixture> {
   const harnessDir = mkdtempSync(join(ROOT, `${label}-`));
@@ -159,29 +155,6 @@ async function notesFixture(label: string): Promise<Fixture> {
     expected: workflow.workflowToken,
     operationId: `bind-${label}`,
   });
-  // The second session is a real active `execution_sessions` row of the same
-  // workflow (the raw fixture row the store's own tests use) so the ledger can
-  // be shown to keep two distinct sessions' provenance apart.
-  const raw = new DatabaseSync(storeDbPath(context));
-  try {
-    raw
-      .prepare(
-        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-          "values (?, 'plan-pm', ?, ?, ?, 1, 'active', ?)",
-      )
-      .run(WF, PLAN_PM_ID, PLAN_ID, bound.data.epoch, TS);
-  } finally {
-    raw.close();
-  }
-  const planCaller: ExecutionCaller = { sessionId: PLAN_PM_ID, role: "plan-pm", workflowId: WF, planId: PLAN_ID };
-  const planSession: ExecutionSessionRef = {
-    storeId: bound.data.storeId,
-    epoch: bound.data.epoch,
-    workflowId: WF,
-    role: "plan-pm",
-    sessionId: PLAN_PM_ID,
-    planId: PLAN_ID,
-  };
   const workflowDir = join(harnessDir, "workflows", WF);
   return {
     context,
@@ -190,8 +163,6 @@ async function notesFixture(label: string): Promise<Fixture> {
     ledgerPath: join(workflowDir, "notes.jsonl"),
     session: bound.data,
     coordContext: callerContext(harnessDir, caller),
-    planSession,
-    planContext: callerContext(harnessDir, planCaller),
     seed: (input) => {
       mkdirSync(workflowDir, { recursive: true });
       if (input.ledger !== undefined) writeFileSync(join(workflowDir, "notes.jsonl"), input.ledger);
@@ -285,22 +256,17 @@ describe("execution-ledgers: canonical location and retained bytes", () => {
     expect(snapshotDoc.plans[0]!.notes).toEqual(["inline legacy row note", "second inline note"]);
   });
 
-  test("keeps each distinct bound session's provenance in one ledger", async () => {
+  test("records coordinator provenance in the workflow ledger", async () => {
     shared.seed({ ledger: "" });
     await appendWorkflowNote(shared.coordContext, shared.session, note("coordinator-note", "from the coordinator"));
-    await appendWorkflowNote(
-      shared.planContext,
-      shared.planSession,
-      note("plan-note", "from the plan session", { sessionId: PLAN_PM_ID }),
-    );
     const facts = normalizeWorkflowNotesCoverage({
       workflowId: WF,
       path: shared.ledgerPath,
       bytes: readFileSync(shared.ledgerPath),
     });
-    expect(facts.acceptedIds).toEqual(["coordinator-note", "plan-note"]);
-    expect(facts.records.map((record) => record.record.sessionId)).toEqual([COORDINATOR_ID, PLAN_PM_ID]);
-    expect(facts.records.map((record) => record.record.workflowId)).toEqual([WF, WF]);
+    expect(facts.acceptedIds).toEqual(["coordinator-note"]);
+    expect(facts.records.map((record) => record.record.sessionId)).toEqual([COORDINATOR_ID]);
+    expect(facts.records.map((record) => record.record.workflowId)).toEqual([WF]);
   });
 
   test("a fresh workflow's first note creates only its own body dir", async () => {

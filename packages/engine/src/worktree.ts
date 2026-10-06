@@ -6,17 +6,17 @@
  * Spec sources (semantic SSOT — the skills stay authoritative; this module
  * implements their deterministic rules without forking semantics):
  * - L1/L2 layer split + stacking — main control root + dedicated
- *   integration checkout + per-plan feature worktrees +
- *   `plans[].execution_lease` (L1); within-plan parallel writable tracks
- *   need their own distinct worktrees and L1 does not replace L2:
+ *   integration checkout + per-plan feature worktrees recorded in row
+ *   metadata; within-plan parallel writable tracks need their own distinct
+ *   worktrees and L1 does not replace L2:
  *   `mstar-branch-worktree` SKILL.md § "Worktree isolation layers (L1 vs L2)"
  *   § "Stacking rules".
  * - Main control root — the process-SSOT holder is the Git-derived MAIN
  *   worktree (first `git worktree list --porcelain -z` record); the
  *   dedicated integration checkout (`integration_worktree_path` on
  *   `branch.integration`) is the sole merge cwd and MUST be distinct from
- *   main; `execution_lease.worktree_path` MUST be a distinct checkout from
- *   the main worktree and never holds product edits in main:
+ *   main; the row metadata worktree MUST be a distinct checkout from main
+ *   and never holds product edits in main:
  *   SKILL.md § "Control worktree vs feature worktree (iteration / L1)" +
  *   iteration spec worktree-write-model § "Three domains" / § "Field
  *   semantics" / § "Primary residency".
@@ -169,7 +169,7 @@ export function assertMainWorktreeResidency(main: MainWorktreeInfo, expectedBran
  * L1 pre-dispatch checklist input — the three-domain topology: the
  * Git-derived main worktree (process-SSOT holder), the governing snapshot's
  * dedicated integration checkout, and the plan's feature worktree
- * (`plans[].execution_lease`). Callers carry the actual snapshot type and
+ * (`plans[].metadata.worktree_path` / `metadata.working_branch`). Callers carry the actual snapshot type and
  * resolve the recorded residency expectation + active lifecycle branches
  * from the governing snapshots.
  */
@@ -191,10 +191,10 @@ export type L1PreDispatchInput = {
   expectedMainBranch: string;
   /** Branches owned by ANY active lifecycle (integration/plan/track) — main must not sit on any of them, even when the recorded expectation matches. */
   lifecycleBranches: readonly string[];
-  /** `execution_lease.worktree_path` — the plan's feature worktree. */
-  leaseWorktreePath: string;
-  /** `execution_lease.working_branch` — the plan's Working branch. */
-  leaseWorkingBranch: string;
+  /** `plans[].metadata.worktree_path` — the plan's feature worktree. */
+  rowWorktreePath: string;
+  /** `plans[].metadata.working_branch` — the plan's Working branch. */
+  rowWorkingBranch: string;
   /** Plan id (`status.json.plans[].id` / `{SDD_DIR}` segment) — message context. */
   planId: string;
 };
@@ -386,8 +386,8 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
     mainWorktree,
     expectedMainBranch,
     lifecycleBranches,
-    leaseWorktreePath,
-    leaseWorkingBranch,
+    rowWorktreePath,
+    rowWorkingBranch,
     planId,
   } = input;
 
@@ -442,23 +442,23 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
     );
   }
 
-  if (leaseWorktreePath.trim() === "") {
+  if (rowWorktreePath.trim() === "") {
     violations.push(
       violation(
         "high",
-        "worktree.l1.lease-missing",
-        `execution_lease.worktree_path is empty for plan "${planId}" \u2014 no verified execution_lease to dispatch against`,
-        "claim the execution_lease with an absolute feature worktree path before dispatch",
+        "worktree.l1.feature-scope-missing",
+        `metadata.worktree_path is empty for plan "${planId}" — no registered feature worktree to dispatch against`,
+        "record the absolute feature worktree path in the plan row metadata",
       ),
     );
   }
-  if (leaseWorkingBranch.trim() === "") {
+  if (rowWorkingBranch.trim() === "") {
     violations.push(
       violation(
         "high",
-        "worktree.l1.lease-branch-missing",
-        `execution_lease.working_branch is empty for plan "${planId}"`,
-        "record the lease working_branch before dispatch",
+        "worktree.l1.feature-branch-missing",
+        `metadata.working_branch is empty for plan "${planId}"`,
+        "record the working branch in the plan row metadata",
       ),
     );
   }
@@ -550,14 +550,14 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
     return null;
   };
 
-  // lease worktree vs MAIN worktree.
-  if (mainWorktree !== null && leaseWorktreePath.trim() !== "") {
+  // Feature worktree vs MAIN worktree.
+  if (mainWorktree !== null && rowWorktreePath.trim() !== "") {
     const v = identityViolation(
       mainWorktree.root,
-      leaseWorktreePath,
-      "worktree.l1.lease-equals-main",
-      `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}")`,
-      "use a distinct feature worktree for the plan (git worktree add <path> <branch>) and update the lease",
+      rowWorktreePath,
+      "worktree.l1.feature-equals-main",
+      `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the main worktree "${mainWorktree.root}" (plan "${planId}")`,
+      "use a distinct feature worktree for the plan (git worktree add <path> <branch>)",
     );
     if (v !== null) violations.push(v);
   }
@@ -572,47 +572,45 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
     );
     if (v !== null) violations.push(v);
   }
-  // lease worktree vs integration checkout.
-  if (integrationRequired && integrationWorktreePath.trim() !== "" && leaseWorktreePath.trim() !== "") {
+  // Feature worktree vs integration checkout.
+  if (integrationRequired && integrationWorktreePath.trim() !== "" && rowWorktreePath.trim() !== "") {
     const v = identityViolation(
       integrationWorktreePath,
-      leaseWorktreePath,
-      "worktree.l1.lease-equals-integration",
-      `execution_lease.worktree_path "${leaseWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") \u2014 the feature worktree must be distinct from both main and integration`,
-      "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>) and update the lease",
+      rowWorktreePath,
+      "worktree.l1.feature-equals-integration",
+      `row metadata worktree "${rowWorktreePath}" is the same Git checkout as the integration worktree "${integrationWorktreePath}" (plan "${planId}") — the feature worktree must be distinct from both main and integration`,
+      "use a distinct feature worktree for the plan (git worktree add <path> <working-branch>)",
     );
     if (v !== null) violations.push(v);
   }
 
-  // Feature worktree checks (existing contract): dir exists, checked-out
-  // branch matches execution_lease.working_branch. Fail-closed probes.
-  if (leaseWorktreePath.trim() !== "" && !existsSync(leaseWorktreePath)) {
+  if (rowWorktreePath.trim() !== "" && !existsSync(rowWorktreePath)) {
     violations.push(
       violation(
         "high",
         "worktree.l1.feature-missing",
-        `feature worktree directory "${leaseWorktreePath}" does not exist for plan "${planId}"`,
-        `create it before dispatch: git worktree add ${shellQuote(leaseWorktreePath)} <working-branch>`,
+        `feature worktree directory "${rowWorktreePath}" does not exist for plan "${planId}"`,
+        `create it before dispatch: git worktree add ${shellQuote(rowWorktreePath)} <working-branch>`,
       ),
     );
-  } else if (leaseWorktreePath.trim() !== "" && leaseWorkingBranch.trim() !== "") {
-    const probe = probeBranch(leaseWorktreePath, opts);
+  } else if (rowWorktreePath.trim() !== "" && rowWorkingBranch.trim() !== "") {
+    const probe = probeBranch(rowWorktreePath, opts);
     if ("error" in probe) {
       violations.push(
         violation(
           "high",
           "worktree.l1.branch-probe-failed",
-          `cannot probe branch at "${leaseWorktreePath}" for plan "${planId}": ${probe.error}`,
-          "verify the path is a git worktree checkout on the lease working branch (not detached)",
+          `cannot probe branch at "${rowWorktreePath}" for plan "${planId}": ${probe.error}`,
+          "verify the path is a git worktree checkout on the recorded working branch (not detached)",
         ),
       );
-    } else if (probe.branch !== leaseWorkingBranch) {
+    } else if (probe.branch !== rowWorkingBranch) {
       violations.push(
         violation(
           "high",
           "worktree.l1.branch-mismatch",
-          `feature worktree "${leaseWorktreePath}" is on branch "${probe.branch}", expected execution_lease.working_branch "${leaseWorkingBranch}" (plan "${planId}")`,
-          `checkout ${shellQuote(leaseWorkingBranch)} in the feature worktree`,
+          `feature worktree "${rowWorktreePath}" is on branch "${probe.branch}", expected metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`,
+          `checkout ${shellQuote(rowWorkingBranch)} in the feature worktree`,
         ),
       );
     }

@@ -116,7 +116,6 @@ export type PlanRow = {
   status?: unknown;
   /** Opaque plan metadata; metadata.track_branches retains active L2 Assignment working branches. */
   metadata?: unknown;
-  execution_lease?: unknown;
   [key: string]: unknown;
 };
 
@@ -212,15 +211,14 @@ function validateNonEmptyString(
  * § Compatibility: read accepts `id` or `plan_id`; write one canonical key).
  * Required: `id` (or legacy `plan_id`), `title`, `file`, `status` (one of
  * Todo|InProgress|InReview|Blocked|Done); `metadata` optional but must be an
- * object when present. `execution_lease` is type-checked here; the full lease
- * state machine lives in the lease module (Task 5).
+ * object when present.
  */
 export function validatePlanRow(row: unknown): GateResult {
   const violations: ValidationResult[] = [];
   if (!isPlainObject(row)) {
     return { ok: false, violations: [violation("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
-  const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
+  const { id, plan_id: planId, title, file, status, metadata } = row;
 
   if (id === undefined && planId === undefined) {
     violations.push(violation("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
@@ -267,19 +265,6 @@ export function validatePlanRow(row: unknown): GateResult {
 
   if (metadata !== undefined && !isPlainObject(metadata)) {
     violations.push(violation("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
-  }
-  if (execution_lease !== undefined && !isPlainObject(execution_lease)) {
-    violations.push(violation("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
-  }
-  if (status === "Done" && execution_lease !== undefined) {
-    violations.push(
-      violation(
-        "medium",
-        "status.plan-row.done-with-lease",
-        "plan status Done must not carry an execution_lease \u2014 the Done authority deletes the lease in the same complete-file update as status: \"Done\" (status-and-residuals.md \u00a7 Hold, release, and override)",
-        "delete plans[].execution_lease in the same update that sets status: \"Done\"",
-      ),
-    );
   }
 
   return { ok: violations.length === 0, violations };

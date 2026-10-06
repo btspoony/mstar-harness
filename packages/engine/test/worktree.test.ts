@@ -241,8 +241,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(true);
@@ -265,8 +265,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(true);
@@ -284,8 +284,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.l1.integration-missing");
@@ -300,8 +300,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.l1.integration-missing");
@@ -319,8 +319,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: mainInfo(join(root, "repo")),
         expectedMainBranch: mainInfo(join(root, "repo")).branch,
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(codesOf(result)).toContain("worktree.l1.integration-missing");
@@ -343,8 +343,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -363,8 +363,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: null,
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.main.unresolved");
@@ -379,8 +379,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.main.expected-branch-missing");
@@ -400,8 +400,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: realpathSync(repo), branch: "release/other" },
         expectedMainBranch: "main",
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -429,8 +429,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: realpathSync(repo), branch: "iteration/owned" },
         expectedMainBranch: "iteration/owned",
         lifecycleBranches: ["iteration/owned", "iteration/int", "feature/a"],
-        leaseWorktreePath: paths.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: paths.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);

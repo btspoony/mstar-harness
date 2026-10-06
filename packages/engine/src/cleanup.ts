@@ -123,21 +123,14 @@ function ownerSnapshot(
 }
 
 /**
- * Rule 3 — any active execution/integration lease referencing the target,
- * by path and by branch, across all supplied snapshots. Presence is active:
- * writers delete the key on release and terminal snapshots cannot validly
- * carry leases, so any lease shape found is fail-closed.
+ * Rule 3 — any active integration merge attempt referencing the target.
+ * Plan row ownership is ordinary metadata and is handled by the non-terminal
+ * guard below rather than a per-plan lease.
  */
 function leaseRefusesTarget(snapshots: readonly WorkflowSnapshot[], target: CleanupTarget): boolean {
   for (const doc of snapshots) {
     const merge = doc.integration_merge_lease;
     if (merge && (merge.source_branch === target.branch || merge.target_branch === target.branch)) return true;
-    if (!Array.isArray(doc.plans)) continue;
-    for (const row of doc.plans) {
-      if (!isPlainObject(row)) continue;
-      const lease = row.execution_lease;
-      if (isPlainObject(lease) && (lease.worktree_path === target.ref || lease.working_branch === target.branch)) return true;
-    }
   }
   return false;
 }
@@ -178,11 +171,10 @@ function nonTerminalRefuses(
     if (!Array.isArray(doc.plans)) continue;
     for (const row of doc.plans) {
       if (!isPlainObject(row) || row.status === "Done") continue;
-      const lease = row.execution_lease;
-      if (isPlainObject(lease) && lease.working_branch === target.branch) return true;
       const meta = row.metadata;
       if (isPlainObject(meta)) {
         if (meta.working_branch === target.branch) return true;
+        if (meta.worktree_path === target.ref) return true;
         if (Array.isArray(meta.track_branches) && meta.track_branches.includes(target.branch)) return true;
       }
     }

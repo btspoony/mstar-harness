@@ -168,14 +168,7 @@ function snapshotDoc(id: string, pinRevision: number): string {
           file: "/plans/wf-read.md",
           status: "InProgress",
           coordination: { revision: 1, progress: { status: "InProgress", summary: "half way", evidence_paths: [] } },
-          metadata: { catalog_pin: { entity_revision: pinRevision } },
-          execution_lease: {
-            holder: "session-1",
-            claimed_at: STARTED_AT,
-            worktree_path: "/wt/wf-read",
-            working_branch: `feature/${id}`,
-            session_label: "must-never-be-projected",
-          },
+          metadata: { catalog_pin: { entity_revision: pinRevision }, worktree_path: `/wt/${id}`, working_branch: `feature/${id}` },
         },
       ],
       integration_merge_lease: {
@@ -1019,10 +1012,8 @@ describe("projection views", () => {
     expect(workflow.plans[0]?.progress).toBe("half way");
     expect(workflow.plans[0]?.catalogPinRevision).toBe(planRevision);
     expect(workflow.plans[0]?.badges).toEqual([]);
-    expect(workflow.plans[0]?.leases.map((lease) => lease.kind)).toEqual(["execution", "integration-merge"]);
-    expect(workflow.plans[0]?.leases[0]?.worktreePath).toBe("/wt/wf-read");
-    expect(JSON.stringify(envelope)).not.toContain("must-never-be-projected");
-    expect(JSON.stringify(envelope)).not.toContain("session_label");
+    expect(workflow.plans[0]?.leases.map((lease) => lease.kind)).toEqual(["integration-merge"]);
+    expect(JSON.stringify(envelope)).not.toContain("execution_lease");
 
     const detail = await withStoreRead(context, queryDashboard("workflow-detail", { id: "wf-read" }));
     expect(detail.data).toEqual(workflow);
@@ -1156,14 +1147,7 @@ describe("projection views", () => {
               file: "/plans/wf-dup.md",
               status: "InProgress",
               coordination: { revision: 1, progress: { status: "InProgress", summary: "plan-workflow progress", evidence_paths: [] } },
-              metadata: { catalog_pin: { entity_revision: 7 } },
-              execution_lease: {
-                holder: "session-plan",
-                claimed_at: STARTED_AT,
-                worktree_path: "/wt/wf-dup",
-                working_branch: "feature/wf-dup",
-                session_label: "must-never-be-projected",
-              },
+              metadata: { catalog_pin: { entity_revision: 7 }, worktree_path: "/wt/wf-dup", working_branch: "feature/wf-dup" },
             },
           ],
         },
@@ -1189,13 +1173,7 @@ describe("projection views", () => {
               title: "Plan wf-dup",
               file: "/plans/wf-dup.md",
               status: "Blocked",
-              metadata: { catalog_pin: { entity_revision: 9 } },
-              execution_lease: {
-                holder: "session-iter",
-                claimed_at: STARTED_AT,
-                worktree_path: "/wt/iter-dup",
-                working_branch: "integrate/iter-dup",
-              },
+              metadata: { catalog_pin: { entity_revision: 9 }, worktree_path: "/wt/iter-dup", working_branch: "integrate/iter-dup" },
             },
           ],
         },
@@ -1209,19 +1187,15 @@ describe("projection views", () => {
     const planWorkflow = envelope.data.items.find((item) => item.id === "wf-dup") as WorkflowDTO;
     const iterationWorkflow = envelope.data.items.find((item) => item.id === "iter-dup") as WorkflowDTO;
 
-    // Each workflow's plan row shows only its own workflow's lease, status and
-    // pin revision -- never the other's.
+    // Each workflow keeps its own row state and pin revision.
     expect(planWorkflow.plans[0]?.status).toBe("InProgress");
     expect(planWorkflow.plans[0]?.progress).toBe("plan-workflow progress");
     expect(planWorkflow.plans[0]?.catalogPinRevision).toBe(7);
-    expect(planWorkflow.plans[0]?.leases.map((lease) => lease.holder)).toEqual(["session-plan"]);
-    expect(planWorkflow.plans[0]?.leases.map((lease) => lease.workflowId)).toEqual(["wf-dup"]);
+    expect(planWorkflow.plans[0]?.leases).toEqual([]);
 
     expect(iterationWorkflow.plans[0]?.status).toBe("Blocked");
     expect(iterationWorkflow.plans[0]?.catalogPinRevision).toBe(9);
-    expect(iterationWorkflow.plans[0]?.leases.map((lease) => lease.holder)).toEqual(["session-iter"]);
-    expect(iterationWorkflow.plans[0]?.leases.map((lease) => lease.workflowId)).toEqual(["iter-dup"]);
-    expect(JSON.stringify(envelope)).not.toContain("must-never-be-projected");
+    expect(iterationWorkflow.plans[0]?.leases).toEqual([]);
 
     // The iteration view resolves the plan's execution from the iteration's
     // own row, never from the same-id plan workflow's row.

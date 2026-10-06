@@ -812,19 +812,6 @@ describe("execution-registration", () => {
     expect((await listCatalog(fixture.context, {})).total).toBe(0);
   });
 
-  test("execution-registration-refuses-a-non-coordinator-caller-and-writes-no-registration-file", async () => {
-    const fixture = await activeFixture("caller-scope");
-    const before = await footprint(fixture.context);
-    const refusal = await refusalOf(() =>
-      commitExecutionRegistration(
-        { ...fixture.context, caller: { sessionId: "host-plan-pm", role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID } },
-        { ...planRequest({ context: fixture.context, operationId: "op-plan-pm", expectedCatalogRevision: 0 }), expected: fixture.rootToken },
-      ),
-    );
-    expect(refusal.code).toBe("execution.scope-mismatch");
-    expect(await footprint(fixture.context)).toEqual(before);
-    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
-  });
 });
 
 /* ------------------------------------------------------------------------ *

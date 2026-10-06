@@ -504,38 +504,23 @@ export function evaluatePhaseGate(
 }
 
 /**
- * Leftover-lease probe over the loose snapshot doc: presence only, never
- * lease validity (an invalid lease shape fails the strict snapshot validator
- * and is reported as PHASE6_INVALID_SNAPSHOT).
- */
-function hasLeftoverLease(snapshotDoc: SnapshotDoc): boolean {
-  if (snapshotDoc.integration_merge_lease !== undefined && snapshotDoc.integration_merge_lease !== null) return true;
-  if (!Array.isArray(snapshotDoc.plans)) return false;
-  return snapshotDoc.plans.some(
-    (row) => isPlainObject(row) && row.execution_lease !== undefined && row.execution_lease !== null,
-  );
-}
-
-/**
  * Phase 6 post-merge close local-state gate (phase-6-post-merge-close.md
  * §6.4 + Evidence): verifies the checkable post-close state — the workflow
  * snapshot is a valid v3 document (T1 `validateWorkflowSnapshot`, with the
  * single legacy `control_worktree_path` alias non-blocking exactly as the
- * canonical reader accepts and migrates it) in a
- * terminal status (completed | failed | stopped, T1 `isTerminalSnapshot`),
- * no `plans[].execution_lease` or top-level `integration_merge_lease`
- * survived the close, and the root `status.json` validates as a v2 registry
- * (`validateStatusV2`, structure-only) and no longer registers the
- * workflow (removal-at-terminal).
+ * canonical reader accepts and migrates it) in a terminal status (completed
+ * | failed | stopped), has no top-level `integration_merge_lease`, and the
+ * root `status.json` validates as a v2 registry (`validateStatusV2`,
+ * structure-only) and no longer registers the workflow (removal-at-terminal).
  *
  * Deliberately does NOT verify remote merge evidence or physical cleanup —
  * the gate only reads local state. An invalid/unreadable ROOT — any
  * `validateStatusV2` failure (non-v2 version, missing `updated_at`,
  * malformed `workflows[]` or entries) — is a
  * violation (`PHASE6_INVALID_ROOT`): it is not proof of the entry's
- * absence. The lease probe runs on terminal documents only — mid-flight
- * leases on a running lifecycle are legitimate and the actionable code is
- * `PHASE6_NOT_TERMINAL`.
+ * absence. The integration lease probe runs only on terminal documents;
+ * mid-flight leases on a running lifecycle are legitimate and the actionable
+ * code is `PHASE6_NOT_TERMINAL`.
  *
  * Pure and additive: consumes T1's validators unchanged and does not touch
  * `evaluatePhaseGate` / `PhaseGateResult` (Phase 2–5 exit codes stay
@@ -599,7 +584,7 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
   // the total validator above refuses parsed non-object bodies (a literal
   // `null` snapshot.json etc.) as blocking violations, so this read cannot
   // throw. Shape-invalid OBJECT documents still reach it — the
-  // dangling-lease probe below intentionally runs on any terminal body.
+  // The integration lease probe below intentionally runs on any terminal body.
   const shapeOk = blocking.length === 0;
   const terminal = isPlainObject(snapshotDoc) && isTerminalSnapshot(snapshotDoc as WorkflowSnapshot);
   if (shapeOk && !terminal) {
@@ -611,13 +596,13 @@ export function evaluatePostMergeClose(snapshotDoc: SnapshotDoc, rootDoc: unknow
       ),
     );
   }
-  if (terminal && hasLeftoverLease(snapshotDoc)) {
+  if (terminal && isPlainObject(snapshotDoc) && snapshotDoc.integration_merge_lease != null) {
     violations.push(
       violation(
         "high",
         "PHASE6_DANGLING_LEASE",
-        "Terminal snapshot still carries a lease (plans[].execution_lease or integration_merge_lease) \u2014 close never releases leases",
-        "Release the lease(s) with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
+        "Terminal snapshot still carries an integration merge lease — close never releases leases",
+        "Resolve the integration attempt through the coordinator, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
       ),
     );
   }
@@ -895,26 +880,6 @@ export async function evaluatePostMergeCloseFromExecutionAuthority(context: Stor
         );
       }
       if (terminal) {
-        const leases = handle.db.prepare(
-          "select plan_id, lease_json from execution_leases where workflow_id = ? order by plan_id",
-        ).all(workflowId) as Array<{ plan_id: string; lease_json: string }>;
-        for (const lease of leases) {
-          let status: unknown = "held";
-          try {
-            const parsed = JSON.parse(lease.lease_json) as Record<string, unknown>;
-            if (isPlainObject(parsed) && parsed.status !== undefined) status = parsed.status;
-          } catch { /* unparseable lease bytes are carried state — treat as held */ }
-          if (status !== "released") {
-            violations.push(
-              violation(
-                "high",
-                "PHASE6_DANGLING_LEASE",
-                `Plan '${lease.plan_id}' still carries a ${JSON.stringify(status)} lease \u2014 close never releases leases`,
-                "Release the lease(s) with the owner action, then re-run 'mstar iteration gate --phase 6 --workflow <id>'",
-              ),
-            );
-          }
-        }
         const integrationLease = handle.db.prepare(
           "select lease_json from execution_integration_leases where workflow_id = ?",
         ).get(workflowId) as { lease_json: string } | undefined;

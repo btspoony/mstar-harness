@@ -45,7 +45,6 @@ import {
 } from "./path.js";
 import { findMstarc, parseMstarc } from "./mstarc.js";
 import { readJson, type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { verifyPlanExecutionLease } from "./lease.js";
 import { WORKFLOW_DELIVERY_KINDS, WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { assertBranchAlignment, gitProbeTimeoutMs, isDistinctCheckout, l1PreDispatchCheck, probeCheckoutRoot, readMainWorktree } from "./worktree.js";
 import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
@@ -993,18 +992,14 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
  * - `featureCwd` exists and never nests with the control checkout
  * (`featureCwd` inside the control checkout, or the control harness
  * inside the feature checkout, are both refused — L1 hard rules);
- * - branch/lease: when the control harness's workflow snapshots supply a
+ * - branch/scope: when the control harness's workflow snapshots supply a
  * plan row from a REGISTERED ACTIVE workflow (v2 root `status.json`
- * `workflows[]`; a retained terminal snapshot never satisfies lease
+ * `workflows[]`; a retained terminal snapshot never satisfies scope
  * enforcement, and a plan claimed by multiple active workflows fails
- * closed), its lease is verified (`verifyPlanExecutionLease`) and the
- * L1 checklist runs (`l1PreDispatchCheck` with the Git-derived MAIN
- * worktree, the governing snapshot's integration topology, the recorded
- * residency expectation and the active lifecycle-branch ownership set);
- * the context must then match the verified lease exactly. Without an
- * active lease (no row, or a non-InProgress row without lease), the
- * standalone branch policy applies (`assertBranchAlignment`) — an
- * InProgress row without lease is the orphan refusal. The one admission
+ * closed), L1 validates row `metadata.worktree_path` /
+ * `metadata.working_branch` against Git. The context must match that
+ * registered scope exactly. Without an active row scope, the standalone
+ * branch policy applies (`assertBranchAlignment`) — the one admission
  * exception (lifecycle contract §4b/§6 S2): on a register-governed harness
  * root (readable v2 `status.json` `workflows[]`), a plan with NO active
  * registered row is an unregistered normal-route plan — refused with
@@ -1017,8 +1012,7 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
  * Throws `SddScriptError` — exit 2 when the declared context itself is
  * malformed (non-absolute path, identity/composition mismatch, missing plan
  * file), exit 1 when the environment fails the gate (missing dirs, branch
- * mismatch, lease/orphan refusal, symlink escape). A rejected context never
- * reaches an action check.
+ * mismatch, symlink escape). A rejected context never reaches an action check.
  */
 export function resolveSddExecutionContext(input: SddExecutionContext): SddExecutionContext {
   const { planId, workingBranch } = input;
@@ -1162,7 +1156,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       contextViolation(
         "critical",
         "sdd.context.feature-in-control",
-        `featureCwd "${canonicalFeatureCwd}" is inside the control checkout "${controlCheckout}" and is not a distinct Git checkout \u2014 a plain subdirectory or symlink alias of the control checkout is not isolation; product edits never land in the control checkout (execution_lease.worktree_path MUST be a distinct checkout)`,
+        `featureCwd "${canonicalFeatureCwd}" is inside the control checkout "${controlCheckout}" and is not a distinct Git checkout \u2014 a plain subdirectory or symlink alias of the control checkout is not isolation; product edits never land in the control checkout (plans[].metadata.worktree_path MUST be a distinct checkout)`,
         "use a distinct feature worktree for the plan (git worktree add <path> <branch>)",
       ),
     ]);
@@ -1194,32 +1188,22 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
     ]);
   }
 
- // Branch/lease policy: verified lease when an active workflow supplies one,
- // standalone branch alignment otherwise (spec A3 — no new global lease mandate).
+  // Row metadata supplies feature ownership; Git topology is still verified
+  // against the governing workflow snapshot.
   const match = findWorkflowPlanRow(canonicalControlHarnessRoot, planId);
   if (match.kind === "ambiguous") {
- // Fail-closed: more than one registered active workflow claims this plan
- // — the governing lease is undecidable, never a silent standalone fallback.
     throwGateFail([
       contextViolation(
         "high",
         "sdd.context.workflow-plan-ambiguous",
-        `plan "${planId}" appears in multiple registered active workflows (${match.workflowIds.join(", ")}) \u2014 ` +
-          "the governing execution_lease is undecidable; resolve the duplicate registration before dispatch",
+        `plan "${planId}" appears in multiple registered active workflows (${match.workflowIds.join(", ")}) — resolve the duplicate registration before dispatch`,
       ),
     ]);
   }
-  if (match.kind === "row" && match.row.execution_lease !== undefined) {
-    const row = match.row;
-    const leaseVerify = verifyPlanExecutionLease(row, planId);
-    if (!leaseVerify.ok) throwGateFail(leaseVerify.violations);
-    const lease = leaseVerify.lease as Record<string, unknown>;
-    // L1 consumes the full governing snapshot and the Git-derived MAIN
-    // worktree separately (never the harness checkout as a stand-in):
-    // main residency against the recorded expectation (plan header, with
-    // the explicit branch.base fallback), non-ownership of every active
-    // lifecycle branch, the snapshot's integration topology, and the
-    // pairwise main/integration/feature checkout identity.
+  const rowMetadata = match.kind === "row" && isPlainObject(match.row.metadata) ? match.row.metadata : {};
+  const rowWorktreePath = typeof rowMetadata.worktree_path === "string" ? rowMetadata.worktree_path : "";
+  const rowWorkingBranch = typeof rowMetadata.working_branch === "string" ? rowMetadata.working_branch : "";
+  if (match.kind === "row" && (match.row.status === "InProgress" || rowWorktreePath !== "" || rowWorkingBranch !== "")) {
     const snapshot = match.snapshot;
     const main = readMainWorktree(canonicalControlHarnessRoot);
     const snapshotBase =
@@ -1238,36 +1222,32 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       mainWorktree: main,
       expectedMainBranch,
       lifecycleBranches: collectActiveLifecycleBranches(match.activeSnapshots),
-      leaseWorktreePath: lease.worktree_path as string,
-      leaseWorkingBranch: lease.working_branch as string,
+      rowWorktreePath,
+      rowWorkingBranch,
       planId,
     });
     if (!l1.ok) throwGateFail(l1.violations);
-    if (canonicalizeNearestExisting(lease.worktree_path as string) !== canonicalFeatureCwd) {
+    if (canonicalizeNearestExisting(rowWorktreePath) !== canonicalFeatureCwd) {
       throwGateFail([
         contextViolation(
           "high",
-          "sdd.context.lease-worktree-mismatch",
-          `SddExecutionContext.featureCwd "${canonicalFeatureCwd}" does not match the verified execution_lease.worktree_path "${String(lease.worktree_path)}" \u2014 the context must match the verified lease (A3)`,
+          "sdd.context.row-worktree-mismatch",
+          `SddExecutionContext.featureCwd "${canonicalFeatureCwd}" does not match row metadata.worktree_path "${rowWorktreePath}"`,
         ),
       ]);
     }
-    if (workingBranch !== lease.working_branch) {
+    if (workingBranch !== rowWorkingBranch) {
       throwGateFail([
         contextViolation(
           "high",
-          "sdd.context.lease-branch-mismatch",
-          `SddExecutionContext.workingBranch "${workingBranch}" does not match the verified execution_lease.working_branch "${String(lease.working_branch)}" (plan "${planId}")`,
+          "sdd.context.row-branch-mismatch",
+          `SddExecutionContext.workingBranch "${workingBranch}" does not match row metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`,
         ),
       ]);
     }
-  } else if (match.kind === "row" && match.row.status === "InProgress") {
- // InProgress without a lease is the orphan refusal (status-and-residuals
- // § Orphan recovery) — fail with the reused violation, never invent a lease.
-    throwGateFail(verifyPlanExecutionLease(match.row, planId).violations);
   } else {
-    // Standalone (no registered active workflow row, or a non-InProgress row
-    // without a lease): existing branch policy only — no lease mandate.
+    // Standalone branch policy remains in force when there is no active row
+    // carrying a registered feature scope.
     // Admission exception (lifecycle contract §4b/§6 S2): on a
     // register-governed root (readable v2 `status.json` `workflows[]` — the
     // readability gate above already refused the damaged case), a plan with
