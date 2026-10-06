@@ -931,8 +931,8 @@ function assertCoordinatedSnapshotWriter(
   const bound = isPlainObject(coordination) && isPlainObject(coordination.coordinator) ? coordination.coordinator.session_file : undefined;
   if (sessionPath === undefined || typeof bound !== "string" || canonicalTarget(sessionPath) !== canonicalTarget(bound)) {
     throw new CoordinationError(
-      "coordination.session-mismatch",
-      `snapshot ${snapshotPath} is coordinated \u2014 ${action} requires --session <coordinator envelope>`,
+      "coordination.identity-mismatch",
+      `snapshot ${snapshotPath} is coordinated \u2014 ${action} requires its currently bound coordinator envelope; retry the same operation with --session <coordinator envelope>`,
       { path: snapshotPath, expected: bound, actual: sessionPath },
     );
   }
@@ -1256,7 +1256,7 @@ export type CloseWorkflowOptions = {
    * Canonical coordinator session envelope path (spec §C4). Required when the
    * stored snapshot is coordinated: the close writes the snapshot, so only the
    * snapshot's own bound coordinator may pass. A missing/mismatched envelope
-   * refuses the close with `coordination.session-mismatch` before anything is
+   * refuses the close with `coordination.identity-mismatch` before anything is
    * written. Non-coordinated snapshots ignore it; an already-terminal snapshot
    * is returned unchanged (no write, no authorization needed).
    */

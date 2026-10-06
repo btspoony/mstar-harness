@@ -226,7 +226,6 @@ const DEFAULT_AUTHORITY_DEPS: CoordinatorAuthorityDeps = {
   bind: (input) =>
     bindExecutionSession(executionContextFor({ harnessDir: input.harnessDir }, input.identity), {
       workflowId: input.workflowId,
-      role: "coordinator",
       expected: input.expected,
       operationId: input.operationId,
     }),

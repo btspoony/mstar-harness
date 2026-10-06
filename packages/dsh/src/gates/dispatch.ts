@@ -30,11 +30,11 @@ import {
   parseAssignmentBranchForms,
   parseAssignmentFields,
   parseEnforcementFlag,
+  probeCheckoutRoot,
   readJson,
   readMainWorktree,
   readWorkflowSnapshot,
   resolveRepoEnforcement,
-  validateExecutionLease,
   WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type {
@@ -323,8 +323,9 @@ function assignmentHeaderValues(headerRegion: string, label: string): string[] {
   const plain = new RegExp(`^[ \\t]*(?:[-*][ \\t]+)?${escaped}[ \\t]*:[ \\t]*(.*)$`)
   const values: string[] = []
   for (const line of headerRegion.split(/\r?\n/)) {
-    const value = (line.match(bold) ?? line.match(plain))?.[1]
-    if (value !== undefined && value.trim() !== '') values.push(value.trim())
+    const raw = (line.match(bold) ?? line.match(plain))?.[1]
+    const value = raw === undefined ? undefined : stripWrappingCodeSpan(raw.trim())
+    if (value !== undefined && value !== '') values.push(value)
   }
   return values
 }
@@ -589,7 +590,28 @@ function worktreeL2Violations(header: string): ValidationResult[] {
       tracks.push({ worktreePath: worktreePaths[i]!, workingBranch: workingBranches[i]! })
     }
   }
-  violations.push(...l2PreDispatchCheck({ tracks }).violations)
+  const isolation = l2PreDispatchCheck({ tracks })
+  violations.push(...isolation.violations)
+  if (!isolation.ok) return violations
+  const checkoutRoots = new Set<string>()
+  for (const track of tracks) {
+    const root = probeCheckoutRoot(track.worktreePath)
+    if (root === null) {
+      violations.push(worktreeViolation(
+        'worktree.l2.checkout-unresolved',
+        `cannot establish the Git checkout root of "${track.worktreePath}" before writable dispatch`,
+        'use an existing Git worktree checkout on its declared Working branch and retry dispatch',
+      ))
+    } else if (checkoutRoots.has(root)) {
+      violations.push(worktreeViolation(
+        'worktree.l2.checkout-collision',
+        `parallel writable track "${track.worktreePath}" shares Git checkout "${root}" with another track; subdirectories and symlink aliases are not independent worktrees`,
+        'create a separate Git worktree for each writable track and update its Worktree path before retrying dispatch',
+      ))
+    } else {
+      checkoutRoots.add(root)
+    }
+  }
   return violations
 }
 
@@ -736,6 +758,7 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
     rowWorktreePath,
     rowWorkingBranch,
     planId,
+    workflowId: snapshot.id,
   }).violations
 }
 

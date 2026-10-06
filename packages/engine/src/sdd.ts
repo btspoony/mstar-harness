@@ -1224,7 +1224,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       rowWorktreePath,
       rowWorkingBranch,
       planId,
-      workflowId: snapshot.id,
+      workflowId: match.workflowId,
     });
     if (!l1.ok) throwGateFail(l1.violations);
     if (canonicalizeNearestExisting(rowWorktreePath) !== canonicalFeatureCwd) {
@@ -1233,7 +1233,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
           "high",
           "sdd.context.row-worktree-mismatch",
           `SddExecutionContext.featureCwd "${canonicalFeatureCwd}" does not match row metadata.worktree_path "${rowWorktreePath}" (plan "${planId}")`,
-          `If row metadata is wrong, run \`mstar plan prepare --workflow ${snapshot.id} --plan ${planId} --worktree-path ${JSON.stringify(canonicalFeatureCwd)} --working-branch ${JSON.stringify(workingBranch)}\`; otherwise set featureCwd to the recorded worktree`,
+          `If row metadata is wrong, run \`mstar plan prepare --workflow ${match.workflowId} --plan ${planId} --worktree-path ${JSON.stringify(canonicalFeatureCwd)} --working-branch ${JSON.stringify(workingBranch)}\`; otherwise set featureCwd to the recorded worktree`,
         ),
       ]);
     }
@@ -1243,7 +1243,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
           "high",
           "sdd.context.row-branch-mismatch",
           `SddExecutionContext.workingBranch "${workingBranch}" does not match row metadata.working_branch "${rowWorkingBranch}" (plan "${planId}")`,
-          `If row metadata is wrong, run \`mstar plan prepare --workflow ${snapshot.id} --plan ${planId} --worktree-path ${JSON.stringify(rowWorktreePath)} --working-branch ${JSON.stringify(workingBranch)}\`; otherwise set workingBranch to the recorded branch`,
+          `If row metadata is wrong, run \`mstar plan prepare --workflow ${match.workflowId} --plan ${planId} --worktree-path ${JSON.stringify(rowWorktreePath)} --working-branch ${JSON.stringify(workingBranch)}\`; otherwise set workingBranch to the recorded branch`,
         ),
       ]);
     }

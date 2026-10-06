@@ -244,7 +244,6 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           : undefined;
         const receipt = await bindExecutionSession(executionContextFor({ harnessDir: root }, identity), {
           workflowId: input.workflow,
-          role: "coordinator",
           expected: (input.expect ?? beforeBind!.token) as ExecutionToken,
           operationId: input.operation ?? randomUUID(),
         });
