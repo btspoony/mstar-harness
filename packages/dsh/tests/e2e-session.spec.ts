@@ -20,9 +20,8 @@
  *     into the step messages (AC-7 "full mstar-gated session");
  *  7. v2 seam tools — mstar_sdd_workspace creates the SDD dir,
  *     mstar_iteration_gate evaluates the committed fixtures;
- *  8. bundledSkillDir — the Task 4 reviewer note: relative roots are
- *     cwd-anchored (launch cwd = package root), with the fixture proof and
- *     the shipped `./skills` default tied back to the bundle patch.
+ *  8. bundledSkillDir — explicit relative roots resolve from an isolated
+ *     launch cwd, independently of the app workspace and test-runner cwd.
  *
  * AC-7/AC-8 evidence: this spec IS the "local install simulation boots a
  * full mstar-gated session" observable; the `dsh plugin --profile add`
@@ -31,7 +30,7 @@
 import { describe, expect, it, afterEach } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -63,8 +62,6 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url))
 const FIXTURE_CORDIS_YML = join(FIXTURES, 'cordis.yml')
 /** The repo-root mirror skills/ (byte-identical to the control mirror). */
 const MIRROR_SKILLS = fileURLToPath(new URL('../../../skills/', import.meta.url))
-/** The package root — the process cwd the test suite runs under. */
-const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '')
 
 /** Read one committed fixture file. */
 function fixture(rel: string): string {
@@ -562,41 +559,45 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
 })
 
 /* ===========================================================================
- * 9. bundledSkillDir — relative root is cwd-anchored (Task 4 reviewer note)
+ * 9. bundledSkillDir — explicit relative root is launch-cwd anchored
  * ========================================================================== */
 
-describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () => {
-  it('the test launch cwd IS the package root — grounds the ./skills resolution finding', () => {
-    expect(process.cwd()).toBe(PACKAGE_ROOT)
+describe('bundledSkillDir — launch-cwd resolution', () => {
+  it('a relative bundledSkillDir discovers bundled skills from the launch cwd, not the app workspace', async () => {
+    const launchRoot = await mkdtemp(join(tmpdir(), 'dsh-e2e-relative-skills-'))
+    try {
+      // Only the child has this launch cwd; no process-global chdir can race
+      // other suites. The app workspace is a different directory.
+      await symlink(join(FIXTURES, 'skills'), join(launchRoot, 'skills'), 'dir')
+      const script = join(launchRoot, 'probe.ts')
+      await writeFile(script, [
+        `import { bootApp } from ${JSON.stringify(fileURLToPath(new URL('./harness.ts', import.meta.url)))}`,
+        "import { join } from 'node:path'",
+        `const app = await bootApp({ root: join(process.cwd(), 'workspace'), cordisYml: ${JSON.stringify(FIXTURE_CORDIS_YML)}, bundledSkillDir: './skills' })`,
+        'try {',
+        '  console.log(JSON.stringify(await app.ctx.skills.list()))',
+        '} finally {',
+        '  await app.dispose()',
+        '}',
+      ].join('\n'))
+      const skills = JSON.parse(execFileSync(process.execPath, [script], {
+        cwd: launchRoot,
+        encoding: 'utf8',
+      })) as Array<{ name: string; source: string; provider: string }>
+      const good = skills.find((s) => s.name === 'good-skill')
+      expect(good).toBeDefined()
+      expect(good!.source).toBe('bundled')
+      expect(good!.provider).toBe('mstar')
+      // Missing-description skills remain undiscoverable.
+      expect(skills.some((s) => s.name === 'broken-skill')).toBe(false)
+    } finally {
+      await rm(launchRoot, { recursive: true, force: true })
+    }
   })
 
-  it('a relative bundledSkillDir resolves against the launch cwd (fixture proof)', async () => {
-    // `./tests/fixtures/skills` is relative: skill-filesystem `join()` semantics
-    // anchor it to process.cwd() (the package root), so the committed
-    // fixture skill is discovered as a BUNDLED source. If the root were
-    // anchored anywhere else (install dir, module dir), discovery would be
-    // empty — the e2e proves the cwd anchoring the shipped `./skills`
-    // default relies on.
-    booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, bundledSkillDir: './tests/fixtures/skills' })
-    const skills = await booted.ctx.skills.list()
-    const good = skills.find((s) => s.name === 'good-skill')
-    expect(good).toBeDefined()
-    expect(good!.source).toBe('bundled')
-    expect(good!.provider).toBe('mstar')
-    // Missing-description skills are not discoverable (frontmatter contract).
-    expect(skills.some((s) => s.name === 'broken-skill')).toBe(false)
-  })
-
-  it('the shipped default (./skills, no deployment keys) boots safely: engine-status watermark always appends', async () => {
-    // Exactly the shipped patch config minus deployment keys: harnessDir
-    // omitted (the plugin never probes from the launch cwd — without the
-    // config the harness dir resolves per session workspace at event time;
-    // this agent-less step has no workspace, so the watermark shows
-    // `harness dir: none`), no enforcement (warn-only by construction),
-    // bundledSkillDir ./skills.
-    // The boot must settle and the advisory catalog must still append; the
-    // resolved harness dir / enforcement / gate row are environment state,
-    // so only the process-immutable watermark is asserted.
+  it('an explicit relative root without deployment keys boots safely: engine-status watermark always appends', async () => {
+    // No configured harness and no session workspace: skill configuration
+    // must not prevent the advisory catalog from composing its watermark.
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, bundledSkillDir: './skills', harnessDir: null })
     expect(booted.ctx.dshHostAdapter).toBeInstanceOf(DshHostAdapter)
 
