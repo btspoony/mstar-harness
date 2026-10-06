@@ -61,7 +61,6 @@ import {
   projectBucketOf,
   readCompletionEvidence,
   requireProgressStatus,
-  requireRowStatus,
   rowStatusOf,
   standaloneDeliveryAnchors,
   storedCoordinationViolations,
@@ -1322,6 +1321,25 @@ function assertStandaloneSourceProof(
   }
 }
 
+/**
+ * §E the completion admission of one row (contract §Operation semantics
+ * `complete`): the reviewed state is `InReview`, or `InProgress` recorded as
+ * `InReview` by THIS SAME transaction — the entailed bookkeeping the completion
+ * delta already writes — so a complete coordinator never needs a separate
+ * `progress` call first. `Todo`, `Blocked` and `Done` are refused, and the
+ * refusal names the transition that reaches them.
+ */
+function requireCompletableStatus(row: PlanRow, planId: string): void {
+  const status = rowStatusOf(row);
+  if (status === "InReview" || status === "InProgress") return;
+  throw new CoordinationError(
+    "coordination.plan-status",
+    `complete requires plan ${planId} in InReview or InProgress (the completion records the entailed InReview itself), not ` +
+      `${status || "no status"}; move it with plan progress first`,
+    { plan_id: planId, status, allowed: ["InReview", "InProgress"] },
+  );
+}
+
 /** Test-only hook to observe the preflight→commit gap of a DB completion. */
 let completeWitnessGapForTest: (() => void) | undefined;
 export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
@@ -1438,7 +1456,12 @@ export async function completeExecutionPlan(
   completeWitnessGapForTest?.();
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "complete", { still: true });
+    // §E admission: the reviewed state the completion composes is either already
+    // recorded (`InReview`) or the one this same write unit entails from
+    // `InProgress` (`InProgress → InReview → Done` is ONE delta, so no separate
+    // progress call is required). `Todo`, `Blocked` and a completed row are
+    // refused, and the refusal names the transition that reaches them.
+    requireCompletableStatus(witness.view.plan as unknown as PlanRow, planId);
     const committed = witnessSnapshot(witness);
     requirePinnedDeliveryRoute(committed, pinned, planId, "complete");
     if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
