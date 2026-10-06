@@ -609,7 +609,7 @@ export function scopeGuard(path: string, allowedRoots: readonly string[]): GateR
       violation(
         "medium",
         "compound.scope.outside",
-        `path "${path}" is outside the compound-refresh scope (allowed: ${allowedRoots.join(", ")}) — compound-refresh operates only on {HARNESS_DIR}/knowledge/**, {HARNESS_DIR}/knowledge/README.md, <repo-root>/CONCEPTS.md (mstar-compound-refresh SKILL.md § 产物与操作路径)`,
+        `path "${path}" is outside the compound-refresh scope (allowed roots: ${allowedRoots.join(", ")}) after resolve() normalization`,
         "point the operation at one of the allowed paths",
       ),
     ],
