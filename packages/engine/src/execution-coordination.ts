@@ -352,8 +352,8 @@ function resolvePlanOperationRequest<Operation extends CoordinationOperation>(
 }
 
 /** The caller-input refusal of this module (`coordination.invalid-input`). */
-function invalidPlanInput(detail: string): CoordinationError {
-  return new CoordinationError("coordination.invalid-input", detail);
+function invalidPlanInput(detail: string, details?: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.invalid-input", detail, details);
 }
 
 /**
@@ -694,7 +694,7 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
-  request: ExecutionPlanIntent<PrepareOperation>,
+  request: ExecutionPlanRequest<PrepareOperation>,
 ): Promise<ExecutionReceipt<ExecutionPlanView>> {
   const resolved = resolvePlanOperationRequest(context.caller, request, "prepare");
   const operation = resolved.call.operation;
@@ -2083,8 +2083,8 @@ export async function mutateExecutionPlan(
     default:
       throw new CoordinationError(
         "coordination.unknown-operation",
-        `${String(strict.kind)} is not a coordination operation`,
-        { operation: String(strict.kind) },
+        `${String(operation.kind)} is not a coordination operation`,
+        { operation: String(operation.kind) },
       );
   }
 }

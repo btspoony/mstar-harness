@@ -16,6 +16,7 @@
  * here — they arrive with later tasks on top of this boundary.
  */
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { join, resolve } from "node:path";
@@ -63,6 +64,7 @@ export type StoreErrorCode =
   | "store.schema-drift"
   | "store.corrupt"
   | "store.busy"
+  | "store.upgrade-attestation-missing"
   | "store.upgrade-state-changed"
   | "store.upgrade-staged-record-missing"
   | "store.upgrade-staged-record-malformed"
