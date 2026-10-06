@@ -1337,7 +1337,10 @@ function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationCon
       throw new StoreError(
         "store.corrupt",
         `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in ` +
-          `this workflow's registry. Restore the store from its supported backup/restore recovery point; nothing was modified.`,
+          `this workflow's registry. Recover the store from its supported backup/restore recovery point: ` +
+          `run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, ` +
+          `then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` ` +
+          `(add \`--harness\` when needed). Nothing was modified.`,
       );
     }
     const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
