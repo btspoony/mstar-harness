@@ -47,6 +47,7 @@ import {
   CoordinationError,
   isNonEmptyString,
   isPlainObject,
+  type CoordinationErrorCode,
   type RowCoordination,
 } from "./coordination-write.js";
 import { storedCoordinationViolations } from "./coordination-transitions.js";
@@ -2034,11 +2035,11 @@ function sessionRefusalDetails(input: {
  * §2.3 the coordinator recovery entry the session-unavailable refusal offers,
  * truthful about what `recoverExecutionCoordinator` does with THIS row. While
  * the workflow holds a current-epoch ACTIVE holder, the transition replaces
- * only the holder it names, so naming this non-active row is refused
- * (`coordination.duplicate-holder`) — the reachable paths are the live
- * holder's own reference, or a recovery that names THAT holder with stop
- * evidence for it. With no live holder the recovery naming this row is the
- * real way back, so the entry spells out its complete inputs.
+ * only the holder it names, so naming this non-active row is refused (a
+ * foreign-identity mismatch) — the reachable paths are the live holder's own
+ * reference, or a recovery that names THAT holder with stop evidence for it.
+ * With no live holder the recovery naming this row is the real way back, so the
+ * entry spells out its complete inputs.
  */
 function coordinatorRecoveryWork(input: {
   rows: SessionRow[];
@@ -2342,7 +2343,7 @@ export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: 
  */
 export function readWorkflowSessionRows(tx: ExecutionTransaction, workflowId: string, role: "coordinator"): SessionRow[] {
   if (role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", `this authority holds only coordinator session rows — got ${String(role)}`, {
+    throw new CoordinationError("coordination.identity-mismatch", `this authority holds only coordinator session rows — got ${String(role)}`, {
       role,
     });
   }
@@ -2361,7 +2362,7 @@ export function revokeSessionRow(
 ): void {
   if (input.role !== "coordinator") {
     throw new CoordinationError(
-      "coordination.session-role",
+      "coordination.identity-mismatch",
       `this authority revokes only coordinator session rows — got ${String(input.role)}`,
       { role: input.role },
     );
@@ -2616,14 +2617,27 @@ export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planI
   if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the explicit plan id it selects");
   if (caller.role !== "coordinator" || caller.sessionId !== sessionId || caller.workflowId !== workflowId) {
     throw new CoordinationError(
-      "coordination.session-mismatch",
+      "coordination.identity-mismatch",
       "the trusted caller does not match the coordinator session reference",
     );
   }
   return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
 }
 
-/** Bind the trusted caller as the single coordinator for a running workflow. */
+/**
+ * §2.3 the bind of the workflow's ONE coordinator, into a running lifecycle.
+ *
+ * A normal bind is a BOOTSTRAP, never a recovery: it refuses (a) while a
+ * current-epoch ACTIVE coordinator holds the workflow — that holder's own live
+ * reference is the way in — (b) when this identity already has a row that is
+ * not ACTIVE at the current epoch (suspended, revoked or epoch-invalidated),
+ * and (c) when the workflow was created by a DIFFERENT identity. The suspended,
+ * revoked and epoch-invalidated rows are revived ONLY through the named
+ * coordinator recovery (`recoverExecutionCoordinator`), which requires the prior
+ * holder and its stop/reload attestation; first-bind adoption is unavailable
+ * once any coordinator record exists. Every refusal names the recorded facts and
+ * the supported route, so the caller can act instead of guessing.
+ */
 export async function bindExecutionSession(
   context: ExecutionContext,
   input: { workflowId: string; expected: ExecutionToken; operationId: string },
@@ -2631,10 +2645,24 @@ export async function bindExecutionSession(
   const bind = resolveBindRequest(context.caller, input);
   const requestHash = bindSessionRequestHash(context.caller, bind, input.expected);
   return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") throw new ExecutionError("execution.not-active", "session binding requires an active authority");
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError(
+        "execution.not-active",
+        `the execution authority is ${tx.execution.authorityState}; binding a session requires an active authority. ` +
+          `A staged store is inspectable only through migration diagnostics.`,
+      );
+    }
     const recorded = readCommittedOperation(tx.db, tx.epoch, bind.operationId);
     if (recorded !== null) {
-      if (recorded.requestHash !== requestHash) throw new ExecutionError("execution.operation-conflict", "operation id is committed for another request");
+      if (recorded.requestHash !== requestHash) {
+        throw new ExecutionError(
+          "execution.operation-conflict",
+          `operation id ${JSON.stringify(bind.operationId)} is already committed on this store epoch for a different request. ` +
+            `An operation id is an idempotency key, not a reusable slot — retry the committed request unchanged, or express the ` +
+            `new effect under a new operation id. Nothing was bound.`,
+          { operation_id: bind.operationId, recorded_fingerprint: recorded.requestHash, requested_fingerprint: requestHash },
+        );
+      }
       const receipt = readCommittedReceipt<ExecutionSessionRef>(recorded, tx, bind.operationId, bind.workflowId, {
         kind: "session", key: [bind.workflowId, "coordinator", bind.sessionId],
       });
@@ -2647,39 +2675,141 @@ export async function bindExecutionSession(
       kind: "workflow", storeId: tx.storeId, epoch: tx.epoch, key: [bind.workflowId], revision: header.revision,
     });
     const view = readWorkflowView(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
-    if (view.state.status !== "running") throw new CoordinationError("coordination.invalid-transition", `workflow ${bind.workflowId} is not running`);
-    const rows = readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
-    if (rows.some((row) => row.state === "active" && row.ref.epoch === tx.epoch)) {
-      throw new ExecutionError("execution.session-unavailable", `workflow ${bind.workflowId} already has an active coordinator`);
+    if (view.state.status !== "running") {
+      throw new CoordinationError(
+        "coordination.invalid-transition",
+        `workflow ${bind.workflowId} is ${String(view.state.status)} — a coordinator session binds only to a running lifecycle`,
+        { workflow_id: bind.workflowId, status: view.state.status },
+      );
     }
+    const rows = readSessionRows(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, bind.workflowId);
+    // (a) a live holder is never replaced by a bind.
+    const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    if (live !== undefined) {
+      throw sessionBindRefusal({
+        code: "coordination.identity-mismatch",
+        detail:
+          `workflow ${bind.workflowId} already holds the ACTIVE coordinator session ${JSON.stringify(live.ref.sessionId)} at ` +
+          `epoch ${tx.epoch}. Ownership is not replaceable by a bind: resume that holder's own binding, or run ` +
+          `recoverExecutionCoordinator naming ${JSON.stringify(live.ref.sessionId)} with its stop/reload attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: live.ref.sessionId,
+        holderEpoch: live.ref.epoch,
+        facts: { holder: live.ref.sessionId, holder_epoch: live.ref.epoch, current_epoch: tx.epoch },
+      });
+    }
+    // (b) a non-active own row is history: only the named recovery revives it.
+    const mine = rows.find((row) => row.ref.sessionId === bind.sessionId);
+    if (mine !== undefined && (mine.state !== "active" || mine.ref.epoch !== tx.epoch)) {
+      throw sessionBindRefusal({
+        code: "execution.session-unavailable",
+        detail:
+          `workflow ${bind.workflowId} records session ${JSON.stringify(bind.sessionId)} in state ${mine.state} at epoch ` +
+          `${mine.ref.epoch}; the current epoch is ${tx.epoch}. A suspended, revoked or epoch-invalidated binding is never revived ` +
+          `by a normal bind — run recoverExecutionCoordinator, which takes the workflow token, an operation id, a reason and the ` +
+          `prior holder ${JSON.stringify(bind.sessionId)} with its stop/reload attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: bind.sessionId,
+        holderEpoch: mine.ref.epoch,
+        facts: { row_state: mine.state, row_epoch: mine.ref.epoch, current_epoch: tx.epoch },
+      });
+    }
+    // (c) the creating identity owns the first bind; a foreign identity never
+    // adopts a lifecycle, and adoption is unavailable once any record exists.
     if (header.creatorSessionId !== null && header.creatorSessionId !== bind.sessionId) {
-      throw new ExecutionError("execution.session-unavailable", `workflow ${bind.workflowId} was created by another session`);
+      throw sessionBindRefusal({
+        code: "coordination.identity-mismatch",
+        detail:
+          `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted caller is ` +
+          `${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity, or through ` +
+          `recoverExecutionCoordinator naming the recorded holder with stop attestation. Nothing was bound.`,
+        workflowId: bind.workflowId,
+        sessionId: bind.sessionId,
+        holder: header.creatorSessionId,
+        holderEpoch: tx.epoch,
+        facts: { creator_session_id: header.creatorSessionId, caller_session_id: bind.sessionId },
+      });
     }
     if (header.creatorSessionId === null) {
+      // First-bind adoption is a NEWLY created lifecycle's path: a historical
+      // coordinator record means the lifecycle already had a creator, so a
+      // creator-less header with records is a recovery case, not an adoption.
+      if (rows.length > 0) {
+        throw sessionBindRefusal({
+          code: "coordination.identity-mismatch",
+          detail:
+            `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` +
+            `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator with the recorded holder and its ` +
+            `stop/reload attestation. Nothing was bound.`,
+          workflowId: bind.workflowId,
+          sessionId: bind.sessionId,
+          holder: rows[0]!.ref.sessionId,
+          holderEpoch: rows[0]!.ref.epoch,
+          facts: { coordinator_rows: rows.length },
+        });
+      }
       tx.db.prepare("update execution_workflows set creator_session_id = ? where workflow_id = ?").run(bind.sessionId, bind.workflowId);
     }
     const now = new Date().toISOString();
     const address: SessionAddress = { workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId };
-    const mine = rows.find((row) => row.ref.sessionId === bind.sessionId);
-    let revision = 1;
-    if (mine === undefined) writeExecutionSession(tx.db, { workflowId: bind.workflowId, address, epoch: tx.epoch, now });
-    else {
-      revision = mine.revision + 1;
-      tx.db.prepare("update execution_sessions set state='active', epoch=?, revision=?, bound_at=? where workflow_id=? and role='coordinator' and session_id=?")
-        .run(tx.epoch, revision, now, bind.workflowId, bind.sessionId);
-    }
+    writeExecutionSession(tx.db, { workflowId: bind.workflowId, address, epoch: tx.epoch, now });
     advanceWorkflowHeaderRevision(tx, { workflowId: bind.workflowId, now });
     const data: ExecutionSessionRef = {
       storeId: tx.storeId, epoch: tx.epoch, workflowId: bind.workflowId, role: "coordinator", sessionId: bind.sessionId,
     };
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data,
-      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, "coordinator", bind.sessionId], revision),
+      token: executionToken("session", tx.storeId, tx.epoch, [bind.workflowId, "coordinator", bind.sessionId], 1),
       storeId: tx.storeId,
       epoch: tx.epoch,
     };
     writeOperationReceipt(tx, { operationId: bind.operationId, requestHash, workflowId: bind.workflowId, planId: null, receipt, now });
     return { ...receipt, operationId: bind.operationId, replayed: false };
+  });
+}
+
+/** One bind refusal with the recorded facts and the supported recovery route, in the shared recovery-details convention. */
+function sessionBindRefusal(input: {
+  code: CoordinationErrorCode | "execution.session-unavailable";
+  detail: string;
+  workflowId: string;
+  sessionId: string;
+  holder: string | null;
+  holderEpoch: number;
+  facts: Record<string, unknown>;
+}): ExecutionError {
+  const problem: RecoveryProblem = {
+    component: "session",
+    path: "session",
+    code: input.code,
+    sourcesTried: [`the coordinator session rows of workflow ${JSON.stringify(input.workflowId)}, read in this transaction`],
+    currentFacts: [input.detail],
+    needed:
+      input.holder === null
+        ? `a coordinator binding this identity can hold: bind workflow ${JSON.stringify(input.workflowId)} for a newly created lifecycle`
+        : `the supported coordinator recovery: run recoverExecutionCoordinator naming ${JSON.stringify(input.holder)} (epoch ` +
+          `${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own live reference`,
+    withheldEffect:
+      "the session binding and its revision: authority was withheld, so no row, revision or receipt changed under this operation",
+    availableWork: [
+      `resume the caller's own binding through resumeExecutionSession (it reconstructs the store's current row)`,
+      `run recoverExecutionCoordinator for a stopped prior holder with stop evidence`,
+      "independent operations on other workflows continue",
+    ],
+  };
+  return new ExecutionError("execution.session-unavailable", input.detail, {
+    component: problem.component,
+    path: problem.path,
+    workflow_id: input.workflowId,
+    session_id: input.sessionId,
+    ...(input.holder === null ? {} : { holder: input.holder }),
+    ...input.facts,
+    sources_tried: problem.sourcesTried,
+    current_facts: problem.currentFacts,
+    available_work: problem.availableWork,
+    recovery: unresolvedRecovery({ target: { workflowId: input.workflowId }, unresolved: [problem] }),
   });
 }
 
@@ -2900,7 +3030,7 @@ export async function readExecutionSession(
     session.sessionId !== context.caller.sessionId
   ) {
     throw new CoordinationError(
-      "coordination.session-mismatch",
+      "coordination.identity-mismatch",
       "the trusted caller does not independently match the supplied execution session reference",
     );
   }
@@ -2947,14 +3077,14 @@ function ownSessionAddress(caller: ExecutionCaller | undefined): SessionAddress 
  * binding, never another holder's — and what still works meanwhile.
  *
  * `holder` is the workflow's ACTIVE coordinator record (no epoch filter), so
- * this refusal and a bind's `coordination.duplicate-holder` name one fact.
+ * this refusal names the same fact a bind's foreign-holder fence names.
  * Reporting is all this path does: a held workflow-wide coordinator scope is
  * never revived, stolen or replaced here — the narrow recovery transition owns
  * replacement, and only after validated stop evidence.
  */
 function unresolvedOwnSession(address: SessionAddress, rows: readonly SessionRow[]): never {
   const holder = rows.find((row) => row.state === "active");
-  const code = holder === undefined ? "coordination.session-not-found" : "coordination.duplicate-holder";
+  const code = holder === undefined ? "coordination.session-not-found" : "coordination.identity-mismatch";
   const currentFacts = [
     `the trusted caller is coordinator session ${address.sessionId} of workflow ${address.workflowId}`,
     holder === undefined

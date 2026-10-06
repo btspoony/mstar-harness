@@ -56,7 +56,6 @@ import {
   gitProof,
   integrationAnchors,
   integrationDiverged,
-  integrationUnresolved,
   missingDecision,
   projectBucketOf,
   readCompletionEvidence,
@@ -64,7 +63,6 @@ import {
   rowStatusOf,
   standaloneDeliveryAnchors,
   storedCoordinationViolations,
-  summarize,
   type ValidatedCompletionEvidence,
 } from "./coordination-transitions.js";
 import {
@@ -126,7 +124,6 @@ import {
   type RecoveryProblem,
   type ResolutionSource,
 } from "./recovery-intent.js";
-import { findingsCleanupGate } from "./project.js";
 import { storeDbPath } from "./store-db.js";
 import {
   consultDeliveryEvidence,
@@ -565,13 +562,13 @@ function writeCoordinationBlock(
  * requires it — nothing awaits, launches, reads Git or appends a file between
  * BEGIN and COMMIT.
  */
-function withExecutionPlanOperation(
+function withExecutionPlanOperation<T>(
   context: ExecutionContext,
   resolved: ResolvedPlanOperation<CoordinationOperation>,
   requestHash: string,
-  run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<ExecutionPlanView>,
-  alreadySatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<ExecutionPlanView> | undefined,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<T>,
+  alreadySatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<T> | undefined,
+): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -675,15 +672,21 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
 }
 
 /**
- * `prepare` records the ordinary revisable execution configuration — the
+ * §3 `prepare` records the ordinary revisable execution configuration — the
  * explicit scope facts, the QA gate and the findings-cleanup mode — in one
  * transaction, and selects the frozen catalog input the registration pinned. It
  * is OPTIONAL: a row with no prior record completes on the same defaults, so
  * nothing downstream requires a prepare first. A later prepare revises the
  * recorded configuration, including while the row is active; the row's status,
- * progress and completion are never reset. Only same-operation-id request-hash
- * conflicts govern replay; document digests remain provenance and do not make
- * repeated or revised inputs stale.
+ * progress and completion are never reset.
+ *
+ * §4.1 a SUPPLIED scope is validated against the ACTUAL filesystem and Git — the
+ * requested checkout must be a readable, clean Git worktree on the requested
+ * branch — never merely stored as a string and never compared to an old value
+ * (a mistaken prior config stays correctable). Admission (a `Done` row refuses)
+ * applies to an equal configuration too, so a no-op on a terminal row is refused
+ * rather than reported as satisfied. Only same-operation-id request-hash
+ * conflicts govern replay; document digests remain provenance.
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
@@ -693,6 +696,11 @@ export async function prepareExecutionPlan(
   const operation = resolved.call.operation;
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
   const inputs = readPrepareInputs(resolved.call);
+  // §4.1 the actual-checkout validation runs BEFORE SQLite ownership: it spawns
+  // Git and stats the filesystem, which no transaction body may do.
+  if (inputs.config.worktreePath !== undefined) {
+    validateSuppliedCheckout(inputs.config.worktreePath, inputs.config.workingBranch, resolved.read.planId);
+  }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const { planId, workflowId } = resolved.read;
   return withExecutionPlanOperation(context, resolved, requestHash, (witness, tx, at) => {
@@ -724,10 +732,13 @@ export async function prepareExecutionPlan(
     });
     const committed = readExecutionPlanWitness(tx, resolved.read);
     return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  }, (witness, tx) => {
+  }, (witness) => {
     // §4.1 an already-equal configuration is `already-satisfied`: the recorded
     // block and the row metadata already say what this prepare asks for, so no
-    // byte is rewritten and the row's CAS does not advance for a no-op.
+    // byte is rewritten and the row's CAS does not advance for a no-op. ADMISSION
+    // still applies here — the no-op path never reaches the body, so a `Done` row
+    // is refused rather than reported satisfied.
+    assertPrepareAdmission({ planId, row: witness.view.plan as PlanRow });
     const prior = witness.view.coordination?.prepared;
     if (prior === undefined) return undefined;
     if (prior.qa_gate !== inputs.config.qaGate || prior.findings_cleanup !== inputs.config.findingsCleanup) return undefined;
@@ -740,8 +751,58 @@ export async function prepareExecutionPlan(
     if (inputs.config.workingBranch !== undefined && inputs.config.workingBranch !== metadata.working_branch) {
       return undefined;
     }
-    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
+    return { data: witness.view, token: witness.token, storeId: "", epoch: 0 };
   });
+}
+
+/**
+ * §4.1 validate the checkout and branch a `prepare` actually ASKS FOR, against
+ * the filesystem and Git: the worktree must be a readable Git worktree, must
+ * carry no unfinished Git operation and no uncommitted change, and — when a
+ * branch is supplied — must be ON that branch. The stored metadata is then a
+ * fact about a real checkout rather than a caller's string.
+ */
+function validateSuppliedCheckout(worktreePath: string, workingBranch: string | undefined, planId: string): void {
+  const repository = canonicalTarget(worktreePath);
+  const head = gitRead(repository, ["rev-parse", "HEAD"]);
+  if (head === undefined) {
+    throw new CoordinationError(
+      "coordination.not-in-git",
+      `prepare requires the supplied worktreePath ${worktreePath} to be a readable Git worktree`,
+      { plan_id: planId, worktree_path: worktreePath },
+    );
+  }
+  const dirty = gitRead(repository, ["status", "--porcelain"]);
+  if (dirty === undefined) {
+    throw new CoordinationError(
+      "coordination.not-in-git",
+      `prepare cannot read the Git state of the supplied worktreePath ${worktreePath}`,
+      { plan_id: planId, worktree_path: worktreePath },
+    );
+  }
+  if (dirty.length > 0) {
+    throw gitProof(`prepare requires a clean supplied worktree — ${worktreePath} has uncommitted changes`, {
+      plan_id: planId,
+      worktree_path: worktreePath,
+      head,
+    });
+  }
+  if (workingBranch === undefined) return;
+  const branch = gitRead(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== workingBranch) {
+    throw gitProof(
+      `prepare requires the supplied worktreePath ${worktreePath} to be on the supplied workingBranch ${workingBranch} — got ` +
+        `${branch || "a detached HEAD"}`,
+      { plan_id: planId, expected: workingBranch, actual: branch },
+    );
+  }
+  if (gitRead(repository, ["rev-parse", `refs/heads/${workingBranch}`]) === undefined) {
+    throw gitProof(`prepare requires refs/heads/${workingBranch} to exist in ${worktreePath}`, {
+      plan_id: planId,
+      working_branch: workingBranch,
+      worktree_path: worktreePath,
+    });
+  }
 }
 
 /**
@@ -1117,6 +1178,11 @@ async function readWorkflowSnapshot(context: ExecutionContext, workflowId: strin
   });
 }
 
+/**
+ * §E the report-only route's completion evidence: the workflow must RECORD the
+ * fulfilment of its registered completion policy. `consultDeliveryEvidence`
+ * owns the completeness rule, so this route cannot invent a second one.
+ */
 function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string, what: string): void {
   const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
   if (failure !== undefined) {
@@ -1157,45 +1223,6 @@ function requirePinnedDeliveryRoute(
       `${what} requires plan ${planId} to keep the completion policy pinned before the transaction — recorded ` +
         `${JSON.stringify(snapshot.completion_policy)}, pinned ${JSON.stringify(pinned.completionPolicy)}`,
       { plan_id: planId, expected: pinned.completionPolicy, actual: snapshot.completion_policy },
-    );
-  }
-}
-
-/**
- * §D/§E the findings cleanup gate of one plan (spec §D/§E): completion demands
- * it, so a plan returned for rework cannot complete while the findings it was
- * told to close are still open. The gate consumes the authoritative open issues
- * linked to the plan — never a legacy register — and fails closed: a missing,
- * corrupt or staged store refuses the lifecycle step instead of reading as "no
- * findings".
- *
- * It opens its own read handle, so it runs BEFORE this call takes SQLite
- * ownership (§4.1: no second connection inside the write transaction).
- */
-async function assertFindingsClosed(
-  context: ExecutionContext,
-  planId: string,
-  prepared: PreparedCoordination,
-  what: string,
-): Promise<void> {
-  let gate;
-  try {
-    gate = await findingsCleanupGate({ harnessDir: context.harnessDir }, planId, {
-      mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new CoordinationError(
-      "coordination.store",
-      `plan ${planId} cannot ${what}: the issue store is unavailable and findings authority cannot be read — ${message}`,
-      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
-    );
-  }
-  if (!gate.ok) {
-    throw new CoordinationError(
-      "coordination.findings-open",
-      `plan ${planId} cannot ${what} while findings are open (${prepared.findings_cleanup}): ${summarize(gate.violations)}`,
-      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
     );
   }
 }
@@ -1265,23 +1292,26 @@ function applyCompletion(input: {
 }
 
 /**
- * §E the standalone source proof: the feature checkout is clean, its HEAD is the
- * pinned source commit, it is on the registered delivery source branch, that
- * branch's tip is the same commit, and the review range is an ancestry of it.
- * The worktree is the row's own recorded scope, so the rule never reads a
- * caller-supplied path.
+ * §E the recorded source proof of one plan's own delivery, from the ROW's
+ * recorded scope: the checkout is a clean Git worktree, its HEAD is the pinned
+ * source commit, it is on the recorded/registered source branch, that branch's
+ * tip is the same commit, and the reviewed range is an ancestry of it. Used by
+ * BOTH the standalone development route and the iteration (integration) route,
+ * so a row can never complete against a merge of a commit unrelated to its own
+ * feature branch or its reviewed commit. `worktreePath` is always the row's own
+ * recorded scope — never a caller-supplied path.
  */
-function assertStandaloneSourceProof(
+function assertSourceReviewProof(
   worktreePath: string,
-  evidence: ValidatedCompletionEvidence,
+  shas: { source_sha: string | null; review_base: string | null; review_head: string | null },
   sourceBranch: string,
   planId: string,
-): void {
-  const sourceSha = evidence.source_sha;
-  const reviewBase = evidence.review_base;
-  const reviewHead = evidence.review_head;
+): { source_sha: string; review_base: string; review_head: string } {
+  const sourceSha = shas.source_sha;
+  const reviewBase = shas.review_base;
+  const reviewHead = shas.review_head;
   if (sourceSha === null || reviewBase === null || reviewHead === null) {
-    throw invalidPlanInput("complete on the standalone development route requires evidence.source_sha, review_base and review_head");
+    throw invalidPlanInput("complete requires evidence.source_sha, review_base and review_head on this route");
   }
   assertFeatureCheckout(worktreePath, sourceSha, "complete", planId);
   if (reviewHead !== sourceSha) {
@@ -1319,6 +1349,63 @@ function assertStandaloneSourceProof(
       review_head: reviewHead,
     });
   }
+  return { source_sha: sourceSha, review_base: reviewBase, review_head: reviewHead };
+}
+
+/**
+ * §E the EXACT merge proof of one iteration completion (contract line 162): the
+ * named result commit exists in the recorded integration repository, its HEAD is
+ * that commit, its two parents are exactly `[base_sha, source_sha]` in that
+ * order, `base_sha` and `source_sha` are objects, and the result is reachable
+ * from the observed integration HEAD. `integrationProof`'s broader `proven`
+ * classification — which admits the base itself when the source is already an
+ * ancestor — is NOT sufficient here: the direct operation names the already
+ * performed serial merge, so a no-merge result is refused rather than accepted
+ * as an implicit exemption.
+ */
+function assertExactMergeResult(
+  path: string,
+  planId: string,
+  result: string,
+  baseSha: string,
+  sourceSha: string,
+  head: string,
+): string {
+  if (!gitObjectExists(path, result) || !gitObjectExists(path, baseSha) || !gitObjectExists(path, sourceSha)) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${result} is not an object of ${path} together with its base ${baseSha} and source ${sourceSha}`,
+      { plan_id: planId, result, base: baseSha, source: sourceSha, path },
+    );
+  }
+  if (!gitObjectExists(path, head)) {
+    throw integrationDiverged(`plan ${planId} integration HEAD ${head} is not an object of ${path}`, {
+      plan_id: planId,
+      head,
+      path,
+    });
+  }
+  const parentsLine = gitRead(path, ["rev-list", "--parents", "-n", "1", result]);
+  const parents =
+    parentsLine === undefined
+      ? undefined
+      : parentsLine
+          .trim()
+          .split(/\s+/)
+          .slice(1);
+  if (parents === undefined || parents.length !== 2 || parents[0] !== baseSha || parents[1] !== sourceSha) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${result} carries parents ${JSON.stringify(parents ?? null)}, expected the exact two-parent merge [${baseSha}, ${sourceSha}] — ` +
+        `a direct completion names the serial merge that was performed, so a no-merge base is refused`,
+      { plan_id: planId, result, base: baseSha, source: sourceSha, parents: parents ?? null },
+    );
+  }
+  if (gitRead(path, ["merge-base", "--is-ancestor", result, head]) === undefined) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${result} is not reachable from the integration HEAD ${head}`,
+      { plan_id: planId, result, head, path },
+    );
+  }
+  return result;
 }
 
 /**
@@ -1340,6 +1427,51 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
   );
 }
 
+/**
+ * §4.1 the findings-cleanup gate of one row, on the transaction the caller
+ * ALREADY owns: the authoritative open issues linked to the plan are read
+ * through this transaction's own handle, so an issue captured after the
+ * preflight refuses the completion instead of being judged against a stale
+ * list. The mode is the row's effective configuration. Only the SHARED gate's
+ * decision table is reused; the read is this handle's, and it fails closed on a
+ * staged or unreadable store.
+ */
+function assertFindingsClosedOn(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  planId: string,
+  prepared: PreparedCoordination,
+  what: string,
+): void {
+  const meta = tx.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
+    | { authorityState?: unknown }
+    | undefined;
+  if (meta?.authorityState !== "active") {
+    throw new CoordinationError(
+      "coordination.store",
+      `plan ${planId} cannot ${what}: the issue store is ${
+        typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable"
+      }, so findings authority cannot be read`,
+      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
+    );
+  }
+  const rows = tx.db
+    .prepare(
+      "select issues.id as id, issues.severity as severity from issues " +
+        "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
+        "where issues.disposition = 'open' order by issues.id asc",
+    )
+    .all(planId) as Array<{ id: string; severity: string }>;
+  const mode = prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual";
+  const blocking = rows.filter((row) => normalizeSeverity(row.severity) === "critical" || mode === "zero-residual");
+  if (blocking.length === 0) return;
+  throw new CoordinationError(
+    "coordination.findings-open",
+    `plan ${planId} cannot ${what} while findings are open (${mode}): ${blocking.map((row) => `${row.id} (${row.severity})`).join("; ")}`,
+    { plan_id: planId, findings_cleanup: mode, findings: blocking.map((row) => row.id) },
+  );
+}
+
 /** Test-only hook to observe the preflight→commit gap of a DB completion. */
 let completeWitnessGapForTest: (() => void) | undefined;
 export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
@@ -1350,33 +1482,40 @@ export function setCompleteWitnessGapForTest(callback: (() => void) | undefined)
  * §3 `complete` on the DB authority: a single direct coordinator operation. It
  * re-proves the pinned evidence, the recorded result and the route, then applies
  * the completion delta as ONE transaction — `Done`, the completion record and
- * the released merge claim commit together or not at all.
+ * the released own merge claim commit together or not at all.
  *
- * The route selects which proof is REQUIRED, and the pair is re-checked inside
- * the transaction because the plan's CAS guards the row and not the workflow
- * header:
+ * §4.1 RECEIPT REPLAY runs FIRST, before any Git command or evidence hash: the
+ * frame's request fingerprint (published semantic selection, which excludes
+ * transport freshness) is compared against the committed operation ledger inside
+ * the write transaction, and an identical retry returns the RECORDED receipt
+ * verbatim — Git never re-runs, the reports are never re-hashed and
+ * `completed_at` is never rewritten, so a cleaned-up checkout or a moved HEAD
+ * cannot turn a success into a failure. Only a first attempt reaches the
+ * preflight below; the `completeWitnessGapForTest` seam still observes that
+ * preflight→commit gap.
+ *
+ * The route selects which proof is REQUIRED, and both the route/policy pair and
+ * the actual anchors are re-derived from the transaction's own snapshot so a
+ * workflow-header write in the window cannot leave completion judged against
+ * obsolete anchors:
  *
  * - a single-row `verification/report-only` workflow completes on its QC/QA
- *   evidence plus the already-recorded fulfilment of its declared completion
+ *   evidence plus the EXPLICITLY RECORDED fulfilment of its declared completion
  *   policy, needs no source, integration or merge, and rejects integration input;
  * - a single-row `development` workflow completes on its QC/QA evidence and its
  *   registered source branch: the row worktree is clean, on that branch and at
- *   the pinned source commit. `integration` input is refused rather than
- *   synthesizing an integration lane;
- * - every other route requires `integration: { base_sha, result_sha }` naming the
- *   serial merge the coordinator actually performed: the result is a two-parent
- *   merge of the base and the pinned source, reachable from the observed
- *   integration HEAD at the snapshot's registered integration checkout.
+ *   the pinned source commit, with the review range an ancestry;
+ * - every other route additionally requires `integration: { base_sha, result_sha }`
+ *   naming the serial merge the coordinator ACTUALLY performed, proven as the
+ *   exact two-parent merge of base+source reachable from the observed
+ *   integration HEAD — and the row's OWN feature checkout, ref and reviewed
+ *   ancestry are proven in the same operation.
  *
- * A completion of one route is never accepted for another. Replay returns the
- * recorded receipt verbatim: Git is never re-run and `completed_at` is never
- * rewritten.
- *
- * §4.1/§7 the external Git read and every evidence hash happen before SQLite
- * ownership, and the Git witness they produced is re-read immediately before the
- * commit, so a checkout, object store or ref that moved in the window refuses
- * instead of committing a stale proof. A refs-only witness cannot prove an
- * unchanged index or worktree.
+ * §4.1/§7 every external Git read and every evidence hash happens before SQLite
+ * ownership, and the Git witnesses they produced are re-read immediately before
+ * the commit; `assertFindingsClosed` is re-run through this transaction's own
+ * handle so an issue opened in the window refuses instead of committing a stale
+ * decision.
  */
 export async function completeExecutionPlan(
   context: ExecutionContext,
@@ -1385,25 +1524,121 @@ export async function completeExecutionPlan(
   const resolved = resolvePlanOperationRequest(context.caller, request, "complete");
   const operation = resolved.call.operation;
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "evidence", "integration"], "complete operation");
-  const { planId } = resolved.read;
-  const before = await readExecutionPlan(context, request.session, planId);
-  const row = before.data.plan as unknown as PlanRow;
-  const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
+  // §4.1 the external half: read the workflow snapshot and capture the Git
+  // witnesses BEFORE SQLite ownership. `completeWitnessGap` then observes the gap
+  // between this captured proof and the commit, where the transaction re-validates
+  // every witness and re-derives the route/policy pair from its own snapshot.
+  const witnesses = await captureCompletionWitnesses(context, resolved.read, operation);
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) =>
+    completeInTransaction(witness, tx, at, resolved.read, operation, witnesses),
+  );
+}
+
+/** The pre-transaction observations `complete` re-validates at the commit boundary. */
+type CompletionWitnesses = { git: readonly GitProofWitness[] };
+
+/**
+ * §4.1 the pre-transaction half of `complete`: the route/policy pair, the actual
+ * anchors and the Git witnesses, all read before SQLite ownership. Nothing here
+ * is authority on its own — the transaction re-derives the route and anchors from
+ * its own snapshot and re-validates each witness immediately before the commit,
+ * so a header write or a moved checkout in the window refuses rather than
+ * committing a stale proof.
+ */
+async function captureCompletionWitnesses(
+  context: ExecutionContext,
+  read: ResolvedPlanRead,
+  operation: CompleteOperation,
+): Promise<CompletionWitnesses> {
+  const before = await readExecutionPlan(context, read.workflowId, read.planId);
+  const snapshot = await readWorkflowSnapshot(context, read.workflowId);
   const route = deliveryRouteOf(snapshot);
   if (route === "integration" && operation.integration === undefined) {
     throw invalidPlanInput(
       "complete on the integration route requires integration: { base_sha, result_sha } naming the serial merge that was performed",
+      { plan_id: read.planId, missing: "integration" },
+    );
+  }
+  assertNoIntegrationContamination({ snapshot, planId: read.planId, integration: operation.integration, what: "complete" });
+  const row = before.data.plan as unknown as PlanRow;
+  const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
+  const prepared = effectivePrepareConfig(before.data);
+  assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
+  if (route === "report-only") {
+    assertReportOnlyCompletionEvidence(snapshot, read.planId, "complete");
+    return { git: [] };
+  }
+  const scope = planScopeOf(before.data, read.planId);
+  if (route === "development") {
+    const anchors = standaloneDeliveryAnchors(snapshot, read.planId);
+    if (scope.workingBranch !== anchors.sourceBranch) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `complete requires the recorded working branch ${scope.workingBranch} to equal the registered delivery source ${anchors.sourceBranch}`,
+        { plan_id: read.planId, expected: anchors.sourceBranch, actual: scope.workingBranch },
+      );
+    }
+    assertSourceReviewProof(scope.worktreePath, evidence, anchors.sourceBranch, read.planId);
+    return { git: [captureGitProofWitness(scope.worktreePath)] };
+  }
+  const anchors = integrationAnchors(snapshot, read.planId);
+  const checkout = assertIntegrationCheckout(anchors, read.planId);
+  const requested = operation.integration!;
+  const proven = assertSourceReviewProof(scope.worktreePath, evidence, scope.workingBranch, read.planId);
+  assertExactMergeResult(anchors.worktreePath, read.planId, requested.result_sha, requested.base_sha, proven.source_sha, checkout.head);
+  return {
+    git: [
+      captureGitProofWitness(scope.worktreePath),
+      captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged"),
+    ],
+  };
+}
+
+/** The first-attempt body of `complete`: the frame has already replayed a committed receipt. */
+function completeInTransaction(
+  witness: ExecutionPlanWitness,
+  tx: ExecutionTransaction,
+  at: string,
+  read: ResolvedPlanRead,
+  operation: CompleteOperation,
+  witnesses: CompletionWitnesses,
+): ExecutionRead<ExecutionPlanView> {
+  const planId = witness.planId;
+  // §E admission: the reviewed state is already recorded (`InReview`) or the one
+  // this same write unit entails from `InProgress` (`InProgress → InReview → Done`
+  // is ONE delta, so no separate progress call is required). `Todo`, `Blocked`
+  // and `Done` refuse with the transition that reaches them.
+  requireCompletableStatus(witness.view.plan as unknown as PlanRow, planId);
+  const snapshot = witnessSnapshot(witness);
+  const route = deliveryRouteOf(snapshot);
+  if (route === "integration" && operation.integration === undefined) {
+    throw invalidPlanInput(
+      "complete on the integration route requires integration: { base_sha, result_sha } naming the serial merge that was performed",
+      { plan_id: planId, missing: "integration" },
     );
   }
   assertNoIntegrationContamination({ snapshot, planId, integration: operation.integration, what: "complete" });
+  const row = witness.view.plan as unknown as PlanRow;
   const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
-  const prepared = effectivePrepareConfig(before.data);
+  const prepared = effectivePrepareConfig(witness.view);
   assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
-  const pinned: DeliveryRoutePin = deliveryRoutePin(snapshot);
-  const scope = route === "report-only" ? null : planScopeOf(before.data, planId);
-  let integration: CompletionRecord["integration"] = undefined;
-  let gitWitness: GitProofWitness | undefined;
+  const refs = completionEvidenceRefs(evidence);
+  const scope = route === "report-only" ? null : planScopeOf(witness.view, planId);
+  const record: CompletionRecord = {
+    source_branch: scope === null ? null : scope.workingBranch,
+    source_sha: evidence.source_sha,
+    worktree_path: scope === null ? null : scope.worktreePath,
+    review_base: evidence.review_base,
+    review_head: evidence.review_head,
+    qc: refs.qc,
+    qa: refs.qa,
+    completed_by: witness.session.sessionId,
+    completed_at: at,
+  };
   if (route === "report-only") {
+    // §E no Git and no integration proof is invented here: the workflow must
+    // already RECORD the fulfilment of its registered completion policy.
     assertReportOnlyCompletionEvidence(snapshot, planId, "complete");
   } else if (route === "development") {
     const anchors = standaloneDeliveryAnchors(snapshot, planId);
@@ -1414,73 +1649,83 @@ export async function completeExecutionPlan(
         { plan_id: planId, expected: anchors.sourceBranch, actual: scope!.workingBranch },
       );
     }
-    assertStandaloneSourceProof(scope!.worktreePath, evidence, anchors.sourceBranch, planId);
-    gitWitness = captureGitProofWitness(scope!.worktreePath);
+    const proven = assertSourceReviewProof(scope!.worktreePath, evidence, anchors.sourceBranch, planId);
+    record.source_sha = proven.source_sha;
+    record.review_base = proven.review_base;
+    record.review_head = proven.review_head;
   } else {
     const anchors = integrationAnchors(snapshot, planId);
     const checkout = assertIntegrationCheckout(anchors, planId);
-    if (evidence.source_sha === null) throw invalidPlanInput("complete requires evidence.source_sha on the integration route");
     const requested = operation.integration!;
-    const proof = integrationProof(anchors.worktreePath, checkout.head, requested.base_sha, evidence.source_sha);
-    if (proof.kind === "diverged") {
-      throw integrationDiverged(`plan ${planId} integration cannot be proven — ${proof.reason}`, {
-        plan_id: planId,
-        base: requested.base_sha,
-        source: evidence.source_sha,
-      });
-    }
-    if (proof.kind === "pending") {
-      throw integrationUnresolved(
-        `plan ${planId} shows no merge of ${evidence.source_sha} onto ${requested.base_sha} at ${anchors.worktreePath} — run the serial coordinator merge, then complete`,
-        { plan_id: planId, base: requested.base_sha, source: evidence.source_sha, head: checkout.head },
-      );
-    }
-    if (proof.resultSha !== requested.result_sha) {
-      throw integrationDiverged(
-        `plan ${planId} records result ${requested.result_sha} but the proven merge of ${evidence.source_sha} onto ` +
-          `${requested.base_sha} is ${proof.resultSha}`,
-        { plan_id: planId, recorded: requested.result_sha, proven: proof.resultSha },
-      );
-    }
-    integration = {
+    const proven = assertSourceReviewProof(scope!.worktreePath, evidence, scope!.workingBranch, planId);
+    const resultSha = assertExactMergeResult(
+      anchors.worktreePath,
+      planId,
+      requested.result_sha,
+      requested.base_sha,
+      proven.source_sha,
+      checkout.head,
+    );
+    record.source_sha = proven.source_sha;
+    record.review_base = proven.review_base;
+    record.review_head = proven.review_head;
+    record.integration = {
       target_branch: anchors.targetBranch,
       worktree_path: anchors.worktreePath,
       base_sha: requested.base_sha,
-      result_sha: proof.resultSha,
-      verified_at: "",
+      result_sha: resultSha,
+      verified_at: at,
     };
-    gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
+    // §4.2 the merge mutex: this completion may release only THIS coordinator's
+    // own claim for this plan and source. A live foreign holder refuses with the
+    // ordinary recovery route; a claim left by a stopped owner is settled by
+    // `releaseStoppedMergeClaim`, never silently here.
+    requireOwnMergeClaim(witness, planId, scope!.workingBranch);
   }
-  const refs = completionEvidenceRefs(evidence);
-  await assertFindingsClosed(context, planId, prepared, "complete");
+  // §4.1 re-validate every preflight Git witness, then the authoritative findings
+  // gate on THIS transaction's handle: a checkout, ref or issue moved after the
+  // preflight refuses instead of committing a stale proof or decision.
+  for (const witness of witnesses.git) revalidateGitProofWitness(witness);
   completeWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    // §E admission: the reviewed state the completion composes is either already
-    // recorded (`InReview`) or the one this same write unit entails from
-    // `InProgress` (`InProgress → InReview → Done` is ONE delta, so no separate
-    // progress call is required). `Todo`, `Blocked` and a completed row are
-    // refused, and the refusal names the transition that reaches them.
-    requireCompletableStatus(witness.view.plan as unknown as PlanRow, planId);
-    const committed = witnessSnapshot(witness);
-    requirePinnedDeliveryRoute(committed, pinned, planId, "complete");
-    if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
-    const record: CompletionRecord = {
-      source_branch: scope === null ? null : scope.workingBranch,
-      source_sha: evidence.source_sha,
-      worktree_path: scope === null ? null : scope.worktreePath,
-      review_base: evidence.review_base,
-      review_head: evidence.review_head,
-      qc: refs.qc,
-      qa: refs.qa,
-      ...(integration === undefined ? {} : { integration: { ...integration, verified_at: at } }),
-      completed_by: witness.session.sessionId,
-      completed_at: at,
-    };
-    applyCompletion({ tx, witness, planId, record, scope, at, what: `plan ${planId} coordination` });
-    const settled = readExecutionPlanWitness(tx, resolved.read);
-    return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
+  assertFindingsClosedOn(tx, witness.workflowId, planId, prepared, "complete");
+  applyCompletion({ tx, witness, planId, record, scope, at, what: `plan ${planId} coordination` });
+  const settled = readExecutionPlanWitness(tx, read);
+  return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
+}
+
+/**
+ * §4.2 the merge-mutex admission of one iteration completion: the workflow's
+ * merge claim may be released by this completion ONLY when it is this
+ * coordinator's own claim for THIS plan and source branch. A claim held by a
+ * different live session is that session's claim — refused with the ordinary
+ * recovery route, never stolen; a claim left by a stopped owner is settled by
+ * the close's own `releaseStoppedMergeClaim`, so it refuses here rather than
+ * being silently dropped by a row completion.
+ */
+function requireOwnMergeClaim(witness: ExecutionPlanWitness, planId: string, sourceBranch: string): void {
+  const lease = witness.view.integrationLease;
+  if (lease === null) return;
+  if (lease.plan_id !== planId || lease.source_branch !== sourceBranch) {
+    throw new CoordinationError(
+      "coordination.merge-lease-foreign",
+      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt ` +
+        `(${planId} source ${sourceBranch}) — a foreign claim is never reused or released`,
+      {
+        plan_id: planId,
+        holder_plan_id: lease.plan_id,
+        holder_source_branch: lease.source_branch,
+        source_branch: sourceBranch,
+      },
+    );
+  }
+  if (lease.holder === witness.session.sessionId) return;
+  throw new CoordinationError(
+    "coordination.identity-mismatch",
+    `plan ${planId} merge lease is held by coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
+      `${JSON.stringify(witness.session.sessionId)} — resume that holder's own binding, or run recoverExecutionCoordinator ` +
+      `naming it with stop attestation before this completion may release the claim`,
+    { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
+  );
 }
 
 /* ------------------------------------------------------------------------ *
@@ -1503,37 +1748,14 @@ export type EntailedRowCompletion = {
 };
 
 /**
- * §1/§R10 whether a report-only workflow still OWES the fulfilment of its
- * registered completion policy: true when nothing is recorded, false when the
- * recorded fulfilment names that policy. A recorded fulfilment of a DIFFERENT
- * policy is a re-pointed completion — the exact state the post-Done freeze
- * refuses — and is refused here rather than accepted as the basis of a Done.
+ * §R5/§R10 the close reports only what the workflow ALREADY records: whether the
+ * registered report-only completion policy is still unfulfilled. It never
+ * synthesizes a fulfilment — a QA pass is not the fulfilment of a registered
+ * policy — so an unrecorded policy is reported as outstanding and the close's
+ * own caller must refuse with the ordinary `workflow evidence` action that
+ * records it. An imported/Done row is held to exactly the same rule.
  */
 function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: string): boolean {
-  const policy = snapshot.completion_policy;
-  const recorded = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.completion)
-    ? (snapshot.delivery.completion as Record<string, unknown>)
-    : undefined;
-  if (recorded === undefined) return true;
-  if (!isNonEmptyString(policy) || recorded.policy !== policy) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
-        `while the lifecycle registers ${JSON.stringify(policy ?? null)} — a re-pointed completion is never the basis of a Done`,
-      { plan_id: planId, recorded: recorded.policy, registered: policy ?? null },
-    );
-  }
-  return false;
-}
-
-/**
- * §R5/§R10 the fulfilment of a report-only completion policy, RESOLVED from the
- * facts the workflow already records: the policy it registered at registration
- * (§1) and the acceptance report the row's own completion was recorded against.
- * Nothing is invented — a workflow that registered no policy is refused with that
- * fact.
- */
-function entailedFulfilment(row: ExecutionPlanView, snapshot: WorkflowSnapshot, planId: string): { policy: string; evidence: string } {
   const policy = snapshot.completion_policy;
   if (!isNonEmptyString(policy)) {
     throw missingDecision({
@@ -1543,19 +1765,35 @@ function entailedFulfilment(row: ExecutionPlanView, snapshot: WorkflowSnapshot, 
       field: "completion_policy",
       source: "workflow snapshot delivery_kind verification/report-only",
       message:
-        `close records report-only plan ${planId}'s fulfilment of the policy the lifecycle declared at registration, and this ` +
-        `workflow records no completion_policy — declare the policy the report is accepted against, then retry`,
+        `close requires report-only plan ${planId}'s lifecycle to declare the completion_policy its report is accepted against, ` +
+        `and this workflow records none — declare the policy through workflow registration, then retry`,
     });
   }
-  const report = row.coordination?.completion?.qa.report.path;
-  if (!isNonEmptyString(report)) {
+  const recorded = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.completion)
+    ? (snapshot.delivery.completion as Record<string, unknown>)
+    : undefined;
+  if (recorded === undefined) {
+    throw missingDecision({
+      planId,
+      what: "close",
+      component: "workflow-delivery",
+      field: "delivery.completion",
+      source: "workflow snapshot delivery evidence",
+      message:
+        `close requires the workflow to RECORD the fulfilment of its registered completion policy ${JSON.stringify(policy)}, and ` +
+        `nothing is recorded — record it through the ordinary \`mstar workflow evidence\` action (which records its explicit ` +
+        `fulfilment), then retry; a QA pass alone is not the fulfilment of a policy`,
+    });
+  }
+  if (recorded.policy !== policy) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `close cannot record the report-only fulfilment of plan ${planId}: its completion records no acceptance report reference`,
-      { plan_id: planId },
+      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
+        `while the lifecycle registers ${JSON.stringify(policy)} — a re-pointed completion is never the basis of a Done`,
+      { plan_id: planId, recorded: recorded.policy, registered: policy },
     );
   }
-  return { policy, evidence: report };
+  return false;
 }
 
 /**
@@ -1584,7 +1822,7 @@ export async function readEntailedRowCompletion(
           `complete it with the ordinary plan complete operation, then retry the close`,
       });
     }
-    return reportOnlyFulfilmentOutstanding(snapshot, planId) ? { planId, fulfilment: entailedFulfilment(row, snapshot, planId) } : null;
+    return reportOnlyFulfilmentOutstanding(snapshot, planId) ? { planId, fulfilment: null } : null;
   }
   if (status === "Done") return null;
   throw missingDecision({
