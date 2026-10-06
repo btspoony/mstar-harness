@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
+import { initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
 import { commandEnvelopeSchema, executeCommand, getCommandDefinitions } from "./definitions.js";
 import {
   CommandSchemaSelectionError,
@@ -263,4 +267,85 @@ describe("command discovery", () => {
       expect(envelope.message).not.toContain("expected valid value");
     }
   });
+});
+
+test("workflow.evidence publishes the delivery evidence file contract and recover-coordinator publishes its attestation option", () => {
+  const evidence = getCommandDefinitions().find((entry) => entry.id === "workflow.evidence");
+  if (evidence === undefined) throw new Error("missing workflow.evidence definition");
+  // The delivery document's shape is published under its own payload key; the
+  // `--file` option stays a plain path string, never an inline JSON field.
+  expect(evidence.payloads?.delivery).toBeDefined();
+  const deliverySchema = evidence.payloads!.delivery.schema.toJSONSchema() as { properties?: Record<string, unknown>; required?: string[] };
+  expect(Object.keys(deliverySchema.properties ?? {})).toEqual(["completion"]);
+  expect(deliverySchema.required).toEqual(["completion"]);
+  const fileOption = evidence.cli.options.find((option) => option.key === "file");
+  expect(fileOption).toBeDefined();
+  expect(fileOption!.variadic ?? false).toBe(false);
+
+  const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
+  if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
+  const attestation = recovery.cli.options.find((option) => option.key === "attestation");
+  expect(attestation).toBeDefined();
+  expect(String(attestation!.help)).toContain("ActivationAttestation");
+});
+
+test("workflow.recover-coordinator is FILE-only and returns usage with the supported ACTIVE recovery pointer", async () => {
+  const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
+  if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
+  const keys = recovery.cli.options.map((option) => option.key);
+  // The FILE transports only: no second ACTIVE recovery alias.
+  for (const key of ["session", "operationId", "reason", "authorizationRef", "stopped", "attestation"]) {
+    expect(keys).toContain(key);
+  }
+  for (const removed of ["workflow", "expect", "operation", "priorSession", "unowned"]) {
+    expect(keys).not.toContain(removed);
+  }
+  // The published pointer names the supported ACTIVE verb and its inputs.
+  expect(recovery.description).toContain("mstar session recover");
+
+  // A real ACTIVE execution authority rejects the FILE transport as usage and
+  // names the supported session recovery.
+  const root = mkdtempSync(join(tmpdir(), "mstar-recover-active-"));
+  try {
+    const harness = join(root, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const store = await initializeStore({ harnessDir: harness });
+    store.close();
+    await initializeExecutionAuthority({ harnessDir: harness });
+    const sessionPath = join(root, "coordinator.json");
+    writeFileSync(sessionPath, JSON.stringify({
+      schema_version: 1,
+      role: "coordinator",
+      session_id: "prior",
+      workflow_id: "wf-active",
+      harness_root: harness,
+    }));
+    const envelope = await executeCommand("workflow.recover-coordinator", {
+      session: sessionPath,
+      operationId: "recover-1",
+      reason: "active authority",
+      authorizationRef: "auth-1",
+      stopped: ["prior"],
+      harness,
+    }, {
+      cwd: root,
+      controlRoot: null,
+      sessionId: "caller-session",
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        async readInput() { return ""; },
+        async spawn() { throw new Error("recovery must not spawn a process"); },
+        async startDashboard() { throw new Error("dashboard is unavailable in this test"); },
+        async openBrowser() { throw new Error("browser is unavailable in this test"); },
+      },
+    });
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(String(envelope.message)).toContain("mstar session recover");
+    for (const flag of ["--workflow", "--prior-session", "--unowned", "--reason", "--attestation", "--expect", "--operation"]) {
+      expect(String(envelope.message)).toContain(flag);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
