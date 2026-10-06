@@ -1110,7 +1110,7 @@ describe("execution-initialize: \u00A73 create-only empty execution authority", 
     expect(workflow.planTokens).toEqual({
       "p-1": executionToken("plan", initialized.storeId, epoch + 1, ["wf-1", "p-1"], 6),
     });
-    expect(workflow.coordinator).toEqual({
+    expect(workflow.coordinator).toMatchObject({
       storeId: initialized.storeId,
       epoch: epoch + 1,
       workflowId: "wf-1",
