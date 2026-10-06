@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "5a40bd6907d2066151dd9be34b0e95cc593ba8f023a904f82287c2f50f3334de",
+  "casesHash": "6a326bf93d02361cd70bbd979ebf67b239c83cf39457a6cf3aa1f01321999825",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -680,7 +680,7 @@
           }
         ]
       },
-      "prompt": "Verify the plan execution lease whose holder is another session, and stop rather than take it over.",
+      "prompt": "Verify the workflow integration merge exclusion whose holder is another session, and stop rather than take it over. The fixture calls its informational boundary 'execution lease boundary'; this is not a removed per-row lease.",
       "assertions": [
         {
           "id": "a-calls",
@@ -768,7 +768,7 @@
         }
       ],
       "provenance": {
-        "note": "Verify the plan execution lease whose holder is another session, and stop rather than take it over.",
+        "note": "Verify a foreign workflow integration merge exclusion and stop without takeover; no per-plan lease admission.",
         "coverage": [
           "unauthorized-request",
           "bounded-protected-lease"
@@ -779,7 +779,7 @@
         "context": "warm",
         "evidence": "lease record present in the fixture"
       },
-      "integrityHash": "c6b741a83d5b716688528cc7fd561208a2b9ecdcc077543a36b5b7a613c95c53"
+      "integrityHash": "cfb7fa187960a717d7013a7196a5a3e272eba5fde8126aa5639ca5f32b542340"
     },
     {
       "id": "bounded-res-slash-iteration-cold",
@@ -997,7 +997,7 @@
       },
       "bounded-res-lease-boundary": {
         "inputs": [
-          "lease record at store/fixture.json carrying the execution lease boundary and its holder session-foreign-fixture"
+          "workflow integration exclusion record at store/fixture.json carrying the informational execution lease boundary and holder session-foreign-fixture"
         ],
         "unavailable": [
           "authorization to take over the foreign lease"
@@ -1057,11 +1057,8 @@
       "migrate": {
         "excluded": "host-environment dependent or destructive corpus route; explicit unverified route"
       },
-      "lease.verify": {
-        "scenario": "bounded-res-lease-boundary"
-      },
       "lease.verify-integration": {
-        "excluded": "no concrete instruction input/output pair authored for this route; explicit unverified disposition"
+        "scenario": "bounded-res-lease-boundary"
       },
       "iteration.gate": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
@@ -1070,16 +1067,16 @@
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "plan.bind": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
+        "excluded": "coordinator-only bootstrap/resume needs an isolated workflow identity fixture; unverified here"
       },
       "plan.show": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
       "plan.prepare": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
+        "excluded": "ordinary revisable source/configuration, no sealed Assignment; needs isolated coordinator fixture"
       },
       "plan.progress": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
+        "excluded": "direct coordinator progress for explicit plan, no per-row bind; needs isolated workflow fixture"
       },
       "plan.issue-add": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
@@ -1087,44 +1084,14 @@
       "plan.issue-close": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
       },
-      "plan.handoff": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.accept": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.return": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.integration-start": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.integration-accept": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
       "plan.complete": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.repair-delivery-source": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.reconcile": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.release": {
-        "excluded": "requires a live bound plan execution claim fixture; explicit unverified route"
-      },
-      "plan.residual-add": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
-      },
-      "plan.residual-close": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
+        "excluded": "direct coordinator QC/QA and declared-route proof needs isolated source/merge/policy fixture"
       },
       "session.run": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
+        "excluded": "coordinator-only child identity launch; isolated child fixture, no row scope or plan-PM role"
       },
       "session.recover": {
-        "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"
+        "excluded": "explicit stopped workflow-coordinator recovery; isolated attestation fixture, no per-plan owner"
       },
       "workflow.register": {
         "excluded": "requires a live coordinator session/workflow fixture; explicit unverified route"

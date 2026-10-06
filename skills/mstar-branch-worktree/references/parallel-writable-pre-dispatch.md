@@ -7,10 +7,10 @@ This reference is **L2** worktree isolation: **same `plan_id`**, **same business
 **L1 (cross-plan)** is separate and stacks on top when iteration Phase 2 defaults apply:
 
 - The **control root** is the primary checkout (main worktree) — the process-SSOT holder whose residency is recorded as **`Main worktree branch`** in the main plan header. The **integration worktree** (`integration_worktree_path`, checked out to `spec_integration_branch`) is the sole merge cwd; status/SDD coordination reads/writes run via absolute control-root paths.
-- Each concurrently active plan uses a **distinct feature worktree** (`execution_lease.worktree_path` ≠ the main worktree ≠ `integration_worktree_path`) with a verified snapshot `plans[].execution_lease` before writable dispatch. **Every** writable track — parallel or serial — is excluded from the main and integration checkouts.
-- Claim/hold/release/merge rules → **`mstar-iteration`** `references/phase-2-worktree-lease.md` (not repeated here).
+- Each ready row uses a distinct metadata.worktree_path/source branch, different from main/control and integration; verify actual checkout before writable dispatch. This applies to serial as well as concurrent product edits.
+- Ordinary coordinator configuration/atomic writes/serial merge rules → mstar-iteration/references/phase-2-worktree-lease.md.
 
-When **one plan** runs **≥2** concurrent writable tracks, **L2 still applies** inside that plan even if L1 leases already isolate plans from each other. Run this checklist **per plan** that has multiple parallel implement tracks.
+Within-plan multiple writable tracks also require L2; cross-plan isolation never substitutes for it.
 
 ## Why this exists
 

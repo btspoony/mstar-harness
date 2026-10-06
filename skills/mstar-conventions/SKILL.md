@@ -106,7 +106,7 @@ enforcement=hard
 
 ## Issue/catalog store 路径与权威分界
 
-Issue 身份、证据、影响、处置、occurrences、关系与 provenance，以及 project/iteration/plan/document **catalog** 身份与关系，权威在 **`{HARNESS_DIR}/store.db`**（激活后）；roadmap 正文也在该 store，其读写规则 → **`mstar-project-governance`**。执行路由、lease、session 凭证与冻结执行输入仍是根 `status.json` / workflow snapshot 等 **JSON**（`ArtifactStore` / 默认 `FsStore`）——不是 SQLite，也不把 `ArtifactStore` 改成通用 SQLite 后端。
+Issue/catalog/roadmap and ACTIVE execution authority live in control-root store.db. Pre-activation execution files remain their own transport only. Coordinator source metadata/configuration/progress/completion and workflow merge exclusion are domain-written; no per-row session or sealed Assignment. ArtifactStore never bypasses ACTIVE authority.
 
 ### Catalog 字段权威（contract §1）
 
@@ -114,11 +114,11 @@ Issue 身份、证据、影响、处置、occurrences、关系与 provenance，�
 |------|------|------|
 | project / iteration / plan / document 的 identity、路径、kind、description、project/iteration 归属、spec/knowledge 关系、catalog 生命周期（`active` / `archived` / `superseded`） | **DB catalog** 行 | catalog 域 API；`mstar catalog list` / `mstar catalog show` |
 | 文档正文（compass 叙述、plan、spec/knowledge 内容、README 散文） | **文件** | 直接读文件 |
-| 根 `status.json` `workflows[]` 路由与 active 归属；snapshot 的 status/phase/branch/lease/coordination/session | **JSON 执行权威** | 既有校验读（门禁用）；dashboard 只读投影 |
-| snapshot 行 status/progress/task/QC/QA/done_at/branch/worktree | **JSON 执行权威** | 永不由 catalog 或投影刷新 |
-| snapshot `plans[].id/title/file` 与 `metadata` 引用 | prepare 时从某个 catalog revision 复制来的**冻结执行输入** | 不可当作 catalog 登记编辑；后续 catalog 变更不静默改写在途 plan |
+| Workflow status/phase/anchors/configuration/completion and coordinator | ACTIVE DB execution authority; pre-activation file transport only | Authoritative execution reader; dashboard is projection |
+| Row status/progress/QC/QA/source branch/worktree | Same selected execution authority | Domain calls; catalog never resets runtime state |
+| Registered plan id/title/file and metadata | Ordinary registered row inputs from a catalog revision | Correct through supported writers; later catalog edits do not silently relocate an active plan |
 
-`store.db` 是进程本地（默认 gitignored），执行路由/lease/session 与冻结输入**不**进 SQLite。**激活前** legacy 索引仍是权威；store 未初始化/未激活时 catalog 查询**拒绝**（`store.not-initialized` / `store.not-active`），**不**读作「空 catalog」；切换由 cutover plan 的 activation 负责。
+Store is process-local and gitignored. Catalog-not-initialized/active refuses rather than answering empty; ACTIVE execution reads never fall back to leftover snapshots. Bootstrap/migration changes authority only through supported operator operations.
 
 ### Markdown 索引退役（contract §4）
 

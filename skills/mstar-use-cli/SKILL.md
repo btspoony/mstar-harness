@@ -41,19 +41,16 @@ Do not load for:
 ### 1. Task → command family
 
 
-Start with the intended verb and its current help, not a universal preflight chain. On the active route, attempt the sparse intended action — session reference, the caller's independently acquired `--session-id`/`sessionId`, and the caller-owned `--operation` id — and let the engine derive the caller-owned session binding and the plan's current token before requiring any separate read; on a plan mutation supply a full execution token only when you hold it as an explicit constraint, and an explicit plan target only for a genuinely ambiguous choice — workflow-level active writes (registration, evidence, recovery) and a fresh active bind state the full execution token themselves. Pre-activation, supply the session envelope and row revision. A fresh plan-PM bind always states explicit operator `--session-id`. Inspect the `applied`, `partial` or `replayed` receipt; preserve already-applied components only where the verb documents action-local partial semantics. A refusal returns grouped facts naming the one non-derivable input or genuine conflict; ambiguous coordinator plan selection, unavailable authorization and a foreign live holder are never derived or auto-selected. Do not repair state through a separate command before replaying the documented remaining action.
+Start with the intended ordinary action, not a universal preflight chain. The acquired primary coordinator's own reference/current scope token/operation id may be derived where unambiguous; explicit constraints validate. Address row actions with --plan and select workflow when needed. File authority uses its workflow envelope/revision, never a per-row identity. Genuine missing configuration/source facts use revisable prepare; defaults do not require a ceremonial record.
 Find the task, run the family, then read its owning skill for the rules around it.
 
 | Task | Family | Owning skill |
 |---|---|---|
-| Read a plan row: revision, recorded provenance versions, scoped paths, operations allowed now | `mstar plan show` | `mstar-iteration` (scoped drive), `mstar-artifacts` (fields) |
-| Claim or resume a scoped session; bootstrap a coordinator session | `mstar plan bind` | `mstar-iteration` |
-| Register a reviewed Assignment and release its dependencies | `mstar plan prepare` | `mstar-iteration` |
+| Read selected row state/configuration/evidence and token | `mstar plan show` | `mstar-artifacts` |
+| Bootstrap/resume the workflow coordinator only | `mstar plan bind` | `mstar-iteration` |
+| Revise row source metadata and QA/cleanup configuration | `mstar plan prepare` | `mstar-artifacts`, `mstar-iteration` |
 | Update progress; capture findings on this plan as linked issues; close one with its disposition | `mstar plan progress`, `mstar plan issue-add`, `mstar plan issue-close` | `mstar-sdd`, `mstar-project-governance` (capture contract) |
-| Finish a plan (handoff; row stays InReview) | `mstar plan handoff` | `mstar-sdd`, `mstar-artifacts` |
-| Transfer execution ownership / return a handoff | `mstar plan accept`, `mstar plan return` | `mstar-iteration` |
-| Release the caller's own held execution claim; explicitly bind to reacquire | `mstar plan release`, `mstar plan bind` | `mstar-iteration` |
-| Run the pinned integration and record Done; recover a crashed attempt | `mstar plan integration-start`, `mstar plan integration-accept`, `mstar plan complete`, `mstar plan reconcile` | `mstar-branch-worktree`, `mstar-iteration` |
+| Record Done directly from QC/QA and declared-route proof | `mstar plan complete` | `mstar-artifacts`, `mstar-branch-worktree`, `mstar-iteration` |
 | Amend an approved Prepare scope | `mstar workflow show-prepare`, `mstar workflow amend-prepare` | `mstar-artifacts` |
 | Register a standalone plan workflow; record delivery evidence | `mstar workflow register`, `mstar workflow evidence` | `mstar-artifacts` |
 | Register an iteration workflow | `mstar iteration register` | `mstar-artifacts` (lifecycle semantics) |
@@ -65,7 +62,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Land or check a QC seat report | `mstar qc validate-report` | `mstar-review-qc` |
 | Validate an Assignment before dispatch | `mstar dispatch validate` | `mstar-dispatch-gates` |
 | Map an execution mode to its QC seat count; assert tri identity | `mstar review seats` | `mstar-review-qc` |
-| Verify a plan's execution lease; verify the integration merge lease | `mstar lease verify`, `mstar lease verify-integration` | `mstar-artifacts`, `mstar-branch-worktree` |
+| Verify workflow-wide integration merge exclusion | `mstar lease verify-integration` | `mstar-artifacts`, `mstar-branch-worktree` |
 | Check L1 / L2 pre-dispatch worktree topology | `mstar worktree check` | `mstar-branch-worktree`, `mstar-dispatch-gates` |
 | Assert QC / QA checkout alignment across seat files | `mstar worktree qc-alignment` | `mstar-branch-worktree` |
 | Post-merge worktree and branch cleanup (dry-run first) | `mstar worktree cleanup` | `mstar-iteration` |
@@ -96,9 +93,9 @@ Use `references/preconditions.md` when the intended verb refuses for a required 
 
 ### 3. Lifecycle shape
 
-The public lifecycle verbs remain `handoff → accept → [iteration integration-start → operator merge → integration-accept] → complete`; a standalone development row completes from accepted handoff, while report-only follows its registered completion policy rather than inventing Git integration. Use current verb help for supported arguments and inspect the receipt after each intent. `return` and `reconcile` address their specific failed/crashed attempt; neither is a universal preparatory repair. `references/plan-and-workflow.md` describes role boundaries and exceptional conflicts.
+The primary coordinator's ordinary prepare/progress/complete operations replace ownership-transfer completion. Iteration complete verifies the already-performed serial merge; standalone development verifies registered source without integration inputs; report-only consumes matching fulfilment recorded before Done without fabricated Git. All retain QC/QA and their distinct outer delivery/close obligations. No per-row execution lease or bind exists.
 
-`complete` releases only the row's lease on the standalone route and both leases on the iteration route; a standalone workflow remains running until delivery evidence and workflow close. `repair-delivery-source` is only for a pre-fix snapshot whose registered source branch equals its target, never normal progress.
+Complete writes Done/evidence/ownership atomically and releases applicable integration exclusion; exact replay preserves timestamps. Retry the same intended action with current facts rather than introducing another protocol. Parameters/recovery → references/plan-and-workflow.md.
 
 ## Decision Rules
 
@@ -106,11 +103,11 @@ The public lifecycle verbs remain `handoff → accept → [iteration integration
 - **Exit codes: `0` ok, `1` engine refusal, `2` usage.** `0` includes idempotent no-ops and read-only reads. `1` carries a stable machine code; a refused call's commit state is action-local and stated by its receipt. `2` is a usage error — unknown flag, missing required argument or option, malformed or relative path where an absolute one is required, unreadable payload.
 - **Flags come from the CLI help, never from this skill.** Run the group help, or the verb help, before guessing an option; the group help is also the authority for which verbs exist at all.
 - **Refusal semantics are action-local.** A refusal's commit state belongs to that one action: read the receipt instead of assuming. The engine's coordinated plan-route writes refuse transactionally — a refused operation there writes no row, receipt or counter change, so its recovery is a read of current state, never an undo. Where a verb documents action-local partial application, components already committed stay committed — the receipt names them, and the documented remaining action is replayed as its own operation, not the whole sequence. A stale explicit token is recovered by re-reading the addressed scope and retrying with the fresh token. There is no force, no replace and no takeover flag to escalate to.
-- **Submitted evidence digests record provenance, not immutable report bytes.** Later report edits, including appended sections, do not invalidate the handoff by hash and require no return, re-signing or resealing. Current semantic QC/QA, acceptance, ownership and evidence-path requirements still apply; `return` remains an ownership/state action, not a byte-repair step.
+- Evidence digests record provenance, not immutable report bytes. Explanatory report edits need no hash repair or resealing; current semantic QC/QA, source proof and evidence-path requirements still apply. No ownership-transfer repair action remains.
 - **Streams are per command and per mode — observe them, never infer from the family.** A verb's machine surface (the `--json` form, or a verb whose output is a machine object such as `persist get`) writes that object to **stdout**, failure and refusal objects included, so neither the exit code nor the family tells you which stream carried the bytes. On the human surface a success is usually one short line on **stdout** (`<path>: OK`, `host: <id>`), though some verbs leave stdout empty and put the readable summary on **stderr**; usage errors and most refusal diagnostics go to **stderr**, and one command can split inside itself — machine rows on stdout, the human headline on stderr. No split holds for every command and no enumeration is reliable, so never assume a command's failure text is on stderr: where a pipe depends on it, read the actual output or that command's help. The exit code is the verdict; an empty stdout is not by itself a failure signal.
 - **The CLI you run may not be the code you read.** The globally installed binary runs the *published* engine build, and even a workspace entry point resolves the engine's **built output**, which can lag its source until that package is rebuilt — so a fix present in the engine source can be absent from the very command you are testing. Install health, and a healthy setup check, prove neither. When a result contradicts source you just read, rebuild or re-resolve before concluding the source is wrong, and follow the version-alignment path in `mstar-harness-core`. The same caution covers a repository's own generated bundles: a checkout can be mid-flight between source and artifact.
 - **Never write a lifecycle state or a lease by editing a document.** Done and lease release go through the completion verb; the protected coordination documents refuse direct writes by design.
-- **Never hand a reference or a token to a leaf.** Session envelopes, session references and every token — the active execution token and operation id included — are coordinator/PM material; the scoped-drive rules in `mstar-iteration` own that boundary.
+- **Never hand coordinator context to a leaf:** session references/envelopes, CAS tokens and operation IDs stay with the primary PM; leaf tasks carry only owned scope/paths/evidence.
 - **Never substitute recovery for resume or resume for recovery.** A resume is read-only; a stopped owner is replaced only by the recovery verb that owns the current authority.
 - **A validator's `OK` is a statement about its own contract only.** Exit 0 means no violations of that check — not that the content is correct, complete or current.
 
