@@ -19,8 +19,7 @@
  *   key survives only as a read alias in `readWorkflowSnapshot`),
  *   `legacy_metadata?` (catch-all for unmapped v1 root-metadata keys),
  *   `compass_ref?` (relative pointer to the iteration delivery compass).
- * - Lease shape delegation: `validateExecutionLease` /
- *   `validateIntegrationMergeLease` unchanged (`lease.ts`).
+ * - Mutex shape: `validateIntegrationMergeLease` unchanged (`lease.ts`).
  * - Writer: whole-rewrite under `withStatusWriteLock(snapshotPath)` - the
  *   `.status-write.lockdir` lands inside `workflows/<id>/` (dirname of the
  *   snapshot), no harness-root pollution.
@@ -32,7 +31,6 @@ import { readJson, type GateResult, type Severity, type ValidationResult } from 
 import {
   CoordinationError,
   canonicalTarget,
-  fileClaimHolderState,
   isNonEmptyString,
   isPlainObject,
   readArtifactBytes,
@@ -42,7 +40,7 @@ import {
   type RowValidationRoute,
   type SnapshotCoordination,
 } from "./coordination-write.js";
-import { validateExecutionLease, validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
+import { validateIntegrationMergeLease, withStatusWriteLock, type IntegrationMergeLease } from "./lease.js";
 import { assertSafePathComponent, canonicalizeNearestExisting, resolvePlanDir } from "./path.js";
 import { resolveRegisteredPlanFile } from "./plan-path.js";
 // Call-time-only cycle with status.ts (status.ts imports the snapshot consts
@@ -151,10 +149,9 @@ export type WorkflowBranchAnchors = {
 };
 
 /**
- * v3 workflow snapshot (`workflows/<id>/snapshot.json`) - final schema
- * (). `plans[]` rows are the legacy PlanRow shape verbatim;
- * per-row `execution_lease` stays on the row, `integration_merge_lease` is
- * top-level.
+ * v3 workflow snapshot (`workflows/<id>/snapshot.json`). Plan rows carry
+ * ordinary coordinator-managed metadata; `integration_merge_lease` is the
+ * workflow-wide serial merge mutex.
  *
  * Integration worktree path: the canonical member is
  * `integration_worktree_path` - the dedicated integration checkout, on
@@ -203,12 +200,11 @@ export const CLOSE_PHASE = "phase-3-close";
  * - not a running `type: iteration` - a plan snapshot has no phase concept,
  *   and a terminal document carries its own outcome - nothing is derived and
  *   `facts` names why;
- * - running with NO execution ownership anywhere - every row still `Todo`, no
- *   row progress, no row `coordination` block, no row `execution_lease`, no
- *   workflow `integration_merge_lease` - derives `PREPARE_PHASE`. A
- *   coordinator binding is NOT execution ownership, so a bound-but-unstarted
- *   iteration still derives Prepare;
- * - running WITH execution ownership derives the applicable FORWARD label:
+ * - running with NO execution progress anywhere - every row remains `Todo`,
+ *   no row progress, no `coordination.progress`, and no workflow
+ *   `integration_merge_lease` - derives `PREPARE_PHASE`. A prepared row config
+ *   or coordinator binding does not itself start execution;
+ * - running WITH execution progress derives the applicable FORWARD label:
  *   `CLOSE_PHASE` when every row is `Done`, otherwise `EXECUTE_PHASE`.
  *
  * The result is a pure read - no snapshot byte is touched (`facts` is the
@@ -235,9 +231,7 @@ export function deriveLifecyclePhase(snapshot: WorkflowSnapshot): LifecyclePhase
   for (const row of rows) {
     const planId = typeof row.id === "string" && row.id !== "" ? row.id : "(unnamed row)";
     if (row.status !== undefined && row.status !== "Todo") ownership.push(`plan ${planId} status=${String(row.status)}`);
-    if (row.progress !== undefined && row.progress !== 0) ownership.push(`plan ${planId} progress=${String(row.progress)}`);
-    if (row.execution_lease !== undefined) ownership.push(`plan ${planId} execution_lease`);
-    if (row.coordination !== undefined) ownership.push(`plan ${planId} coordination`);
+    if (isPlainObject(row.coordination) && row.coordination.progress !== undefined) ownership.push(`plan ${planId} progress`);
   }
   if (ownership.length === 0) {
     return { phase: PREPARE_PHASE, facts: [...facts, `plans=${rows.length}`, "every row Todo", "no execution ownership"] };
@@ -263,11 +257,8 @@ export type WorkflowSnapshot = {
   legacy_metadata?: Record<string, unknown>;
   compass_ref?: string;
   /**
-   * Snapshot-level coordination block ( - scoped plan-PM coordination).
-   * Present only on a coordinated lifecycle: it carries the workflow's
-   * coordinator binding (session id + canonical envelope path). The block
-   * is validated strictly (`validateSnapshotCoordination`) and may only be
-   * changed by the locked coordination writer.
+   * Workflow-level coordinator identity and recovery evidence. Plan rows
+   * carry ordinary prepared/progress/completion data.
    */
   coordination?: SnapshotCoordination;
   /**
@@ -325,139 +316,6 @@ export function rowValidationRoute(snapshot: WorkflowSnapshot, row: PlanRow): Ro
   return "integration";
 }
 
-function validateStandaloneCompletedCoherence(snapshot: WorkflowSnapshot, row: PlanRow): ValidationResult[] {
-  const violations: ValidationResult[] = [];
-  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
-  if (!standalone || row.id !== snapshot.plans[0]?.id) return violations;
-  const coordination = row.coordination;
-  // A Done standalone row that carries a coordination block must carry the
-  // handoff that block exists to record. The coordination block's own presence
-  // is the durable marker that this row entered the coordination lifecycle, and
-  // no authorized writer produces a coordinated row without a handoff: `accept`
-  // moves it to `accepted` and `complete` writes it `completed` in the SAME
-  // update as `status: "Done"` (`completeStandaloneRow` / `completeRow`,
-  // coordination.ts) - so a Done coordinated row whose handoff block is missing
-  // is only reachable by deleting it, and the deleted block is exactly the
-  // accepted/QC/QA record the completion was authorized against. The reverse
-  // boundary is deliberate: a Done standalone row with NO coordination block at
-  // all is a legitimate legacy shape - the v1 lift mints it verbatim
-  // (`buildStandaloneSnapshot`, migrate.ts:466-511) - and stays accepted.
-  if (!isPlainObject(coordination)) return violations;
-  if (!isPlainObject(coordination.handoff)) {
-    if (row.status === "Done") {
-      violations.push(
-        violation(
-          "high",
-          "coordination.row.handoff-field",
-          `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff \u2014 a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`,
-        ),
-      );
-    }
-    return violations;
-  }
-  const handoff = coordination.handoff as Record<string, unknown>;
-  const completed = handoff.state === "completed";
-  // The state is a POSITIVE requirement, never an early return: a Done
-  // standalone row IS the closed shape, so its stored handoff must be
-  // `completed` - the requirement the DB route's completed replay states
-  // outright (`requireHandoffState(handoff, ["completed"], ...)`,
-  // execution-coordination.ts). The early return this replaces evaluated every
-  // check below - integration contamination, the `integration_worktree_path` /
-  // `branch.integration` refusals and the no-lease requirement - only for a
-  // shape an adversary had already stored correctly, so flipping one word of
-  // stored state disabled all of them and a handoff rewritten back to
-  // `accepted` reached the terminal close. An in-progress standalone row (not
-  // Done) is not this validator's subject and stays untouched: `accepted` is
-  // the state `accept` writes.
-  if (row.status !== "Done" && !completed) return violations;
-  if (!completed) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} \u2014 a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`,
-      ),
-    );
-  }
-  if (handoff.integration !== undefined) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        `standalone completed handoff must not carry integration for row ${String(row.id)}`,
-      ),
-    );
-  }
-  if (isStandaloneReportOnlyWorkflow(snapshot)) {
-    if (snapshot.integration_worktree_path !== undefined) {
-      violations.push(
-        violation(
-          "high",
-          "coordination.row.handoff-field",
-          "report-only completed handoff must not carry integration_worktree_path",
-        ),
-      );
-    }
-    if (isNonEmptyString(snapshot.branch?.integration)) {
-      violations.push(
-        violation(
-          "high",
-          "coordination.row.handoff-field",
-          "report-only completed handoff must not carry branch.integration",
-        ),
-      );
-    }
-  }
-  if (row.status !== "Done") {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        `standalone completed handoff requires row ${String(row.id)} to be Done`,
-      ),
-    );
-  }
-  if (row.execution_lease !== undefined) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        `standalone completed handoff requires no execution lease on row ${String(row.id)}`,
-      ),
-    );
-  }
-  if (snapshot.integration_merge_lease !== undefined) {
-    violations.push(
-      violation(
-        "high",
-        "coordination.row.handoff-field",
-        "standalone completed handoff requires no integration_merge_lease on the snapshot",
-      ),
-    );
-  }
-  if (isStandaloneDevelopmentWorkflow(snapshot)) {
-    const source = snapshot.branch?.source;
-    const target = snapshot.branch?.target;
-    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-      violations.push(
-        violation(
-          "high",
-          "coordination.row.handoff-field",
-          "standalone completed handoff requires nonblank branch.source and branch.target",
-        ),
-      );
-    } else if (handoff.source_branch !== source) {
-      violations.push(
-        violation(
-          "high",
-          "coordination.row.handoff-field",
-          `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`,
-        ),
-      );
-    }
-  }
-  return violations;
-}
 
 
 /** Stable JSON for change detection (sorted keys, recursive). */
@@ -579,22 +437,15 @@ export function deliveryEvidenceMembers(kind: WorkflowDeliveryKind): readonly st
 }
 
 /**
- * Validate a v3 workflow snapshot document ( - final schema):
- * enum/type/id checks, `schema_version: 1`, required timestamps, `plans[]`
- * rows validated by the legacy `validatePlanRow` with row-level
- * `execution_lease` shape delegated to `validateExecutionLease`,
- * `integration_merge_lease` shape delegated to
- * `validateIntegrationMergeLease`, `execution_policy` keys accepted-but-
- * opaque. Integration worktree path: the canonical member is
- * `integration_worktree_path`; the v1 `control_worktree_path` key is a
- * read-only alias whose presence keeps this STRICT validation a failing
- * gate carrying the medium `workflow.snapshot.legacy-control-worktree-path`
- * migration diagnostic (read acceptance is not write permission - the
- * canonical reader is the only consumer that normalizes it, in memory);
- * both keys present is `workflow.snapshot.conflicting-worktree-paths`
- * (high), even when the values are equal. Terminal invariant: `status` ∈
- * completed|failed|stopped ⇒ `ended_at` present AND no row carries
- * `execution_lease` AND no `integration_merge_lease` (no dangling leases).
+ * Validate a v3 workflow snapshot:
+ * enum/type/id checks, `schema_version: 1`, required timestamps, plans[]
+ * rows with validated ordinary metadata/coordination, and a validated
+ * workflow-level integration merge mutex. Integration worktree path: the
+ * canonical member is `integration_worktree_path`; the v1
+ * `control_worktree_path` key is a read-only alias whose presence keeps this
+ * strict validation a failing gate carrying the migration diagnostic.
+ * Both keys present is `workflow.snapshot.conflicting-worktree-paths`.
+ * Terminal invariant: `ended_at` is present and no integration mutex remains.
  */
 export function validateWorkflowSnapshot(doc: unknown): GateResult {
   const violations: ValidationResult[] = [];
@@ -677,17 +528,12 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
     const snapshotDoc = doc as WorkflowSnapshot;
     for (const row of doc.plans) {
       violations.push(...validatePlanRow(row).violations);
-      if (isPlainObject(row) && row.execution_lease !== undefined) {
-        violations.push(...validateExecutionLease(row.execution_lease).violations);
-      }
-      // Row-level coordination block (scoped plan coordination) - strict:
-      // unknown keys, malformed handoffs/progress/bindings are refused here
-      // so a malformed coordination state can never be persisted.
+      // Row-level coordination is an ordinary prepared/progress/completion
+      // record and is validated by its shared domain validator.
       if (isPlainObject(row) && row.coordination !== undefined) {
         const planRow = row as PlanRow;
         const route = rowValidationRoute(snapshotDoc, planRow);
         violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
-        violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
       }
     }
   }
@@ -814,19 +660,6 @@ export function validateWorkflowSnapshot(doc: unknown): GateResult {
           `terminal status ${JSON.stringify(doc.status)} requires ended_at \u2014 a terminal snapshot must record when the lifecycle ended`,
         ),
       );
-    }
-    if (Array.isArray(doc.plans)) {
-      for (const row of doc.plans) {
-        if (isPlainObject(row) && row.execution_lease !== undefined) {
-          violations.push(
-            violation(
-              "high",
-              "workflow.snapshot.terminal-dangling-execution-lease",
-              `terminal snapshot must not carry a row execution_lease (dangling lease) \u2014 release every lease before the lifecycle ends`,
-            ),
-          );
-        }
-      }
     }
     if (doc.integration_merge_lease !== undefined) {
       violations.push(
@@ -1109,8 +942,8 @@ function assertCoordinatedSnapshotWriter(
  * `phase` + `updated_at` are taken from the incoming snapshot (spec §C4 line
  * 152). The stored document remains the source for every other field, while
  * semantic identity, scope, state and authority fields are checked against
- * their stored values before projection. Documentary content and provenance
- * metadata are not sealed by this writer.
+ * their stored values before projection. Documentary content may vary, while
+ * row execution scope metadata remains write-protected.
  */
 function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): WorkflowSnapshot {
   if (!isPlainObject(stored)) {
@@ -1155,7 +988,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
       { field: "plans" },
     );
   }
-  const rowFields = ["id", "plan_id", "file", "status", "progress", "revision", "execution_lease"] as const;
+  const rowFields = ["id", "plan_id", "file", "status", "progress", "revision"] as const;
   const seenRows = new Set<string>();
   for (const row of incomingRows) {
     if (!isPlainObject(row) || typeof row.id !== "string" || seenRows.has(row.id)) {
@@ -1177,15 +1010,15 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
     }
     const incomingAuthority = isPlainObject(row.coordination) ? row.coordination : {};
     const storedAuthority = isPlainObject(prior.coordination) ? prior.coordination : {};
-    for (const field of ["revision", "session"] as const) {
+    for (const field of ["revision"] as const) {
       if (incomingAuthority[field] !== undefined && !isDeepStrictEqual(incomingAuthority[field], storedAuthority[field])) {
         throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} coordination.${field}; use its authorized plan operation`, { field: `plans.coordination.${field}`, plan_id: row.id });
       }
     }
     for (const [block, fields] of [
-      ["prepared", ["assignment_path", "assignment_intent", "qa_gate", "findings_cleanup", "prepared_by", "prepared_at"]],
-      ["handoff", ["id", "attempt", "state", "submitted_by", "source_branch", "source_sha", "worktree_path", "review_base", "review_head", "accepted_by", "integration", "completed_at"]],
+      ["prepared", ["qa_gate", "findings_cleanup", "prepared_by", "prepared_at"]],
       ["progress", ["status", "summary", "evidence_paths", "track_branches"]],
+      ["completion", ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"]],
     ] as const) {
       const proposed = isPlainObject(incomingAuthority[block]) ? incomingAuthority[block] : {};
       const held = isPlainObject(storedAuthority[block]) ? storedAuthority[block] : {};
@@ -1197,7 +1030,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
     }
     const incomingMetadata = isPlainObject(row.metadata) ? row.metadata : {};
     const storedMetadata = isPlainObject(prior.metadata) ? prior.metadata : {};
-    for (const field of ["iteration_refs", "spec_integration_branch", "merge_target"] as const) {
+    for (const field of ["iteration_refs", "spec_integration_branch", "merge_target", "worktree_path", "working_branch"] as const) {
       if (incomingMetadata[field] !== undefined && !isDeepStrictEqual(incomingMetadata[field], storedMetadata[field])) {
         throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} metadata.${field}`, { field: `plans.metadata.${field}`, plan_id: row.id });
       }
@@ -1446,110 +1279,6 @@ export function isCloseTimestamp(value: string): boolean {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value.slice(0, 10);
 }
 
-/**
- * §R11/A21 the failed/stopped half of one file-route close: settle the
- * workflow's OWN held claims whose holder is no longer one of this workflow's
- * recorded session identities AND whose stop this workflow records, and refuse
- * the outcome on every claim it leaves.
- *
- * Three rules are the whole rule, and the first two are the SAME two the DB
- * route's `releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim` apply:
- *
- * - OWNED means the claims this workflow's own snapshot carries - every
- *   `plans[].execution_lease` and the top-level `integration_merge_lease`; a
- *   claim of another lifecycle is not reachable here at all.
- * - a claim whose holder is a LIVE session of this workflow is never released.
- *   Liveness is the identity `fileClaimHolderState` resolves (the workflow's
- *   coordinator binding, or the addressed plan's own plan session) - §4.2: a
- *   stale heartbeat, an old `claimed_at` and a caller's assertion authorize
- *   nothing, so no close infers another session's stop.
- * - an unrecognized holder is settled only on a recorded STOP FACT - the
- *   workflow's own identity-recovery attestation
- *   (`coordination.identity_recoveries[].stopped_session_ids`) naming it. The
- *   absence of a binding is not proof of a stop (the activation import refuses
- *   exactly such a holder as an orphan claim), so anything else is `unresolved`:
- *   the claim stays held and this close refuses it with the stop/transfer it
- *   needs, never releasing it silently. A conservative false refusal is the
- *   accepted worst case here; a release without a stop fact is not.
- *
- * The release IS the key's absence (the file route's lease release - writers
- * delete the key, never write `null`/a tombstone), and it happens in the SAME
- * locked whole-snapshot write that records the terminal outcome, so a crash
- * cannot leave the outcome recorded over unsettled claims. The rest of the row
- * - its status, its coordination block and its bindings - is preserved, so
- * "who owned this claim" survives the close. A held lease without a holder is
- * refused rather than released (the same rule the whole-view readers apply:
- * never release a claim that names nobody); `readWorkflowSnapshot` refuses such
- * a document before this writer sees it, so that branch is the invariant's
- * backstop rather than a reachable state.
- */
-function settleStoppedFileClaims(input: {
-  snapshot: WorkflowSnapshot;
-  workflowId: string;
-  outcome: CloseWorkflowOutcome;
-}): WorkflowSnapshot {
-  const { snapshot, workflowId, outcome } = input;
-  const coordination = snapshot.coordination;
-  const live: string[] = [];
-  const unresolved: string[] = [];
-  const plans = snapshot.plans.map((row): PlanRow => {
-    const lease = row.execution_lease;
-    if (lease === undefined) return row;
-    if (!isPlainObject(lease) || !isNonEmptyString(lease.holder)) {
-      throw new CoordinationError(
-        "coordination.store",
-        `plan ${String(row.id)} of workflow ${workflowId} carries a held execution lease without the holder it names \u2014 the ` +
-          `corrupt record is refused, never settled as a claim that names nobody`,
-        { workflow_id: workflowId, plan_id: String(row.id) },
-      );
-    }
-    const holder = lease.holder;
-    const state = fileClaimHolderState({ holder, coordination, planCoordinations: [row.coordination] });
-    if (state === "live") {
-      live.push(`the execution lease of plan ${String(row.id)} (holder ${holder}, still a live recorded session of this workflow)`);
-      return row;
-    }
-    if (state === "unresolved") {
-      unresolved.push(`the execution lease of plan ${String(row.id)} (holder ${holder}, no recorded stop or transfer)`);
-      return row;
-    }
-    const { execution_lease: _released, ...restOfRow } = row;
-    return restOfRow;
-  });
-  const claim = snapshot.integration_merge_lease;
-  let settled: WorkflowSnapshot = { ...snapshot, plans };
-  if (claim !== undefined) {
-    // The merge claim names no holder ROLE (`IntegrationMergeLease` carries the
-    // holder and the plan it merges), so it is decided against the strongest
-    // identity the record itself has - the workflow's coordinator binding and
-    // every plan session this workflow records - exactly as the DB route's
-    // integration half decides against any active session of the workflow.
-    const state = fileClaimHolderState({
-      holder: claim.holder,
-      coordination,
-      planCoordinations: snapshot.plans.map((row) => row.coordination),
-    });
-    if (state === "live") {
-      live.push(`the integration merge lease (holder ${claim.holder}, still a live recorded session of this workflow)`);
-    } else if (state === "unresolved") {
-      unresolved.push(`the integration merge lease (holder ${claim.holder}, no recorded stop or transfer)`);
-    } else {
-      const { integration_merge_lease: _released, ...restOfSnapshot } = settled;
-      settled = restOfSnapshot;
-    }
-  }
-  if (live.length > 0 || unresolved.length > 0) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `workflow ${workflowId} cannot become ${outcome} while it still owns ${[...live, ...unresolved].join("; ")} \u2014 this close ` +
-        `settles only the claims it owns whose holder a recorded stop or transfer has already taken out of this workflow's live ` +
-        `sessions, and every claim it leaves needs that holder's own stop or transfer (a recorded identity recovery attesting the ` +
-        `holder stopped, or the holder's own release) before this lifecycle can end`,
-      { workflow_id: workflowId, status: outcome },
-    );
-  }
-  return settled;
-}
 
 /**
  * Complete the latest snapshot under its write lock. Never releases leases.
@@ -1567,16 +1296,10 @@ function settleStoppedFileClaims(input: {
  * - `failed`/`stopped` (#270/R11/A21): an explicit terminal intent, recorded
  *   WITHOUT any successful-delivery precondition - no row-`Done` requirement, no
  *   delivery-evidence consultation (a failure close is never treated as a
- *   delivery; the Phase-6 gate passes such a snapshot by the same rule). Instead
- *   the close settles the workflow's OWN held claims whose holder a recorded
- *   stop fact (the identity-recovery attestation) has already taken out of its
- *   live recorded sessions, in the SAME locked whole-snapshot write
- *   (`settleStoppedFileClaims`); a claim a LIVE holder still holds, and a claim
- *   whose holder no recorded stop or transfer accounts for, EACH refuse the
- *   outcome with that holder named - the file authority never infers another
- *   session's stop (§4.2, R11's "a genuinely running foreign lease needs that
- *   holder's stop/transfer fact"). The refusal is raised BEFORE the write, so a
- *   refused close spends no byte.
+ * delivery; the Phase-6 gate passes such a snapshot by the same rule). A
+ * failed/stopped close may settle the workflow mutex only when coordinator
+ * recovery records that the exact mutex holder stopped; live or unattested
+ * holders remain protected.
  *
  * A valid terminal snapshot is returned unchanged - including `failed`/`stopped`
  * (idempotent preservation: nothing is rewritten, not even the timestamp). Two
@@ -1635,7 +1358,6 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
     // (not the normalized view) carries the `coordination` block, exactly as
     // the replacement door reads it.
     assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "close");
-    let next: WorkflowSnapshot = snapshot;
     if (outcome === "completed") {
       if (snapshot.plans.some((row) => row.status !== "Done")) {
         throw new Error("refusing to close workflow: every plan row must be Done");
@@ -1647,11 +1369,44 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
           .join("; ");
         throw new Error(`refusing to close workflow: ${detail}`);
       }
-    } else {
-      next = settleStoppedFileClaims({ snapshot, workflowId, outcome });
     }
-    const closed: WorkflowSnapshot = { ...next, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
-    // Strict terminal validation refuses both lease kinds without deleting them.
+    let closeBase = snapshot;
+    const coordinatorSessionId = snapshot.coordination?.coordinator?.session_id;
+    const lease = snapshot.integration_merge_lease;
+    if (lease !== undefined) {
+      const leaseClaimedAt = Date.parse(lease.claimed_at);
+      const attestedStopped =
+        outcome !== "completed" &&
+        coordinatorSessionId !== undefined &&
+        lease.holder !== coordinatorSessionId &&
+        Number.isFinite(leaseClaimedAt) &&
+        (snapshot.coordination?.identity_recoveries ?? []).some((recovery) => {
+          const stoppedAt = Date.parse(recovery.attested_at ?? "");
+          const recoveredAt = Date.parse(recovery.recovered_at);
+          return (
+            recovery.workflow_id === workflowId &&
+            recovery.prior_session_id === lease.holder &&
+            recovery.session_id === coordinatorSessionId &&
+            recovery.stopped_session_ids.includes(lease.holder) &&
+            !recovery.stopped_session_ids.includes(coordinatorSessionId) &&
+            Number.isFinite(stoppedAt) &&
+            Number.isFinite(recoveredAt) &&
+            leaseClaimedAt <= stoppedAt &&
+            stoppedAt <= recoveredAt
+          );
+        });
+      if (!attestedStopped) {
+        throw new CoordinationError(
+          "coordination.invalid-transition",
+          `workflow ${workflowId} cannot become ${outcome} while the integration mutex holder is live or lacks a matching stop attestation at or after this claim; for pre-activation FILE authority, recover the recorded coordinator with \`mstar workflow recover-coordinator --session <prior-coordinator-envelope> --operation-id <id> --reason <reason> --authorization-ref <approved-reference> --stopped <prior-session-id> --attestation <absolute-ActivationAttestation.json>\`, then close as failed or stopped`,
+          { workflow_id: workflowId, status: outcome, holder: lease.holder, current_coordinator: coordinatorSessionId ?? null },
+        );
+      }
+      const { integration_merge_lease: _settled, ...withoutMutex } = snapshot;
+      closeBase = withoutMutex;
+    }
+    const closed: WorkflowSnapshot = { ...closeBase, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
+    // Strict terminal validation enforces that the mutex is settled before close.
     await validateAndPutWorkflowSnapshot(store, closed, snapshotPath);
     return closed;
   });
@@ -1830,18 +1585,23 @@ export async function recordWorkflowDelivery(
     }
     const previousCompletion = isPlainObject(stored.completion) ? stored.completion : undefined;
     const nextCompletion = isPlainObject(evidence.completion) ? evidence.completion : undefined;
-    if (
+    const completionAccepted =
       snapshot.delivery_kind === "verification/report-only" &&
       doneRows &&
+      nonEmptyString(snapshot.completion_policy) &&
+      previousCompletion !== undefined &&
+      previousCompletion.policy === snapshot.completion_policy &&
+      nonEmptyString(previousCompletion.evidence);
+    if (
+      completionAccepted &&
+      previousCompletion !== undefined &&
       nextCompletion !== undefined &&
-      (previousCompletion === undefined ||
-        previousCompletion.policy !== nextCompletion.policy ||
-        previousCompletion.evidence !== nextCompletion.evidence)
+      (previousCompletion.policy !== nextCompletion.policy || previousCompletion.evidence !== nextCompletion.evidence)
     ) {
       throw new CoordinationError(
         "coordination.completion-frozen",
-        `workflow ${workflowId} is Done against completion policy ${String(previousCompletion?.policy ?? snapshot.completion_policy)} and reference ${String(previousCompletion?.evidence ?? "(none)")}; keep the recorded reference and edit that document normally; a different completed intent uses its own workflow`,
-        { workflow_id: workflowId },
+        `workflow ${workflowId} has accepted completion evidence against its registered policy/reference; the accepted fulfilment cannot be replaced`,
+        { workflow_id: workflowId, completion_policy: snapshot.completion_policy },
       );
     }
     const merged = { ...stored, ...evidence } as WorkflowDeliveryEvidence;

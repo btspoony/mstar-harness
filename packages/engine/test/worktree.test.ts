@@ -4,20 +4,20 @@
  * branch alignment probe, QC/QA field alignment.
  *
  * Spec sources (each test cites the skill/spec section it enforces):
- * - L1/L2 layer split + stacking — main control root + integration checkout
- * + per-plan feature worktrees + `plans[].execution_lease` (L1); within-plan
- * parallel writable tracks need their own distinct worktrees (L2, L1 does
- * not replace L2): `mstar-branch-worktree` SKILL.md § "Worktree isolation
- * layers (L1 vs L2)" § "Stacking rules" + iteration spec
- * worktree-write-model § "Locked interfaces (P1 engine)".
+ * - L1/L2 layer split + stacking — main control root + dedicated
+ *   integration checkout + per-plan feature worktrees recorded in row
+ *   metadata; within-plan parallel writable tracks need their own distinct
+ *   worktrees (L2, L1 does not replace L2): `mstar-branch-worktree` SKILL.md
+ *   § "Worktree isolation layers (L1 vs L2)" § "Stacking rules" + iteration
+ *   spec worktree-write-model § "Three domains".
+ * - Main control root vs feature — `plans[].metadata.worktree_path` MUST be a
+ *   Git checkout distinct from the MAIN worktree; pairwise main/integration/
+ *   feature identity via the canonical per-worktree git dir: SKILL.md
+ *   § "Control worktree vs feature worktree (iteration / L1)" § "Hard rules".
  * - Primary residency — the expectation is the branch RECORDED at lifecycle
- * start (never the branch observed at check time as its own expected value);
- * main on any active lifecycle-owned branch is refused; detached/unresolved
- * main fails closed: spec § "Primary residency" + § "Stable machine codes".
- * - Main control root vs feature — `execution_lease.worktree_path` MUST be a
- * Git checkout distinct from the MAIN worktree; pairwise main/integration/
- * feature identity via the canonical per-worktree git dir: SKILL.md
- * § "Control worktree vs feature worktree (iteration / L1)" § "Hard rules".
+ *   start (never the branch observed at check time as its own expected value);
+ *   main on any active lifecycle-owned branch is refused; detached/unresolved
+ *   main fails closed: spec § "Primary residency" + § "Stable machine codes".
  * - L2 pre-dispatch checklist — per-track worktree dirs exist and
  * `git -C <path> branch --show-current` matches the Assignment Working
  * branch before the first concurrent writable dispatch; N parallel invokes
@@ -241,8 +241,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(true);
@@ -265,8 +265,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(true);
@@ -284,8 +284,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.l1.integration-missing");
@@ -300,8 +300,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.l1.integration-missing");
@@ -319,8 +319,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: mainInfo(join(root, "repo")),
         expectedMainBranch: mainInfo(join(root, "repo")).branch,
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(codesOf(result)).toContain("worktree.l1.integration-missing");
@@ -343,8 +343,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -363,8 +363,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: null,
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.main.unresolved");
@@ -379,8 +379,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/feature",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(codesOf(result)).toContain("worktree.main.expected-branch-missing");
@@ -400,8 +400,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: realpathSync(repo), branch: "release/other" },
         expectedMainBranch: "main",
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -429,8 +429,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: realpathSync(repo), branch: "iteration/owned" },
         expectedMainBranch: "iteration/owned",
         lifecycleBranches: ["iteration/owned", "iteration/int", "feature/a"],
-        leaseWorktreePath: paths.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: paths.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -458,8 +458,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: realpathSync(repo), branch: "develop" },
         expectedMainBranch: "develop",
         lifecycleBranches: ["iteration/int", "feature/a"],
-        leaseWorktreePath: paths.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: paths.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(true);
@@ -482,8 +482,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -494,7 +494,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
     }
   });
 
-  test("lease worktree equals the main worktree → worktree.l1.lease-equals-main (critical)", () => {
+  test("feature metadata worktree equals the main checkout → worktree.l1.feature-equals-main (critical)", () => {
     const root = tmpRoot("worktree-l1-eqmain-");
     try {
       const repo = gitRepo(root);
@@ -506,19 +506,19 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: [],
-        leaseWorktreePath: repo,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: repo,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
-      expect(codesOf(result)).toContain("worktree.l1.lease-equals-main");
+      expect(codesOf(result)).toContain("worktree.l1.feature-equals-main");
       expect(severitiesOf(result)).toContain("critical");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("lease worktree equals the integration checkout → worktree.l1.lease-equals-integration (critical)", () => {
+  test("feature metadata worktree equals the integration checkout → worktree.l1.feature-equals-integration (critical)", () => {
     const root = tmpRoot("worktree-l1-eqint-");
     try {
       const wts = worktreeFixture(root, ["iteration/int"]);
@@ -531,19 +531,19 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["iteration/int"],
-        leaseWorktreePath: wts.get("iteration/int")!,
-        leaseWorkingBranch: "iteration/int",
+        rowWorktreePath: wts.get("iteration/int")!,
+        rowWorkingBranch: "iteration/int",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
-      expect(codesOf(result)).toContain("worktree.l1.lease-equals-integration");
+      expect(codesOf(result)).toContain("worktree.l1.feature-equals-integration");
       expect(severitiesOf(result)).toContain("critical");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("plain subdirectory of the main checkout as lease → worktree.l1.lease-equals-main", () => {
+  test("plain subdirectory of main as feature worktree → worktree.l1.feature-equals-main", () => {
     const root = tmpRoot("worktree-l1-subdir-");
     try {
       const repo = gitRepo(root);
@@ -557,19 +557,19 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: [],
-        leaseWorktreePath: subdir,
-        leaseWorkingBranch: main.branch,
+        rowWorktreePath: subdir,
+        rowWorkingBranch: main.branch,
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
-      expect(codesOf(result)).toContain("worktree.l1.lease-equals-main");
+      expect(codesOf(result)).toContain("worktree.l1.feature-equals-main");
       expect(severitiesOf(result)).toContain("critical");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("symlink alias of the integration checkout as lease → worktree.l1.lease-equals-integration", () => {
+  test("symlink alias of integration checkout as feature → worktree.l1.feature-equals-integration", () => {
     const root = tmpRoot("worktree-l1-alias-");
     try {
       const wts = worktreeFixture(root, ["iteration/int"]);
@@ -584,12 +584,12 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["iteration/int"],
-        leaseWorktreePath: alias,
-        leaseWorkingBranch: "iteration/int",
+        rowWorktreePath: alias,
+        rowWorkingBranch: "iteration/int",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
-      expect(codesOf(result)).toContain("worktree.l1.lease-equals-integration");
+      expect(codesOf(result)).toContain("worktree.l1.feature-equals-integration");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -604,15 +604,15 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: "/a/b", branch: "main" },
         expectedMainBranch: "main",
         lifecycleBranches: [],
-        leaseWorktreePath: alias,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: alias,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
-      expect(codesOf(result)).toContain("worktree.l1.lease-equals-main");
+      expect(codesOf(result)).toContain("worktree.l1.feature-equals-main");
     }
   });
 
-  test("empty lease worktree path → worktree.l1.lease-missing", () => {
+  test("missing row feature path → worktree.l1.feature-scope-missing", () => {
     const result = l1PreDispatchCheck({
       workflowType: "plan",
       integrationWorktreePath: "",
@@ -620,14 +620,16 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "",
+      rowWorkingBranch: "feature/a",
+      workflowId: "wf-1",
       planId: "p-1",
     });
-    expect(codesOf(result)).toContain("worktree.l1.lease-missing");
+    expect(codesOf(result)).toContain("worktree.l1.feature-scope-missing");
+    expect(result.violations[0]?.fix).toContain("plan prepare --workflow wf-1 --plan p-1 --worktree-path <absolute-feature-worktree>");
   });
 
-  test("empty lease working branch → worktree.l1.lease-branch-missing", () => {
+  test("missing row working branch → worktree.l1.feature-branch-missing", () => {
     const result = l1PreDispatchCheck({
       workflowType: "plan",
       integrationWorktreePath: "",
@@ -635,11 +637,13 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/lease",
-      leaseWorkingBranch: "",
+      rowWorktreePath: "/tmp/lease",
+      rowWorkingBranch: "",
+      workflowId: "wf-1",
       planId: "p-1",
     });
-    expect(codesOf(result)).toContain("worktree.l1.lease-branch-missing");
+    expect(codesOf(result)).toContain("worktree.l1.feature-branch-missing");
+    expect(result.violations[0]?.fix).toContain('plan prepare --workflow wf-1 --plan p-1 --worktree-path "/tmp/lease" --working-branch');
   });
 
   test("missing feature worktree dir → worktree.l1.feature-missing", () => {
@@ -650,8 +654,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       mainWorktree: { root: "/repo/main", branch: "main" },
       expectedMainBranch: "main",
       lifecycleBranches: [],
-      leaseWorktreePath: "/tmp/does-not-exist",
-      leaseWorkingBranch: "feature/a",
+      rowWorktreePath: "/tmp/does-not-exist",
+      rowWorkingBranch: "feature/a",
       planId: "p-1",
     });
     expect(result.ok).toBe(false);
@@ -671,8 +675,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["feature/a", "feature/b"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/b",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/b",
         planId: "p-1",
       });
       expect(result.ok).toBe(false);
@@ -696,8 +700,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: wts.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: wts.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       };
       const branchOf = () => "feature/a";
@@ -725,8 +729,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: { root: control, branch: "main" },
         expectedMainBranch: "main",
         lifecycleBranches: [],
-        leaseWorktreePath: lease,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: lease,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(codesOf(result)).toContain("worktree.l1.checkout-probe-failed");
@@ -749,8 +753,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         mainWorktree: main,
         expectedMainBranch: main.branch,
         lifecycleBranches: ["feature/a"],
-        leaseWorktreePath: paths.get("feature/a")!,
-        leaseWorkingBranch: "feature/a",
+        rowWorktreePath: paths.get("feature/a")!,
+        rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
       expect(result.ok).toBe(true);
@@ -961,7 +965,7 @@ describe("l2PreDispatchCheck — within-plan parallel track checklist", () => {
   });
 });
 
-describe("assertControlVsFeaturePath — lease worktree must be a distinct Git checkout", () => {
+describe("assertControlVsFeaturePath — row metadata worktree must be a distinct Git checkout", () => {
   test("same checkout → worktree.control-feature.same (critical)", () => {
     const root = tmpRoot("worktree-cvf-same-");
     try {
@@ -1263,8 +1267,8 @@ describe("git probe timeout — bounded probes fail closed ", () => {
           mainWorktree: { root: join(lease, "..", "control"), branch: "main" },
           expectedMainBranch: "main",
           lifecycleBranches: [],
-          leaseWorktreePath: lease,
-          leaseWorkingBranch: "feature/a",
+          rowWorktreePath: lease,
+          rowWorkingBranch: "feature/a",
           planId: "p-1",
         },
         { gitPath, timeoutMs: 300 },
@@ -1289,8 +1293,8 @@ describe("git probe timeout — bounded probes fail closed ", () => {
             mainWorktree: { root: join(lease, "..", "control"), branch: "main" },
             expectedMainBranch: "main",
             lifecycleBranches: [],
-            leaseWorktreePath: lease,
-            leaseWorkingBranch: "feature/a",
+            rowWorktreePath: lease,
+            rowWorkingBranch: "feature/a",
             planId: "p-1",
           },
           { gitPath },
@@ -1321,8 +1325,8 @@ describe("git probe timeout — bounded probes fail closed ", () => {
           mainWorktree: main,
           expectedMainBranch: main.branch,
           lifecycleBranches: ["feature/x"],
-          leaseWorktreePath: wts.get("feature/x")!,
-          leaseWorkingBranch: "feature/x",
+          rowWorktreePath: wts.get("feature/x")!,
+          rowWorkingBranch: "feature/x",
           planId: "p-1",
         });
         expect(result.ok).toBe(true);
@@ -1347,7 +1351,7 @@ test("L1 identity probes are once per checkout per invocation, never cached acro
     const shim = join(root, "git-shim");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
-    const input = { workflowType: "iteration" as const, integrationWorktreePath: wts.get("iteration/a")!, integrationBranch: "iteration/a", mainWorktree: main, expectedMainBranch: main.branch, lifecycleBranches: ["iteration/a", "feature/a"], leaseWorktreePath: wts.get("feature/a")!, leaseWorkingBranch: "feature/a", planId: "plan-a" };
+    const input = { workflowType: "iteration" as const, integrationWorktreePath: wts.get("iteration/a")!, integrationBranch: "iteration/a", mainWorktree: main, expectedMainBranch: main.branch, lifecycleBranches: ["iteration/a", "feature/a"], rowWorktreePath: wts.get("feature/a")!, rowWorkingBranch: "feature/a", planId: "plan-a" };
     expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);
     expect(readFileSync(log, "utf8").split("\n").filter((line) => line.endsWith("rev-parse --git-dir"))).toHaveLength(3);
     expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);

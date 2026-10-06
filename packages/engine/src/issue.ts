@@ -9,9 +9,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination.js";
-import type { CoordinatorBinding, RowCoordination } from "./coordination-write.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
-import { rowPlanIds } from "./status.js";
 import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import {
   WORKFLOW_SNAPSHOT_FILE,
@@ -158,37 +156,6 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
       type: "string[]",
       description: "Reported L2 track branches",
       itemsNonblank: true,
-    },
-  },
-  HandoffEvidence: {
-    source_sha: { required: true, type: "string", description: "Source commit SHA" },
-    review_head: { required: true, type: "string", description: "Review range head SHA" },
-    review_base: { required: true, type: "string", description: "Review range base SHA" },
-    qc: {
-      required: true,
-      type: "object",
-      description: "QC decision, reports and consolidated report",
-      properties: {
-        decision: { required: true, type: "string", description: "QC decision", values: ["Approve", "Approve with residuals"] },
-        reports: {
-          required: true,
-          type: "string[]",
-          description: "QC report paths",
-          minItems: 1,
-          itemsNonblank: true,
-        },
-        consolidated: { required: true, type: "string", description: "Consolidated QC report path" },
-      },
-    },
-    qa: {
-      required: true,
-      type: "object",
-      description: "QA gate, passing decision and report",
-      properties: {
-        gate: { required: true, type: "string", description: "QA gate", values: ["mandatory", "pm-acceptance"] },
-        decision: { required: true, type: "string", description: "QA decision", values: ["pass"] },
-        report: { required: true, type: "string", description: "QA report path" },
-      },
     },
   },
 } as const satisfies Record<string, Record<string, PayloadFieldSchema>>;
@@ -1288,12 +1255,9 @@ export function assertTerminalDisposition(disposition: TerminalDisposition): voi
 }
 
 /**
- * Shared role-to-seat mapping for session-authorized issue paths. The
- * plan-scoped route uses the `plan-pm` mapping; milestone assignment separately
- * validates its session against this seat vocabulary.
+ * Shared role-to-seat mapping for session-authorized issue paths.
  */
 const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
-  "plan-pm": "project-manager",
   coordinator: "project-manager",
 };
 
@@ -1305,7 +1269,7 @@ const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
  */
 const CAPTURE_SEAT = "project-manager";
 
-/** Derive the audited actor for plan-scoped issue capture and closure. */
+/** Derive the audited actor for coordinator-authorized issue capture and closure. */
 export function issueWriteSeat(role: string): string {
   if (!Object.hasOwn(ENVELOPE_SEATS, role)) {
     throw new IssueError("issue.scope-refused", `Session role ${JSON.stringify(role)} holds no issue-write seat`);
@@ -1325,8 +1289,8 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Bind the session envelope for milestone assignment or plan-scoped issue coordination.
- * Unscoped issue writes use `requireCaptureSeat` and do not call this function.
+ * Bind the workflow coordinator envelope for milestone assignment or addressed
+ * plan issue coordination. Unscoped issue writes use `requireCaptureSeat`.
  */
 function authorizeMutation(context: StoreContext, mutation: Pick<MutationContext, "actor" | "sessionFile">): CoordinationSession {
   const { session, sessionPath } = readScopedSession(mutation.sessionFile);
@@ -1342,7 +1306,7 @@ function authorizeMutation(context: StoreContext, mutation: Pick<MutationContext
   return session;
 }
 
-/** Re-check engine-issued session authority for plan-scoped issue coordination only. */
+/** Re-check the engine-issued coordinator session for issue coordination. */
 export function assertPlanIssueSession(context: StoreContext, sessionFile: string): void {
   authorizeMutation(context, { actor: "project-manager", sessionFile });
 }
@@ -1415,20 +1379,6 @@ function liveSnapshotOf(
   return snapshot;
 }
 
-/** The session binding of the one plan row `plan_id` addresses (or a refusal). */
-function planSessionBinding(snapshot: WorkflowSnapshot, session: CoordinationSession): CoordinatorBinding | undefined {
-  const planId = session.plan_id ?? "";
-  const rows = snapshot.plans.filter((row) => rowPlanIds(row).includes(planId));
-  if (rows.length !== 1) {
-    throw refuseAuthority(
-      `Session envelope names plan ${JSON.stringify(planId)}, which is ${rows.length === 0 ? "no row" : `${rows.length} rows`} of workflow ${snapshot.id}`,
-    );
-  }
-  // Boundary cast: `readWorkflowSnapshot` validated every row coordination
-  // block (`validateRowCoordination`), so a present `session` is a binding.
-  const coordination = rows[0]?.coordination as RowCoordination | undefined;
-  return coordination?.session;
-}
 
 /** Every §4 condition above, or a refusal. */
 function assertEngineIssuedSession(harnessDir: string, sessionPath: string, session: CoordinationSession): void {
@@ -1439,47 +1389,36 @@ function assertEngineIssuedSession(harnessDir: string, sessionPath: string, sess
   }
   const issued = issuedSessionLocation(session);
   const snapshot = liveSnapshotOf(session, sessionPath, issued.dir);
-  const binding = session.role === "coordinator" ? snapshot.coordination?.coordinator : planSessionBinding(snapshot, session);
+  const binding = snapshot.coordination?.coordinator;
   if (binding === undefined) {
-    throw refuseAuthority(
-      session.role === "coordinator"
-        ? `Workflow ${snapshot.id} records no coordinator binding for ${issued.path}`
-        : `Plan ${JSON.stringify(session.plan_id)} of workflow ${snapshot.id} records no session binding for ${issued.path}`,
-    );
+    throw refuseAuthority(`Workflow ${snapshot.id} records no coordinator binding for ${issued.path}`);
   }
   if (binding.session_id !== session.session_id) {
     throw refuseAuthority(
       `Workflow ${snapshot.id} records session ${binding.session_id}, not the envelope's session ${session.session_id}`,
     );
   }
-  // The recorded bound path itself must be a shape an engine bind ever
-  // issued (canonical, or the pre-#264 bare name that released 3.11.0
-  // workflows record). A record at any other path is not an engine record.
   if (!isIssuedSessionPath(binding.session_file, issued)) {
     throw refuseAuthority(
       `Workflow ${snapshot.id} records session ${binding.session_id} at ${binding.session_file}, which is not an engine-issued ` +
         `path for this session (${issued.path} or the pre-#264 bound form ${issued.legacyPath})`,
     );
   }
-  // Tie: the presented file must be exactly the workflow's bound session
-  // file (the recorded-path rule the coordination writers already enforce).
-  // A byte-identical copy at any other path — canonical-named or
-  // legacy-named — is not a credential.
   if (canonicalizeNearestExisting(sessionPath) !== canonicalizeNearestExisting(binding.session_file)) {
     throw refuseAuthority(
-      `Session envelope ${sessionPath} is not the workflow's bound session file ${binding.session_file} \u2014 issue authorization follows the recorded path exactly`,
+      `Session envelope ${sessionPath} is not the workflow's bound session file ${binding.session_file} — issue authorization follows the recorded path exactly`,
     );
   }
 }
 
 /**
- * Read the session envelope used by milestone assignment and plan-scoped coordination.
+ * Read the coordinator envelope used by milestone assignment and addressed plan coordination.
  */
 function readScopedSession(sessionFile: string | undefined): { session: CoordinationSession; sessionPath: string } {
   if (!sessionFile) {
     throw new IssueError(
       "issue.scope-refused",
-      "This mutation requires an existing scoped session envelope; no session credential is written to the store.",
+      "This mutation requires an existing coordinator session envelope; no session credential is written to the store.",
     );
   }
   try {

@@ -207,18 +207,23 @@ describe("catalog pin \u2014 a prepared execution keeps its frozen input", () =>
     expect(state.pin).toEqual(orphan);
   });
 
-  test("catalog pin: progress, status and lease reporting never invalidate the frozen input hash", async () => {
+  test("catalog pin: progress, status and row scope metadata never invalidate the frozen input hash", async () => {
     const { context } = await withStore("pin-progress-");
     await registerPlan(context);
     const row = planRow();
     const pin = await pinFor(context, row);
 
-    // Execution-authority fields (contract §1) are not part of the selection.
+    // Row scope metadata is not part of the catalog selection.
     const progressed: Record<string, unknown> = {
       ...row,
       status: "InProgress",
-      execution_lease: { holder: "session-1", worktree_path: "/tmp/wt" },
-      metadata: { project_id: "proj-a", track_branches: ["feature/track-1"], catalog_pin: pin },
+      metadata: {
+        project_id: "proj-a",
+        track_branches: ["feature/track-1"],
+        catalog_pin: pin,
+        worktree_path: "/tmp/wt",
+        working_branch: "feature/track-1",
+      },
       coordination: { revision: 3, progress: { status: "InProgress", summary: "working", evidence_paths: [] } },
     };
     const state = await readExecutionCatalogPin(pinRead(context, progressed));

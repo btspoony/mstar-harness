@@ -105,14 +105,7 @@ function snapshotDoc(id: string, overrides: Record<string, unknown> = {}): strin
           file: `/plans/${id}.md`,
           status: "InProgress",
           coordination: { revision: 1, progress: { status: "InProgress", summary: "half way", evidence_paths: [] } },
-          metadata: { catalog_pin: { entity_revision: 4 } },
-          execution_lease: {
-            holder: "session-1",
-            claimed_at: STARTED_AT,
-            worktree_path: `/wt/${id}`,
-            working_branch: `feature/${id}`,
-            session_label: "must-never-be-projected",
-          },
+          metadata: { catalog_pin: { entity_revision: 4 }, worktree_path: `/wt/${id}`, working_branch: `feature/${id}` },
         },
       ],
       integration_merge_lease: {

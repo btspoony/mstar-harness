@@ -404,24 +404,6 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
     expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
   });
 
-  test("terminal snapshot with a leftover row execution_lease → PHASE6_DANGLING_LEASE", () => {
-    const result = evaluatePostMergeClose(
-      phase6Snapshot({
-        plans: [
-          {
-            id: "plan-a",
-            title: "Plan A",
-            file: "plans/plan-a.md",
-            status: "InProgress",
-            execution_lease: { holder: "dev-1", claimed_at: "2026-08-19T08:00:00Z", worktree_path: "/tmp/wt/plan-a" },
-          },
-        ],
-      }),
-      phase6Root([]),
-    );
-    expect(result.ok).toBe(false);
-    expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
-  });
 
   test("invalid snapshot document → PHASE6_INVALID_SNAPSHOT (local close state cannot be verified)", () => {
     for (const bad of [{ ...phase6Snapshot(), schema_version: 2 }, { ...phase6Snapshot(), id: "" }]) {
@@ -695,24 +677,6 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (mstar
     expect(reasoned.ok).toBe(true);
   });
 
-  test("terminal plan workflow with a dangling row lease → PHASE6_DANGLING_LEASE (type-generic probe, close never releases leases)", () => {
-    const result = evaluatePostMergeClose(
-      phase6PlanSnapshot({
-        plans: [
-          {
-            id: "plan-a",
-            title: "Plan A",
-            file: "plans/plan-a.md",
-            status: "Done",
-            execution_lease: { holder: "dev-1", claimed_at: "2026-08-19T08:00:00Z", worktree_path: "/tmp/wt/plan-a" },
-          },
-        ],
-      }),
-      phase6Root([]),
-    );
-    expect(result.ok).toBe(false);
-    expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
-  });
 
   test("failed plan workflow keeps its status and row state and passes (§5 — failure closes are never rewritten as completed)", () => {
     const result = evaluatePostMergeClose(
