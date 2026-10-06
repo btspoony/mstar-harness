@@ -1169,6 +1169,30 @@ describe("execution-export", () => {
     // The store really does hold the session identity the export must drop.
     const identified = rawGet<{ session_id: string }>(world.dbPath, "select session_id from execution_sessions")!;
     expect(identified.session_id).toBe(COORDINATOR);
+    // A REAL prepared/completed coordination row: the contracted shapes record
+    // the coordinator identity in `prepared_by`/`completed_by`, so the export's
+    // redaction is proven against the row it actually projects — not only the
+    // top-level session list it already omits.
+    rawRun(
+      world.dbPath,
+      "update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?",
+      JSON.stringify({
+        prepared: { qa_gate: "mandatory", findings_cleanup: "allow-residual", prepared_by: COORDINATOR, prepared_at: TS },
+        completion: {
+          source_branch: `feature/${PLAN_1}`,
+          source_sha: "a".repeat(40),
+          worktree_path: join(world.harness, "worktrees", PLAN_1),
+          review_base: "a".repeat(40),
+          review_head: "a".repeat(40),
+          qc: { decision: "Approve", reports: [{ path: join(world.harness, "qc.md"), sha256: "b".repeat(64) }], consolidated: { path: join(world.harness, "qc-s.md"), sha256: "c".repeat(64) } },
+          qa: { gate: "mandatory", decision: "pass", report: { path: join(world.harness, "qa.md"), sha256: "d".repeat(64) } },
+          completed_by: COORDINATOR,
+          completed_at: TS,
+        },
+      }),
+      WF,
+      PLAN_1,
+    );
     expect(rawGet<{ creator_session_id: string }>(world.dbPath, "select creator_session_id from execution_workflows")!.creator_session_id).toBe(
       COORDINATOR,
     );
@@ -1206,6 +1230,15 @@ describe("execution-export", () => {
     expect(exported.canonicalJson.includes(".status-write.lockdir")).toBe(false);
     expect(forbiddenKeysIn(parsed)).toEqual([]);
     expect(parsed.redactedKeys).toContain("holder");
+    // The row's own coordination projection is present (its business evidence
+    // travels) but carries no coordinator identity: `prepared_by`/`completed_by`
+    // are redacted exactly like the old `accepted_by`.
+    expect(parsed.redactedKeys).toEqual(expect.arrayContaining(["prepared_by", "completed_by"]));
+    const projected = workflow.plans[0].coordination as Record<string, any>;
+    expect(projected.prepared).not.toHaveProperty("prepared_by");
+    expect(projected.completion).toMatchObject({ qc: { decision: "Approve" }, qa: { decision: "pass" } });
+    expect(projected.completion).not.toHaveProperty("completed_by");
+    expect(projected.completion.completed_at).toBe(TS);
 
 
     // …and the artifact authorizes nothing: fed to a real writer as its

@@ -794,6 +794,43 @@ describe("execution-workflow: \u00A73 workflow-level phase, lifecycle, policy, c
     expect(stored!.status).toBe("completed");
   });
 
+  test("a report-only close refuses without the explicitly recorded fulfilment and never synthesizes one from QA", async () => {
+    const fixture = await workflowFixture("close-report-only-missing-fulfilment");
+    withRaw(fixture.context, (db) => {
+      const row = db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID) as { state_json: string };
+      const state = JSON.parse(row.state_json) as Record<string, unknown>;
+      state.delivery_kind = "verification/report-only";
+      state.completion_policy = "acceptance report";
+      delete state.branch;
+      // No `delivery.completion` recorded: the outer lifecycle fact is absent.
+      delete state.delivery;
+      db.prepare("update execution_workflows set state_json = ? where workflow_id = ?").run(JSON.stringify(state), WORKFLOW_ID);
+    });
+    // The row is already Done (an imported/historical report-only row) and its QA
+    // report passes — exactly the state that must NOT be turned into fulfilment.
+    setRowStatus(fixture.context, PLAN_ID, "Done");
+    const before = await workflowFootprint(fixture.context);
+    const refused = await refusalOf(() =>
+      workflowMutation(fixture, "op-close-report-only-missing", {
+        kind: "lifecycle",
+        status: "completed",
+        reason: "acceptance report verified",
+      }),
+    );
+    expect(refused.code).toBe("coordination.invalid-transition");
+    // State and routing are untouched; the caller is told to record the fact.
+    expect(await workflowFootprint(fixture.context)).toEqual(before);
+    const [stored] = rows(
+      fixture.context,
+      `select (select count(*) as n from execution_registry where workflow_id = '${WORKFLOW_ID}') as registered, ` +
+        `(select json_extract(state_json, '$.status') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as status, ` +
+        `(select json_extract(state_json, '$.delivery') from execution_workflows where workflow_id = '${WORKFLOW_ID}') as delivery`,
+    );
+    expect(stored!.registered).toBe(1);
+    expect(stored!.status).toBe("running");
+    expect(stored!.delivery).toBeNull();
+  });
+
   test("the terminal close removes routing and keeps history in ONE commit", async () => {
     const fixture = await workflowFixture("close-ok");
     setRowStatus(fixture.context, PLAN_ID, "Done");

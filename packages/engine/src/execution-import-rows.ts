@@ -56,7 +56,10 @@ function insertCoordinatorSession(tx: ExecutionTransaction, workflowId: string, 
  */
 function projectLegacyRowCoordination(row: Record<string, unknown>): Record<string, unknown> {
   const legacy = isPlainObject(row.coordination) ? row.coordination : {};
-  const out: Record<string, unknown> = { revision: 1 };
+  // The block's `revision` belongs to the dedicated `execution_plans.revision`
+  // column, never to the stored JSON (the DB representation invariant the whole
+  // reader set relies on), so the projection carries no revision.
+  const out: Record<string, unknown> = {};
   const prepared = legacy.prepared;
   if (isPlainObject(prepared)) {
     const qaGate = prepared.qa_gate;
@@ -77,7 +80,7 @@ function projectLegacyRowCoordination(row: Record<string, unknown>): Record<stri
     const qa = handoff.qa;
     const integration = handoff.integration;
     const mapped: Record<string, unknown> = {
-      source_branch: isNonEmptyString(handoff.source_branch) ? handoff.source_branch : "",
+      source_branch: isNonEmptyString(handoff.source_branch) ? handoff.source_branch : null,
       source_sha: isNonEmptyString(handoff.source_sha) ? handoff.source_sha : null,
       worktree_path: isNonEmptyString(handoff.worktree_path) ? handoff.worktree_path : null,
       review_base: isNonEmptyString(handoff.review_base) ? handoff.review_base : null,
@@ -101,6 +104,49 @@ function projectLegacyRowCoordination(row: Record<string, unknown>): Record<stri
   return out;
 }
 
+/**
+ * Map the source/cleanup ownership a removed per-plan lease carried onto the
+ * ordinary row metadata, so dropping the lease never drops the only record of
+ * the source checkout and branch. Existing metadata wins; only the members the
+ * lease alone recorded are filled in, and the caller resolves a genuine
+ * conflict by naming it rather than silently keeping one.
+ */
+function projectLegacyLeaseScope(row: Record<string, unknown>, workflowId: string, planId: string): Record<string, string> {
+  const lease = row.execution_lease;
+  if (!isPlainObject(lease)) return {};
+  const worktree = isNonEmptyString(lease.worktree_path)
+    ? lease.worktree_path
+    : isNonEmptyString(lease.plan_worktree_path)
+      ? lease.plan_worktree_path
+      : undefined;
+  const branch = isNonEmptyString(lease.working_branch)
+    ? lease.working_branch
+    : isNonEmptyString(lease.plan_branch)
+      ? lease.plan_branch
+      : undefined;
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  const scoped: Record<string, string> = {};
+  const recordedWorktree = metadata.worktree_path;
+  const recordedBranch = metadata.working_branch;
+  if (worktree !== undefined) {
+    if (isNonEmptyString(recordedWorktree) && recordedWorktree !== worktree) {
+      conflict(`plan ${planId} of workflow ${workflowId} records worktree ${recordedWorktree} in metadata and ${worktree} on its removed execution lease; resolve which checkout owns this plan, then rerun store upgrade.`);
+    }
+    scoped.worktree_path = worktree;
+  } else if (isNonEmptyString(recordedWorktree)) {
+    scoped.worktree_path = recordedWorktree;
+  }
+  if (branch !== undefined) {
+    if (isNonEmptyString(recordedBranch) && recordedBranch !== branch) {
+      conflict(`plan ${planId} of workflow ${workflowId} records branch ${recordedBranch} in metadata and ${branch} on its removed execution lease; resolve which branch owns this plan, then rerun store upgrade.`);
+    }
+    scoped.working_branch = branch;
+  } else if (isNonEmptyString(recordedBranch)) {
+    scoped.working_branch = recordedBranch;
+  }
+  return scoped;
+}
+
 /** Reused transaction row mapping for file-imported workflow state. */
 export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source: ImportedWorkflow): void {
   const { id, entry, snapshot, coordinator, plans } = source;
@@ -122,10 +168,16 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
   const insertInput = tx.db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) values (?, ?, 1, ?, ?, ?)");
   const routeSnapshot = { ...(snapshot as unknown as WorkflowSnapshot), plans: plans.map((plan) => ({ id: plan.id })) } as WorkflowSnapshot;
   plans.forEach(({ id: planId, row, pin, droppedLease }, ordinal) => {
-    // The state copy is taken BEFORE the projection below, which may promote a
-    // completed legacy attempt to `Done` on the row it is handed.
-    const state: Record<string, unknown> = { ...row, id: planId };
     const block = projectLegacyRowCoordination(row);
+    // Source/cleanup ownership survives the removed lease: its recorded
+    // worktree/branch move into the ordinary row metadata the target shape uses,
+    // so L1 facts and cleanup ownership are never lost with the seat.
+    const scope = projectLegacyLeaseScope(row, id, planId);
+    const state: Record<string, unknown> = { ...row, id: planId };
+    if (Object.keys(scope).length > 0) {
+      const metadata = isPlainObject(row.metadata) ? { ...row.metadata } : {};
+      state.metadata = { ...metadata, ...scope };
+    }
     // A stopped workspace's in-progress claim is not carried into the new
     // authority as live work: that is why the row imports as Blocked rather
     // than apparently being worked on.
@@ -139,7 +191,7 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
     const stateGate = validatePlanRow(state);
     if (!stateGate.ok) conflict(`plan ${planId} of workflow ${id} has an invalid stored row (${stateGate.violations.map((v) => v.code).join(", ")}).`);
     const violations = validateRowCoordination(
-      block,
+      { revision: 1, ...block },
       `execution_plans(${id},${planId}).coordination_json`,
       rowValidationRoute(routeSnapshot, state as never),
     );

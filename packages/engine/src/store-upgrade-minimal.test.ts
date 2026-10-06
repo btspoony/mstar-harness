@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore, storeDbPath, type StoreContext } from "./store-db.js";
+import { initializeStore, MIGRATIONS, openStore, storeDbPath, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
 import { readExecutionState } from "./execution-store.js";
@@ -67,7 +67,10 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
   const result = await upgradeStoreMinimal(input);
   expect(result).toMatchObject({ verdict: "upgraded", imported: 1, authorityState: "active" });
   expect(result.sourceDigest).toMatch(/^[a-f0-9]{64}$/);
-  expect(result.skipped).toEqual([{ path: "workflows/wf-creates-and-imports/unknown.bin", reason: "unrecognized workflow entry; left in place" }]);
+  expect(result.skipped).toEqual([
+    { path: "workflows/wf-creates-and-imports/sessions/plan-pm.json", reason: "legacy plan-PM session envelope dropped; the seat was removed" },
+    { path: "workflows/wf-creates-and-imports/unknown.bin", reason: "unrecognized workflow entry; left in place" },
+  ]);
   expect([...readFileSync(unknownPath)]).toEqual([...unknownBytes]);
   const store = await openStore(context, "read");
   try {
@@ -81,9 +84,27 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
       status: "running",
       branch: { source: "feature/wf-creates-and-imports", target: "main" },
     });
-    const plan = store.db.prepare("select workflow_id, plan_id, state_json from execution_plans").get() as { workflow_id: string; plan_id: string; state_json: string };
+    const plan = store.db.prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans").get() as {
+      workflow_id: string;
+      plan_id: string;
+      state_json: string;
+      coordination_json: string;
+    };
     expect(plan).toMatchObject({ workflow_id: workflow.workflow_id, plan_id: "wf-creates-and-imports-plan" });
-    expect(JSON.parse(plan.state_json)).toMatchObject({ id: plan.plan_id, status: "Todo", title: "Upgrade fixture plan" });
+    // The dropped lease's source/cleanup ownership survives in ordinary
+    // metadata: the row's worktree and branch are what L1 and cleanup read.
+    expect(JSON.parse(plan.state_json)).toMatchObject({
+      id: plan.plan_id,
+      status: "Todo",
+      title: "Upgrade fixture plan",
+      metadata: {
+        worktree_path: join(ROOT, "worktree-creates-and-imports"),
+        working_branch: "feature/wf-creates-and-imports",
+      },
+    });
+    // The stored coordination carries NO revision: that value is the plan
+    // column's alone, exactly as the DB representation boundary requires.
+    expect(JSON.parse(plan.coordination_json)).toEqual({});
     // The legacy plan-PM session envelope is dropped: the seat was removed, so
     // no plan-scoped session row and no per-plan lease table exist any more.
     expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 0 });
@@ -91,6 +112,10 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
       "workflow wf-creates-and-imports plan wf-creates-and-imports-plan: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations",
       "workflow wf-creates-and-imports plan wf-creates-and-imports-plan: legacy plan-PM session binding dropped on import; that seat no longer exists",
     ]);
+    // The final public read exposes the migrated row and its ownership facts.
+    const readable = await readExecutionState(context);
+    const migrated = readable.data.workflows[0]?.plans[0];
+    expect(migrated?.plan.id).toBe(plan.plan_id);
   } finally {
     store.close();
   }
@@ -106,6 +131,188 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
     expect(replayStore.db.prepare("select count(*) as n from execution_plans").get()).toEqual({ n: 1 });
   } finally {
     replayStore.close();
+  }
+});
+
+test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the target shape and business facts survive", async () => {
+  const { context } = legacyWorkspace("active-schema8-normalize");
+  const workflowId = "wf-active-schema8-normalize";
+  const planId = `${workflowId}-plan`;
+  const sessionId = "session-active-schema8-normalize";
+
+  // A schema-8 store: initialized, then reverted to the schema-8 SHAPE (frozen
+  // migration 4 DDL) and populated with the OLD protocol JSON the removed seat
+  // wrote — a sealed prepared block, a completed handoff, a plan-PM session and
+  // a per-plan lease carrying the only recorded source/cleanup ownership.
+  const initialized = await initializeStore(context);
+  try {
+    initialized.db.exec(`
+      delete from schema_version where version = 9;
+      create table execution_sessions_v8(
+        workflow_id text not null references execution_workflows(workflow_id),
+        role text not null check (role in ('coordinator','plan-pm')),
+        session_id text not null,
+        plan_id text,
+        epoch integer not null check (epoch > 0),
+        revision integer not null check (revision > 0),
+        state text not null check (state in ('active','suspended','revoked')),
+        bound_at text not null,
+        primary key (workflow_id, role, session_id),
+        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
+        check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
+      );
+      drop table execution_sessions;
+      alter table execution_sessions_v8 rename to execution_sessions;
+      create unique index execution_sessions_active_coordinator
+        on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+      create unique index execution_sessions_active_plan_pm
+        on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
+      create table execution_leases(
+        workflow_id text not null,
+        plan_id text not null,
+        revision integer not null check (revision > 0),
+        owner_epoch integer not null check (owner_epoch > 0),
+        lease_json text not null,
+        primary key (workflow_id, plan_id),
+        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+      );
+    `);
+    initialized.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+    initialized.db.prepare(
+      "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+        "values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
+    ).run(workflowId, sessionId, planId);
+    initialized.db.prepare(
+      "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)",
+    ).run(
+      workflowId,
+      planId,
+      JSON.stringify({
+        id: planId,
+        title: "Schema-8 fixture plan",
+        file: `${planId}.md`,
+        status: "Todo",
+        execution_lease: {
+          holder: sessionId,
+          claimed_at: "2026-10-04T00:00:00Z",
+          worktree_path: join(ROOT, "schema8-worktree"),
+          working_branch: `feature/${planId}`,
+        },
+      }),
+      JSON.stringify({
+        revision: 1,
+        prepared: {
+          assignment_path: join(ROOT, "assignment.md"),
+          assignment_sha256: "a".repeat(64),
+          plan_sha256: "b".repeat(64),
+          qa_gate: "mandatory",
+          findings_cleanup: "allow-residual",
+          prepared_by: "host-coord",
+          prepared_at: "2026-10-04T00:00:00Z",
+        },
+        session: { session_id: sessionId, session_file: join(ROOT, "plan-pm.json"), bound_at: "2026-10-04T00:00:00Z" },
+        handoff: {
+          id: `${planId}-attempt-1`,
+          attempt: 1,
+          state: "completed",
+          submitted_by: sessionId,
+          submitted_at: "2026-10-04T01:00:00Z",
+          source_branch: `feature/${planId}`,
+          source_sha: "c".repeat(40),
+          worktree_path: join(ROOT, "schema8-worktree"),
+          review_base: "c".repeat(40),
+          review_head: "c".repeat(40),
+          qc: { decision: "Approve", reports: [{ path: join(ROOT, "qc.md"), sha256: "d".repeat(64) }], consolidated: { path: join(ROOT, "qc-s.md"), sha256: "e".repeat(64) } },
+          qa: { gate: "mandatory", decision: "pass", report: { path: join(ROOT, "qa.md"), sha256: "f".repeat(64) } },
+          accepted_by: "host-coord",
+          accepted_at: "2026-10-04T02:00:00Z",
+          completed_at: "2026-10-04T03:00:00Z",
+        },
+      }),
+    );
+    initialized.db.prepare(
+      "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
+    ).run(
+      workflowId,
+      planId,
+      JSON.stringify({
+        holder: sessionId,
+        holder_session_id: sessionId,
+        holder_role: "plan-pm",
+        claimed_at: "2026-10-04T00:00:00Z",
+        worktree_path: join(ROOT, "schema8-worktree"),
+        working_branch: `feature/${planId}`,
+        status: "held",
+      }),
+    );
+    initialized.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
+      .run(
+        workflowId,
+        JSON.stringify({
+          schema_version: 1,
+          id: workflowId,
+          type: "plan",
+          status: "running",
+          started_at: "2026-10-04",
+          updated_at: "2026-10-04",
+          delivery_kind: "development",
+          branch: { source: `feature/${planId}`, target: "main" },
+          coordination: { coordinator: { session_id: "host-coord", session_file: join(ROOT, "coord.json"), bound_at: "2026-10-04T00:00:00Z" } },
+          self_amendments: [{ at: "2026-10-04T01:00:00Z", session_id: "plan-session", operation_id: "amend-op" }],
+        }),
+        "2026-10-04",
+        "2026-10-04",
+      );
+  } finally {
+    initialized.close();
+  }
+
+  await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-active-schema8-normalize" });
+  const store = await openStore(context, "read");
+  try {
+    expect(store.schemaVersion).toBe(MIGRATIONS.length);
+    // The retained coordination JSON is the target shape: no sealed assignment,
+    // no session, no handoff, no revision; the real QC/QA evidence and the
+    // completed outcome survive as a contracted CompletionRecord.
+    const coordination = JSON.parse(
+      (store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { coordination_json: string })
+        .coordination_json,
+    ) as Record<string, unknown>;
+    expect(Object.keys(coordination).sort()).toEqual(["completion", "prepared"]);
+    expect((coordination.prepared as Record<string, unknown>)).toEqual({
+      qa_gate: "mandatory",
+      findings_cleanup: "allow-residual",
+      prepared_by: "host-coord",
+      prepared_at: "2026-10-04T00:00:00Z",
+    });
+    expect((coordination.completion as Record<string, unknown>)).toMatchObject({
+      source_branch: `feature/${planId}`,
+      completed_by: "host-coord",
+      completed_at: "2026-10-04T03:00:00Z",
+    });
+    // The old lease's source/cleanup ownership moved into ordinary metadata, and
+    // the completed row is Done.
+    const state = JSON.parse(
+      (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { state_json: string }).state_json,
+    ) as Record<string, unknown>;
+    expect(state).toMatchObject({
+      status: "Done",
+      metadata: { worktree_path: join(ROOT, "schema8-worktree"), working_branch: `feature/${planId}` },
+    });
+    expect(state).not.toHaveProperty("execution_lease");
+    expect(state).not.toHaveProperty("coordination");
+    // The workflow header lost the removed self-amendment audit and the removed
+    // per-workflow coordination block, keeping its identity.
+    const header = JSON.parse(
+      (store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId) as { state_json: string }).state_json,
+    ) as Record<string, unknown>;
+    expect(header).not.toHaveProperty("self_amendments");
+    expect(header).not.toHaveProperty("coordination");
+    expect(header).toMatchObject({ id: workflowId, status: "running" });
+    // The legacy plan-PM session row is gone; the table is coordinator-only.
+    expect(store.db.prepare("select count(*) as n from execution_sessions").get()).toEqual({ n: 0 });
+  } finally {
+    store.close();
   }
 });
 
@@ -510,7 +717,10 @@ test("unregistered snapshot directories import while empty unregistered director
   mkdirSync(join(context.harnessDir, "workflows", "unregistered-empty"), { recursive: true });
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unregistered-snapshot" });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
-  expect(result.skipped).toEqual([{ path: "workflows/wf-unregistered-populated/unknown.bin", reason: "unrecognized workflow entry; left in place" }]);
+  expect(result.skipped).toEqual([
+    { path: "workflows/wf-unregistered-populated/sessions/plan-pm.json", reason: "legacy plan-PM session envelope dropped; the seat was removed" },
+    { path: "workflows/wf-unregistered-populated/unknown.bin", reason: "unrecognized workflow entry; left in place" },
+  ]);
   const store = await openStore(context, "read");
   try {
     expect(store.db.prepare("select count(*) as n from execution_workflows").get()).toEqual({ n: 2 });

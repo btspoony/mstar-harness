@@ -2023,6 +2023,10 @@ const REDACTED_KEYS: Record<string, true> = {
   creator_session_id: true,
   submitted_by: true,
   accepted_by: true,
+  /** The coordinator identity the contracted `PreparedCoordination` records. */
+  prepared_by: true,
+  /** The coordinator identity the contracted `CompletionRecord` records. */
+  completed_by: true,
   bound_by: true,
   token: true,
   workflowToken: true,

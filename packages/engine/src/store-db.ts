@@ -920,7 +920,13 @@ export const MIGRATION_5_SQL = `
 alter table execution_migrations add column coverage_json text;
 `;
 
-export type Migration = { version: number; name: string; sql: string };
+/**
+ * One append-only migration. `normalize`, when present, performs the JSON
+ * transformation the version's SQL cannot express (the members it removes or
+ * rewrites live inside stored JSON), running in the SAME exclusive transaction
+ * as this version's row.
+ */
+export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb) => void };
 
 /** Migration 6 — durable roadmap content authority; never import disposable projection rows. */
 export const MIGRATION_6_SQL = `
@@ -993,22 +999,23 @@ alter table provenance add column origin text not null default 'scoped' check (o
 
 
 /**
- * Migration 9 — coordinator-only execution sessions, and no per-plan lease.
+ * Migration 9 — coordinator-only execution sessions, and no per-plan lease,
+ * with the retained business JSON normalized into the target shape.
  *
- * The removed plan-PM seat left two storage artefacts behind: per-plan session
- * rows and per-plan write leases. Neither has a producer any more, and the
- * coordinator's own exclusion is `BEGIN IMMEDIATE` plus CAS tokens plus the
- * operation receipts, so this migration deletes the obsolete rows and the
- * lease table rather than keeping an inert protocol around: a store that still
- * carried a second seat's identity or a stale held claim would describe an
- * ownership the engine can no longer act on.
+ * The removed plan-PM seat left three storage artefacts behind: per-plan
+ * session rows, per-plan write leases, and — in every store that reached schema
+ * 8 through the old protocol — a sealed `prepared` and a `handoff` inside each
+ * plan's `coordination_json` plus `self_amendments` in the workflow header.
+ * None of them has a producer any more, and the store's own JSON cannot be
+ * transformed by SQL alone, so the migration runner performs one
+ * `normalizeExecutionState` pass over `execution_plans` / `execution_workflows`
+ * in the SAME exclusive transaction that records this version.
  *
- * `execution_sessions` keeps only workflow-scoped coordinator rows, so the
- * `plan_id` column and the role check that admitted `plan-pm` go with them —
- * SQLite cannot drop a column's CHECK in place, hence the table rewrite. The
- * rewrite is inside the migration runner's single `BEGIN IMMEDIATE`, so it is
- * atomic with the recorded version row; the workflow foreign key and the
- * ACTIVE-coordinator partial unique index are re-created on the new table.
+ * `execution_sessions` keeps only coordinator rows, so the `plan_id` column and
+ * the role check that admitted `plan-pm` go with them — a column's CHECK cannot
+ * be dropped in place, hence the table rewrite. `execution_leases` is dropped:
+ * its recorded worktree/branch ownership is already mapped into ordinary row
+ * metadata by the same pass.
  *
  * Migrations 1–8 stay byte-identical: every applied store keeps its recorded
  * checksum, and the historical DDL that once created these rows remains
@@ -1035,6 +1042,171 @@ create unique index execution_sessions_active_coordinator
 drop table execution_leases;
 `;
 
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseStoredRecord(text: unknown, what: string): JsonRecord {
+  const parsed: unknown = typeof text === "string" ? JSON.parse(text) : undefined;
+  if (!isRecord(parsed)) throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
+  return parsed;
+}
+
+/**
+ * Normalize one legacy row-coordination block: the removed seat's sealed
+ * `prepared` becomes the contracted ordinary configuration, its `progress` is
+ * carried over, a `completed` attempt becomes a contracted `CompletionRecord`
+ * (the row's real QC/QA and integration evidence — never rewritten), and every
+ * other protocol member is dropped. The result carries NO revision: that value
+ * belongs to the `execution_plans.revision` column alone.
+ */
+function normalizeLegacyCoordination(legacy: JsonRecord): JsonRecord {
+  const out: JsonRecord = {};
+  const prepared = legacy.prepared;
+  if (isRecord(prepared)) {
+    const qaGate = prepared.qa_gate;
+    const findings = prepared.findings_cleanup;
+    if (
+      typeof prepared.prepared_by === "string" && prepared.prepared_by !== "" &&
+      typeof prepared.prepared_at === "string" && prepared.prepared_at !== "" &&
+      (qaGate === "mandatory" || qaGate === "pm-acceptance") &&
+      (findings === "zero-residual" || findings === "allow-residual")
+    ) {
+      out.prepared = { qa_gate: qaGate, findings_cleanup: findings, prepared_by: prepared.prepared_by, prepared_at: prepared.prepared_at };
+    }
+  }
+  if (isRecord(legacy.progress)) out.progress = legacy.progress;
+  const handoff = legacy.handoff;
+  if (isRecord(handoff) && handoff.state === "completed") {
+    const qc = handoff.qc;
+    const qa = handoff.qa;
+    const integration = handoff.integration;
+    const mapped: JsonRecord = {
+      source_branch: typeof handoff.source_branch === "string" && handoff.source_branch !== "" ? handoff.source_branch : null,
+      source_sha: typeof handoff.source_sha === "string" && handoff.source_sha !== "" ? handoff.source_sha : null,
+      worktree_path: typeof handoff.worktree_path === "string" && handoff.worktree_path !== "" ? handoff.worktree_path : null,
+      review_base: typeof handoff.review_base === "string" && handoff.review_base !== "" ? handoff.review_base : null,
+      review_head: typeof handoff.review_head === "string" && handoff.review_head !== "" ? handoff.review_head : null,
+      qc: isRecord(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
+      qa: isRecord(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      completed_by: typeof handoff.accepted_by === "string" && handoff.accepted_by !== "" ? handoff.accepted_by : "",
+      completed_at: typeof handoff.completed_at === "string" && handoff.completed_at !== "" ? handoff.completed_at : "",
+    };
+    if (isRecord(integration)) {
+      mapped.integration = {
+        target_branch: typeof integration.target_branch === "string" ? integration.target_branch : "",
+        worktree_path: typeof integration.worktree_path === "string" ? integration.worktree_path : "",
+        base_sha: typeof integration.base_sha === "string" ? integration.base_sha : "",
+        result_sha: typeof integration.result_sha === "string" ? integration.result_sha : "",
+        verified_at: typeof integration.verified_at === "string" ? integration.verified_at : "",
+      };
+    }
+    out.completion = mapped;
+  }
+  return out;
+}
+
+/** Map the source/cleanup ownership a removed lease carried onto ordinary row metadata. */
+function normalizeLegacyLeaseScope(row: JsonRecord, workflowId: string, planId: string): JsonRecord | null {
+  const lease = row.execution_lease;
+  if (!isRecord(lease)) return null;
+  const worktree = typeof lease.worktree_path === "string" && lease.worktree_path !== ""
+    ? lease.worktree_path
+    : typeof lease.plan_worktree_path === "string" && lease.plan_worktree_path !== ""
+      ? lease.plan_worktree_path
+      : undefined;
+  const branch = typeof lease.working_branch === "string" && lease.working_branch !== ""
+    ? lease.working_branch
+    : typeof lease.plan_branch === "string" && lease.plan_branch !== ""
+      ? lease.plan_branch
+      : undefined;
+  if (worktree === undefined && branch === undefined) return null;
+  const metadata = isRecord(row.metadata) ? row.metadata : {};
+  const recordedWorktree = metadata.worktree_path;
+  const recordedBranch = metadata.working_branch;
+  // A genuine conflict is named rather than silently resolved: the operator
+  // decides which checkout/branch owns the plan before the upgrade commits.
+  if (worktree !== undefined && typeof recordedWorktree === "string" && recordedWorktree !== "" && recordedWorktree !== worktree) {
+    throw new StoreError(
+      "store.corrupt",
+      `execution_plans(${workflowId},${planId}) records worktree ${recordedWorktree} in metadata and ${worktree} on its removed ` +
+        `execution lease; resolve which checkout owns this plan, then rerun the upgrade. Nothing was modified.`,
+    );
+  }
+  if (branch !== undefined && typeof recordedBranch === "string" && recordedBranch !== "" && recordedBranch !== branch) {
+    throw new StoreError(
+      "store.corrupt",
+      `execution_plans(${workflowId},${planId}) records branch ${recordedBranch} in metadata and ${branch} on its removed ` +
+        `execution lease; resolve which branch owns this plan, then rerun the upgrade. Nothing was modified.`,
+    );
+  }
+  const out: JsonRecord = { ...metadata };
+  if (worktree !== undefined) out.worktree_path = worktree;
+  if (branch !== undefined) out.working_branch = branch;
+  return out;
+}
+
+/**
+ * Rewrite the retained business JSON of an upgraded store into the target
+ * shape. Runs inside the migration runner's own exclusive transaction: either
+ * the whole schema + JSON cutover commits, or nothing does. Rows it does not
+ * recognize are left exactly as they are — never guessed at, never edited by
+ * hand — so a store that needs operator attention refuses through the normal
+ * read/validation path instead of being silently mangled.
+ */
+function normalizeExecutionState(db: StoreDb): void {
+  const tables = new Set(
+    (db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>)
+      .map((row) => (typeof row.name === "string" ? row.name : ""))
+      .filter((name) => name !== ""),
+  );
+  if (!tables.has("execution_plans") || !tables.has("execution_workflows")) return;
+
+  const plans = db
+    .prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; state_json?: unknown; coordination_json?: unknown }>;
+  const updatePlan = db.prepare("update execution_plans set state_json = ?, coordination_json = ? where workflow_id = ? and plan_id = ?");
+  for (const row of plans) {
+    const workflowId = String(row.workflow_id ?? "");
+    const planId = String(row.plan_id ?? "");
+    const what = `execution_plans(${workflowId},${planId})`;
+    const state = parseStoredRecord(row.state_json, `${what}.state_json`);
+    const legacy = parseStoredRecord(row.coordination_json, `${what}.coordination_json`);
+    const coordination = normalizeLegacyCoordination(legacy);
+    const nextState: JsonRecord = { ...state };
+    const scope = normalizeLegacyLeaseScope(state, workflowId, planId);
+    if (scope !== null) nextState.metadata = scope;
+    if (isRecord(coordination.completion) && !(typeof nextState.status === "string" && nextState.status === "Done")) {
+      nextState.status = "Done";
+    }
+    delete nextState.coordination;
+    delete nextState.execution_lease;
+    updatePlan.run(JSON.stringify(nextState), JSON.stringify(coordination), workflowId, planId);
+  }
+
+  const workflows = db
+    .prepare("select workflow_id, state_json from execution_workflows")
+    .all() as Array<{ workflow_id?: unknown; state_json?: unknown }>;
+  const updateWorkflow = db.prepare("update execution_workflows set state_json = ? where workflow_id = ?");
+  for (const row of workflows) {
+    const workflowId = String(row.workflow_id ?? "");
+    const state = parseStoredRecord(row.state_json, `execution_workflows(${workflowId}).state_json`);
+    // The header keeps its identity and promotes the coordinator recovery
+    // history; the removed per-workflow coordination block and the removed
+    // self-amendment audit go, exactly as the file import writes it.
+    const coordination = isRecord(state.coordination) ? state.coordination : undefined;
+    const next: JsonRecord = { ...state };
+    delete next.coordination;
+    delete next.self_amendments;
+    if (coordination !== undefined && coordination.identity_recoveries !== undefined) {
+      next.identity_recoveries = coordination.identity_recoveries;
+    }
+    updateWorkflow.run(JSON.stringify(next), workflowId);
+  }
+}
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1045,7 +1217,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
   { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
   { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
-  { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL },
+  { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
 ];
 
 /**
@@ -1148,8 +1320,14 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
 
 /**
  * Apply pending migrations inside ONE exclusive write transaction, record
- * each version row only as it applies, verify the final set, and roll the
- * whole batch back on any failure — no dirty partial schema (contract §2).
+ * each version row only as it applies, normalize the retained business JSON the
+ * newly applied version requires, verify the final set, and roll the whole
+ * batch back on any failure — no dirty partial schema (contract §2).
+ *
+ * The normalization is not SQL: the members the removed protocol wrote live in
+ * `execution_plans`/`execution_workflows` JSON, so a version that changes their
+ * vocabulary declares it here and the pass runs in the SAME transaction as its
+ * version row.
  */
 function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: boolean } = {}): number {
   const own = !options.alreadyInTransaction;
@@ -1161,6 +1339,7 @@ function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: b
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
+      if (migration.normalize !== undefined) migration.normalize(db);
       db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
         migration.version,
         migration.name,
