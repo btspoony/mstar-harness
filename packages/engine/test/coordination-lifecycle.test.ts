@@ -35,7 +35,7 @@ import {
 import type { CompletionEvidence } from "../src/coordination-write.js";
 import { closeWorkflow, recordWorkflowDelivery } from "../src/workflow.js";
 import {
-  WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID,
+  WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, PROJECT_ID, FIXTURE_COORDINATOR_ID,
   type GitFixture,
   git, writeText, writeJson, readJson, makeFixture, sleep, errorCodeOf, failureOf, failureCode,
   ensureCoordinator, prepareCall, progressCall, completeCall,
@@ -215,13 +215,13 @@ describe("iteration-completion", () => {
     // A real two-parent merge whose base is NOT the recorded base: the parents
     // do not match `[base_sha, source_sha]`.
     const wrongBase = await acceptedFixture();
-    const otherBase = headOf(otherBaseCheckout(wrongBase));
+    otherBaseCheckout(wrongBase);
     const mergeSha = mergeFeature(wrongBase);
     const beforeWrongBase = readJson(wrongBase.snapshotPath);
     expect(
       await errorCodeOf(() =>
         completeCall(wrongBase, PLAN_ID, completionEvidenceOf(wrongBase, wrongBase.planSha), {
-          base_sha: otherBase,
+          base_sha: wrongBase.baseSha,
           result_sha: mergeSha,
         }),
       ),
@@ -357,11 +357,17 @@ describe("standalone-development-completion", () => {
     expect(readJson(dirty.snapshotPath)).toEqual(dirtyBefore);
     expect(planRowOf(dirty, PLAN_ID).status).toBe("InReview");
 
-    // An integration worktree recorded on a standalone workflow is contamination.
+    // A held integration claim on a standalone workflow is contamination.
     const contaminated = await acceptedStandaloneFixture();
     writeJson(contaminated.snapshotPath, {
       ...snapshotOf(contaminated),
-      integration_worktree_path: join(contaminated.root, "extra-integration"),
+      integration_merge_lease: {
+        holder: FIXTURE_COORDINATOR_ID,
+        claimed_at: "2026-01-02T03:04:05.000Z",
+        plan_id: PLAN_ID,
+        source_branch: `feature/${PLAN_ID}`,
+        target_branch: "main",
+      },
     });
     const contaminatedBefore = readJson(contaminated.snapshotPath);
     expect(
@@ -675,7 +681,13 @@ describe("report-only-completion", () => {
     const contaminated = await reportOnlyFixture();
     writeJson(contaminated.snapshotPath, {
       ...snapshotOf(contaminated),
-      integration_worktree_path: join(contaminated.root, "extra-integration"),
+      integration_merge_lease: {
+        holder: FIXTURE_COORDINATOR_ID,
+        claimed_at: "2026-01-02T03:04:05.000Z",
+        plan_id: PLAN_ID,
+        source_branch: `feature/${PLAN_ID}`,
+        target_branch: "main",
+      },
     });
     const contaminatedBefore = readJson(contaminated.snapshotPath);
     expect(

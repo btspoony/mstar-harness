@@ -44,7 +44,7 @@ import {
   type ImplementerSessionLedger,
   type SddExecutionContext,
 } from "../src/sdd.js";
-import { registerPlanWorkflow } from "../src/workflow.js";
+import { readWorkflowSnapshot, registerPlanWorkflow } from "../src/workflow.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
@@ -837,7 +837,7 @@ type ExecutionFixture = {
   root: string;
  /** Disposable "primary checkout" on `main` — stands in for the incident scene. */
   primary: string;
- /** Control worktree on an integration branch, carrying the control harness. */
+ /** Integration worktree; the primary-harness variant keeps process SSOT on main. */
   control: string;
  /** Feature worktree on the plan's Working branch. */
   feature: string;
@@ -850,7 +850,7 @@ type ExecutionFixture = {
 
 const PLAN_ID = "20260907-sdd-execution-paths";
 
-function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?: boolean } = {}): ExecutionFixture {
+function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?: boolean; primaryHarness?: boolean } = {}): ExecutionFixture {
   const primary = join(root, "primary");
   mkdirSync(primary);
   git(["init", "-q"], primary);
@@ -875,7 +875,10 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   // Nested-harness variant: the harness sits under a configured subdir of
   // the control checkout (`<control>/state/.mstar`) — the resolver must
   // derive the real checkout root by git probe, never dirname(harness).
-  const harnessDir = opts.nestedHarness ? join(control, "state", ".mstar") : join(control, ".mstar");
+  // Real registration probes the process store from workflow paths, so its
+  // harness belongs on the Git-derived primary checkout, not integration.
+  const harnessCheckout = opts.primaryHarness ? primary : control;
+  const harnessDir = opts.nestedHarness ? join(harnessCheckout, "state", ".mstar") : join(harnessCheckout, ".mstar");
   const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
   mkdirSync(dirname(planFile), { recursive: true });
   // The registered plan document (§4): its `plan_id` header is the identity
@@ -1451,11 +1454,14 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
   test("registration clears the refusal: register then retry proceeds, prior state preserved (S2 recovery path)", async () => {
     const root = tmpRoot("sdd-ctx-register-recovery-");
     try {
-      const f = executionFixture(root);
+      const f = executionFixture(root, { primaryHarness: true });
       writeStatusRegister(f, ["wf-other"]);
       writeSnapshot(f, "wf-other", [
         { id: "another-plan", title: "other plan", file: "plans/another-plan.md", status: "InProgress" },
       ]);
+      const otherSnapshotPath = join(f.harnessDir, "workflows", "wf-other", "snapshot.json");
+      const otherSnapshotBefore = readFileSync(otherSnapshotPath, "utf8");
+      const otherEntryBefore = JSON.parse(readFileSync(join(f.harnessDir, "status.json"), "utf8")).workflows[0];
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.message).toContain("sdd.context.plan-not-registered");
 
@@ -1476,6 +1482,8 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
         workflows: { id: string }[];
       };
       expect(rootDoc.workflows.map((w) => w.id).sort()).toEqual(["wf-other", "wf-recovered"]);
+      expect(rootDoc.workflows.find((w) => w.id === "wf-other")).toEqual(otherEntryBefore);
+      expect(readFileSync(otherSnapshotPath, "utf8")).toBe(otherSnapshotBefore);
     } finally {
       setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
@@ -1485,7 +1493,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
   test("a registered verification/report-only workflow without branch.target proceeds (registration is the only admission demand)", async () => {
     const root = tmpRoot("sdd-ctx-verification-");
     try {
-      const f = executionFixture(root);
+      const f = executionFixture(root, { primaryHarness: true });
  // Recorded alternative completion policy, no branch fields — admission
  // demands registration only, never a PR (contract §1 binding negatives).
       setArtifactStore(createFsStore(f.harnessDir));
@@ -1496,6 +1504,9 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
         completionPolicy: "acceptance artifacts recorded under the plan's sddDir",
       });
       expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
+      const { snapshot } = readWorkflowSnapshot(join(f.harnessDir, "workflows", "wf-verify"));
+      expect(snapshot.branch).toBeUndefined();
+      expect(snapshot.completion_policy).toBe("acceptance artifacts recorded under the plan's sddDir");
     } finally {
       setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });

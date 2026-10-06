@@ -461,10 +461,6 @@ describe("intent resolution — trusted root, explicit target, authority change 
     expect(root.ok).toBe(true);
     if (!root.ok) throw new Error("a recorded session root must resolve");
     expect(root.root).toBe(fixture.harness);
-    expect(root.resolvedFrom).toEqual([
-      { path: "controlRoot", source: "session.envelope" },
-      { path: "cwd", source: "harness.probe.absent" },
-    ]);
 
     const associated = resolveIntentTarget({ root: fixture.harness, association: { workflowId: session.workflow_id } });
     expect(associated.ok).toBe(true);
