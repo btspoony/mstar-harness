@@ -435,7 +435,7 @@ describe("migration 7 - project_milestones", () => {
       handle.close();
       await expect(upgradeStore({ harnessDir: dir })).rejects.toMatchObject({ code });
       const unchanged = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
-      expect(unchanged.prepare("select * from schema_version order by version").all()).toEqual(versionsBefore);
+      expect(versionsBefore).toEqual(unchanged.prepare("select * from schema_version order by version").all());
       unchanged.close();
     }
   });
