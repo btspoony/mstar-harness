@@ -694,6 +694,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
   test("the retired pre-activation registration path is refused while the authority is active", async () => {
     const fixture = await activeFixture("mstar-workflow-legacy");
     const identity = coordinatorIdentity();
+    const before = await readExecutionAuthority(fixture.context);
     const legacy = runCli(
       [
         "workflow",
@@ -702,6 +703,8 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "wf-legacy-form",
         "--plan-id",
         PLAN_ID,
+        "--plan-title",
+        "Active workflow transport plan",
         "--plan-file",
         `plans/${PLAN_ID}.md`,
         "--delivery-kind",
@@ -721,6 +724,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     // No file-route bytes were created by the refusal.
     expect(existsSync(join(fixture.harnessDir, "workflows", "wf-legacy-form", "snapshot.json"))).toBe(false);
     expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
+    const after = await readExecutionAuthority(fixture.context);
+    expect(after.token).toBe(before.token);
+    expect(after.data).toEqual(before.data);
   });
   test("session recover --unowned accepts empty stoppedSessions only for a workflow with no coordinator", async () => {
     const fixture = await activeFixture("mstar-session-recover-unowned");

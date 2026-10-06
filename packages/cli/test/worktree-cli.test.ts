@@ -366,7 +366,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     }
   });
 
-  test("lease worktree is the main worktree → worktree.l1.lease-equals-main, exit 1", () => {
+  test("feature worktree is the main worktree → worktree.l1.feature-equals-main, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-eqmain-");
     try {
       const topo = topologyFixture(root);
@@ -375,7 +375,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
+      const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -507,7 +508,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     }
   });
 
-  test("plain subdirectory of the main checkout as lease → worktree.l1.lease-equals-main, exit 1", () => {
+  test("plain subdirectory of the main checkout as feature → worktree.l1.feature-equals-main, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-subdir-");
     try {
       git(["init", "-q"], root);
@@ -524,13 +525,14 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
+      const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("symlink alias of the main checkout as lease → worktree.l1.lease-equals-main, exit 1", () => {
+  test("symlink alias of the main checkout as feature → worktree.l1.feature-equals-main, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-symlink-");
     try {
       git(["init", "-q"], root);
@@ -547,7 +549,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
+      const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -795,10 +798,15 @@ test("retained track ownership prevents main from carrying an active track", () 
     const linked = worktreeFixture(root);
     const mainBranch = git(["branch", "--show-current"], root);
     const row = { ...PLAN_A(linked), metadata: { ...PLAN_A(linked).metadata, track_branches: [mainBranch] } };
-    writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
+    const snapshot = writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
+    const register = writeRegister(root, [WORKFLOW_ID]);
+    const beforeSnapshot = readFileSync(snapshot, "utf8");
+    const beforeRegister = readFileSync(register, "utf8");
     const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
     const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
-    expect(output.message).toContain("owned by an active lifecycle");
+    expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.main.residency-switched", severity: "high" }));
+    expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
+    expect(readFileSync(register, "utf8")).toBe(beforeRegister);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

@@ -24,6 +24,7 @@
  * harness — no live workflow is ever touched.
  */
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -77,9 +78,9 @@ function cliEnv(): Record<string, string> {
   return env;
 }
 
-function runCli(args: string[]): RunResult {
+function runCli(args: string[], cwd = CLI_ROOT): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
+    cwd,
     env: cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
@@ -89,6 +90,18 @@ function runCli(args: string[]): RunResult {
 
 function closeArgs(harness: string, extra: string[] = []): string[] {
   return ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", harness, ...extra];
+}
+
+/** Acquire the envelope through the public bind from the fixture's own primary checkout. */
+function bindCoordinator(harness: string): string {
+  const bound = runCli([
+    "plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness,
+    "--session-id", "11111111-2222-3333-4444-555555555555",
+  ], harness);
+  if (bound.exitCode !== 0) throw new Error(`coordinator bind failed: ${bound.stdout}\n${bound.stderr}`);
+  const sessionFile = envelope(bound).data?.session_file;
+  if (typeof sessionFile !== "string") throw new Error(`coordinator bind returned no session file: ${bound.stdout}`);
+  return sessionFile;
 }
 
 /**
@@ -137,6 +150,10 @@ interface HarnessFixture {
 function setupHarness(fn: (harness: string, paths: { snapshot: string; root: string }) => void, fixture: HarnessFixture = {}): void {
   const harness = mkdtempSync(join(tmpdir(), "mstar-workflow-close-"));
   try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: harness });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: harness });
+    mkdirSync(join(harness, "plans"), { recursive: true });
+    writeFileSync(join(harness, "plans", "plan-a.md"), "# Plan A\n\n**plan_id:** plan-a\n");
     const snapshot = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
     const root = join(harness, "status.json");
     if (fixture.snapshot !== null) {
@@ -209,12 +226,9 @@ describe("mstar status workflow-close", () => {
   test("an authorized coordinator cannot close an unfinished plan row (exit 1, bytes unchanged)", () => {
     setupHarness(
       (harness, { snapshot, root }) => {
-        const sessionId = "11111111-2222-3333-4444-555555555555";
         const beforeRoot = readFileSync(root, "utf8");
 
-        const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", sessionId]);
-        expect(bound.exitCode).toBe(0);
-        const sessionFile = String(envelope(bound).data?.session_file);
+        const sessionFile = bindCoordinator(harness);
         const coordinated = readFileSync(snapshot, "utf8");
 
         const result = runCli(closeArgs(harness, ["--session", sessionFile]));
@@ -328,24 +342,16 @@ describe("mstar status workflow-close", () => {
   });
 });
 
-/**
- * The close verb under the coordinated-writer cutover: a snapshot carrying the
- * `coordination` block must still be refused *before* any byte is written when
- * a pre-existing gate fails, and an uncoordinated close keeps its contract.
- * The coordinator-session transport for a coordinated close is an engine-side
- * seam (see the task report); these cases pin only what the CLI can guarantee
- * today — a refusal never mutates the snapshot or the root entry.
- */
+/** Public coordinator binding authorizes close; missing/foreign envelopes and unfinished rows do not. */
 describe("mstar status workflow-close — coordinated-writer boundary", () => {
   /** Snapshot whose row is done, with a well-formed coordinator binding. */
-  function coordinatedSnapshotDoc(harness: string, rowStatus: string): Record<string, unknown> {
+  function coordinatedSnapshotDoc(harness: string, rowStatus: string): string {
     const snapshot = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
     writeFileSync(snapshot, JSON.stringify(snapshotDoc({
       plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: rowStatus }],
     }), null, 2));
-    const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "11111111-2222-3333-4444-555555555555"]);
-    expect(bound.exitCode).toBe(0);
-    return JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
+    bindCoordinator(harness);
+    return readFileSync(snapshot, "utf8");
   }
 
   /** Read the envelope produced by the ordinary coordinator bind. */
@@ -358,7 +364,7 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
 
   test("a coordinated snapshot closes for its bound coordinator session (exit 0)", () => {
     setupHarness((harness, { snapshot, root }) => {
-      writeFileSync(snapshot, JSON.stringify(coordinatedSnapshotDoc(harness, "Done"), null, 2), "utf8");
+      coordinatedSnapshotDoc(harness, "Done");
       const sessionPath = coordinatorSessionPath(harness);
 
       const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12", "--session", sessionPath]));
@@ -373,44 +379,40 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
   test("a coordinated snapshot without --session refuses even when every row is Done (exit 1, bytes + root intact)", () => {
     setupHarness((harness, { snapshot, root }) => {
       const fixture = coordinatedSnapshotDoc(harness, "Done");
-      writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
 
+      const beforeRoot = readFileSync(root, "utf8");
       const result = runCli(closeArgs(harness));
       expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("is coordinated");
-      expect(message(result)).toContain("--session <coordinator envelope>");
-      // The row gate is not what refused this close: rows are Done.
-      expect(message(result)).not.toContain("every plan row must be Done");
-      expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
-      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootAfter.workflows).toHaveLength(1);
+      expect(envelope(result).code).toBe("coordination.identity-mismatch");
+      expect(readFileSync(snapshot, "utf8")).toBe(fixture);
+      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
   });
 
   test("a coordinated snapshot with an unfinished row refuses before writing anything (bytes + root intact)", () => {
     setupHarness((harness, { snapshot, root }) => {
       const fixture = coordinatedSnapshotDoc(harness, "InReview");
-      writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
       const sessionPath = coordinatorSessionPath(harness);
+      const beforeRoot = readFileSync(root, "utf8");
 
       const result = runCli(closeArgs(harness, ["--session", sessionPath]));
       expect(result.exitCode).toBe(1);
       expect(envelope(result).code).toBe("coordination.invalid-input");
-      expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
-      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootAfter.workflows).toHaveLength(1);
+      expect(readFileSync(snapshot, "utf8")).toBe(fixture);
+      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
   });
 
   test("a session path outside the bound coordinator envelope refuses without writes", () => {
-    setupHarness((harness, { snapshot }) => {
+    setupHarness((harness, { snapshot, root }) => {
       const fixture = coordinatedSnapshotDoc(harness, "Done");
-      writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
+      const beforeRoot = readFileSync(root, "utf8");
 
       const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
       expect(result.exitCode).toBe(1);
       expect(envelope(result).code).toBe("coordination.identity-mismatch");
-      expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
+      expect(readFileSync(snapshot, "utf8")).toBe(fixture);
+      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
     });
   });
 });
@@ -617,23 +619,14 @@ describe("mstar workflow evidence", () => {
 
   test("a coordinated workflow refuses without its bound coordinator envelope (exit 1, bytes unchanged)", () => {
     setupHarness((harness, { snapshot }) => {
-      const sessionFile = join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json");
-      mkdirSync(join(harness, "workflows", WORKFLOW_ID, "sessions"), { recursive: true });
-      writeFileSync(sessionFile, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "s-1", workflow_id: WORKFLOW_ID, harness_root: harness }), "utf8");
-      const coordinated = snapshotDoc({
-        // No evidence collected yet — the recording seam is what fills it.
-        delivery: undefined,
-        coordination: { coordinator: { session_id: "s-1", session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" } },
-      });
-      writeFileSync(snapshot, JSON.stringify(coordinated, null, 2), "utf8");
+      writeFileSync(snapshot, JSON.stringify(snapshotDoc({ delivery: undefined }), null, 2), "utf8");
+      const sessionFile = bindCoordinator(harness);
       const payload = writePayload(harness, { compound: { outcome: "created" } });
       const before = readFileSync(snapshot, "utf8");
 
       const refused = runCli(evidenceArgs(harness, payload));
       expect(refused.exitCode).toBe(1);
-      // The refusal names the authorization seam (the same one the close uses).
-      expect(message(refused)).toContain("is coordinated");
-      expect(message(refused)).toContain("--session <coordinator envelope>");
+      expect(envelope(refused).code).toBe("coordination.identity-mismatch");
       expect(readFileSync(snapshot, "utf8")).toBe(before);
 
       const recorded = runCli(evidenceArgs(harness, payload, ["--session", sessionFile, "--at", "2026-09-12T01:00:00Z"]));
