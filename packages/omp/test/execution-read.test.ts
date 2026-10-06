@@ -593,14 +593,16 @@ describe("execution-omp-read-phase2 — the phase2 observation runs on the DB au
     const fixture = makeFixture("phase2-binding-pairing");
     const coordinator = await seedActiveAuthority(fixture, "iteration");
     const goodBinding = { version: 1, harnessRoot: realpathSync(fixture.harness), session: coordinator };
-    // The engine's cross-field rule (`execution-session.ts` `assertRefShape`): a
-    // coordinator carries a null plan id and a plan-pm a non-empty one. A record
-    // declaring either impossible pairing is history, not a binding — the
-    // restore guard admits it exactly as it admits any other malformed shape.
+    // The engine's own reference shape (`execution-session.ts` `assertRefShape`)
+    // admits the workflow's coordinator seat and no per-plan scope. A record
+    // declaring a per-plan scope, or the removed plan-pm seat, is history, not a
+    // binding — the restore guard admits it exactly as it admits any other
+    // malformed shape.
     const impossiblePairings = [
       { ...goodBinding, session: { ...coordinator, role: "coordinator", planId: PLAN_ID } },
-      { ...goodBinding, session: { ...coordinator, role: "plan-pm", planId: null } },
-      { ...goodBinding, session: { ...coordinator, role: "plan-pm", planId: "" } },
+      { ...goodBinding, session: { ...coordinator, role: "plan-pm" } },
+      { ...goodBinding, session: { ...coordinator, planId: null } },
+      { ...goodBinding, session: { ...coordinator, planId: PLAN_ID } },
     ];
     for (const executionBinding of impossiblePairings) {
       const host = extensionHost({

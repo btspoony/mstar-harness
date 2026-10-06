@@ -4,8 +4,8 @@
  *
  * The ACTIVE-SET resolver (`resolveActiveWorkflow`) picks the lifecycle a
  * session writes under, from ONE registry (`status.json` `workflows[]`) by
- * the locked order: lease (an `execution_lease` whose opaque `holder` equals
- * the hint's, or whose `worktree_path` contains its cwd) → cwd (a
+ * the locked order: row scope (a plan row whose `metadata.worktree_path`
+ * contains the hint's cwd) → cwd (a
  * `control_worktree_path` containing it) → the session's durable
  * `selectedWorkflowId` → the only active entry. Each automatic rung needs
  * EXACTLY ONE distinct match; zero or several fall through, and nothing
@@ -48,7 +48,6 @@ import {
   resolveHarnessDir,
   executionContextFor,
   resumeExecutionSession,
-  validateExecutionLease,
   validateWorkflowEntry,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
@@ -223,16 +222,19 @@ function within(root: string, cwd: string): boolean {
   return rel !== '' && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)
 }
 
-/** The structurally valid `execution_lease` rows of one snapshot (invalid ones are no evidence). */
-function validLeases(snapshot: Record<string, unknown>): Record<string, unknown>[] {
+/** The structurally valid row scopes of one snapshot (unrecorded rows are no evidence). */
+function validRowScopes(snapshot: Record<string, unknown>): Array<{ worktreePath: string; workingBranch: string }> {
   if (!Array.isArray(snapshot.plans)) return []
-  const leases: Record<string, unknown>[] = []
+  const scopes: Array<{ worktreePath: string; workingBranch: string }> = []
   for (const row of snapshot.plans) {
-    const lease = asRecord(asRecord(row)?.execution_lease)
-    if (lease === undefined || !validateExecutionLease(lease).ok) continue
-    leases.push(lease)
+    const metadata = asRecord(asRecord(row)?.metadata)
+    const worktreePath = typeof metadata?.worktree_path === 'string' ? metadata.worktree_path : undefined
+    const workingBranch = typeof metadata?.working_branch === 'string' ? metadata.working_branch : undefined
+    if (worktreePath === undefined || worktreePath.trim() === '') continue
+    if (workingBranch === undefined || workingBranch.trim() === '') continue
+    scopes.push({ worktreePath, workingBranch })
   }
-  return leases
+  return scopes
 }
 
 /**
@@ -276,21 +278,17 @@ function soleEntry(matches: Map<string, ActiveEntry>): ActiveEntry | undefined {
  */
 function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWorkflowSelection | undefined {
   const cwd = hint.cwd === '' ? undefined : hint.cwd
-  const holder = hint.leaseHolder === '' ? undefined : hint.leaseHolder
-  if (cwd === undefined && holder === undefined) return undefined
-  const leaseMatches = new Map<string, ActiveEntry>()
+  if (cwd === undefined) return undefined
+  const scopeMatches = new Map<string, ActiveEntry>()
   const cwdMatches = new Map<string, ActiveEntry>()
   for (const entry of source.entries) {
     const snapshot = source.snapshotOf(entry)
     if (snapshot === undefined) continue
-    const leases = validLeases(snapshot)
-    if (
-      (holder !== undefined && leases.some((lease) => lease.holder === holder)) ||
-      (cwd !== undefined && leases.some((lease) => within(String(lease.worktree_path), cwd)))
-    ) {
-      leaseMatches.set(entry.id, entry)
+    const scopes = validRowScopes(snapshot)
+    if (cwd !== undefined && scopes.some((scope) => within(scope.worktreePath, cwd))) {
+      scopeMatches.set(entry.id, entry)
     }
-    // Rung 2 is collected independently: a lease match never removes the
+    // Rung 2 is collected independently: a row-scope match never removes the
     // entry from the cwd candidate set.
     const integrationWorktree = snapshot.integration_worktree_path
     if (cwd !== undefined && typeof integrationWorktree === 'string' && within(integrationWorktree, cwd)) {
@@ -299,8 +297,8 @@ function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWor
   }
   // Several matches at a rung are ambiguous — never arbitrated by array
   // order or the longest prefix; the next rung decides.
-  const byLease = soleEntry(leaseMatches)
-  if (byLease !== undefined) return { kind: 'active', workflowId: byLease.id, dir: byLease.dir }
+  const byScope = soleEntry(scopeMatches)
+  if (byScope !== undefined) return { kind: 'active', workflowId: byScope.id, dir: byScope.dir }
   const byCwd = soleEntry(cwdMatches)
   return byCwd === undefined ? undefined : { kind: 'active', workflowId: byCwd.id, dir: byCwd.dir }
 }
@@ -551,11 +549,11 @@ export function refusalOf(error: unknown): { code: string; message: string } {
 }
 
 /** One DB plan view as the plan-row shape the binding rule and the gate
- * readers consume (`id`/`status`/`metadata` + the row's `execution_lease`).
- * The DB stores the lease beside the row, never inside it (§2.2), so the
- * adapter re-joins them here — the normalization §5 asks for. */
+ * readers consume (`id`/`status`/`metadata`). The DB stores the row's
+ * worktree/branch scope in its metadata, so the adapter consumes it there —
+ * the normalization §5 asks for. */
 function planRowOf(view: ExecutionPlanView): Record<string, unknown> {
-  return { ...(view.plan as Record<string, unknown>), execution_lease: view.executionLease }
+  return { ...(view.plan as Record<string, unknown>) }
 }
 
 /** One DB lifecycle's materialized state as the snapshot shape the file route

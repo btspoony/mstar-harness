@@ -35,7 +35,6 @@ import {
   readWorkflowSnapshot,
   resolveRepoEnforcement,
   validateExecutionLease,
-  verifyPlanExecutionLease,
   WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type {
@@ -385,17 +384,14 @@ export function sessionIdOf(exec: ToolExecution): string | undefined {
  * relocation —): before any
  * writable implement dispatch, reread the ACTIVE workflow snapshot
  * (`workflows/<id>/snapshot.json` — the v1 root `plans[]` home is gone; the
- * root v2 `status.json` supplies the active `workflows[]`) and confirm
- * the session still passes verify-held-lease — `holder`, `worktree_path` and
- * `working_branch` must match the Assignment; mismatch or absent lease →
- * STOP. Engine `verifyPlanExecutionLease` + `validateExecutionLease` carry
- * the presence/shape checks (missing / orphan / dual-write / non-ssot /
- * invalid fields); the dispatch-context comparisons (holder vs the
- * dispatching session, worktree and branch vs the Assignment) are dsh-side.
+ * root v2 `status.json` supplies the active `workflows[]`) and confirm the
+ * session dispatches into the row's own recorded scope — `worktree_path` and
+ * `working_branch` must match the Assignment; mismatch or an unrecorded scope
+ * → STOP.
  *
  * Degrade-allow cases (no false positives): no harness dir, unresolvable plan
  * id, and non-SDD assignments whose plan row is absent or not InProgress.
- * Unverifiable lease states (unreadable/missing root status.json, a
+ * Unverifiable states (unreadable/missing root status.json, a
  * selection failure — v1/migration-required root, no active workflow — an
  * unreadable/missing snapshot, plan row not registered) are violations ONLY
  * for sdd dispatches (the lease state cannot be confirmed — the status gate
@@ -488,49 +484,41 @@ export function leaseGateViolations(
   }
   if (!sdd && row.status !== 'InProgress') return []
 
-  const verify = verifyPlanExecutionLease(row, planId)
-  const violations = [...verify.violations]
-  const lease = asRecord(verify.lease)
-  // Dispatch-context comparisons need a structurally valid lease — the shape
-  // violations (when present) already surfaced above; skip comparisons so raw
-  // fields of a broken lease never produce misleading mismatch noise.
-  if (lease !== undefined && validateExecutionLease(lease).ok) {
-    const sessionId = sessionIdOf(exec)
-    // Holder contract: `lease.holder` must be recorded as the dsh
-    // Agent.id this dispatch runs under. The mstar control-side holder
-    // convention is `<host>:<stable-session-id>` — a lease claimed under that
-    // vocabulary against a bare dsh agent id is a deliberate fail-closed
-    // mismatch (no-steal): deployments must record leases with the dsh agent
-    // id, not the control-side session id.
-    if (sessionId !== undefined && lease.holder !== sessionId) {
-      violations.push(leaseViolation(
-        'lease.dispatch.holder-mismatch',
-        `execution_lease.holder "${String(lease.holder)}" differs from this session "${sessionId}" — the active lease belongs to another agent; no-steal: STOP, do not dispatch`,
-        'dispatch only from the lease-holding session (or release/override the lease with user authorization + audit note)',
-      ))
-    }
+  const metadata = asRecord(row.metadata)
+  const rowWorktreePath = typeof metadata?.worktree_path === 'string' ? metadata.worktree_path : ''
+  const rowWorkingBranch = typeof metadata?.working_branch === 'string' ? metadata.working_branch : ''
+  const violations: ValidationResult[] = []
+  if (rowWorktreePath === '' || rowWorkingBranch === '') {
+    violations.push(leaseViolation(
+      'lease.dispatch.unverifiable',
+      `plan ${planId} records no worktree/branch metadata in ${snapshotPath} — the row's own writable scope is unverifiable; STOP before writable dispatch`,
+      'record the row scope through `mstar plan prepare --worktree-path <abs> --working-branch <name>` before writable dispatch',
+    ))
+  } else {
+    // Dispatch-context comparisons against the row's OWN recorded scope: the
+    // Assignment must dispatch into the worktree and branch the row records.
     const worktree = assignmentHeaderValue(header, 'Worktree path')
     const wt = worktree === undefined ? undefined : firstToken(worktree)
     if (isNaValue(wt)) {
       violations.push(leaseViolation(
         'lease.dispatch.worktree-mismatch',
-        'Assignment declares no Worktree path — cannot confirm this dispatch matches execution_lease.worktree_path',
-        'add the absolute Worktree path to the Assignment (must equal the lease worktree_path)',
+        'Assignment declares no Worktree path — cannot confirm this dispatch matches the row worktree',
+        'add the absolute Worktree path to the Assignment (must equal the row metadata worktree_path)',
       ))
-    } else if (resolve(wt) !== resolve(String(lease.worktree_path ?? ''))) {
+    } else if (resolve(wt) !== resolve(rowWorktreePath)) {
       violations.push(leaseViolation(
         'lease.dispatch.worktree-mismatch',
-        `Assignment Worktree path "${wt}" differs from execution_lease.worktree_path "${String(lease.worktree_path)}"`,
-        'align the Assignment with the lease worktree path (or update the lease)',
+        `Assignment Worktree path "${wt}" differs from the row worktree_path "${rowWorktreePath}"`,
+        'align the Assignment with the row worktree path (or re-prepare the row)',
       ))
     }
     const forms = parseAssignmentBranchForms(header)
     const branch = forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch
-    if (branch !== undefined && branch !== lease.working_branch) {
+    if (branch !== undefined && branch !== rowWorkingBranch) {
       violations.push(leaseViolation(
         'lease.dispatch.branch-mismatch',
-        `Assignment Working branch "${branch}" differs from execution_lease.working_branch "${String(lease.working_branch)}"`,
-        'align the Assignment with the lease working branch (or update the lease)',
+        `Assignment Working branch "${branch}" differs from the row working_branch "${rowWorkingBranch}"`,
+        'align the Assignment with the row working branch (or re-prepare the row)',
       ))
     }
   }
@@ -718,14 +706,14 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
   const read = activeSnapshotRows(harnessDir, hint)
   if (read.rows === null || read.snapshot === null) return [] // unattributable status is the lease gate's report (sdd dispatches)
   const row = read.rows.find((r) => r?.id === planId || r?.plan_id === planId)
-  const lease = asRecord(row?.execution_lease)
-  const leaseWorktreePath = typeof lease?.worktree_path === 'string' ? lease.worktree_path : undefined
-  const leaseWorkingBranch = typeof lease?.working_branch === 'string' ? lease.working_branch : undefined
+  const metadata = asRecord(row?.metadata)
+  const rowWorktreePath = typeof metadata?.worktree_path === 'string' ? metadata.worktree_path : undefined
+  const rowWorkingBranch = typeof metadata?.working_branch === 'string' ? metadata.working_branch : undefined
   if (
-    leaseWorktreePath === undefined || leaseWorktreePath.trim() === '' ||
-    leaseWorkingBranch === undefined || leaseWorkingBranch.trim() === ''
+    rowWorktreePath === undefined || rowWorktreePath.trim() === '' ||
+    rowWorkingBranch === undefined || rowWorkingBranch.trim() === ''
   ) {
-    return [] // no lease metadata to compare — nothing to verify
+    return [] // no recorded row scope to compare — nothing to verify
   }
   const snapshot = read.snapshot
   const lifecycleBranches = new Set(collectActiveLifecycleBranches([snapshot]))
@@ -746,8 +734,8 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
     mainWorktree: readMainWorktree(harnessDir),
     expectedMainBranch,
     lifecycleBranches: [...lifecycleBranches],
-    leaseWorktreePath,
-    leaseWorkingBranch,
+    rowWorktreePath,
+    rowWorkingBranch,
     planId,
   }).violations
 }
@@ -760,10 +748,9 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
  * {@link leaseGateViolations} / {@link worktreeL1Violations}, which are
  * Assignment-keyed) and REUSES the named plumbing: the
  * {@link activeSnapshotRows} read (the v3 root `plans[]` → active snapshot
- * relocation) and the engine coverage primitive `verifyPlanExecutionLease`
- * (already consumed at {@link leaseGateViolations} — the same SSOT
- * semantics: an InProgress row without a lease is an orphan; a
- * metadata-only lease is a non-SSOT fail).
+ * relocation) and the row's own `metadata.worktree_path` /
+ * `metadata.working_branch` scope — an InProgress row that records no scope
+ * is an uncovered row.
  *
  * Fail-open edges (the workflow branch never bricks fan-out): no harness dir
  * → nothing to attribute; missing status.json / no active lifecycle → no
@@ -819,7 +806,11 @@ async function writableFanOutUncovered(
     const planId = typeof row.id === 'string' && row.id !== '' ? row.id
       : typeof row.plan_id === 'string' && row.plan_id !== '' ? row.plan_id
       : 'in-progress-plan'
-    if (!verifyPlanExecutionLease(row, planId).ok) return { uncoveredPlanId: planId, unreadable: false }
+    const metadata = asRecord(row.metadata)
+    const scopeRecorded =
+      typeof metadata?.worktree_path === 'string' && metadata.worktree_path !== '' &&
+      typeof metadata?.working_branch === 'string' && metadata.working_branch !== ''
+    if (!scopeRecorded) return { uncoveredPlanId: planId, unreadable: false }
   }
   return { unreadable: false }
 }

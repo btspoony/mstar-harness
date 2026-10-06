@@ -614,29 +614,21 @@ describe("generated CLI adapter — minted identity transport", () => {
   });
 
 
-  test("sparse ACTIVE close preserves the minted plan-pm seat instead of reinterpreting it as coordinator", async () => {
-    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
-    try {
-      process.env.MSTAR_EXECUTION_IDENTITY = minted({ role: "plan-pm", planId: "plan-adapter" });
-      const result = await run(["status", "workflow-close", "--workflow", "wf-adapter", "--reason", "synthetic close"]);
-      const envelope: unknown = JSON.parse(result.stdout);
-      expect(result.status).toBe(2);
-      expect(field(envelope, "code")).toBe("command.invalid-input");
-      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
-    } finally {
-      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
-    }
+  test("a retired plan transfer verb is absent from the CLI surface", async () => {
+    const result = await run(["plan", "release", "--workflow", "wf-adapter", "--plan", "plan-foreign"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("plan.release.ok");
   });
 
-  test("sparse plan operation rejects an explicit plan selector outside the minted own plan", async () => {
+  test("a plan operation without --plan states the addressing fact it requires", async () => {
     const prior = process.env.MSTAR_EXECUTION_IDENTITY;
     try {
-      process.env.MSTAR_EXECUTION_IDENTITY = minted({ role: "plan-pm", planId: "plan-own" });
-      const result = await run(["plan", "release", "--workflow", "wf-adapter", "--plan", "plan-foreign"]);
+      process.env.MSTAR_EXECUTION_IDENTITY = minted({ workflowId: "wf-adapter" });
+      const result = await run(["plan", "progress", "--workflow", "wf-adapter", "--progress", JSON.stringify({ status: "InProgress", summary: "s", evidence_paths: [] })]);
       const envelope: unknown = JSON.parse(result.stdout);
       expect(result.status).toBe(2);
       expect(field(envelope, "code")).toBe("command.invalid-input");
-      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
+      expect(String(field(envelope, "message"))).toContain("--plan");
     } finally {
       if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
     }

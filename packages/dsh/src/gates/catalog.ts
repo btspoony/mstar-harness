@@ -712,14 +712,13 @@ function harnessStateSource(
           // → [] (an ALWAYS-present array — lossless JSON, never omitted).
           iterationRefs: iterationRefsOf(metadata?.iteration_refs),
         })
-        // v3 lease home: per-row `execution_lease` on the snapshot plan row
-        // (the v1 root-metadata home is gone).
-        const lease = asRecord(row.execution_lease)
-        if (lease !== undefined && typeof lease.holder === 'string') {
+        // Row scope: the plan row's own recorded worktree/branch metadata.
+        const metadataForScope = asRecord(row.metadata)
+        if (typeof metadataForScope?.worktree_path === 'string') {
           leases.push({
             planId: id,
-            holder: lease.holder,
-            worktreePath: str(lease.worktree_path),
+            holder: str(metadataForScope.working_branch),
+            worktreePath: str(metadataForScope.worktree_path),
           })
         }
       }

@@ -88,8 +88,7 @@ const V2_BIND_PAYLOAD = {
       storeId: "store-a",
       sessionId: "sess-a",
       workflowId: "wf-2",
-      role: "plan-pm",
-      planId: "plan-1",
+      role: "coordinator",
       epoch: 3,
     },
   },
@@ -107,7 +106,6 @@ const FOREIGN_V2_BIND_PAYLOAD = {
       sessionId: "sess-other",
       workflowId: "wf-9",
       role: "coordinator",
-      planId: null,
       epoch: 987654321,
     },
   },
@@ -299,11 +297,10 @@ test("a v2 bind decodes under generation 2 with its declared binding shape and a
     storeId: "store-a",
     epoch: 3,
     sessionId: "sess-a",
-    role: "plan-pm",
-    planId: "plan-1",
+    role: "coordinator",
   });
   // Exactly the declared shape: no credential, token, path or session-file field.
-  expect(Object.keys(view.executionBinding!).sort()).toEqual(["epoch", "harnessRoot", "planId", "role", "sessionId", "storeId"]);
+  expect(Object.keys(view.executionBinding!).sort()).toEqual(["epoch", "harnessRoot", "role", "sessionId", "storeId"]);
   // A v2 record names no envelope path, so its view carries no provenance.
   expect(view.provenance).toEqual([]);
 
@@ -318,7 +315,6 @@ test("a v2 bind decodes under generation 2 with its declared binding shape and a
     epoch: 987654321,
     sessionId: "sess-other",
     role: "coordinator",
-    planId: null,
   });
 });
 
@@ -333,21 +329,19 @@ test("a v2 bind with a malformed executionBinding is refused and its payload kep
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, version: 2 } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, harnessRoot: "" } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: "sess-a" } },
-    // Empty identity fields, an unknown role, a non-null plan id on a coordinator
-    // and a non-positive or fractional epoch.
+    // Empty identity fields, an unknown or non-coordinator role and a
+    // non-positive or fractional epoch.
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, storeId: "" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, sessionId: "" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, workflowId: "" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "dev" } } },
-    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, planId: 3 } } },
-    // The engine's cross-field pairing (`assertRefShape`): a coordinator never
-    // carries a plan id, and a plan-pm always carries a non-empty one. A payload
-    // whose declared pairing the engine could never accept is not a verified
-    // binding — it is retained as history like every other malformed shape.
+    // The engine's own reference shape admits the workflow's coordinator seat
+    // and no per-plan scope: a payload naming the removed plan-pm seat, or one
+    // still carrying a plan id, is not a verified binding — it is retained as
+    // history like every other malformed shape.
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: "plan-1" } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "coordinator", planId: "plan-1" } } },
-    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "coordinator", planId: "" } } },
-    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: null } } },
-    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, role: "plan-pm", planId: "" } } },
+    { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, planId: 3 } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: 0 } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: -3 } } },
     { ...V2_BIND_PAYLOAD, executionBinding: { ...good, session: { ...good.session, epoch: 1.5 } } },
