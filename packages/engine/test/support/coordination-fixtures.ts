@@ -96,7 +96,7 @@ export function planRow(id: string, projectId: string | undefined, workingBranch
     id,
     plan_id: id,
     title: `Plan ${id}`,
-    file: `.mstar/plans/${id}.md`,
+    file: `plans/${id}.md`,
     status: "Todo",
     ...(Object.keys(metadata).length === 0 ? {} : { metadata }),
   };

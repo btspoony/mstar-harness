@@ -277,7 +277,6 @@ async function workflowFixture(
   const [workflow] = created.data.workflows;
   const coordinator = await bindExecutionSession(domainContext(context, coordinatorCaller), {
     workflowId: WORKFLOW_ID,
-    role: "coordinator",
     expected: workflow.workflowToken,
     operationId: `bind-coordinator-${label}`,
   });
@@ -1659,7 +1658,10 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
         attestation: attestation([COORDINATOR_ID]),
       },
     ));
-    expect(foreignRefusal.code).toBe("coordination.duplicate-holder");
+    expect(foreignRefusal.code).toBe("coordination.invalid-transition");
+    expect(foreignRefusal.details).toMatchObject({
+      workflow_id: WORKFLOW_ID, holder: "host-live-elsewhere", named: COORDINATOR_ID,
+    });
     expect(workflowFootprint(foreign.context)).toEqual(foreignBefore);
     expect(storedMergeClaim(foreign.context)).toMatchObject({ holder: "host-live-elsewhere", status: "held" });
 
@@ -1689,7 +1691,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     const before = await workflowFootprint(fixture.context);
     // An attestation that names the REPLACEMENT as stopped: the recovery must
     // refuse before binding, leaving every session/claim/business fact intact.
-    const stoppedReplacement = await refusalOf(() =>
+    const stoppedReplacement = await refusalOf(async () =>
       recoverExecutionCoordinator(domainContext(fixture.context, trustedCaller(RECOVERY_ID, "coordinator")), {
         expected: await liveWorkflowToken(fixture),
         operationId: "op-recover-stopped-replacement",
@@ -1938,7 +1940,10 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
         attestation: { ...attestation([COORDINATOR_ID]), attestedAt: "2026-01-02T05:00:00.000Z" },
       },
     ));
-    expect(refused.code).toBe("coordination.duplicate-holder");
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details).toMatchObject({
+      workflow_id: WORKFLOW_ID, holder: RECOVERY_ID, named: COORDINATOR_ID,
+    });
     expect(workflowFootprint(fixture.context)).toEqual(before);
   });
 
@@ -1963,7 +1968,10 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       priorSessionId: COORDINATOR_ID, reason: "renew against old history",
       attestation: { ...attestation([COORDINATOR_ID]), attestedAt: "2026-01-02T05:00:00.000Z" },
     }));
-    expect(refused.code).toBe("coordination.duplicate-holder");
+    expect(refused.code).toBe("coordination.invalid-transition");
+    expect(refused.details).toMatchObject({
+      workflow_id: WORKFLOW_ID, holder: RECOVERY_ID, named: COORDINATOR_ID,
+    });
     expect(workflowFootprint(fixture.context)).toEqual(before);
   });
 
@@ -1991,7 +1999,7 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
       } as WorkflowSnapshot,
     });
     await bindExecutionSession(domainContext(fixture.context, otherCaller), {
-      workflowId: otherId, role: "coordinator", operationId: "op-bind-other",
+      workflowId: otherId, operationId: "op-bind-other",
       expected: other.data.workflows.find((workflow) => workflow.state.id === otherId)!.workflowToken,
     });
     withRaw(fixture.context, (db) => {

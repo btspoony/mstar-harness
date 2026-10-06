@@ -1174,7 +1174,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
     }
   });
 
-  test("configured nested harness: nested real linked worktree passes; plain subdir row metadata is refused", () => {
+  test("configured nested harness: an active row cannot authorize a plain control-checkout subdirectory", () => {
     const root = tmpRoot("sdd-ctx-nested-harness-row-");
     try {
       const f = executionFixture(root, { nested: true, nestedHarness: true });
@@ -1190,9 +1190,11 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       writeSnapshot(f, "wf-1", [
         { id: PLAN_ID, status: "InProgress", metadata: rowMetadata(f, { worktree_path: subdir, working_branch: controlBranch }) },
       ]);
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
+      const err = errOf(() => resolveSddExecutionContext({
+        ...contextOf(f), featureCwd: subdir, workingBranch: controlBranch,
+      }));
       expect(err.exitCode).toBe(1);
-      expect(err.message).toContain("worktree.l1.feature-equals-main");
+      expect(errCodes(err)).toContain("sdd.context.feature-in-control");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -150,7 +150,6 @@ async function notesFixture(label: string): Promise<Fixture> {
   const workflow = created.data.workflows[0]!;
   const bound = await bindExecutionSession(callerContext(harnessDir, caller), {
     workflowId: WF,
-    role: "coordinator",
     expected: workflow.workflowToken,
     operationId: `bind-${label}`,
   });

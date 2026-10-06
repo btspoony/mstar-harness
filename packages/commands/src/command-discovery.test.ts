@@ -341,6 +341,7 @@ test("workflow.recover-coordinator is FILE-only and returns usage with the suppo
       },
     });
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error("expected the ACTIVE recovery usage refusal");
     expect(String(envelope.message)).toContain("mstar session recover");
     for (const flag of ["--workflow", "--prior-session", "--unowned", "--reason", "--attestation", "--expect", "--operation"]) {
       expect(String(envelope.message)).toContain(flag);

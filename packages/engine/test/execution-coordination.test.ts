@@ -656,7 +656,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     expect(planTokens[OWN_PLAN]).toBeDefined();
   });
 
-  test("prepare refuses outsiders on unsealed and sealed rows without recording an action", async () => {
+  test("prepare refuses a caller of another workflow without recording an action", async () => {
     const fixture = await seededWorkflow("prepare-outsiders");
     const { context, coordinatorCaller } = fixture;
     const before = footprint(context);
@@ -665,6 +665,7 @@ describe("execution-prepare-progress: §3/§4.1 DB prepare and progress", () => 
     await expect(
       prepareExecutionPlan(domainContext(context, { ...coordinatorCaller, workflowId: "wf-other" }), {
         operationId: "outsider",
+        session: fixture.coordinator,
         expected: fixture.planTokens[OWN_PLAN],
         planId: OWN_PLAN,
         operation: { kind: "prepare" },
