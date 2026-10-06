@@ -226,7 +226,6 @@ const DEFAULT_AUTHORITY_DEPS: CoordinatorAuthorityDeps = {
   bind: (input) =>
     bindExecutionSession(executionContextFor({ harnessDir: input.harnessDir }, input.identity), {
       workflowId: input.workflowId,
-      planId: null,
       role: "coordinator",
       expected: input.expected,
       operationId: input.operationId,
@@ -266,7 +265,6 @@ export function executionBindingOf(harnessRoot: string, session: ExecutionSessio
       workflowId: session.workflowId,
       role: session.role,
       sessionId: session.sessionId,
-      planId: session.planId,
     },
   };
 }
@@ -295,7 +293,7 @@ function refuse(code: string, text: string, details: Record<string, unknown> = {
 
 /** The §3.1 host identity of one coordinator call: provenance, scope, native id. */
 function coordinatorIdentityOf(sessionId: string, workflowId: string): ExecutionIdentity {
-  return { source: "host", sessionId, workflowId, role: "coordinator", planId: null };
+  return { source: "host", sessionId, workflowId, role: "coordinator" };
 }
 
 /** The §5 route of one control root, or the root's own refusal (never masked). */
@@ -439,7 +437,7 @@ export async function bindCoordinatorIdentity(
     }
     const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
     try {
-      validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
+      validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
     } catch (error) {
       return refuse(codeOf(error), messageOf(error), { workflowId });
     }
@@ -492,7 +490,7 @@ export async function bindCoordinatorIdentity(
   // `harnessDir` the engine resolves and compares) — never an identity member.
   const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
   try {
-    validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
+    validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
     return refuse(codeOf(error), messageOf(error), { workflowId });
   }
@@ -850,10 +848,9 @@ export async function recoverCoordinatorIdentity(
     sessionId: facts.sessionId,
     workflowId: context.workflowId,
     role: "coordinator",
-    planId: null,
   };
   try {
-    validateExecutionIdentity(identity, { workflowId: context.workflowId, role: "coordinator", planId: null });
+    validateExecutionIdentity(identity, { workflowId: context.workflowId, role: "coordinator" });
   } catch (error) {
     return refuse(codeOf(error), messageOf(error), { workflowId: context.workflowId });
   }
@@ -987,7 +984,7 @@ async function recoverActiveCoordinator(
 
   const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
   try {
-    validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
+    validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
     return refuse(codeOf(error), messageOf(error), { workflowId });
   }

@@ -459,9 +459,9 @@ export function resolveCliSessionIdentity(
 
 /**
  * The routes whose active-token caller seat is the workflow's coordinator,
- * independent of any session reference. Each family below constructs exactly
- * `{workflowId, role: "coordinator", planId: null}` from the trusted caller, so a
- * minted identity addressing that workflow in any other seat is refused here.
+ * independent of any session reference. Each family constructs exactly
+ * `{workflowId, role: "coordinator"}` from the trusted caller, so a minted
+ * identity addressing that workflow in any other seat is refused here.
  * Every other active route either carries its whole scope in a session reference
  * or states its seat in the bind selectors; this set is the command-aware fact
  * the sparse routes can consume instead of treating token-only calls as
