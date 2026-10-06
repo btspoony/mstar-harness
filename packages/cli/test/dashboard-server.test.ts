@@ -14,7 +14,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { importRoadmapAuthority, initializeStore, listIssues, openStore, registerCatalogEntity, reviewRoadmapImport, type StoreContext, type StoreDb } from "@mstar-harness/engine";
+import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeExecutionAuthority, initializeStore, listIssues, openStore, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
@@ -30,7 +30,7 @@ afterAll(() => {
 async function workspace(name: string): Promise<{ dir: string; context: StoreContext }> {
   const dir = mkdtempSync(join(ROOT, name));
   mkdirSync(join(dir, ".mstar"), { recursive: true });
-  const context: StoreContext = { harnessDir: dir };
+  const context: StoreContext = { harnessDir: join(dir, ".mstar") };
   const handle = await initializeStore(context);
   handle.close();
   // Normalize the WAL side files (same reason as `withWrite`): a read-only open
@@ -55,40 +55,34 @@ async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Prom
   probe.close();
 }
 
-function seedIssue(db: StoreDb, id: string, title: string, severity: string, registeredAt: string | null, disposition = "open"): void {
-  db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, registered_at, created_at, updated_at, revision, identity_key) " +
-      "values (?, 'proj-a', ?, 'bug', ?, ?, 'impact', 'acceptance', ?, ?, ?, 1, ?)",
-  ).run(id, title, severity, disposition, registeredAt, RECORDED_AT, RECORDED_AT, `identity-${id}`);
+async function seedIssue(context: StoreContext, title: string, severity: CaptureInput["severity"], resolved = false): Promise<void> {
+  const captured = await captureIssue(context, {
+    projectId: "proj-a", title, severity, kind: "bug",
+    impact: "Dashboard consumer observes this issue", acceptance: "Dashboard returns its stored disposition",
+    sourceIdentity: title, rootCauseKey: title, acceptanceKey: title, occurrenceKey: title,
+    sourceKind: "test", location: "dashboard-server.test.ts", observedBehavior: title,
+    evidence: ["isolated fixture"], discoveredAt: RECORDED_AT,
+  }, { actor: "project-manager", operationId: `capture-${title}` });
+  if (resolved) {
+    await closeIssue(context, captured.issueId, "resolved", {
+      reason: "Fixture acceptance met", references: ["fixture"], alignmentRef: "QA gate: Approve — fixture",
+    }, { actor: "project-manager", operationId: `close-${title}`, expectedRevision: captured.revision });
+  }
 }
 
-/**
- * A minimal valid harness: one declared workflow whose snapshot is the only
- * projected row this store can publish. A workspace without these sources
- * cannot publish a projection generation at all.
- */
-function declareWorkflow(dir: string, id: string): void {
-  mkdirSync(join(dir, ".mstar", "workflows", id), { recursive: true });
-  writeFileSync(
-    join(dir, ".mstar", "status.json"),
-    JSON.stringify({
-      version: 2,
-      updated_at: "2026-09-18",
-      workflows: [{ id, type: "plan", started_at: RECORDED_AT, dir: `workflows/${id}` }],
-    }),
-  );
-  writeFileSync(
-    join(dir, ".mstar", "workflows", id, "snapshot.json"),
-    JSON.stringify({
-      schema_version: 1,
-      id,
-      type: "plan",
-      status: "running",
-      started_at: RECORDED_AT,
-      updated_at: RECORDED_AT,
-      plans: [],
-    }),
-  );
+/** A real active workflow, created through the public execution boundary. */
+async function declareWorkflow(context: StoreContext, id: string): Promise<void> {
+  const initial = await initializeExecutionAuthority(context);
+  await createExecutionWorkflow({
+    ...context, caller: { role: "coordinator", sessionId: "dashboard-fixture", workflowId: id },
+  }, {
+    expected: initial.token, operationId: "create-dashboard-workflow",
+    entry: { id, type: "plan", started_at: RECORDED_AT, dir: `workflows/${id}` },
+    snapshot: {
+      schema_version: 1, id, type: "plan", status: "running",
+      started_at: RECORDED_AT, updated_at: RECORDED_AT, plans: [],
+    },
+  });
 }
 
 /**
@@ -116,7 +110,7 @@ async function start(
   dir: string,
   options: { port?: number; project?: string } = {},
 ): Promise<RunningDashboard> {
-  return startDashboard({ harnessDir: dir, port: options.port, projectId: options.project });
+  return startDashboard({ harnessDir: join(dir, ".mstar"), port: options.port, projectId: options.project });
 }
 
 describe("static shell and inlined assets", () => {
@@ -168,14 +162,9 @@ describe("API over a real store", () => {
   let context: StoreContext;
   beforeAll(async () => {
     ({ dir, context } = await workspace("api-"));
-    await withWrite(context, (db) => {
-      seedIssue(db, "I-000001", "critical open", "critical", "2026-09-01");
-      seedIssue(db, "I-000002", "medium open", "medium", "2026-09-02");
-      seedIssue(db, "I-000003", "resolved", "high", "2026-09-03");
-    });
-    await withWrite(context, (db) => {
-      db.prepare("update issues set disposition = 'resolved', closed_at = ? where id = 'I-000003'").run(RECORDED_AT);
-    });
+    await seedIssue(context, "critical open", "critical");
+    await seedIssue(context, "medium open", "medium");
+    await seedIssue(context, "resolved", "high", true);
     server = await start(dir);
   });
   afterAll(() => server.close());
@@ -237,7 +226,7 @@ describe("API over a real store", () => {
     // missing, a GET reaches the store (503) while HEAD never does (405).
     const dir = mkdtempSync(join(ROOT, "no-store-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const noStore = await startDashboard({ harnessDir: dir });
+    const noStore = await startDashboard({ harnessDir: join(dir, ".mstar") });
     try {
       const get = await raw(new URL("/api/issues", noStore.url).href);
       expect(get.status).toBe(503);
@@ -375,8 +364,8 @@ describe("workflow detail and the projection generation", () => {
   });
 
   test("with a published generation an unknown id is still a structured 404", async () => {
-    const { dir } = await workspace("workflow-published-");
-    declareWorkflow(dir, "wf-demo");
+    const { dir, context } = await workspace("workflow-published-");
+    await declareWorkflow(context, "wf-demo");
     const server = await start(dir);
     try {
       const found = await raw(new URL("/api/workflows/wf-demo", server.url).href);
@@ -416,7 +405,7 @@ describe("boundary and lifecycle", () => {
   test("a missing store refuses reads with store.not-initialized", async () => {
     const dir = mkdtempSync(join(ROOT, "missing-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const server = await startDashboard({ harnessDir: dir });
+    const server = await startDashboard({ harnessDir: join(dir, ".mstar") });
     try {
       const res = await raw(new URL("/api/issues", server.url).href);
       expect(res.status).toBe(503);
@@ -428,7 +417,7 @@ describe("boundary and lifecycle", () => {
 
   test("an unknown project fails before the server starts", async () => {
     const { dir } = await workspace("project-");
-    await expect(startDashboard({ harnessDir: dir, projectId: "no-such-project" })).rejects.toThrow(/Unknown project/);
+    await expect(startDashboard({ harnessDir: join(dir, ".mstar"), projectId: "no-such-project" })).rejects.toThrow(/Unknown project/);
   });
 
   test("without --project the served URL carries no selector", async () => {
@@ -442,15 +431,12 @@ describe("boundary and lifecycle", () => {
   });
 
   test("a known project starts, seeds the served URL and scopes the issue list", async () => {
-    const { dir, context } = await workspace("scoped-");
-    await withWrite(context, (db) => {
-      db.prepare(
-        "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) " +
-          "values ('project', 'proj-a', 'Project A', 'repository', 'proj-a', ?, ?)",
-      ).run(RECORDED_AT, RECORDED_AT);
-      seedIssue(db, "I-000001", "scoped", "high", "2026-09-01");
-    });
-    const server = await startDashboard({ harnessDir: dir, projectId: "proj-a" });
+    const { context } = await workspace("scoped-");
+    await registerCatalogEntity(context, {
+      kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a",
+    }, { actor: "project-manager", operationId: "register-scoped-project" });
+    await seedIssue(context, "scoped", "high");
+    const server = await startDashboard({ harnessDir: context.harnessDir, projectId: "proj-a" });
     try {
       // The selector travels in the served URL: the shell parses
       // `location.search` as its initial Issues filter, and `--open` opens
@@ -469,10 +455,10 @@ describe("boundary and lifecycle", () => {
 
   test("a port conflict refuses with an actionable message and leaves the other server running", async () => {
     const { dir } = await workspace("conflict-");
-    const first = await startDashboard({ harnessDir: dir, port: 0 });
+    const first = await startDashboard({ harnessDir: join(dir, ".mstar"), port: 0 });
     try {
       const usedPort = new URL(first.url).port;
-      await expect(startDashboard({ harnessDir: dir, port: Number(usedPort) })).rejects.toThrow(/already in use/);
+      await expect(startDashboard({ harnessDir: join(dir, ".mstar"), port: Number(usedPort) })).rejects.toThrow(/already in use/);
       const stillUp = await raw(new URL("/api/issues", first.url).href);
       expect(stillUp.status).toBe(200); // the empty store answers: the socket is alive
       expect((JSON.parse(stillUp.body) as { data: { total: number } }).data.total).toBe(0);
@@ -483,7 +469,7 @@ describe("boundary and lifecycle", () => {
 
   test("close() is idempotent and the socket stops accepting", async () => {
     const { dir } = await workspace("close-");
-    const server = await startDashboard({ harnessDir: dir });
+    const server = await startDashboard({ harnessDir: join(dir, ".mstar") });
     const url = server.url;
     await server.close();
     await expect(server.close()).resolves.toBeUndefined();
@@ -515,9 +501,7 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
 
       // A real workspace for the CLI process to serve.
       const { dir, context } = await workspace("artifact-");
-      await withWrite(context, (db) => {
-        seedIssue(db, "I-000001", "artifact", "high", "2026-09-01");
-      });
+      await seedIssue(context, "artifact", "high");
 
       const child = spawn("bun", [packaged, "dashboard", "--port", "0"], {
         cwd: dir,
