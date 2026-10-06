@@ -81,7 +81,7 @@ const inputSchema = z.object({
   integrationResultSha: z.string().min(1).optional(),
   expectIssue: z.number().int().nonnegative().optional(),
 });
-const bindInputSchema = inputSchema.omit({ plan: true }).extend({ sessionId: z.string().min(1).optional() }).strict();
+const bindInputSchema = inputSchema.omit({ plan: true }).passthrough();
 type PlanInput = z.infer<typeof inputSchema>;
 
 const optionKeys = Object.keys(inputSchema.shape);
@@ -198,6 +198,9 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "pre-activation and active transports are disjoint" });
     }
     if (id === "plan.bind") {
+      if (input.plan !== undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
+      }
       const cwd = context.cwd;
       if (input.resumeRef !== undefined) {
         if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active resume requires runtime session identity (${IDENTITY_SUPPLIES}).` });
@@ -221,9 +224,6 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
         }
         if (input.coordinator !== true) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires --coordinator; the coordinator seat is the only active bind" });
-        }
-        if (input.plan !== undefined) {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
         }
         if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires a full execution token" });
         const acquired = context.executionIdentity;
