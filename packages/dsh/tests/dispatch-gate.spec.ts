@@ -18,12 +18,13 @@
  * codes per case (acceptance: parity with the opencode validated field set).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { assignmentHeaderRegion } from '@mstar-harness/engine'
-import { bootApp, seedHarness, v2Root, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedFileWorkflow, seedHarness, type BootResult } from './harness.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { planIdOf, preExecuteListener } from '../src/gates/dispatch.ts'
@@ -740,105 +741,124 @@ describe('dispatch gate — Assignment header values written as markdown code sp
 })
 
 /* ===========================================================================
- * D4 — session-bound lease attribution (two concurrent actives)
+ * D4 — session-bound row-scope attribution (two concurrent actives)
  * ========================================================================== */
 
 const LEASE_PLAN_ID = '00000810-lease-attribution'
-const LEASE_WORKTREE = '/srv/worktrees/lease-attribution'
-const LEASE_BRANCH = 'feature/lease-attribution'
-const LEASE_HOLDER = 'omp:iter-someone-else'
+const ROW_BRANCH = 'feature/lease-attribution'
+/** A DIFFERENT branch an Assignment may declare — the re-verify comparison basis. */
+const OTHER_BRANCH = 'feature/somewhere-else'
 
-/** Fully valid SDD writable Assignment matching the seeded lease exactly. */
-const SDD_LEASED = `## Assignment
+/** Fully valid SDD writable Assignment dispatching into the given checkout. */
+function sddAssignment(worktreePath: string, branch: string): string {
+  return `## Assignment
 
 **Execute as**: fullstack-dev
 **Delegation**: forbidden
 **Task category**: logic
 **Execution mode**: sdd
-**Working branch**: ${LEASE_BRANCH}
-**Worktree path**: ${LEASE_WORKTREE}
+**Working branch**: ${branch}
+**Worktree path**: ${worktreePath}
 **Plan Path**: /proj/plans/${LEASE_PLAN_ID}.md
+**Task budget (implement / ops rounds)**: S — one focused implementer round
 
 Do the thing, evidence-first.
 `
-
-/** The InProgress plan row + its execution_lease (held by ANOTHER agent). */
-const LEASED_PLAN: Record<string, unknown> = {
-  id: LEASE_PLAN_ID,
-  title: 'leased plan',
-  status: 'InProgress',
-  execution_lease: {
-    holder: LEASE_HOLDER,
-    claimed_at: '2026-08-08',
-    worktree_path: LEASE_WORKTREE,
-    working_branch: LEASE_BRANCH,
-  },
 }
 
 /** An agent carrying the durable session identity the binding store is keyed by. */
 const sessionAgent = (sessionId: string, cwd: string): unknown =>
   ({ id: sessionId, session: { header: { id: sessionId, cwd } } })
 
-describe('dispatch gate — D4 session-bound lease attribution (explicit selection never bypasses the no-steal check)', () => {
-  /** Seed two actives: `wf-a` holds the leased plan row, `wf-b` holds none. */
-  async function seedTwoActives(harnessDir: string): Promise<void> {
-    await seedHarness(harnessDir, {
-      'status.json': v2Root([v2WorkflowEntry('wf-a'), v2WorkflowEntry('wf-b')]),
-      'workflows/wf-a/snapshot.json': v2SnapshotWithPlans('wf-a', [LEASED_PLAN]),
-      'workflows/wf-b/snapshot.json': v2SnapshotWithPlans('wf-b', []),
+describe('dispatch gate — D4 session-bound row-scope attribution (explicit selection never bypasses the re-verify)', () => {
+  /**
+   * Seed two actives through the public producers: `wf-a` records the plan row
+   * and its source scope, `wf-b` records none. The scope-bearing row needs a
+   * real checkout, not an absolute-looking placeholder, so the fixture builds
+   * the L1 topology the same dispatch proves: the app root is a git repo on
+   * `main`, plus a dedicated integration checkout and the plan's feature
+   * worktree. Returns the feature path the row records.
+   */
+  async function seedTwoActives(app: BootResult): Promise<string> {
+    const root = app.root
+    execFileSync('git', ['init', '-q', '-b', 'main', root])
+    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'])
+    const integrationPath = join(root, 'integration-checkout')
+    const featurePath = join(root, 'feature-checkout')
+    execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
+    execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', ROW_BRANCH, featurePath])
+    await seedFileWorkflow(app.harnessDir, 'wf-a', [{
+      id: LEASE_PLAN_ID,
+      title: 'scoped plan',
+      file: `plans/${LEASE_PLAN_ID}.md`,
+      status: 'InProgress',
+      metadata: { worktree_path: featurePath, working_branch: ROW_BRANCH },
+    }], {
+      type: 'iteration',
+      branch: { base: 'main', integration: 'integration/fixture' },
+      integration_worktree_path: integrationPath,
     })
+    await seedFileWorkflow(app.harnessDir, 'wf-b')
+    return featurePath
   }
 
   it('the session pick selects WHICH snapshot is re-verified — an id that does not hold the plan row reports plan-not-found', async () => {
-    const app = booted = await bootApp()
-    await seedTwoActives(app.harnessDir)
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const feature = await seedTwoActives(app)
     expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-b' }).kind).toBe('written')
     const advisories = captureAdvisories(app.ctx)
 
-    // `sess-x` holds no lease (its id is not the lease holder and its cwd is
-    // not the lease worktree), so the durable pick is the ONLY binding
-    // evidence — and it names the lifecycle WITHOUT the plan row.
+    // `sess-x` records no scope of its own inside either lifecycle, so the
+    // durable pick is the ONLY binding evidence — and it names the lifecycle
+    // WITHOUT the plan row.
     const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      subagentExec(SDD_LEASED, sessionAgent('sess-x', app.root)),
-      defaultAllow,
-    )
-
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(violationCodes(advisories[0])).toContain('lease.dispatch.plan-not-found')
-    expect(violationCodes(advisories[0])).not.toContain('lease.dispatch.holder-mismatch')
-  })
-
-  it('the bound lease is still no-steal checked — an explicit pick never bypasses holder-mismatch', async () => {
-    const app = booted = await bootApp()
-    await seedTwoActives(app.harnessDir)
-    expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
-    const advisories = captureAdvisories(app.ctx)
-
-    const decision = await app.ctx.waterfall(
-      'tools/pre-execute',
-      subagentExec(SDD_LEASED, sessionAgent('sess-x', app.root)),
+      subagentExec(sddAssignment(feature, ROW_BRANCH), sessionAgent('sess-x', app.root)),
       defaultAllow,
     )
 
     expect(decision).toEqual({ kind: 'allow' })
     const codes = violationCodes(advisories[0])
-    expect(codes).toContain('lease.dispatch.holder-mismatch')
-    expect(codes).not.toContain('lease.dispatch.plan-not-found')
+    expect(codes).toContain('lease.dispatch.plan-not-found')
+    expect(codes).not.toContain('lease.dispatch.worktree-mismatch')
+  })
 
-    // The SAME session shape with the holder id passes the no-steal check —
-    // the pick resolves the plan row and the lease verifies clean (worktree
-    // and branch match the Assignment).
-    const matching = await app.ctx.waterfall(
+  it('the bound row scope is still re-verified — an explicit pick never bypasses the scope mismatch', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    await seedTwoActives(app)
+    expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
       'tools/pre-execute',
-      subagentExec(SDD_LEASED, sessionAgent(LEASE_HOLDER, app.root)),
+      subagentExec(sddAssignment(join(app.root, 'elsewhere-checkout'), OTHER_BRANCH), sessionAgent('sess-x', app.root)),
       defaultAllow,
     )
-    expect(matching).toEqual({ kind: 'allow' })
-    const lastCodes = violationCodes(advisories.at(-1))
-    expect(lastCodes).not.toContain('lease.dispatch.holder-mismatch')
-    expect(lastCodes).not.toContain('lease.dispatch.plan-not-found')
-    expect(lastCodes).not.toContain('lease.dispatch.unverifiable')
+
+    expect(decision).toEqual({ kind: 'allow' })
+    const codes = violationCodes(advisories[0])
+    expect(codes).toContain('lease.dispatch.worktree-mismatch')
+    expect(codes).toContain('lease.dispatch.branch-mismatch')
+    expect(codes).not.toContain('lease.dispatch.plan-not-found')
+    expect(codes).not.toContain('lease.dispatch.unverifiable')
+  })
+
+  it('an Assignment dispatching into the row’s OWN recorded scope verifies clean (the positive control)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+    const feature = await seedTwoActives(app)
+    expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+    const advisories = captureAdvisories(app.ctx)
+
+    // The same pick resolves the plan row, and its recorded worktree/branch
+    // match the Assignment — nothing to report.
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(sddAssignment(feature, ROW_BRANCH), sessionAgent('sess-x', app.root)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
   })
 })
 

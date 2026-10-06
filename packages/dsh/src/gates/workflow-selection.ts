@@ -265,13 +265,13 @@ function soleEntry(matches: Map<string, ActiveEntry>): ActiveEntry | undefined {
 }
 
 /**
- * The two automatic rungs (lease → cwd), each requiring EXACTLY ONE distinct
- * workflow: `undefined` means the rung did not decide (zero or several
- * matches, an omitted hint field, or no automatic evidence) and the caller
- * proceeds to explicit/unique. The two candidate sets are collected
- * independently in ONE pass: an entry that matched the lease rung is still
- * evaluated for the cwd rung, so an ambiguous lease rung (two holders, or a
- * holder plus a lease-worktree match) can still be decided by a unique
+ * The two automatic rungs (row scope → cwd), each requiring EXACTLY ONE
+ * distinct workflow: `undefined` means the rung did not decide (zero or
+ * several matches, an omitted hint field, or no automatic evidence) and the
+ * caller proceeds to explicit/unique. The two candidate sets are collected
+ * independently in ONE pass: an entry that matched the row-scope rung is still
+ * evaluated for the cwd rung, so an ambiguous row-scope rung (two recorded
+ * scopes containing the cwd) can still be decided by a unique
  * `integration_worktree_path`. Each entry's snapshot is read at most once per
  * call, and only when a hint field could actually use it.
  */

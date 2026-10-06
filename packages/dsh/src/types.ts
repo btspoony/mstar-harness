@@ -247,8 +247,8 @@ export interface MstarHarnessProject {
 /**
  * The catalog's workflow selection result (compass v3.0.0 § Catalog
  * selection rule): the lifecycle the state section aggregates, resolved by
- * the locked binding order — lease (an `execution_lease` holder match or a
- * `worktree_path` containing the session cwd) → cwd (a
+ * the locked binding order — row scope (a plan row's `metadata.worktree_path`
+ * containing the session cwd) → cwd (a
  * `control_worktree_path` containing it) → the session's durable
  * `selectedWorkflowId` → the only active entry. `terminal` = the latest
  * terminal snapshot by mtime (history view; reachable only when the active

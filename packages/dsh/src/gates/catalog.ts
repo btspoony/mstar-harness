@@ -332,8 +332,8 @@ export function createCatalogInvalidation(
 /**
  * The cache key of ONE session's catalog payload (D4): the resolved harness
  * dir + the durable `session.header.id` + the session cwd + the EFFECTIVE
- * hint fields that can change the selection (the opaque lease holder and the
- * durable pick — cwd and session id are already in the tuple). Two sessions in
+ * hint fields that can change the selection (the durable pick — cwd and
+ * session id are already in the tuple). Two sessions in
  * the same cwd therefore never share a payload, and a picker commit is a
  * different key rather than a mutated entry.
  *
@@ -1287,10 +1287,10 @@ export async function preStepCatalogListener(
 
 /**
  * The carrying session's catalog selection hint: the structural identity off
- * the agent (cwd + `header.id` + its opaque agent id as the lease holder)
- * folded with the DURABLE pick when the binding record is readable. An
+ * the agent (cwd + `header.id`) folded with the DURABLE pick when the binding
+ * record is readable. An
  * unreadable record keeps the structural hint only — the pick is unknown,
- * never invented, so the resolver falls back to lease/cwd/unique evidence (or
+ * never invented, so the resolver falls back to row-scope/cwd/unique evidence (or
  * reports the picker error) instead of this reader guessing. The catalog is a
  * read path: it renders the honest degrade rather than refusing to render.
  * @param harnessDir - the resolved `{HARNESS_DIR}` for the session workspace.
