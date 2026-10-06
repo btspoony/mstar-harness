@@ -781,7 +781,7 @@
         "mstar-iteration Phase 2 context",
         "main-worktree control root and separate recorded integration checkout established; branch anchors and integration_worktree_path read through the public workflow view (snapshot only pre-activation)",
         "recorded source metadata and actual checkout verified before dispatch, no per-row claim",
-        "integration_merge_lease serial merge after QC/QA before Done (pre-activation: snapshot field; ACTIVE: store-backed workflow state)",
+        "integration_merge_lease serial merge after QC/QA before Done (pre-activation: snapshot field; ACTIVE: store-backed workflow state)"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
