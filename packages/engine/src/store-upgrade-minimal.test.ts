@@ -1,12 +1,18 @@
 import { afterAll, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, MIGRATIONS, openStore, storeDbPath, type StoreContext } from "./store-db.js";
+import { DatabaseSync } from "node:sqlite";
+import { initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
 import { upgradeStoreMinimal } from "./execution-minimal-import.js";
-import { readExecutionState } from "./execution-store.js";
-import { ACTIVATION_PROTOCOL_VERSION } from "./store-activation.js";
+import { bindExecutionSession, executionToken, readExecutionPlan, readExecutionState } from "./execution-store.js";
+import { ACTIVATION_PROTOCOL_VERSION, backupStore, type ActivationAttestation } from "./store-activation.js";
+import { createLocalExecutionIdentity, executionContextFor, resumeExecutionSession } from "./execution-session.js";
+import { mutateExecutionPlan } from "./execution-coordination.js";
+import { executionInputHash, executionInputSelection } from "./coordination.js";
+import { previewExecutionRestore, restoreExecutionBackup } from "./execution-recovery.js";
 import { listPendingCatalogRegistrations, reconcileCatalogExecution, registerCatalogExecution } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 
@@ -59,6 +65,125 @@ function legacyWorkspace(name: string): { context: StoreContext; unknownBytes: B
   const unknownBytes = Buffer.from([0, 1, 2, 255]);
   writeFileSync(join(workflowDir, "unknown.bin"), unknownBytes);
   return { context: { harnessDir }, unknownBytes };
+}
+
+type ProtectedDatabase = {
+  schema: Array<{ type: string; name: string }>;
+  tables: Record<string, string[]>;
+};
+
+/** Compare every SQL row and schema object, including inputs, receipts and ledgers. */
+function protectedDatabase(db: StoreDb): ProtectedDatabase {
+  const schema = db.prepare("select type, name, tbl_name, sql from sqlite_schema order by type, name").all() as Array<{ type: string; name: string }>;
+  const tables: Record<string, string[]> = {};
+  for (const entry of schema) {
+    if (entry.type !== "table") continue;
+    const table = `"${entry.name.replaceAll('"', '""')}"`;
+    tables[entry.name] = db.prepare(`select * from ${table}`).all()
+      .map((row) => JSON.stringify(row)).sort();
+  }
+  return { schema, tables };
+}
+
+async function protectedStore(context: StoreContext) {
+  const store = await openStore(context, "read");
+  try {
+    return protectedDatabase(store.db);
+  } finally {
+    store.close();
+  }
+}
+
+function stopDocument(sessionId: string, attestedAt = "2026-10-04T04:00:00Z"): ActivationAttestation {
+  return {
+    version: ACTIVATION_PROTOCOL_VERSION,
+    attestedAt,
+    operator: { actor: "fixture-operator", authorizationRef: "schema-cutover-authorization" },
+    consumers: [{
+      entryId: "fixture-coordinator", kind: "coordinator", entrypoint: "/opt/mstar/coordinator/dist/index.js",
+      runtime: "node", runtimeVersion: "24.18.0", version: "3.11.2", current: true, disposition: "reloaded",
+    }],
+    stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
+  };
+}
+
+function cleanCheckout(path: string, branch: string): void {
+  mkdirSync(path, { recursive: true });
+  execFileSync("git", ["init", "-b", branch], { cwd: path, stdio: "pipe" });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+    "commit", "--allow-empty", "-m", "Fixture source"], { cwd: path, stdio: "pipe" });
+}
+
+function seedInput(db: StoreDb, workflowId: string, planId: string, pinned = false): void {
+  const row = db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?")
+    .get(workflowId, planId) as { state_json: string };
+  const state = JSON.parse(row.state_json);
+  const hash = executionInputHash(state, planId);
+  const store = db.prepare("select store_id from store_meta where id = 1").get() as { store_id: string };
+  const pin = pinned ? { store_id: store.store_id, entity_revision: 7, document_hash: hash, relation_hash: "a".repeat(64) } : null;
+  db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) values (?, ?, 1, ?, ?, ?)")
+    .run(workflowId, planId, JSON.stringify(executionInputSelection(state, planId)), hash, pin === null ? null : JSON.stringify(pin));
+}
+
+/** Authenticate an ordinary coordinator and actually mutate the migrated row. */
+async function continuePlan(
+  context: StoreContext, workflowId: string, planId: string,
+  identity = createLocalExecutionIdentity({ workflowId, role: "coordinator" }),
+): Promise<void> {
+  const caller = executionContextFor(context, identity);
+  const state = await readExecutionState(context);
+  const workflow = state.data.workflows.find((entry) => entry.state.id === workflowId)!;
+  const bound = workflow.coordinator === null
+    ? await bindExecutionSession(caller, {
+      workflowId, expected: workflow.workflowToken, operationId: `bind-${workflowId}`,
+    })
+    : await resumeExecutionSession(caller, workflow.coordinator);
+  const before = await readExecutionPlan(caller, bound.data, planId);
+  const originalInput = (await protectedStore(context)).tables;
+  const prepared = await mutateExecutionPlan(caller, {
+    session: bound.data, expected: before.token, planId, operationId: `prepare-${workflowId}`,
+    operation: { kind: "prepare", config: { qaGate: "pm-acceptance", findingsCleanup: "allow-residual" } },
+  });
+  expect(prepared.data.plan.status).toBe(before.data.plan.status);
+  expect(prepared.data.plan.metadata).toEqual(before.data.plan.metadata);
+  expect(prepared.data.coordination?.prepared).toMatchObject({
+    qa_gate: "pm-acceptance", findings_cleanup: "allow-residual", prepared_by: identity.sessionId,
+  });
+  expect(prepared.data.coordination?.progress).toEqual(before.data.coordination?.progress);
+  expect(prepared.data.coordination?.completion).toEqual(before.data.coordination?.completion);
+  const progress = { status: "InProgress" as const, summary: "Continue the migrated business row", evidence_paths: [] };
+  const advanced = await mutateExecutionPlan(caller, {
+    session: bound.data, expected: prepared.token, planId, operationId: `progress-${workflowId}`,
+    operation: { kind: "progress", progress },
+  });
+  expect(advanced.data.plan.status).toBe("InProgress");
+  expect(advanced.data.coordination?.progress).toEqual(progress);
+  expect(advanced.data.plan.metadata).toEqual(before.data.plan.metadata);
+  const reread = await readExecutionPlan(caller, bound.data, planId);
+  expect(reread.data).toEqual(advanced.data);
+  expect(reread.token).toEqual(advanced.token);
+  expect((await protectedStore(context)).tables.execution_inputs).toEqual(originalInput.execution_inputs);
+}
+
+/** Build the historical database from its frozen migrations, not a schema-9 imitation. */
+async function schema8Store(context: StoreContext) {
+  const db = new DatabaseSync(storeDbPath(context));
+  try {
+    db.exec("pragma foreign_keys=ON");
+    db.exec("begin");
+    db.exec(SCHEMA_VERSION_TABLE_SQL);
+    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 8)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)")
+        .run(migration.version, migration.name, migrationChecksum(migration), "2026-10-04T00:00:00Z");
+    }
+    db.prepare("update store_meta set authority_state = 'active' where id = 1").run();
+    db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+    db.exec("commit");
+  } finally {
+    db.close();
+  }
+  return openStore(context, "write");
 }
 
 test("store upgrade imports snapshot rows, ownership, and unknown bytes, then replays idempotently", async () => {
@@ -140,46 +265,14 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
   const workflowId = "wf-active-schema8-normalize";
   const planId = `${workflowId}-plan`;
   const sessionId = "session-active-schema8-normalize";
+  const conflictIdentity = createLocalExecutionIdentity({ workflowId: `${workflowId}-conflict`, role: "coordinator" });
   /** Full pre-cutover state captured for the refusal comparison. */
   const protectedState: Record<string, unknown> = {};
 
-  // A schema-8 store: initialized, then reverted to the schema-8 SHAPE (frozen
-  // migration 4 DDL) and populated with the OLD protocol JSON the removed seat
-  // wrote — a sealed prepared block, a completed handoff, a plan-PM session and
-  // a per-plan lease carrying the only recorded source/cleanup ownership.
-  const initialized = await initializeStore(context);
+  // The frozen schema-8 producer shape, populated with historical protocol JSON.
+  const initialized = await schema8Store(context);
+  cleanCheckout(join(ROOT, "metadata-worktree"), `feature/${workflowId}-conflict-plan`);
   try {
-    initialized.db.exec(`
-      delete from schema_version where version = 9;
-      create table execution_sessions_v8(
-        workflow_id text not null references execution_workflows(workflow_id),
-        role text not null check (role in ('coordinator','plan-pm')),
-        session_id text not null,
-        plan_id text,
-        epoch integer not null check (epoch > 0),
-        revision integer not null check (revision > 0),
-        state text not null check (state in ('active','suspended','revoked')),
-        bound_at text not null,
-        primary key (workflow_id, role, session_id),
-        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
-        check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
-      );
-      drop table execution_sessions;
-      alter table execution_sessions_v8 rename to execution_sessions;
-      create unique index execution_sessions_active_coordinator
-        on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
-      create unique index execution_sessions_active_plan_pm
-        on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
-      create table execution_leases(
-        workflow_id text not null,
-        plan_id text not null,
-        revision integer not null check (revision > 0),
-        owner_epoch integer not null check (owner_epoch > 0),
-        lease_json text not null,
-        primary key (workflow_id, plan_id),
-        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
-      );
-    `);
     initialized.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
     // FK order: workflow, then plan, then the sessions and the lease that
     // reference them. The lease is the REAL `execution_leases` row — the plan row
@@ -228,6 +321,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
           prepared_by: "host-coord",
           prepared_at: "2026-10-04T00:00:00Z",
         },
+        progress: { status: "InReview", summary: "Historical review completed", evidence_paths: [], track_branches: [`feature/${planId}`] },
         session: { session_id: sessionId, session_file: join(ROOT, "plan-pm.json"), bound_at: "2026-10-04T00:00:00Z" },
         handoff: {
           id: `${planId}-attempt-1`,
@@ -353,6 +447,17 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
         status: "held",
       }),
     );
+    seedInput(initialized.db, workflowId, planId, true);
+    seedInput(initialized.db, conflictWorkflowId, conflictPlanId);
+    // A genuine public bind supplies a committed operation receipt and ordinary
+    // coordinator identity before refusal; neither is manufactured as SQL setup.
+    const conflictHeader = initialized.db.prepare("select revision from execution_workflows where workflow_id = ?")
+      .get(conflictWorkflowId) as { revision: number };
+    await bindExecutionSession(executionContextFor(context, conflictIdentity), {
+      workflowId: conflictWorkflowId, operationId: "historical-conflict-bind",
+      expected: executionToken("workflow", initialized.storeId, initialized.epoch, [conflictWorkflowId], conflictHeader.revision),
+    });
+    protectedState.database = protectedDatabase(initialized.db);
     // Capture the FULL protected state so the refusal comparison proves every
     // byte is intact — not just counts or defined-ness.
     protectedState.plan = JSON.parse(JSON.stringify(
@@ -414,6 +519,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       refused.db.prepare("select * from execution_leases order by workflow_id, plan_id").all(),
     ));
     expect(afterLeases).toEqual(protectedState.leases);
+    expect(protectedDatabase(refused.db)).toEqual(protectedState.database);
     // No staging table survives the rollback.
     for (const staging of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
       expect(refused.db.prepare("select name from sqlite_master where type = 'table' and name = ?").get(staging)).toBeUndefined();
@@ -437,7 +543,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       (store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, planId) as { coordination_json: string })
         .coordination_json,
     ) as Record<string, unknown>;
-    expect(Object.keys(coordination).sort()).toEqual(["completion", "prepared"]);
+    expect(Object.keys(coordination).sort()).toEqual(["completion", "prepared", "progress"]);
     expect((coordination.prepared as Record<string, unknown>)).toEqual({
       qa_gate: "mandatory",
       findings_cleanup: "allow-residual",
@@ -479,6 +585,22 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
     const readable = await readExecutionState(context);
     const migrated = readable.data.workflows.find((workflow) => workflow.state.id === workflowId)?.plans[0];
     expect(migrated?.plan.id).toBe(planId);
+    const originalPlan = protectedState.plan as { coordination_json: string };
+    const originalCoordination = JSON.parse(originalPlan.coordination_json);
+    const { state: _handoffState, id: _handoffId, attempt: _attempt, submitted_by: _submitter,
+      submitted_at: _submittedAt, accepted_by: completedBy, accepted_at: _acceptedAt, ...completion } = originalCoordination.handoff;
+    expect(migrated?.coordination?.prepared).toEqual(coordination.prepared);
+    expect(migrated?.coordination?.progress).toEqual(originalCoordination.progress);
+    expect(migrated?.coordination?.completion).toEqual({ ...completion, completed_by: completedBy });
+    const originalDatabase = protectedState.database as ProtectedDatabase;
+    const originalInputs = originalDatabase.tables.execution_inputs!;
+    expect(protectedDatabase(store.db).tables.execution_inputs).toEqual(originalInputs);
+    for (const receipt of originalDatabase.tables.execution_operations!) {
+      expect(protectedDatabase(store.db).tables.execution_operations).toContain(receipt);
+    }
+    const originalInput = originalInputs.map((row) => JSON.parse(row))
+      .find((row) => row.workflow_id === workflowId);
+    expect(migrated?.frozenInput).toEqual(JSON.parse(originalInput.catalog_pin_json));
     // The conflicting workflow's own metadata survived untouched — no hard gate.
     const conflictState = JSON.parse(
       (store.db.prepare("select state_json from execution_plans where workflow_id = ? and plan_id = ?").get(`${workflowId}-conflict`, `${workflowId}-conflict-plan`) as { state_json: string }).state_json,
@@ -487,15 +609,16 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
       worktree_path: join(ROOT, "metadata-worktree"),
       working_branch: `feature/${workflowId}-conflict-plan`,
     });
-    // The conflict row carries no phantom coordination or lease: it is clean for
-    // the coordinator's ordinary prepare/progress continuation (T4's cross-track
-    // plan-operation scope; the storage layer preserves the business facts).
+    // Metadata wins over the stale obsolete lease; ordinary operations below
+    // use the real retained checkout rather than a readiness-only assertion.
     expect(conflictState.status).toBe("Todo");
     expect(conflictState).not.toHaveProperty("execution_lease");
     const conflictCoordination = JSON.parse(
       (store.db.prepare("select coordination_json from execution_plans where workflow_id = ? and plan_id = ?").get(`${workflowId}-conflict`, `${workflowId}-conflict-plan`) as { coordination_json: string }).coordination_json,
     ) as Record<string, unknown>;
-    expect(conflictCoordination).toEqual({ revision: 1 });
+    expect(conflictCoordination).toEqual({});
+    expect(store.db.prepare("select revision from execution_plans where workflow_id = ? and plan_id = ?")
+      .get(`${workflowId}-conflict`, `${workflowId}-conflict-plan`)).toEqual({ revision: 1 });
     // The retired seat's integration mutex is settled as a released tombstone,
     // naming the stop evidence that authorized it — not left unreachable.
     const claim = JSON.parse(
@@ -513,6 +636,7 @@ test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the
   } finally {
     store.close();
   }
+  await continuePlan(context, `${workflowId}-conflict`, `${workflowId}-conflict-plan`, conflictIdentity);
 });
 
 test("a sealed/completed legacy file snapshot is projected and imported instead of skipped", async () => {
@@ -597,60 +721,45 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
   }
 });
 
-test("an unattested retired plan-PM integration mutex refuses the upgrade and keeps schema 8", async () => {
-  const { context } = legacyWorkspace("schema8-unattested-orphan");
-  const workflowId = "wf-schema8-unattested-orphan";
+async function historicalClaimWorkspace(name: string) {
+  const { context } = legacyWorkspace(name);
+  const workflowId = `wf-${name}`;
   const planId = `${workflowId}-plan`;
-  const sessionId = "session-schema8-unattested-orphan";
-  const initialized = await initializeStore(context);
+  const sessionId = `session-${name}`;
+  const checkout = join(ROOT, `claim-worktree-${name}`);
+  const branch = `feature/${planId}`;
+  cleanCheckout(checkout, branch);
+  const initialized = await schema8Store(context);
   try {
-    initialized.db.exec(`
-      delete from schema_version where version = 9;
-      create table execution_sessions_v8(
-        workflow_id text not null references execution_workflows(workflow_id),
-        role text not null check (role in ('coordinator','plan-pm')),
-        session_id text not null,
-        plan_id text,
-        epoch integer not null check (epoch > 0),
-        revision integer not null check (revision > 0),
-        state text not null check (state in ('active','suspended','revoked')),
-        bound_at text not null,
-        primary key (workflow_id, role, session_id),
-        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
-        check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
-      );
-      drop table execution_sessions;
-      alter table execution_sessions_v8 rename to execution_sessions;
-      create unique index execution_sessions_active_coordinator
-        on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
-      create unique index execution_sessions_active_plan_pm
-        on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
-      create table execution_leases(
-        workflow_id text not null, plan_id text not null, revision integer not null check (revision > 0),
-        owner_epoch integer not null check (owner_epoch > 0), lease_json text not null,
-        primary key (workflow_id, plan_id),
-        foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
-      );
-    `);
     initialized.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
-      .run(workflowId, JSON.stringify({ schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04", delivery_kind: "development", branch: { source: `feature/${planId}`, target: "main" } }), "2026-10-04", "2026-10-04");
-    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(workflowId, JSON.stringify({ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }));
+      .run(workflowId, JSON.stringify({ schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-10-04", updated_at: "2026-10-04", delivery_kind: "development", branch: { source: branch, target: "main" } }), "2026-10-04", "2026-10-04");
+    initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
+      .run(workflowId, JSON.stringify({ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }));
     initialized.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)")
-      .run(workflowId, planId, JSON.stringify({ id: planId, title: "Unattested orphan plan", file: `${planId}.md`, status: "Todo" }), JSON.stringify({}));
+      .run(workflowId, planId, JSON.stringify({ id: planId, title: "Historical claim plan", file: `${planId}.md`, status: "Todo",
+        metadata: { worktree_path: checkout, working_branch: branch } }), JSON.stringify({}));
     initialized.db.prepare("insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')")
       .run(workflowId, sessionId, planId);
     initialized.db.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)")
-      .run(workflowId, planId, JSON.stringify({ holder: sessionId, claimed_at: "2026-10-04T00:00:00Z", worktree_path: join(ROOT, "orphan-worktree"), working_branch: `feature/${planId}`, status: "held" }));
+      .run(workflowId, planId, JSON.stringify({ holder: sessionId, claimed_at: "2026-10-04T00:00:00Z", worktree_path: checkout, working_branch: branch, status: "held" }));
     initialized.db.prepare("insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)")
-      .run(workflowId, JSON.stringify({ holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z", source_branch: `feature/${planId}`, target_branch: "main", status: "held" }));
+      .run(workflowId, JSON.stringify({ holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z", source_branch: branch, target_branch: "main", status: "held" }));
+    seedInput(initialized.db, workflowId, planId);
   } finally {
     initialized.close();
   }
+  return { context, workflowId, planId, sessionId };
+}
+
+test("an unattested retired plan-PM integration mutex refuses the upgrade and keeps schema 8", async () => {
+  const { context } = await historicalClaimWorkspace("schema8-unattested-orphan");
+  const before = await protectedStore(context);
 
   // No attestation, and then an attestation that does not name this holder: both
   // refuse, and the store is left at schema 8 with every byte intact.
   await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan" }))
     .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+  expect(await protectedStore(context)).toEqual(before);
   const wrongHolder = {
     version: ACTIVATION_PROTOCOL_VERSION,
     attestedAt: "2026-10-04T04:00:00Z",
@@ -660,6 +769,7 @@ test("an unattested retired plan-PM integration mutex refuses the upgrade and ke
   };
   await expect(upgradeStoreMinimal({ context, operator: "operator", operationId: "op-unattested-orphan-2", attestation: wrongHolder }))
     .rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+  expect(await protectedStore(context)).toEqual(before);
   const store = await openStore(context, "read");
   try {
     expect(store.schemaVersion).toBe(MIGRATIONS.length - 1);
@@ -668,6 +778,229 @@ test("an unattested retired plan-PM integration mutex refuses the upgrade and ke
   } finally {
     store.close();
   }
+});
+
+for (const invalid of [
+  { name: "thin-stop-list", document: { stoppedSessions: [{ sessionId: "retired", state: "stopped" }] }, code: "store.attestation-invalid" },
+  { name: "malformed-instant", document: { ...stopDocument("retired"), attestedAt: "not-an-instant" }, code: "store.attestation-invalid" },
+  { name: "missing-current-consumer", document: { ...stopDocument("retired"), consumers: [] }, code: "store.activation-blocked" },
+  { name: "unauthorized-operator", document: { ...stopDocument("retired"), operator: { actor: "operator" } }, code: "store.attestation-invalid" },
+]) {
+  test(`low-level init and upgrade reject ${invalid.name} before changing the store`, async () => {
+    const empty: StoreContext = { harnessDir: join(ROOT, `low-init-${invalid.name}`) };
+    mkdirSync(empty.harnessDir, { recursive: true });
+    await expect(initializeStore(empty, { attestation: invalid.document })).rejects.toMatchObject({ code: invalid.code });
+    expect(existsSync(storeDbPath(empty))).toBe(false);
+    const created = await initializeStore(empty, { attestation: stopDocument("retired") });
+    try {
+      expect(created.schemaVersion).toBe(9);
+    } finally {
+      created.close();
+    }
+    const { context, sessionId } = await historicalClaimWorkspace(`low-upgrade-${invalid.name}`);
+    const before = await protectedStore(context);
+    await expect(upgradeStore(context, { attestation: invalid.document })).rejects.toMatchObject({ code: invalid.code });
+    expect(await protectedStore(context)).toEqual(before);
+    expect(await upgradeStore(context, { attestation: stopDocument(sessionId) })).toEqual({ schemaVersion: 9 });
+  });
+}
+
+for (const boundary of [
+  { name: "future-stop", stopAt: "2999-01-01T00:00:00Z", claimAt: "2026-10-04T00:30:00Z", accepted: false },
+  { name: "claim-newer-than-stop", stopAt: "2026-10-04T00:29:59Z", claimAt: "2026-10-04T00:30:00Z", accepted: false },
+  { name: "equivalent-offset", stopAt: "2026-10-03T20:30:00-04:00", claimAt: "2026-10-04T08:30:00+08:00", accepted: true },
+]) {
+  test(`schema cutover compares parsed instants for ${boundary.name}`, async () => {
+    const { context, workflowId, sessionId } = await historicalClaimWorkspace(`time-${boundary.name}`);
+    const fixture = await openStore(context, "write");
+    let claim: Record<string, unknown>;
+    try {
+      const row = fixture.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?")
+        .get(workflowId) as { lease_json: string };
+      claim = { ...JSON.parse(row.lease_json), claimed_at: boundary.claimAt };
+      fixture.db.prepare("update execution_integration_leases set lease_json = ? where workflow_id = ?")
+        .run(JSON.stringify(claim), workflowId);
+    } finally {
+      fixture.close();
+    }
+    const before = await protectedStore(context);
+    const document = stopDocument(sessionId, boundary.stopAt);
+    if (!boundary.accepted) {
+      await expect(upgradeStore(context, { attestation: document })).rejects.toMatchObject({ code: "store.upgrade-attestation-missing" });
+      expect(await protectedStore(context)).toEqual(before);
+    }
+    const accepted = boundary.accepted ? document : stopDocument(sessionId);
+    expect(await upgradeStore(context, { attestation: accepted })).toEqual({ schemaVersion: 9 });
+    const upgraded = await openStore(context, "read");
+    try {
+      const row = upgraded.db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?")
+        .get(workflowId) as { revision: number; owner_epoch: number; lease_json: string };
+      expect(row.revision).toBe(2);
+      expect(row.owner_epoch).toBe(1);
+      expect(JSON.parse(row.lease_json)).toEqual({
+        ...claim!, status: "released", prior_holder: sessionId, released_by: "store-upgrade",
+        released_at: accepted.attestedAt, release_reason: `retired-plan-pm-seat:${sessionId}`,
+      });
+    } finally {
+      upgraded.close();
+    }
+  });
+}
+
+for (const obsoleteLease of ["missing", "mismatched"] as const) {
+  test(`a ${obsoleteLease} obsolete row lease does not seal the retired holder's actual claim plan`, async () => {
+    const { context, workflowId, planId, sessionId } = await historicalClaimWorkspace(`lease-${obsoleteLease}`);
+    const claimPlanId = `${planId}-actual-claim`;
+    const fixture = await openStore(context, "write");
+    try {
+      // The retired session remains scoped to the original row. Its integration
+      // claim belongs to another REAL row in this workflow, which must be used.
+      fixture.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 1, ?, '{}')")
+        .run(workflowId, claimPlanId, JSON.stringify({ id: claimPlanId, title: "Actual integration plan", file: `${claimPlanId}.md`, status: "InReview" }));
+      seedInput(fixture.db, workflowId, claimPlanId);
+      const row = fixture.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?")
+        .get(workflowId) as { lease_json: string };
+      fixture.db.prepare("update execution_integration_leases set lease_json = ? where workflow_id = ?")
+        .run(JSON.stringify({ ...JSON.parse(row.lease_json), plan_id: claimPlanId }), workflowId);
+      if (obsoleteLease === "missing") {
+        fixture.db.prepare("delete from execution_leases where workflow_id = ? and plan_id = ?").run(workflowId, planId);
+      } else {
+        const lease = fixture.db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?")
+          .get(workflowId, planId) as { lease_json: string };
+        fixture.db.prepare("update execution_leases set lease_json = ? where workflow_id = ? and plan_id = ?")
+          .run(JSON.stringify({ ...JSON.parse(lease.lease_json), holder: "unrelated-old-holder", plan_id: "obsolete-wrong-plan" }), workflowId, planId);
+      }
+    } finally {
+      fixture.close();
+    }
+    await upgradeStore(context, { attestation: stopDocument(sessionId) });
+    const upgraded = await openStore(context, "read");
+    try {
+      const row = upgraded.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?")
+        .get(workflowId) as { lease_json: string };
+      expect(JSON.parse(row.lease_json)).toMatchObject({ plan_id: claimPlanId, status: "released", prior_holder: sessionId });
+      expect(upgraded.db.prepare("select name from sqlite_schema where type = 'table' and name = 'execution_leases'").get()).toBeUndefined();
+      expect(upgraded.db.prepare("select * from execution_sessions where role = 'plan-pm'").all()).toEqual([]);
+      const state = await readExecutionState(context);
+      expect(state.data.workflows[0]?.plans.find((entry) => entry.plan.id === claimPlanId)?.plan.status).toBe("InReview");
+    } finally {
+      upgraded.close();
+    }
+  });
+}
+
+test("retirement matches workflow and session together and preserves foreign and nonretired claims byte-for-byte", async () => {
+  const { context, workflowId, planId, sessionId } = await historicalClaimWorkspace("workflow-session-pairs");
+  const variants = [
+    { id: `${workflowId}-retired-peer`, role: "plan-pm", sessionId },
+    { id: `${workflowId}-foreign-same-id`, role: "coordinator", sessionId },
+    { id: `${workflowId}-live-coordinator`, role: "coordinator", sessionId: "live-coordinator" },
+  ];
+  const fixture = await openStore(context, "write");
+  const preservedClaims: Record<string, unknown> = {};
+  const preservedSessions: Record<string, unknown> = {};
+  try {
+    for (const variant of variants) {
+      fixture.db.prepare("insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)")
+        .run(variant.id, JSON.stringify({ schema_version: 1, id: variant.id, type: "plan", status: "running",
+          started_at: "2026-10-04", updated_at: "2026-10-04", delivery_kind: "development",
+          branch: { source: `feature/${variant.id}`, target: "main" } }), "2026-10-04", "2026-10-04");
+      fixture.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
+        .run(variant.id, JSON.stringify({ id: variant.id, type: "plan", started_at: "2026-10-04", dir: `workflows/${variant.id}` }));
+      // Repeated plan/session IDs in separate workflows are intentional.
+      fixture.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, '{}')")
+        .run(variant.id, planId, JSON.stringify({ id: planId, title: "Independent workflow row", file: `${planId}.md`, status: "InProgress" }));
+      seedInput(fixture.db, variant.id, planId);
+      fixture.db.prepare("insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) values (?, ?, ?, ?, 1, 1, 'active', '2026-10-04T00:00:00Z')")
+        .run(variant.id, variant.role, variant.sessionId, variant.role === "plan-pm" ? planId : null);
+      fixture.db.prepare("insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 3, 1, ?)")
+        .run(variant.id, JSON.stringify({ holder: variant.sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z",
+          source_branch: `feature/${variant.id}`, target_branch: "main", status: "held" }));
+      if (variant.role === "coordinator") {
+        preservedClaims[variant.id] = fixture.db.prepare("select * from execution_integration_leases where workflow_id = ?").get(variant.id);
+        preservedSessions[variant.id] = fixture.db.prepare("select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions where workflow_id = ?").get(variant.id);
+      }
+    }
+  } finally {
+    fixture.close();
+  }
+  const document = stopDocument(sessionId);
+  // Stop evidence naming a nonretired identity still grants no retirement.
+  document.stoppedSessions.push({ sessionId: "live-coordinator", host: "omp", state: "stopped" });
+  await upgradeStore(context, { attestation: document });
+  const upgraded = await openStore(context, "read");
+  try {
+    for (const id of [workflowId, variants[0]!.id]) {
+      const row = upgraded.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(id) as { lease_json: string };
+      expect(JSON.parse(row.lease_json)).toMatchObject({ holder: sessionId, plan_id: planId, status: "released", prior_holder: sessionId });
+    }
+    for (const id of Object.keys(preservedClaims)) {
+      expect(upgraded.db.prepare("select * from execution_integration_leases where workflow_id = ?").get(id)).toEqual(preservedClaims[id]);
+      expect(upgraded.db.prepare("select * from execution_sessions where workflow_id = ?").get(id)).toEqual(preservedSessions[id]);
+    }
+    expect(upgraded.db.prepare("select * from execution_sessions where role = 'plan-pm'").all()).toEqual([]);
+    const state = await readExecutionState(context);
+    for (const variant of variants) {
+      expect(state.data.workflows.find((entry) => entry.state.id === variant.id)?.plans[0]?.plan.status).toBe("InProgress");
+    }
+  } finally {
+    upgraded.close();
+  }
+});
+
+test("a logical missing-plan claim refuses unchanged and recovers from its genuine pre-corruption backup", async () => {
+  const { context, workflowId, planId, sessionId } = await historicalClaimWorkspace("corrupt-claim-recovery");
+  const before = await protectedStore(context);
+  const backup = await backupStore(context, { out: join(context.harnessDir, "archived", "pre-corruption.db") });
+  expect(backup.schemaVersion).toBe(8);
+  expect(backup.execution?.authorityState).toBe("active");
+  const fixture = await openStore(context, "write");
+  try {
+    const row = fixture.db.prepare("select lease_json from execution_integration_leases where workflow_id = ?").get(workflowId) as { lease_json: string };
+    // Only the logical claim target is corrupt. Business rows and structural
+    // FKs stay inventoryable, so the supported recovery admission applies.
+    fixture.db.prepare("update execution_integration_leases set lease_json = ? where workflow_id = ?")
+      .run(JSON.stringify({ ...JSON.parse(row.lease_json), plan_id: "absent-business-plan" }), workflowId);
+  } finally {
+    fixture.close();
+  }
+  const corrupt = await protectedStore(context);
+  await expect(upgradeStoreMinimal({
+    context, operator: "operator", operationId: "corrupt-upgrade", attestation: stopDocument(sessionId),
+  })).rejects.toMatchObject({ code: "store.corrupt" });
+  expect(await protectedStore(context)).toEqual(corrupt);
+  const preview = await previewExecutionRestore(context, backup.backupPath);
+  expect(preview.liveStoreId).toBe(backup.storeId);
+  expect(preview.backupEpoch).toBe(backup.epoch);
+  expect(preview.lostOperationIds).toEqual([]);
+  expect(preview.authorityDifferences.map((difference) => ({ domain: difference.domain, key: difference.key })))
+    .toEqual([{ domain: "execution", key: `integration-lease:${workflowId}` }]);
+  expect(await protectedStore(context)).toEqual(corrupt);
+  const restored = await restoreExecutionBackup(context, {
+    preview, operator: "fixture-operator", authorization: "restore-pre-corruption-point",
+  });
+  expect(restored.storeId).toBe(backup.storeId);
+  expect(restored.epoch).toBe(Math.max(preview.liveEpoch, backup.epoch) + 1);
+  expect(restored.restoredFromSha256).toBe(preview.backupSha256);
+  expect(restored.preRestoreBackup.schemaVersion).toBe(8);
+  const recoveryRecord = JSON.parse(readFileSync(restored.recoveryReceiptPath, "utf8"));
+  expect(recoveryRecord).toMatchObject({
+    phase: "replaced", operator: "fixture-operator", authorization: "restore-pre-corruption-point",
+    backupPath: backup.backupPath, backupSha256: preview.backupSha256,
+    verified: { integrity: "ok", foreignKeys: "ok", schemaVersion: 8, executionAuthorityState: "active" },
+  });
+  const recovered = await protectedStore(context);
+  expect(recovered.schema).toEqual(before.schema);
+  const originalMeta = JSON.parse(before.tables.store_meta![0]!);
+  const restoredMeta = JSON.parse(recovered.tables.store_meta![0]!);
+  expect(restoredMeta).toEqual({ ...originalMeta, authority_epoch: restored.epoch });
+  for (const table of Object.keys(before.tables).filter((table) => table !== "store_meta")) {
+    expect(recovered.tables[table]).toEqual(before.tables[table]);
+  }
+  await upgradeStoreMinimal({
+    context, operator: "operator", operationId: "recovered-upgrade", attestation: stopDocument(sessionId),
+  });
+  await continuePlan(context, workflowId, planId);
 });
 
 test("one store upgrade completes staged store and execution authorities with populated legacy rows", async () => {
