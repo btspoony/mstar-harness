@@ -1223,6 +1223,7 @@ export function resolveSddExecutionContext(input: SddExecutionContext): SddExecu
       lifecycleBranches: collectActiveLifecycleBranches(match.activeSnapshots),
       rowWorktreePath,
       rowWorkingBranch,
+      planId,
       workflowId: snapshot.id,
     });
     if (!l1.ok) throwGateFail(l1.violations);

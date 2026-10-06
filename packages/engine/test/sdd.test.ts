@@ -1251,7 +1251,7 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("worktree.l1.feature-scope-missing");
-      expect(err.message).toContain("plan prepare --workflow <id> --plan <id>");
+      expect(err.message).toContain(`plan prepare --workflow wf-1 --plan ${PLAN_ID}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

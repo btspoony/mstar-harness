@@ -57,7 +57,7 @@ import {
 } from "../src/workflow.js";
 import { evaluatePostMergeClose } from "../src/iteration.js";
 import { PlanPathError } from "../src/plan-path.js";
-import { CoordinationError } from "../src/coordination-write.js";
+import { CoordinationError, type CompletionRecord } from "../src/coordination-write.js";
 import { getCatalog, listCatalog } from "../src/catalog.js";
 import {
   listPendingCatalogRegistrations,
@@ -999,22 +999,36 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
   }
 
   const completion = { policy: "acceptance report", evidence: "sdd/plan-a/report.md" };
+  // Stored historical evidence, not newly verified report files.
+  const recordedCompletion: CompletionRecord = {
+    source_branch: "feature/historical",
+    source_sha: "a".repeat(40),
+    worktree_path: join(tmpdir(), "historical-source"),
+    review_base: "b".repeat(40),
+    review_head: "a".repeat(40),
+    qc: {
+      decision: "Approve",
+      reports: [{ path: join(tmpdir(), "historical-qc.md"), sha256: "1".repeat(64) }],
+      consolidated: { path: join(tmpdir(), "historical-qc-consolidated.md"), sha256: "2".repeat(64) },
+    },
+    qa: { gate: "mandatory", decision: "pass", report: { path: join(tmpdir(), "historical-qa.md"), sha256: "3".repeat(64) } },
+    completed_by: "historical-coordinator",
+    completed_at: "2026-09-12T00:00:00Z",
+  };
 
   test("an accepted matching report-only completion policy/reference is frozen, while identical evidence replays", async () => {
-    const { dir, path } = reportOnlyFixture({ plans: [legacyRow({ status: "InReview", done_at: undefined })] });
-    const recorded = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
-    expect(recorded.written).toBe(true);
-    const done = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    (done.plans as Array<Record<string, unknown>>)[0]!.status = "Done";
-    writeFileSync(path, JSON.stringify(done, null, 4) + "\n");
+    const { dir, path } = reportOnlyFixture({
+      plans: [legacyRow({ status: "Done", coordination: { revision: 1, completion: recordedCompletion } })],
+      delivery: { completion },
+    });
     const acceptedBytes = readFileSync(path, "utf8");
-    const acceptedCompletion = JSON.parse(acceptedBytes).delivery.completion;
 
     await expect(recordWorkflowDelivery(id, dir, { evidence: { completion: { ...completion, evidence: "edited document body remains ordinary content" } } })).rejects.toMatchObject({
       code: "coordination.completion-frozen",
       details: { workflow_id: id, completion_policy: completion.policy },
     });
     expect(readFileSync(path, "utf8")).toBe(acceptedBytes);
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
     await expect(
       recordWorkflowDelivery(id, dir, { evidence: { completion: { policy: "different policy", evidence: completion.evidence } } }),
     ).rejects.toMatchObject({
@@ -1022,10 +1036,13 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
       details: { workflow_id: id, completion_policy: completion.policy },
     });
     expect(readFileSync(path, "utf8")).toBe(acceptedBytes);
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
     expect((await recordWorkflowDelivery(id, dir, { evidence: { completion } })).written).toBe(false);
-    expect(JSON.parse(readFileSync(path, "utf8")).delivery.completion).toEqual(acceptedCompletion);
+    expect(readFileSync(path, "utf8")).toBe(acceptedBytes);
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
     const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-14" });
     expect(closed.status).toBe("completed");
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
   });
 
   test.each([
@@ -1033,15 +1050,24 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     ["mismatched", { policy: "historical policy", evidence: "historical reference" }],
   ])("a Done report-only row with %s historical completion can be corrected", async (_state, previous) => {
     const { dir, path } = reportOnlyFixture({
-      plans: [legacyRow({ status: "Done" })],
+      plans: [legacyRow({ status: "Done", coordination: { revision: 1, completion: recordedCompletion } })],
       ...(previous === undefined ? {} : { delivery: { completion: previous } }),
     });
+    const beforeRefusal = readFileSync(path, "utf8");
+    await expect(closeWorkflow(id, dir, { endedAt: "2026-09-14" })).rejects.toThrow();
+    expect(readFileSync(path, "utf8")).toBe(beforeRefusal);
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
     const corrected = await recordWorkflowDelivery(id, dir, { evidence: { completion }, at: "2026-09-12T01:00:00Z" });
     expect(corrected.written).toBe(true);
     expect(corrected.snapshot.delivery?.completion).toEqual(completion);
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
+    const beforeReplay = readFileSync(path, "utf8");
+    expect((await recordWorkflowDelivery(id, dir, { evidence: { completion } })).written).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(beforeReplay);
     const closed = await closeWorkflow(id, dir, { endedAt: "2026-09-14" });
     expect(closed.status).toBe("completed");
     expect(closed.delivery?.completion).toEqual(completion);
+    expect(JSON.parse(readFileSync(path, "utf8")).plans[0].coordination.completion).toEqual(recordedCompletion);
   });
   test("grandfathering: pre-existing delivery evidence with non-Done rows is untouched and close consultation is unchanged", async () => {
     const { dir, path } = fixture({
@@ -2326,6 +2352,7 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
   });
   test("ordinary coordinator prepare preserves the registered catalog pin across source edits and an SDK reopen", async () => {
     const { root, snapshotPath } = harness();
+    await registerIterationWorkflow(id, options(root));
     const registered = JSON.parse(readFileSync(snapshotPath, "utf8")) as {
       plans: Array<{ id: string; metadata?: Record<string, unknown> }>;
     };
@@ -2364,12 +2391,11 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
       operation: { kind: "prepare", config: { qaGate: "pm-acceptance" } },
     });
     const firstRead = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
-    const frozenPin = firstRead.catalog_pin?.pin;
-    expect(frozenPin).not.toBeNull();
+    expect(firstRead.catalog_pin?.pin).toEqual(frozenFixturePin);
 
     writeFileSync(planPath, `# Edited after registration\n\n**plan_id:** ${ROW_IDS[0]}\n`, "utf8");
     const reopened = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
-    expect(reopened.catalog_pin?.pin).toEqual(frozenPin);
+    expect(reopened.catalog_pin?.pin).toEqual(frozenFixturePin);
     await mutatePlanCoordination({
       sessionPath: prior.session_file,
       cwd: root,
@@ -2381,9 +2407,9 @@ describe("registerIterationWorkflow — iteration registration producer", () => 
     });
 
     const finalRead = await readPlanCoordination(prior.session_file, ROW_IDS[0], root);
-    expect(finalRead.catalog_pin?.pin).toEqual(frozenPin);
+    expect(finalRead.catalog_pin?.pin).toEqual(frozenFixturePin);
     expect(finalRead.prepared?.qa_gate).toBe("mandatory");
-    expect(JSON.parse(readFileSync(snapshotPath, "utf8")).plans[0].metadata.catalog_pin).toEqual(frozenPin);
+    expect(JSON.parse(readFileSync(snapshotPath, "utf8")).plans[0].metadata.catalog_pin).toEqual(frozenFixturePin);
   });
 
   test("stopped integration claim is recovered through the public coordinator route before failed close", async () => {
