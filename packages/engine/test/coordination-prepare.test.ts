@@ -22,7 +22,7 @@ import {
 } from "../src/coordination.js";
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import type { RecoveryDetails } from "../src/recovery-intent.js";
-import { ACTIVATION_PROTOCOL_VERSION, type ActivationAttestation } from "../src/store-activation.js";
+import { ACTIVATION_PROTOCOL_VERSION, StoreActivationError, type ActivationAttestation } from "../src/store-activation.js";
 import { initializeStore } from "../src/store-db.js";
 import { CoordinationError } from "../src/coordination-write.js";
 import { registerWorkflow } from "../src/status.js";
@@ -36,6 +36,7 @@ import {
   afterEachCleanup,
   assignmentText,
   errorCodeOf,
+  failureCode,
   ensureCoordinator,
   coordinatorCall,
   prepareCall,
@@ -2807,11 +2808,16 @@ describe("prepare coordinator recovery", () => {
     // The audit records the attestation instant, derived from the document.
     expect(recoveryAuditOf(fixture)[0]).toMatchObject({ attested_at: "2026-09-15T01:00:00.000Z" });
 
-    // An EXACT retry replays the recorded receipt and does not rewrite the audit.
+    // An EXACT replay: the recorded receipt is served and every protected byte —
+    // rows, anchors, checkout, status, compass, peer and envelopes — survives.
     const auditAfterFirst = JSON.stringify(recoveryAuditOf(fixture));
+    const bytesAfterFirst = protectedBytes(fixture);
     const replay = await recoverPrepareCoordinator(recoveryInputOf(fixture, { attestation }));
     expect(replay.recovery.replay).toBe(true);
     expect(JSON.stringify(recoveryAuditOf(fixture))).toBe(auditAfterFirst);
+    expect(protectedBytes(fixture)).toEqual(bytesAfterFirst);
+    expect(prepareSnapshotOf(fixture).integration_worktree_path).toBe(integrationPathBefore);
+    expect(JSON.stringify(prepareSnapshotOf(fixture).plans)).toBe(planRowsBefore);
   }, 60000);
 
   test("interrupted-claim recovery refuses a missing, foreign-holder, newer-than-stop or running-state attestation without mutating", async () => {
@@ -2830,7 +2836,7 @@ describe("prepare coordinator recovery", () => {
       return fixture;
     }
 
-    // (a) No attestation at all: the mutex recovery cannot proceed.
+    // (a) No attestation at all: the mutex recovery cannot proceed...
     const missing = seeded();
     await ensurePrepareCoordinator(missing);
     const missingDoc = prepareSnapshotOf(missing);
@@ -2840,6 +2846,14 @@ describe("prepare coordinator recovery", () => {
     );
     expect(protectedBytes(missing)).toEqual(missingBefore);
     expect(prepareSnapshotOf(missing).integration_merge_lease).toEqual(missingDoc.integration_merge_lease);
+    // ...until the MISSING fact is supplied: the same fixture recovers by
+    // correcting only the attestation.
+    const supplied = await recoverPrepareCoordinator(
+      recoveryInputOf(missing, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) }),
+    );
+    expect(supplied.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(missing).integration_merge_lease).toBeUndefined();
+    expect(recordedCoordinatorOf(missing)).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
 
     // (b) A foreign holder with a compliant attestation that stops the foreign
     // session only: the exact recorded predecessor is not named.
@@ -2852,7 +2866,11 @@ describe("prepare coordinator recovery", () => {
     const foreignRefusal = await prepareRefusalOf(() =>
       recoverPrepareCoordinator(recoveryInputOf(foreign, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", "11111111-1111-1111-1111-111111111111") })),
     );
-    expect(foreignRefusal.code).toBe("coordination.identity-recovery.unauthorized");
+    // A surviving foreign merge claim is an execution-stage fact: the stage gate
+    // refuses before any own-claim attestation check, and the foreign claim is left.
+    expect(foreignRefusal.code).toBe("coordination.identity-recovery.execution-started");
+    // The surviving foreign merge claim IS the execution-stage fact named.
+    expect(JSON.stringify(foreignRefusal.details)).toContain("integration_merge_lease");
     expect(protectedBytes(foreign)).toEqual(foreignBefore);
     expect(prepareSnapshotOf(foreign).integration_merge_lease).toEqual(foreignDoc.integration_merge_lease);
 
@@ -2871,6 +2889,13 @@ describe("prepare coordinator recovery", () => {
       ).code,
     ).toBe("coordination.identity-recovery.unauthorized");
     expect(protectedBytes(newer)).toEqual(newerBefore);
+    // Correcting ONLY the attested stop to a lawful time after the claim recovers
+    // the SAME fixture.
+    const lawfulNewer = await recoverPrepareCoordinator(
+      recoveryInputOf(newer, { attestation: stopAttestationOf("2026-09-15T03:00:00Z", FIXTURE_COORDINATOR_ID) }),
+    );
+    expect(lawfulNewer.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(newer).integration_merge_lease).toBeUndefined();
 
     // (d) A stop entry in the RUNNING state is not quiesced: the document itself
     // is refused by the shared validator before any ownership decision.
@@ -2880,12 +2905,25 @@ describe("prepare coordinator recovery", () => {
     const runningBefore = protectedBytes(running);
     const runningAttestation = stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID);
     (runningAttestation.stoppedSessions[0] as { state: string }).state = "running";
-    const runningRefusal = await prepareRefusalOf(() =>
+    const runningFailure = await failureOf(() =>
       recoverPrepareCoordinator(recoveryInputOf(running, { attestation: runningAttestation })),
     );
-    expect(typeof runningRefusal.code).toBe("string");
+    // The shared validator throws its OWN typed error, not a coordination one.
+    expect(runningFailure).toBeInstanceOf(StoreActivationError);
+    expect((runningFailure as StoreActivationError).code).toBe("store.activation-blocked");
+    expect(runningFailure.message).toMatch(/running/);
     expect(protectedBytes(running)).toEqual(runningBefore);
     expect(prepareSnapshotOf(running).integration_merge_lease).toEqual(runningDoc.integration_merge_lease);
+
+    // Correcting ONLY the running state to a lawful stop admits the recovery on
+    // the SAME fixture: the claim is released and the ownership moves.
+    const correctedDoc = prepareSnapshotOf(running);
+    correctedDoc.integration_merge_lease = { ...runningDoc.integration_merge_lease };
+    writeJson(running.snapshotPath, correctedDoc);
+    const corrected = await recoverPrepareCoordinator(recoveryInputOf(running, { attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID) }));
+    expect(corrected.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(running).integration_merge_lease).toBeUndefined();
+    expect(recordedCoordinatorOf(running)).toMatchObject({ session_id: RECOVERED_COORDINATOR_ID });
 
     // (e) The replacement named as stopped is refused.
     const selfStopped = seeded();
@@ -2899,6 +2937,15 @@ describe("prepare coordinator recovery", () => {
     );
     expect(protectedBytes(selfStopped)).toEqual(selfBefore);
     expect(prepareSnapshotOf(selfStopped).integration_merge_lease).toEqual(selfDoc.integration_merge_lease);
+    // Removing ONLY the replacement from the stop list recovers the SAME fixture.
+    const lawful = await recoverPrepareCoordinator(
+      recoveryInputOf(selfStopped, {
+        stoppedSessionIds: [FIXTURE_COORDINATOR_ID],
+        attestation: stopAttestationOf("2026-09-15T01:00:00Z", FIXTURE_COORDINATOR_ID),
+      }),
+    );
+    expect(lawful.recovery.replay).toBe(false);
+    expect(prepareSnapshotOf(selfStopped).integration_merge_lease).toBeUndefined();
   }, 60000);
 
   test("interrupted-claim recovery accepts the predecessor's own mutex while no-mutex InProgress still refuses", async () => {
@@ -3384,9 +3431,14 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     // leaves the valid prior config alone.
     const activeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     const refusedBefore = readJson(fixture.snapshotPath);
-    expect(
-      await errorCodeOf(() => reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" })),
-    ).toBe("coordination.invalid-input");
+    const branchRefusal = await failureOf(() =>
+      reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" }),
+    );
+    expect(failureCode(branchRefusal)).toBe("coordination.invalid-input");
+    // The actual branch cause and the ordinary correction are both named.
+    expect(String(branchRefusal.details?.working_branch ?? "")).toBe("feature/plan-a-v2");
+    expect(String(branchRefusal.details?.actual ?? "")).toBe("feature/plan-a");
+    expect(branchRefusal.message).toContain("revise it with plan prepare");
     expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
 
     // The real correction: switch the disposable feature checkout onto the new

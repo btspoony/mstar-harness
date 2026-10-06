@@ -27,6 +27,7 @@ import {
   failureCode,
   finding,
   linkedOpenIssues,
+  git,
   makeFixture,
   arrayField,
   metadataOf,
@@ -352,7 +353,7 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
     expect(view.catalog_pin?.pin).toEqual(pinned);
   });
 
-  test("a config revision after a catalog move preserves the frozen existing pin", async () => {
+  test("a genuine config revision after a catalog move and a document edit preserves the frozen existing pin", async () => {
     const fixture = makeFixture();
     const context = await storeBacked(fixture);
     await prepareCall(fixture, PLAN_ID);
@@ -364,14 +365,26 @@ describe("catalog pin — frozen prepare inputs (state-projection contract §1)"
       operationId: "upd-after-config",
       actor: "project-manager",
     });
-    // An ordinary config revision (branch) does not re-seal the existing pin: the
-    // frozen selection is EVIDENCE of the original prepare, not re-selected here.
-    const rev1 = await prepareCall(fixture, PLAN_ID, { workingBranch: "feature/plan-a" });
-    expect(rev1.outcome).toBe("prepared");
-    const rev2 = await prepareCall(fixture, PLAN_ID, { workingBranch: "feature/plan-a" });
-    void rev2;
-    const after = pinOf(storedRow(fixture, PLAN_ID));
-    expect(after).toEqual(pinned);
+    // A real DOCUMENT change too: the row's plan document is rewritten, so both
+    // the catalog and the document changed before the revision under test.
+    writeFileSync(fixture.planPath, "# plan a\n\nrevised after preparation\n");
+
+    // A GENUINE config revision: the disposable source checkout is switched onto a
+    // new valid feature branch, so the actual checkout/branch validation passes and
+    // the prepare commits a real configuration change.
+    git(["checkout", "-q", "-b", "feature/plan-a-revised"], fixture.worktreePath);
+    const revised = await prepareCall(fixture, PLAN_ID, { workingBranch: "feature/plan-a-revised" });
+    expect(revised.outcome).toBe("prepared");
+    expect(metadataOf(storedRow(fixture, PLAN_ID)).working_branch).toBe("feature/plan-a-revised");
+    // The frozen pin survives the catalog move and the revision unchanged.
+    expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(pinned);
+
+    // An equal reissue of the revised config is already satisfied, no write.
+    const snapshotBefore = readJson(fixture.snapshotPath);
+    const again = await prepareCall(fixture, PLAN_ID, { workingBranch: "feature/plan-a-revised" });
+    expect(again.outcome).toBe("already-satisfied");
+    expect(readJson(fixture.snapshotPath)).toEqual(snapshotBefore);
+    expect(pinOf(storedRow(fixture, PLAN_ID))).toEqual(pinned);
     const view = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
     expect(view.catalog_pin?.pin).toEqual(pinned);
     expect(view.catalog_pin?.catalog_moved).toBe(true);

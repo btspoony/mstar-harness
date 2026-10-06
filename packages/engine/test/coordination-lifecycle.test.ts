@@ -609,6 +609,7 @@ describe("report-only-completion", () => {
     mkdirSync(binDir);
     const evidencePath = join(fixture.root, "ro-evidence.json");
     writeJson(evidencePath, evidence);
+    const snapshotPath = join(fixture.harness, "workflows", WORKFLOW_ID, "snapshot.json");
     const scriptPath = join(fixture.root, "child-ro.ts");
     writeText(scriptPath, [
       `import { readFileSync } from "node:fs";`,
@@ -623,23 +624,29 @@ describe("report-only-completion", () => {
       `const completed = await mutatePlanCoordination({ sessionPath, planId, expectedRevision: view.revision, operation: { kind: "complete", evidence } });`,
       `// Replay the IDENTICAL request in the SAME no-Git child.`,
       `const replay = await mutatePlanCoordination({ sessionPath, planId, expectedRevision: view.revision, operation: { kind: "complete", evidence } });`,
-      `console.log(JSON.stringify({ outcome: completed.outcome, replay: replay.outcome, completedAt: completed.view.row.coordination.completion.completed_at, replayAt: replay.view.row.coordination.completion.completed_at, snapshot: completed.view.revision }));`,
+      `const snapshotText = require("node:fs").readFileSync(process.argv[process.argv.length - 1], "utf8");`,
+      `console.log(JSON.stringify({ outcome: completed.outcome, replay: replay.outcome, completedAt: completed.view.row.coordination.completion.completed_at, replayAt: replay.view.row.coordination.completion.completed_at, snapshotText }));`,
       ``,
     ].join("\n"));
     await sealStoreForReaders(fixture);
     const child = Bun.spawn(
-      [process.execPath, scriptPath, fixture.root, fixture.harness, PLAN_ID, fixture.coordinatorSession, evidencePath],
+      [process.execPath, scriptPath, fixture.root, fixture.harness, PLAN_ID, fixture.coordinatorSession, evidencePath, snapshotPath],
       { cwd: fixture.root, stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: binDir } },
     );
     const exitCode = await child.exited;
     const stdout = await new Response(child.stdout).text();
     const stderr = await new Response(child.stderr).text();
     expect(exitCode, `child stderr: ${stderr}`).toBe(0);
-    const report = JSON.parse(stdout) as { outcome: string; replay: string; completedAt: string; replayAt: string };
+    const report = JSON.parse(stdout) as {
+      outcome: string; replay: string; completedAt: string; replayAt: string; snapshotText: string;
+    };
     expect(report.outcome).toBe("completed");
     // The replay, in the same no-Git child, is already-satisfied with an unchanged timestamp.
     expect(report.replay).toBe("already-satisfied");
     expect(report.replayAt).toBe(report.completedAt);
+    // The WHOLE committed snapshot is byte-identical across the replay.
+    const snapshotAfterFirst = readFileSync(snapshotPath, "utf8");
+    expect(report.snapshotText).toBe(snapshotAfterFirst);
     // The parent reads the committed row: Done with all-null provenance, no integration.
     const row = planRowOf(fixture, PLAN_ID);
     expect(row.status).toBe("Done");
@@ -754,16 +761,18 @@ describe("seam-regressions", () => {
     const activeView = await readPlanCoordination(sessionPath, PLAN_ID, fixture.root);
     const progressBefore = activeView.row.coordination?.progress;
     const refusedBefore = readJson(fixture.snapshotPath);
-    expect(
-      await errorCodeOf(() =>
-        mutatePlanCoordination({
-          sessionPath,
-          planId: PLAN_ID,
-          expectedRevision: activeView.revision,
-          operation: { kind: "prepare", config: { workingBranch: "feature/plan-a-v2" } },
-        }),
-      ),
-    ).toBe("coordination.invalid-input");
+    const branchRefusal = await refusalError(() =>
+      mutatePlanCoordination({
+        sessionPath,
+        planId: PLAN_ID,
+        expectedRevision: activeView.revision,
+        operation: { kind: "prepare", config: { workingBranch: "feature/plan-a-v2" } },
+      }),
+    );
+    expect(failureCode(branchRefusal)).toBe("coordination.invalid-input");
+    // The actual branch cause and the ordinary correction are both named.
+    expect(branchRefusal.details).toMatchObject({ working_branch: "feature/plan-a-v2", actual: "feature/plan-a" });
+    expect(branchRefusal.message).toContain("revise it with plan prepare");
     expect(readJson(fixture.snapshotPath)).toEqual(refusedBefore);
     expect(metadataOf(planRowOf(fixture, PLAN_ID)).working_branch).toBe("feature/plan-a");
     expect(planRowOf(fixture, PLAN_ID).status).toBe("InProgress");
