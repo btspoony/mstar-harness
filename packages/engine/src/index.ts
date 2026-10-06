@@ -547,6 +547,8 @@ export type {
   PlanCoordinationOperation,
   PlanCoordinationView,
   PlanScopeInput,
+  PrepareCoordinatorRecoveryView,
+  RecoverPrepareCoordinatorResult,
   ResidualInput,
   ResolvedPlanScope,
   VersionedArtifact,
