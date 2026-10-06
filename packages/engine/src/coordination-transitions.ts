@@ -19,7 +19,7 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import { _DEFAULT_PROJECT } from "./project.js";
-import { assertSafePathComponent } from "./path-component.js";
+import { assertSafePathComponent } from "./path.js";
 
 export type CoordinationRole = "coordinator";
 export type CoordinationSeat = { role: CoordinationRole; sessionId: string };

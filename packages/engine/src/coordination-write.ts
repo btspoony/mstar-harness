@@ -317,6 +317,8 @@ export type CoordinationIdentityRecovery = {
   operation_id: string; request_hash: string; workflow_id: string; prior_session_id: string;
   session_id: string; authorization_ref: string; reason: string; stopped_session_ids: string[];
   snapshot_version_before: string; compass_version: string; recovered_at: string;
+  /** Stop attestation time for interrupted integration recovery. */
+  attested_at?: string;
 };
 export type SnapshotCoordination = {
   coordinator: CoordinatorBinding;
@@ -504,6 +506,7 @@ export function validateCoordinationIdentityRecovery(
     "authorization_ref",
     "reason",
     "stopped_session_ids",
+    "attested_at",
     "snapshot_version_before",
     "compass_version",
     "recovered_at",
@@ -533,6 +536,14 @@ export function validateCoordinationIdentityRecovery(
     if (typeof value[key] !== "string" || !HASH_RE.test(value[key])) {
       violations.push(invalid("coordination.recovery.version", `${what}.${key} must be a "sha256:<64 hex>" version`));
     }
+  }
+  if (value.attested_at !== undefined && (typeof value.attested_at !== "string"
+    || !/^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?[Zz]$/.test(value.attested_at)
+    || !Number.isFinite(Date.parse(value.attested_at))
+    || typeof value.recovered_at !== "string"
+    || !Number.isFinite(Date.parse(value.recovered_at))
+    || Date.parse(value.attested_at) > Date.parse(value.recovered_at))) {
+    violations.push(invalid("coordination.recovery.attestation", `${what}.attested_at must be a UTC stop timestamp no later than recovered_at`));
   }
   const stopped = value.stopped_session_ids;
   if (!Array.isArray(stopped) || stopped.length === 0) {

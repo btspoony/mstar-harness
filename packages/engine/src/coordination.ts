@@ -110,6 +110,7 @@ import {
   type StoreDb,
   type StoreHandle,
 } from "./store-db.js";
+import { validateActivationAttestation, type ActivationAttestation } from "./store-activation.js";
 import {
   IssueError,
   assertIssueProvenanceSchema,
@@ -2314,8 +2315,10 @@ async function mutatePrepare(
         ...(isNonEmptyString(workingBranch) ? { working_branch: workingBranch } : {}),
       };
       await assertWorkflowRegistrationCommitted(scope.harnessRoot, scope.workflowId);
-      const pin = await selectCatalogPin(scope.harnessRoot, scope.workflowId, scope.planId, { ...context.row, metadata });
-      if (pin !== null) metadata.catalog_pin = pin;
+      if (recordedPinOf(context.row) === null) {
+        const pin = await selectCatalogPin(scope.harnessRoot, scope.workflowId, scope.planId, context.row);
+        if (pin !== null) metadata.catalog_pin = pin;
+      }
       if (current !== undefined
         && current.qa_gate === qaGate
         && current.findings_cleanup === findingsCleanup
@@ -6325,6 +6328,7 @@ const RECOVERY_INPUT_KEYS: readonly string[] = [
   "reason",
   "authorizationRef",
   "stoppedSessionIds",
+  "attestation",
 ];
 
 /**
@@ -6345,6 +6349,7 @@ function recoveryRequestHash(request: {
   reason: string;
   authorizationRef: string;
   stoppedSessionIds: readonly string[];
+  attestation?: ActivationAttestation;
 }): string {
   return sha256Bytes(
     stableJson({
@@ -6354,6 +6359,7 @@ function recoveryRequestHash(request: {
       reason: request.reason,
       authorization_ref: request.authorizationRef,
       stopped_session_ids: [...request.stoppedSessionIds],
+      ...(request.attestation === undefined ? {} : { attestation: request.attestation }),
     }),
   );
 }
@@ -6480,7 +6486,10 @@ export async function showPrepareCoordinatorRecovery(
     );
   }
   const compass = readRecoveryCompass(harnessRoot, snapshot);
-  const admission = prepareStageAdmission(harnessRoot, workflowId, snapshot, phaseDerived);
+  const lease = snapshot.integration_merge_lease;
+  const admission = lease?.holder === coordinator.session_id
+    ? prepareAdmission(harnessRoot, workflowId, snapshot)
+    : prepareStageAdmission(harnessRoot, workflowId, snapshot, phaseDerived);
   return {
     workflowId,
     priorSessionId: coordinator.session_id,
@@ -6492,28 +6501,23 @@ export async function showPrepareCoordinatorRecovery(
 }
 
 /**
- * Replace the recorded coordinator binding of one Prepare workflow with a
- * freshly acquired identity, after the prior owner can no longer authenticate
- * (§3.3). Intentionally NARROWER than the existing DB recovery: no
- * prepared-plan takeover, no lease transfer, no raw session rewrite, no force
- * flag, and it is JSON/Prepare-only.
+ * Replace the recorded coordinator of a Prepare workflow or an interrupted
+ * integration after explicit authorization and an authenticated stop assertion.
+ * An integration claim is discarded only when it belongs to the exact recorded
+ * predecessor being replaced. No claim is transferred, no row state is changed,
+ * and a foreign claim never broadens the Prepare admission.
  *
- * Required under the snapshot write lock: the named registered RUNNING
- * iteration in this canonical root, a committed registration, a prior envelope
- * that still authenticates the EXACT recorded coordinator, an explicitly
- * acquired identity addressing this workflow's coordinator seat with no plan
- * scope, an explicit reason + authorization reference + a stop assertion naming
- * the prior holder, both fresh byte versions, and the ORIGINAL `prepareAdmission`
- * over every row (no lease, no row coordination, no progress — this verb never
- * touches a workflow that has begun executing). Every semantic refusal happens
- * before a file is created.
+ * The registered workflow must still be running. The prior envelope must
+ * authenticate the recorded coordinator; the acquired replacement must address
+ * this workflow and must not appear in the stop assertion. All semantic checks
+ * run under the snapshot write lock before creating the replacement envelope.
  *
  * Accepted effect: one role-scoped envelope through exclusive creation, the
  * top-level coordinator binding replaced, one immutable
- * `coordination.identity_recoveries` entry appended, `updated_at` refreshed —
- * every row, branch anchor, evidence field and other workflow stays
- * byte-identical. The old envelope's bytes remain as history and stop
- * authorizing because the binding moved, never because a credential was edited.
+ * `coordination.identity_recoveries` entry appended, `updated_at` refreshed,
+ * and this predecessor's interrupted integration claim removed atomically.
+ * Every row, branch anchor, evidence field and other workflow stays unchanged.
+ * The old envelope remains as history and stops authorizing when the binding moves.
  */
 export async function recoverPrepareCoordinator(
   input: Readonly<{
@@ -6526,6 +6530,8 @@ export async function recoverPrepareCoordinator(
     reason: string;
     authorizationRef: string;
     stoppedSessionIds: readonly string[];
+    /** Existing operator stop attestation; required for interrupted integration. */
+    attestation?: ActivationAttestation;
   }>,
 ): Promise<RecoverPrepareCoordinatorResult> {
   if (!isPlainObject(input)) throw invalidInput("coordinator recovery input must be an object");
@@ -6552,6 +6558,11 @@ export async function recoverPrepareCoordinator(
   const authorizationRef = recoveryText(input.authorizationRef, "authorizationRef");
   const priorSessionId = recoveryText(input.priorSessionId, "priorSessionId");
   const stoppedSessionIds = recoveryStopList(input.stoppedSessionIds);
+  const attestation = input.attestation === undefined ? undefined : validateActivationAttestation(input.attestation);
+  if (attestation !== undefined && attestation.operator.authorizationRef !== authorizationRef) {
+    throw recoveryRefusal("unauthorized", "the stop attestation's operator authorization does not match authorizationRef; supply the actual operator-authorized attestation and retry recovery", { field: "attestation.operator.authorizationRef" });
+  }
+  const attestedAt = attestation === undefined ? undefined : new Date(attestation.attestedAt).toISOString();
 
   // The new identity's session id names the envelope this recovery creates, so
   // it obeys the same single-safe-component rule every session id does.
@@ -6578,6 +6589,7 @@ export async function recoverPrepareCoordinator(
     reason,
     authorizationRef,
     stoppedSessionIds,
+    ...(attestation === undefined ? {} : { attestation }),
   });
   const snapshotPath = assertSnapshotPath(harnessRoot, workflowId, snapshotPathOf(harnessRoot, workflowId));
   const committed = await withStatusWriteLock(snapshotPath, async () => {
@@ -6669,12 +6681,18 @@ export async function recoverPrepareCoordinator(
         { prior_session_id: recorded.session_id, stopped_session_ids: [...stoppedSessionIds] },
       );
     }
-    // The ORIGINAL admission, over EVERY row (§3.3): no lease, no row
-    // coordination block, no progress, no merge lease. A recovery never touches
-    // a workflow that has started executing. It is decided through the ONE phase
-    // authority (`deriveLifecyclePhase`), so the gate cannot drift from the
-    // phase every other reader reports.
-    const admission = prepareStageAdmission(harnessRoot, workflowId, snapshot, phaseDerived);
+    if (stoppedSessionIds.includes(sessionId)) {
+      throw recoveryRefusal(
+        "unauthorized",
+        "the replacement coordinator is named as stopped; remove the replacement from the stop assertion and retry recovery",
+        { session_id: sessionId },
+      );
+    }
+    const lease = snapshot.integration_merge_lease;
+    const ownsInterruptedClaim = lease?.holder === recorded.session_id;
+    const admission = ownsInterruptedClaim
+      ? prepareAdmission(harnessRoot, workflowId, snapshot)
+      : prepareStageAdmission(harnessRoot, workflowId, snapshot, phaseDerived);
     if (!admission.ok) {
       throw recoveryRefusal(
         admission.reason === "execution-started" ? "execution-started" : "not-prepare",
@@ -6692,6 +6710,20 @@ export async function recoverPrepareCoordinator(
       harness_root: harnessRoot,
     };
     const recoveredAt = nowIso();
+    if (attestedAt !== undefined && Date.parse(attestedAt) > Date.parse(recoveredAt)) {
+      throw recoveryRefusal("unauthorized", "the stop attestation is in the future; supply the observed stop time and retry recovery", { attested_at: attestedAt, recovered_at: recoveredAt });
+    }
+    if (ownsInterruptedClaim && (attestation === undefined || attestedAt === undefined || lease === undefined
+      || !attestation.stoppedSessions.some((entry) => entry.sessionId === recorded.session_id)
+      || attestation.stoppedSessions.some((entry) => entry.sessionId === sessionId)
+      || !Number.isFinite(Date.parse(lease.claimed_at))
+      || Date.parse(lease.claimed_at) > Date.parse(attestedAt))) {
+      throw recoveryRefusal(
+        "unauthorized",
+        "interrupted integration recovery requires the operator's validated stop attestation naming this exact prior holder as stopped or reloaded after its claim; supply workflow recover-coordinator --attestation <absolute-json> and retry. A live, foreign or newer claim is not released",
+        { holder: recorded.session_id, claimed_at: lease?.claimed_at, attested_at: attestedAt ?? null },
+      );
+    }
     const entry: CoordinationIdentityRecovery = {
       operation_id: operationId,
       request_hash: requestHash,
@@ -6701,6 +6733,7 @@ export async function recoverPrepareCoordinator(
       authorization_ref: authorizationRef,
       reason,
       stopped_session_ids: [...stoppedSessionIds],
+      ...(attestedAt === undefined ? {} : { attested_at: attestedAt }),
       snapshot_version_before: version,
       compass_version: compass.version,
       recovered_at: recoveredAt,
@@ -6726,6 +6759,7 @@ export async function recoverPrepareCoordinator(
           identity_recoveries: [...audit, entry],
         },
       };
+      if (ownsInterruptedClaim) delete next.integration_merge_lease;
       await commitSnapshot(harnessRoot, workflowId, snapshotPath, next);
     } catch (error) {
       if (created && envelope !== "") reclaimRecoveryEnvelope(envelope, session);

@@ -74,6 +74,9 @@ The launcher mints one child-local coordinator identity, overwrites the identity
 
 Public recovery output exposes workflow/public session ids and receipt/replay/token/version facts, never envelope paths/body. Independent caller identity is revalidated within the transaction. A copied session id/reference or repeated launcher is not acquisition of the old identity.
 
+For an interrupted FILE integration, use `mstar workflow recover-coordinator --session <prior-envelope> --session-id <replacement-id> --operation-id <id> --reason <text> --authorization-ref <operator-authorization> --stopped <prior-id> --attestation <absolute-json>`. The attestation uses the existing `ActivationAttestation` document contract: operator authorization, installed current coordinator and an explicitly stopped/reloaded prior holder. Its stop time must be at or after the recorded claim and not in the future. Recovery atomically replaces the authenticated coordinator and removes only that predecessor's interrupted claim; rows and delivery evidence are unchanged. A bare stopped-ID list, elapsed time or unrelated historical stop never authorizes release. The engine validates the operator attestation and current binding; it does not independently observe host-process liveness.
+
+
 ## Issue writes
 
 Unscoped `mstar issue` remains actor-only: write verbs require `--actor`, `--operation-id` and payload/file; triage/terminal disposition/link require issue CAS `--expect`. Plan issue-add/issue-close compose issue mutations under the workflow coordinator and selected row, preserving closure authority and issue CAS. The legacy residual register is migration history, never a live dual-write target.
