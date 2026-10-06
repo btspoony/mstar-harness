@@ -1954,7 +1954,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
         domainContext(context, sessionCaller("wf-other", "host-coord")),
         sessionBind("wf-1", workflowToken, "foreign-workflow"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    ).rejects.toMatchObject({ code: "execution.scope-mismatch" });
 
     expect(sessionRows(context)).toEqual([]);
     expect(executionFootprint(context)).toEqual(footprint);
@@ -1978,7 +1978,10 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
     const currentToken = (await readExecutionState(context)).data.workflows[0]!.workflowToken;
     await expect(
       bindExecutionSession(domainContext(context, sessionCaller("wf-1", "host-second")), sessionBind("wf-1", currentToken, "second")),
-    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    ).rejects.toMatchObject({
+      code: "execution.session-unavailable",
+      details: { holder: "host-coord" },
+    });
     // (3) The planted legacy envelope is neither read nor rewritten.
     const before = JSON.parse(readFileSync(envelope, "utf8")) as Record<string, unknown>;
     expect(before.role).toBe("coordinator");
@@ -2019,7 +2022,7 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
         domainContext(context, sessionCaller("wf-1", "adopter-2")),
         sessionBind("wf-1", (await readExecutionState(context)).data.workflows[0]!.workflowToken, "adopt-duplicate"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    ).rejects.toMatchObject({ code: "execution.session-unavailable", details: { holder: "adopter-1" } });
     expect(bound.data.sessionId).toBe("adopter-1");
   });
 
@@ -2095,13 +2098,13 @@ describe("execution-session: \u00A72.3 coordinator binding and the plan read", (
         domainContext(context, sessionCaller("wf-1", "foreign-b")),
         sessionBind("wf-1", (await readExecutionState(context)).data.workflows[0]!.workflowToken, "foreign-after-adopt"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    ).rejects.toMatchObject({ code: "execution.session-unavailable", details: { holder: "adopter-a" } });
     await expect(
       bindExecutionSession(
         domainContext(context, sessionCaller("wf-1", "adopter-c")),
         sessionBind("wf-1", (await readExecutionState(context)).data.workflows[0]!.workflowToken, "adopt-again"),
       ),
-    ).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    ).rejects.toMatchObject({ code: "execution.session-unavailable", details: { holder: "adopter-a" } });
     db = rawDb(storePath(context));
     try {
       expect(one(db, "select creator_session_id from execution_workflows where workflow_id = 'wf-1'")).toEqual({

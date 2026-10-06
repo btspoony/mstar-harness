@@ -3196,9 +3196,18 @@ describe("one-shot prepared coordination — ordinary revisable config", () => {
     await coordinatorCall(fixture, PLAN_ID, { kind: "prepare", config: { worktreePath: fixture.worktreePath, workingBranch: "feature/plan-a" } });
     await progressCall(fixture, PLAN_ID, { status: "InProgress", summary: "start", evidence_paths: [] });
 
-    // A mistaken config is corrected by ordinary prepare while the row is active.
+    // A mistaken config naming a branch the ACTUAL checkout is not on refuses and
+    // leaves the valid prior config alone.
     const activeView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
-    const revised = await reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" });
+    expect(
+      await errorCodeOf(() => reissuePrepare(fixture.coordinatorSession, fixture, activeView.revision, { workingBranch: "feature/plan-a-v2" })),
+    ).toMatch(/^coordination\.(git-proof|scope-mismatch|invalid-input)$/);
+
+    // The real correction: switch the disposable feature checkout onto the new
+    // branch, then prepare that actual scope while the row stays active.
+    git(["checkout", "-q", "-b", "feature/plan-a-v2"], fixture.worktreePath);
+    const switchedView = await readPlanCoordination(fixture.coordinatorSession, PLAN_ID, fixture.root);
+    const revised = await reissuePrepare(fixture.coordinatorSession, fixture, switchedView.revision, { workingBranch: "feature/plan-a-v2" });
     expect(revised).toMatchObject({ outcome: "prepared" });
     const row = planRowOf(fixture, PLAN_ID);
     expect((row.metadata as Record<string, unknown>).working_branch).toBe("feature/plan-a-v2");
