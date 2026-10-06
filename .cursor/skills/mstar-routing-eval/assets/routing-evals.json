@@ -518,7 +518,7 @@
         "{SDD_DIR}/review/qc1.md qc2.md qc3.md",
         "{SDD_DIR}/review/qc-consolidated.md",
         "durable main-plan Review Gate Summary",
-        "project register residuals.json entries[<plan-id>] for open R#",
+        "open QC findings captured as plan-linked issues in {HARNESS_DIR}/store.db (residuals.json is migration history only)",
         "branch review-package path"
       ],
       "hard_fail_if": [
@@ -526,8 +526,8 @@
         "asks user whether to continue mid Autonomous Execute",
         "ends turn with confirmation question instead of next dispatch",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
+        "cross-plan parallel writable implement without ACTIVE control store.db withExecutionTransaction and execution-token arbitration; pre-activation only: without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
+        "treats Worktree mode waived as cross-plan parallel override bypassing ACTIVE DB arbitration or pre-activation file-lock/race-acceptance gate",
         "steal or overwrite active execution_lease or integration_merge_lease",
         "parallel integration merge into spec_integration_branch",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
@@ -562,8 +562,8 @@
         "asks user whether to continue before plan B dispatch",
         "ends turn with confirmation question instead of next dispatch",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
+        "cross-plan parallel writable implement without ACTIVE control store.db withExecutionTransaction and execution-token arbitration; pre-activation only: without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
+        "treats Worktree mode waived as cross-plan parallel override bypassing ACTIVE DB arbitration or pre-activation file-lock/race-acceptance gate",
         "steal or overwrite active execution_lease or integration_merge_lease",
         "writable dispatch for InProgress plan without execution_lease (orphan without recovery)",
         "assignment uses non-English field keys"
@@ -571,7 +571,7 @@
     },
     {
       "id": "iteration-phase2-multi-plan-lease-parallel",
-      "prompt": "iteration-drive：plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 plan 可并行 implement，control worktree 与各自 feature worktree + execution_lease 已就绪",
+      "prompt": "iteration-drive：store.db ACTIVE，plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 plan 依赖与写所有权隔离，可并行 implement，同一 control DB 事务仲裁与各自 feature worktree + execution_leases 已就绪",
       "expected_route": [
         "@project-manager",
         "@fullstack-dev",
@@ -581,10 +581,10 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
-        "snapshot top-level control_worktree_path on control worktree",
-        "same-host exclusive write lock available and used for every lease mutation before cross-plan parallel dispatch",
-        "verified execution_lease per plan before writable dispatch",
-        "distinct absolute Worktree path per plan (execution_lease.worktree_path differs from control_worktree_path)",
+        "main-worktree control root established; ACTIVE execution_workflows branch anchors and integration_worktree_path read through public workflow view (snapshot only pre-activation)",
+        "ACTIVE withExecutionTransaction plus scope execution-token CAS used for every coordination mutation before cross-plan parallel dispatch; snapshot flock is not ACTIVE authority",
+        "verified ACTIVE execution_leases row per plan before writable dispatch (snapshot plans[].execution_lease only pre-activation)",
+        "distinct absolute Worktree path per plan (lease worktree_path differs from main-worktree control root)",
         "Worktree path on each implement Assignment matching execution_lease.worktree_path",
         "Execution mode: sdd per plan",
         "serial implementer then task reviewer per task within each plan",
@@ -593,8 +593,8 @@
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
+        "cross-plan parallel writable implement without ACTIVE control store.db withExecutionTransaction and execution-token arbitration; pre-activation only: without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
+        "treats Worktree mode waived as cross-plan parallel override bypassing ACTIVE DB arbitration or pre-activation file-lock/race-acceptance gate",
         "steal or overwrite active execution_lease held by different holder",
         "parallel integration merge into spec_integration_branch",
         "treats Plan parallelism: serial as Worktree mode waived or skips control worktree or execution_lease claim",
@@ -606,37 +606,37 @@
     },
     {
       "id": "iteration-phase2-no-flock-serial-keep-worktree",
-      "prompt": "iteration-drive：本机无 flock / 无共享 coordination snapshot 写锁；plans/ 默认 gitignore，feature worktree 看不到 .mstar/plans；plan 141 与 143 可能同时改同一文件。编排 Phase 2。",
+      "prompt": "iteration-drive：pre-activation / engine-absent 文件路由，本机无 flock / 无共享 coordination snapshot 写锁；plans/ 默认 gitignore，feature worktree 看不到 .mstar/plans；plan 141 与 143 可能同时改同一文件。编排 Phase 2。",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "Plan parallelism: serial",
-        "control worktree retained (Worktree mode not waived solely for missing flock)",
-        "per-plan feature worktree + execution_lease still required unless user explicitly waives worktree this turn",
+        "control root and integration worktree retained (Worktree mode not waived solely for missing pre-activation file lock)",
+        "pre-activation per-plan feature worktree + snapshot plans[].execution_lease still required unless user explicitly waives worktree this turn",
         "absolute control Plan Path / Control harness root for harness reads",
         "absolute feature Worktree path for product edits"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
-        "sets Worktree mode: waived because no flock",
+        "sets Worktree mode: waived because pre-activation file lock is unavailable",
         "sets Worktree mode: waived because feature worktree lacks plans under default gitignore",
-        "cross-plan parallel writable implement without same-host exclusive write lock and without Cross-host lease race accepted",
+        "pre-activation cross-plan parallel writable implement without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
         "relative Plan Path resolved from feature cwd when L1 lease gate active",
         "assignment uses non-English field keys"
       ]
     },
     {
       "id": "iteration-phase2-gitignore-control-path-harness",
-      "prompt": "iteration-drive：默认 gitignore 下 feature worktree 无 plans/status；control worktree 在 spec_integration_branch 上已有 .mstar/plans 与 workflows/<id>/snapshot.json。派发 plan feature implement。",
+      "prompt": "iteration-drive：store.db ACTIVE，默认 gitignore 下 feature worktree 无 plans/status；主 checkout control root 驻留记录的 Main worktree branch，已有 .mstar/plans 与 .mstar/store.db，独立 integration worktree 检出 spec_integration_branch。派发 plan feature implement。",
       "expected_route": [
         "@project-manager",
         "@fullstack-dev"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
-        "snapshot top-level control_worktree_path",
+        "main-worktree control root resolved; ACTIVE execution_workflows integration_worktree_path and branch anchors read through public workflow view, not snapshot control_worktree_path",
         "Control harness root absolute path on Assignment",
         "Plan Path absolute under control worktree",
         "SDD dir absolute under control worktree or MSTAR_CONTROL_ROOT for the SDD workspace CLI",
@@ -669,8 +669,8 @@
         "missing Context Loaded declaration",
         "writable implement dispatch for plan without verified execution_lease",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
+        "cross-plan parallel writable implement without ACTIVE control store.db withExecutionTransaction and execution-token arbitration; pre-activation only: without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
+        "treats Worktree mode waived as cross-plan parallel override bypassing ACTIVE DB arbitration or pre-activation file-lock/race-acceptance gate",
         "invents execution_lease without claim protocol",
         "steal or overwrite active execution_lease held by different holder",
         "assignment uses non-English field keys"
@@ -807,9 +807,9 @@
       "must_have_artifacts": [
         "Context Loaded declaration",
         "mstar-iteration Phase 2 context",
-        "snapshot top-level control_worktree_path established",
-        "execution_lease claim before writable dispatch even under serial scheduling",
-        "integration_merge_lease serial merge after QC/QA before Done"
+        "main-worktree control root and separate integration worktree established; ACTIVE execution_workflows branch anchors and integration_worktree_path (snapshot only pre-activation)",
+        "ACTIVE execution_leases claim via public plan verb before writable dispatch even under serial scheduling (snapshot execution_lease only pre-activation)",
+        "ACTIVE execution_integration_leases serial integration after QC/QA before Done (snapshot integration_merge_lease only pre-activation)"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
@@ -842,7 +842,7 @@
     },
     {
       "id": "iteration-phase2-orphan-inprogress-stop",
-      "prompt": "iteration-drive：workflow snapshot 显示 plan B 为 InProgress 但没有 execution_lease，想直接 dispatch implement",
+      "prompt": "iteration-drive：pre-activation / engine-absent 文件路由，workflow snapshot 显示 plan B 为 InProgress 但没有 execution_lease，想直接 dispatch implement",
       "expected_route": [
         "@project-manager"
       ],
@@ -882,20 +882,20 @@
     },
     {
       "id": "iteration-phase2-cross-host-parallel-without-lock",
-      "prompt": "iteration-drive：plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 session 在不同机器上、control snapshot 无共享 flock，想同时 dispatch 两 plan 的 implement",
+      "prompt": "iteration-drive：store.db ACTIVE，plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 session 在不同机器上、无共享 control DB 事务/token 仲裁（control snapshot 也无共享 flock），想同时 dispatch 两 plan 的 implement",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "Blocked or Plan parallelism: serial before cross-plan parallel writable dispatch",
-        "no cross-plan parallel writable dispatch without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json)",
-        "cross-host residual documented only after current-turn Cross-host lease race accepted plus audit plans notes"
+        "ACTIVE: no cross-plan parallel writable dispatch without shared control store.db withExecutionTransaction and execution-token arbitration; missing flock alone is not an ACTIVE serial trigger",
+        "pre-activation only: file-route race override requires current-turn Cross-host lease race accepted plus append-only notes.jsonl audit; no snapshot plans notes dual-write and no ACTIVE DB-arbitration bypass"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
+        "cross-plan parallel writable implement without ACTIVE control store.db withExecutionTransaction and execution-token arbitration; pre-activation only: without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
+        "treats Worktree mode waived as cross-plan parallel override bypassing ACTIVE DB arbitration or pre-activation file-lock/race-acceptance gate",
         "cross-plan parallel implement without verified execution_lease and distinct feature Worktree path per plan",
         "writable implement dispatch for plan without verified execution_lease",
         "assignment uses non-English field keys"
@@ -903,7 +903,7 @@
     },
     {
       "id": "iteration-phase2-waived-not-parallel-override",
-      "prompt": "iteration-drive：Assignment 含 Worktree mode: waived；plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 session 在不同机器上、snapshot 无共享 flock，想同时 dispatch 两 plan 的 implement",
+      "prompt": "iteration-drive：pre-activation / engine-absent 文件路由，Assignment 含 Worktree mode: waived；plan A 与 plan B 均为 Todo，Plan parallelism 非 serial；两 session 在不同机器上、snapshot 无共享 flock，想同时 dispatch 两 plan 的 implement",
       "expected_route": [
         "@project-manager"
       ],
@@ -911,13 +911,13 @@
         "Context Loaded declaration",
         "Blocked or Plan parallelism: serial before cross-plan parallel writable dispatch",
         "Worktree mode waived does not waive cross-plan parallel safety gate",
-        "no cross-plan parallel writable dispatch without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json)",
-        "cross-host residual documented only after current-turn Cross-host lease race accepted plus audit plans notes"
+        "pre-activation: no cross-plan parallel writable dispatch without same-host exclusive write lock on workflows/<id>/snapshot.json unless this turn explicitly accepts the file-route race",
+        "pre-activation file-route race override requires current-turn Cross-host lease race accepted plus append-only notes.jsonl audit, not snapshot plans notes"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
-        "treats Worktree mode waived as cross-plan parallel override without same-host lock or Cross-host lease race accepted",
-        "cross-plan parallel writable implement without same-host exclusive write lock on the coordination snapshot (workflows/<id>/snapshot.json) and without Cross-host lease race accepted override",
+        "treats Worktree mode waived as pre-activation cross-plan parallel override without same-host snapshot lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
+        "pre-activation cross-plan parallel writable implement without same-host exclusive snapshot write lock or current-turn Cross-host lease race accepted plus notes.jsonl audit",
         "cross-plan parallel writable dispatch solely because Worktree mode waived",
         "assignment uses non-English field keys"
       ]
