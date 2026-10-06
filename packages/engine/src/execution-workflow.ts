@@ -1684,15 +1684,28 @@ export async function recoverExecutionCoordinator(
         );
       }
       // A LIVE holder is never replaced by another name: the recovery identity
-      // is the holder the stop evidence was given for, or nothing.
+      // is the holder the stop evidence was given for, or nothing. The ONE
+      // exception is the recovery-continuation path below: the caller IS the
+      // live coordinator, its binding was created by an immutable successful
+      // recovery receipt from the named predecessor, and a held integration
+      // claim still names that predecessor — so the continuation settles the
+      // claim without rebinding.
       if (live !== undefined && live.ref.sessionId !== priorSessionId) {
-        throw new CoordinationError(
-          "coordination.duplicate-holder",
-          `workflow ${workflowId} holds the ACTIVE coordinator session ${live.ref.sessionId} at epoch ${tx.epoch}; recovery ` +
-            `may replace only the holder it names (${priorSessionId}). Ownership is not replaceable by another identity, ` +
-            `and a live holder resumes through its own reference. Nothing was recovered.`,
-          { workflow_id: workflowId, holder: live.ref.sessionId, named: priorSessionId },
-        );
+        const continuation =
+          live.ref.sessionId === caller.sessionId &&
+          hasCoordinatorRecoveryChain(tx, workflowId, caller.sessionId, priorSessionId) &&
+          priorRow !== undefined && priorRow.state === "revoked";
+        if (!continuation) {
+          throw new CoordinationError(
+            "coordination.duplicate-holder",
+            `workflow ${workflowId} holds the ACTIVE coordinator session ${live.ref.sessionId} at epoch ${tx.epoch}; recovery ` +
+              `may replace only the holder it names (${priorSessionId}). Ownership is not replaceable by another identity, ` +
+              `and a live holder resumes through its own reference. Nothing was recovered.`,
+            { workflow_id: workflowId, holder: live.ref.sessionId, named: priorSessionId },
+          );
+        }
+        // The claim continuation is settled after the shared revoke/bind below;
+        // the binding is already the caller's and must not change.
       }
       // The stop evidence is the trust boundary: the engine cannot observe a
       // dead process, so a named holder that nobody attested stopped is
@@ -1814,6 +1827,32 @@ function settleStoppedIntegrationClaim(
   if (!Number.isFinite(attestedAtInstant) || !Number.isFinite(recoveredAtInstant)) return;
   if (claimedAt > attestedAtInstant || attestedAtInstant > recoveredAtInstant) return;
   releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: callerId, at });
+}
+
+/**
+ * Whether an immutable successful coordinator-recovery receipt records the
+ * chain: the CURRENT binding (sessionId) was created by a recovery from the
+ * named predecessor. This is the trust anchor for the claim-continuation path —
+ * without a matching receipt, an arbitrary session id is never accepted.
+ */
+function hasCoordinatorRecoveryChain(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  sessionId: string,
+  priorSessionId: string,
+): boolean {
+  const rows = tx.db
+    .prepare("select result_json from execution_operations where workflow_id = ? and plan_id is null order by epoch desc, committed_at desc")
+    .all(workflowId) as Array<{ result_json?: unknown }>;
+  for (const row of rows) {
+    const raw: unknown = typeof row.result_json === "string" ? (JSON.parse(row.result_json) as unknown) : undefined;
+    if (!isPlainObject(raw)) continue;
+    const data = raw.data;
+    const recovery = raw.recovery;
+    if (!isPlainObject(data) || !isPlainObject(recovery)) continue;
+    if (data.sessionId === sessionId && data.role === "coordinator" && recovery.prior_session_id === priorSessionId) return true;
+  }
+  return false;
 }
 
 /** §2.3 a replay's authority revalidation: the caller must still hold its binding. */
