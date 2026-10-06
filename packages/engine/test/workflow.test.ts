@@ -1149,8 +1149,8 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     mkdirSync(sessions, { recursive: true });
     const sessionFile = join(sessions, "s-1.json");
     const foreign = join(sessions, "s-2.json");
-    writeFileSync(sessionFile, JSON.stringify({ session_id: "s-1" }));
-    writeFileSync(foreign, JSON.stringify({ session_id: "s-2" }));
+    writeFileSync(sessionFile, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "s-1", workflow_id: id, harness_root: root }));
+    writeFileSync(foreign, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "s-2", workflow_id: id, harness_root: root }));
     const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
     const snapshot = validSnapshot({
       id,
@@ -1165,9 +1165,10 @@ describe("recordWorkflowDelivery — authorized delivery-evidence recording (sea
     setArtifactStore(createFsStore(root));
     const before = readFileSync(path, "utf8");
     const evidence = { compound: { outcome: "created" as const } };
-    await expect(recordWorkflowDelivery(id, dir, { evidence })).rejects.toMatchObject({ code: "coordination.session-mismatch" });
-    await expect(recordWorkflowDelivery(id, dir, { evidence, sessionPath: foreign })).rejects.toMatchObject({ code: "coordination.session-mismatch" });
-    
+    await expect(recordWorkflowDelivery(id, dir, { evidence })).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    await expect(recordWorkflowDelivery(id, dir, { evidence, sessionPath: foreign })).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
     const recorded = await recordWorkflowDelivery(id, dir, { evidence, sessionPath: sessionFile });
     expect(recorded.written).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf8")).delivery).toEqual(evidence);
@@ -1316,7 +1317,9 @@ describe("declareWorkflowDeliveryKind — one-time kind declaration (seam S3 pop
     const sessions = join(dir, "sessions");
     mkdirSync(sessions, { recursive: true });
     const sessionFile = join(sessions, "s-1.json");
-    writeFileSync(sessionFile, JSON.stringify({ session_id: "s-1" }));
+    const foreign = join(sessions, "s-2.json");
+    writeFileSync(sessionFile, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "s-1", workflow_id: id, harness_root: root }));
+    writeFileSync(foreign, JSON.stringify({ schema_version: 1, role: "coordinator", session_id: "s-2", workflow_id: id, harness_root: root }));
     const path = join(dir, WORKFLOW_SNAPSHOT_FILE);
     writeFileSync(
       path,
@@ -1335,8 +1338,10 @@ describe("declareWorkflowDeliveryKind — one-time kind declaration (seam S3 pop
     setArtifactStore(createFsStore(root));
     const declaration = { deliveryKind: "development", branchSource: "feature/a", branchTarget: "main" } as const;
     const before = readFileSync(path, "utf8");
-    await expect(declareWorkflowDeliveryKind(id, dir, declaration)).rejects.toMatchObject({ code: "coordination.session-mismatch" });
-    
+    await expect(declareWorkflowDeliveryKind(id, dir, declaration)).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    await expect(declareWorkflowDeliveryKind(id, dir, { ...declaration, sessionPath: foreign })).rejects.toMatchObject({ code: "coordination.identity-mismatch" });
+    expect(readFileSync(path, "utf8")).toBe(before);
     const declared = await declareWorkflowDeliveryKind(id, dir, { ...declaration, sessionPath: sessionFile });
     expect(declared.delivery_kind).toBe("development");
     // The declaration ADDS the delivery anchors — the snapshot's other anchors

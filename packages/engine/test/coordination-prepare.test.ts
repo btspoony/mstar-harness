@@ -25,6 +25,7 @@ import type { RecoveryDetails } from "../src/recovery-intent.js";
 import { ACTIVATION_PROTOCOL_VERSION, StoreActivationError, type ActivationAttestation } from "../src/store-activation.js";
 import { initializeStore } from "../src/store-db.js";
 import { CoordinationError } from "../src/coordination-write.js";
+import type { ExecutionIdentity } from "../src/session-identity.js";
 import { registerWorkflow } from "../src/status.js";
 import { createFsStore, setArtifactStore, type ArtifactDoc, type ArtifactRef, type ArtifactStore } from "../src/store.js";
 import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js";
@@ -2618,7 +2619,6 @@ function recoveryInputOf(
       sessionId: RECOVERED_COORDINATOR_ID,
       workflowId: PREPARE_WORKFLOW,
       role: "coordinator",
-      planId: null,
     },
     priorSessionPath: fixture.coordinatorSession,
     priorSessionId: FIXTURE_COORDINATOR_ID,
@@ -2627,7 +2627,7 @@ function recoveryInputOf(
     authorizationRef: "PM-authorization-20260921",
     stoppedSessionIds: [FIXTURE_COORDINATOR_ID],
     ...overrides,
-  } as Parameters<typeof recoverPrepareCoordinator>[0];
+  };
 }
 
 /**
@@ -2656,8 +2656,8 @@ function stopAttestationOf(attestedAt: string, stoppedSessionId: string): Activa
 }
 
 /** One replacement identity for the multi-recovery cases. */
-function recoveredIdentity(sessionId: string): Record<string, unknown> {
-  return { source: "local", sessionId, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: null };
+function recoveredIdentity(sessionId: string): ExecutionIdentity {
+  return { source: "local", sessionId, workflowId: PREPARE_WORKFLOW, role: "coordinator" };
 }
 
 /** Where the engine keeps one coordinator envelope (the session-path contract). */
@@ -3113,16 +3113,16 @@ describe("prepare coordinator recovery", () => {
       {
         name: "an identity addressing a workflow that records no coordinator binding",
         overrides: {
-          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_PEER, role: "coordinator", planId: null },
+          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_PEER, role: "coordinator" },
         },
         code: "coordination.identity-recovery.not-prepare",
       },
       {
-        name: "a plan-scoped identity",
+        name: "an identity with a retired plan scope field",
         overrides: {
-          identity: { source: "local", sessionId: RECOVERED_COORDINATOR_ID, workflowId: PREPARE_WORKFLOW, role: "coordinator", planId: "plan-a" },
+          identity: { ...recoveredIdentity(RECOVERED_COORDINATOR_ID), planId: "plan-a" },
         },
-        code: "coordination.identity-mismatch",
+        code: "coordination.forbidden-field",
       },
       {
         name: "the recorded owner itself",
