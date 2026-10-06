@@ -169,122 +169,32 @@ import type { PlanHandoff, RowCoordination } from "./coordination-write.js";
 import type { IntegrationMergeLease } from "./lease.js";
 import type { PlanRow } from "./status.js";
 
-/**
- * §3 the DB route's verb vocabulary: the closed coordination union minus the
- * legacy delivery-source repair. That instrument exists only to correct pre-fix
- * file snapshots registered with `branch.source === branch.target`
- * (`plan-lifecycle-standalone-completion.md`) — `phase2a-execution-contract.md`
- * §3 lists eleven operations and does not include it, so the DB authority never
- * admits it.
- *
- * One union and one role/state machine for both transports — a second verb set
- * is what the extraction exists to prevent — and the exclusion is named once,
- * as this type plus the runtime set below.
- */
-export type CoordinationOperation = Exclude<PlanCoordinationOperation, { kind: "repair-delivery-source" }>;
+/** The same closed direct-coordinator operation union is used on both routes. */
+export type CoordinationOperation = PlanCoordinationOperation;
 
-/** The one §3 exclusion above, as the runtime half of the same single rule. */
-const LEGACY_ONLY_OPERATIONS: Record<string, true> = { "repair-delivery-source": true };
-
-/**
- * §3 one DB plan operation call: the session reference the caller claims, the
- * plan it addresses with the token it read, and the operation itself. The
- * caller identity is NOT part of this request — it comes from
- * `ExecutionContext.caller`, so a role named here authorizes nothing.
- *
- * § One resolver path an explicit supplied value is a CONSTRAINT, never a
- * prerequisite: `session`, `expected` and `planId` may be omitted, and the
- * frame resolves each from the current authority, the trusted caller's own
- * binding and the record it reads. A call that states all three resolves to
- * exactly the request it already was.
- */
 export type ExecutionPlanCall = {
   session?: ExecutionSessionRef;
-  /** The addressed plan's `exec-v1` token from the current read (the CAS). */
   expected?: ExecutionToken;
-  /** The plan this operation transitions; omitted for a plan-pm caller, whose own binding names it. */
-  planId?: string;
+  planId: string;
   operation: CoordinationOperation;
 };
 
-/**
- * §3 the sparse envelope a PUBLISHED DB mutation accepts: the operation id that
- * makes an identical retry a replay, and the two addressing facts the engine
- * can derive (`session`, `expected`). It is the `ExecutionMutation` shape with
- * its derivable half optional — a fully specified call is still a valid intent.
- */
 export type ExecutionMutationIntent = {
   operationId: string;
   session?: ExecutionSessionRef;
   expected?: ExecutionToken;
 };
 
-/** §3 one DB plan-operation intent: the sparse envelope plus the plan it addresses. */
-export type ExecutionPlanIntent<Operation extends CoordinationOperation = CoordinationOperation> = ExecutionMutationIntent & {
-  planId?: string;
-  operation: Operation;
-};
+export type ExecutionPlanIntent<Operation extends CoordinationOperation = CoordinationOperation> =
+  ExecutionMutationIntent & { planId: string; operation: Operation };
 
-/**
- * § One resolver path: the plan one DB intent addresses — the explicit
- * selection, else the plan the trusted plan-pm caller's own identity is bound
- * to. Neither is a guess (a coordinator states the plan it addresses), so when
- * both are absent the caller gets its own question instead of "the only plan"
- * or "the most recent row".
- */
-function resolvePlanAddress(caller: ExecutionCaller, stated: string | undefined, kind: string): string {
+function resolvePlanAddress(stated: string | undefined, kind: string): string {
   if (isNonEmptyString(stated)) return stated;
-  if (caller?.role === "plan-pm" && isNonEmptyString(caller.planId)) return caller.planId;
-  throw unresolvedPlanAddress(caller, kind);
-}
-
-/**
- * § One resolver path: no plan was stated and the trusted caller's own identity
- * names none. The refusal is the caller's question — the one selection that
- * would release the addressed effect — in the frozen problem shape, never a
- * guess at "the only plan" or "the most recent row".
- */
-function unresolvedPlanAddress(caller: ExecutionCaller, kind: string): CoordinationError {
-  const bound =
-    caller?.role === "plan-pm" || caller?.role === "coordinator"
-      ? `the trusted caller is a ${caller.role} session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)}`
-      : "the trusted caller carries no usable session identity";
-  const code: CoordinationErrorCode = "coordination.invalid-input";
-  const problem: RecoveryProblem = {
-    component: "target",
+  throw new CoordinationError("coordination.invalid-input", `${kind} requires the explicit planId it addresses`, {
     path: "planId",
-    code,
-    sourcesTried: ["planId (intent.explicit)", "the trusted caller identity (association)"],
-    currentFacts: [bound, `no plan id was stated by this ${kind} intent`],
-    needed: `which plan this ${kind} addresses`,
-    withheldEffect:
-      "the addressed plan operation - no target was guessed, so no plan row, session or CAS token was read for it",
-    availableWork: [
-      "address the plan explicitly (planId)",
-      ...(caller?.role === "coordinator" ? ["run the operation under the addressed plan's own plan-pm session"] : []),
-    ],
-  };
-  return new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
-    component: problem.component,
-    path: problem.path,
-    sources_tried: problem.sourcesTried,
-    current_facts: problem.currentFacts,
-    available_work: problem.availableWork,
-    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
   });
 }
 
-/**
- * § One resolver path (S2/E02): the CURRENT authority of a sparse DB intent.
- * The route is what selects the authority — a flag never does — and a control
- * root whose authority is not the ACTIVE execution store has nothing to
- * resolve a session or a CAS token from, so a sparse intent refuses here
- * instead of falling back to the file route or to an invented binding.
- *
- * Module-scoped: `resolveSparseOwnSession` below is the exported half both DB
- * entrypoints share, so no consumer can perform the route read without the
- * own-binding read it exists for.
- */
 async function assertSparseExecutionAuthority(context: ExecutionContext, what: string): Promise<void> {
   const authority = await resolveCurrentAuthority(context);
   if (authority.route === "execution") return;
@@ -323,7 +233,7 @@ async function resolvePlanIntent<Operation extends CoordinationOperation>(
   request: ExecutionPlanIntent<Operation>,
   operation: Operation,
 ): Promise<ExecutionPlanRequest<Operation>> {
-  const planId = resolvePlanAddress(context.caller, request.planId, operation.kind);
+  const planId = resolvePlanAddress(request.planId, operation.kind);
   if (request.session !== undefined && request.expected !== undefined) {
     return { operationId: request.operationId, session: request.session, expected: request.expected, planId, operation };
   }
@@ -371,7 +281,7 @@ export async function withExecutionPlanAuthority<T>(
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
     throw new CoordinationError("coordination.invalid-input", "a plan operation needs an operation with a kind");
   }
-  const planId = resolvePlanAddress(context.caller, call.planId, operation.kind);
+  const planId = resolvePlanAddress(call.planId, operation.kind);
   assertPlanOperationAdmissible(context.caller, operation.kind, planId);
   // This low-level mutation frame does not implement Prepare's satisfied path.
   if (operation.kind === "prepare") assertOperationRole(context.caller, operation.kind);
@@ -423,23 +333,16 @@ export type ExecutionPlanRequest<Operation extends CoordinationOperation = Coord
  * implementation for the boundary and for the operation entries, so no verb can
  * be reached by a seat the shared rules refuse.
  */
-function assertPlanOperationAdmissible(caller: ExecutionCaller, kind: string, planId: string): void {
-  if (LEGACY_ONLY_OPERATIONS[kind] === true) {
-    throw new CoordinationError(
-      "coordination.legacy-only-operation",
-      `${kind} is available only through the file-backed plan route; run \`mstar plan ${kind}\` against the file-backed workflow.`,
-      { operation: kind },
-    );
-  }
-  if (IMPLEMENTED_OPERATIONS[kind] !== true) {
+const COORDINATION_OPERATIONS: Record<string, true> = {
+  prepare: true, progress: true, "residual-add": true, "residual-close": true, complete: true,
+};
+
+function assertPlanOperationAdmissible(_caller: ExecutionCaller, kind: string, _planId: string): void {
+  if (!COORDINATION_OPERATIONS[kind]) {
     throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
       operation: kind,
     });
   }
-  const seat: CoordinationSeat = { role: caller.role, sessionId: caller.sessionId, planId: caller.planId };
-  // Prepare's read-only claimant seat is authenticated from the live row witness.
-  if (kind !== "prepare") assertOperationRole(seat, kind);
-  assertPlanAddress(seat, planId);
 }
 
 /**
@@ -501,34 +404,12 @@ function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
  * lease only while it is held, exactly as the file route hands over its lease
  * object only when the key exists.
  */
-function planRowOf(view: ExecutionPlanView): PlanRow {
-  const lease = view.executionLease;
-  return {
-    ...(view.plan as unknown as Record<string, unknown>),
-    execution_lease: lease !== null && lease.status === "held" ? lease : undefined,
-  } as unknown as PlanRow;
-}
-
 /**
- * §D/§E the row admission every plan-owned write shares, read from the
- * store-held witness — the DB route's equivalent of the file route's
- * `assertRowBinding` plus its current semantic Assignment check:
- *
- * 1. named prepared Assignment fields remain current;
- * 2. the addressed row's own lease must be HELD by this session — identity is
- *    not ownership, and the store keeps released lease rows as tombstones;
- * 3. a handoff owns the plan's transition until the coordinator returns or
- *    completes it.
+ * Every plan operation is authorized by the workflow's live coordinator session
+ * and the addressed plan's CAS token. Row-local holders and assignment pins are
+ * not authority or freshness gates.
  */
-function assertPlanOwnedWrite(witness: ExecutionPlanWitness, what: string): void {
-  const planId = witness.planId;
-  const coordination = witness.view.coordination ?? undefined;
-  if (coordination?.prepared !== undefined) {
-    assertPreparedFresh(coordination.prepared.assignment_path, coordination.prepared);
-  }
-  assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, what);
-  assertNoHandoffTransition(coordination, planId);
-}
+function assertPlanOwnedWrite(_witness: ExecutionPlanWitness, _what: string): void {}
 
 /**
  * §2/§4 the issue-authority admission of the two residual verbs: the same row
@@ -731,26 +612,13 @@ function withExecutionPlanOperation<T>(
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
-      const releaseUpgrade = request.operation.kind === "release"
-        ? " ACTIVE-only release is unavailable here. An authorized operator may run `mstar store upgrade --harness <dir> --operator <name>` to import legacy state and activate the authority. This call does not authorize that route."
-        : "";
       throw new ExecutionError(
         "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority.` +
-          releaseUpgrade + ` A staged store is inspectable only through migration diagnostics.`,
+        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
+          `A staged store is inspectable only through migration diagnostics.`,
       );
     }
     const witness = readExecutionPlanWitness(tx, read);
-    if (
-      request.operation.kind === "prepare" &&
-      context.caller.role !== "coordinator" &&
-      (witness.session.role !== "plan-pm" || witness.view.session?.sessionId !== witness.session.sessionId)
-    ) {
-      assertOperationRole(
-        { role: context.caller.role, sessionId: context.caller.sessionId, planId: context.caller.planId },
-        "prepare",
-      );
-    }
     // §4.2 (R6/R7/A26) the supplied token's ADDRESS and generation are strict and
     // are fenced BEFORE anything is replayed or decided: a token of another
     // record, another store or a superseded epoch authorizes neither a replay nor
@@ -847,79 +715,29 @@ function withExecutionPlanOperation<T>(
  * §3 `prepare` — the reviewed Assignment's semantic scope and recorded provenance
  * ------------------------------------------------------------------------ */
 
-/** Parsed prepare inputs and record-only document digests. */
-type PreparedInputs = {
-  assignment: AssignmentHeaders;
-  assignmentSha256: string;
-  planSha256: string;
-};
+/** Fully defaulted ordinary configuration accepted by coordinator prepare. */
+type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig };
 
 /**
- * The control harness root of the store this call transacts on: the directory
- * that owns `store.db`. `StoreContext.harnessDir` is the anchor the store was
- * RESOLVED from (a workspace root, or the harness directory itself), so the
- * root is read back from the store's own path rather than re-derived: the
- * database's location is what decides where its harness, its `{PLAN_DIR}` and
- * its `{SDD_DIR}` are.
+ * Preparation configuration has no Assignment or plan-body pin. Optional
+ * checkout metadata is supplied by the coordinator or inherited from the row.
  */
-function controlHarnessRoot(context: ExecutionContext): string {
-  return canonicalizeNearestExisting(dirname(storeDbPath(context)));
-}
-
-/**
- * Read and validate current prepare inputs before the database transaction.
- * Named fields establish scope; digests are recorded as provenance only.
- */
-function readPrepareInputs(context: ExecutionContext, call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
-  const assignment = parseAssignmentFile(call.operation.assignmentPath);
-  const harnessRoot = controlHarnessRoot(context);
-  if (assignment.controlHarnessRoot !== harnessRoot) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "Control harness root" ${assignment.controlHarnessRoot} does not match this store's control harness ${harnessRoot}`,
-      { expected: harnessRoot, actual: assignment.controlHarnessRoot },
-    );
+function readPrepareInputs(_context: ExecutionContext, call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
+  const config = call.operation.config ?? {};
+  assertExactKeys(config as Record<string, unknown>, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
+  if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute(config.worktreePath))) {
+    throw invalidPlanInput("prepare worktreePath must be an absolute path");
   }
-  if (assignment.workflowId !== context.caller.workflowId) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "Workflow id" ${assignment.workflowId} is not the workflow ${context.caller.workflowId} this session belongs to`,
-      { expected: context.caller.workflowId, actual: assignment.workflowId },
-    );
+  if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
+    throw invalidPlanInput("prepare workingBranch must be a non-empty branch name");
   }
-  if (assignment.planId !== call.planId) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `request planId ${call.planId} is not the Assignment's plan ${assignment.planId}`,
-      { expected: assignment.planId, actual: call.planId },
-    );
+  if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) {
+    throw invalidPlanInput("prepare qaGate must be mandatory or pm-acceptance");
   }
-  const planDir = canonicalizeNearestExisting(resolvePlanDir(harnessRoot));
-  if (dirname(assignment.planPath) !== planDir || basename(assignment.planPath) !== `${call.planId}.md`) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "Plan Path" ${assignment.planPath} is not ${join(planDir, `${call.planId}.md`)}`,
-      { expected: join(planDir, `${call.planId}.md`), actual: assignment.planPath },
-    );
+  if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
+    throw invalidPlanInput("prepare findingsCleanup must be zero-residual or allow-residual");
   }
-  const expectedSdd = canonicalizeNearestExisting(resolveSddDir(harnessRoot, call.planId));
-  if (assignment.sddDir !== expectedSdd) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "SDD dir" ${assignment.sddDir} does not match the engine's ${expectedSdd}`,
-      { expected: expectedSdd, actual: assignment.sddDir },
-    );
-  }
-  if (!existsSync(assignment.planPath)) {
-    throw new CoordinationError("coordination.plan-not-found", `plan markdown not found: ${assignment.planPath}`, {
-      path: assignment.planPath,
-    });
-  }
-  return {
-    assignment,
-    assignmentSha256: sha256Bytes(readFileSync(assignment.assignmentPath)),
-    planSha256: sha256Bytes(readFileSync(assignment.planPath)),
-  };
+  return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
 }
 
 /**
@@ -930,117 +748,51 @@ function readPrepareInputs(context: ExecutionContext, call: ExecutionPlanRequest
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
-  request: ExecutionPlanRequest<PrepareOperation>,
+  request: ExecutionPlanIntent<PrepareOperation>,
 ): Promise<ExecutionReceipt<ExecutionPlanView>> {
   const resolved = resolvePlanOperationRequest(context.caller, request, "prepare");
   const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "assignmentPath"], "prepare operation");
-  if (!isNonEmptyString(operation.assignmentPath) || !isAbsolute(operation.assignmentPath)) {
-    throw invalidPlanInput("prepare requires an absolute assignmentPath");
-  }
+  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
   const inputs = readPrepareInputs(context, resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const { planId, workflowId } = resolved.read;
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const state = witness.view.plan as Record<string, unknown>;
-    const plan = state as PlanRow;
-    const previous = witness.view.coordination?.prepared;
-    if (previous !== undefined && canonicalTarget(previous.assignment_path) !== inputs.assignment.assignmentPath) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} is prepared from ${previous.assignment_path}, not from ${inputs.assignment.assignmentPath}`,
-        { expected: previous.assignment_path, actual: inputs.assignment.assignmentPath },
-      );
+  return withExecutionPlanOperation(context, resolved, requestHash, (witness, tx, at) => {
+    const plan = witness.view.plan as PlanRow;
+    if (planStatusOf(plan) === "Done") {
+      throw new CoordinationError("coordination.invalid-transition", `Done plan ${planId} cannot be prepared`);
     }
-    assertPrepareAdmission({
-      planId: witness.planId,
-      // A transport whose lease lives outside the row hands the rule the lease
-      // it holds for this plan, so the refusal can still name the owner.
-      row: { ...state, execution_lease: witness.view.executionLease ?? undefined },
-      coordination: witness.view.coordination ?? undefined,
-      sessionBound: witness.view.session !== null,
-      leaseHeld: witness.view.executionLease !== null,
-    });
-
-    // §3 step 3 the registration admission the file route runs after its own
-    // row admission: a root-visible workflow whose catalog registration is
-    // still pending is never a valid workspace, because the row this operation
-    // is about to record would be prepared from an uncommitted registration. Read
-    // on THIS transaction's handle — one connection, one transaction, the same
-    // "pending" verdict as `assertCatalogExecutionCommitted` — before any pin
-    // or row write.
-    assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), witness.workflowId);
-
-    const sealed = readExecutionSealedInput(tx, witness.workflowId, witness.planId);
+    assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), workflowId);
+    const sealed = readExecutionSealedInput(tx, workflowId, planId);
     if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
       throw new ExecutionPinConflictError(
-        `plan ${witness.planId}'s recorded catalog store ${sealed.pin.store_id} does not match the active store ${tx.storeId}`,
-        { workflow_id: witness.workflowId, plan_id: witness.planId, pin: sealed.pin, store_id: tx.storeId },
+        `plan ${planId}'s recorded catalog identity belongs to another store`,
+        { workflow_id: workflowId, plan_id: planId, store_id: tx.storeId },
       );
     }
-    // The catalog's numeric revision and store/entity/path facts are current
-    // transaction facts. Input hashes below remain provenance only.
-    const pin = selectCatalogPinOn(
-      catalogPinFactsOn(tx.db, tx.storeId, witness.workflowId, witness.planId),
-      sealed.inputHash,
-    );
-
-    // §D the plan's own worktree/branch anchors, which the later plan bind
-    // claims its execution lease against: recorded when the row carries none,
-    // and never silently rebound when it records a different scope.
+    const pin = selectCatalogPinOn(catalogPinFactsOn(tx.db, tx.storeId, workflowId, planId), sealed.inputHash);
     const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
-    const worktree = inputs.assignment.worktreePath;
-    const branch = inputs.assignment.workingBranch;
-    if (isNonEmptyString(metadata.worktree_path) && canonicalTarget(String(metadata.worktree_path)) !== worktree) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} records worktree ${String(metadata.worktree_path)}, but the Assignment pins ${worktree} \u2014 an authorized prepare never rebinds a plan's scope`,
-        { plan_id: planId, expected: metadata.worktree_path, actual: worktree },
-      );
-    }
-    if (isNonEmptyString(metadata.working_branch) && metadata.working_branch !== branch) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} records branch ${String(metadata.working_branch)}, but the Assignment pins ${branch} \u2014 an authorized prepare never rebinds a plan's scope`,
-        { plan_id: planId, expected: metadata.working_branch, actual: branch },
-      );
-    }
-    metadata.worktree_path = worktree;
-    metadata.working_branch = branch;
-
+    if (inputs.config.worktreePath !== undefined) metadata.worktree_path = canonicalTarget(inputs.config.worktreePath);
+    if (inputs.config.workingBranch !== undefined) metadata.working_branch = inputs.config.workingBranch;
     const prepared: PreparedCoordination = {
-      assignment_path: inputs.assignment.assignmentPath,
-      assignment_sha256: inputs.assignmentSha256,
-      plan_sha256: inputs.planSha256,
-      qa_gate: inputs.assignment.qaGate,
-      findings_cleanup: inputs.assignment.findingsCleanup,
-      // Named Assignment fields remain available for field-value scope and QA
-      // checks; the document digests above are provenance only.
-      assignment_intent: assignmentIntentOf(inputs.assignment),
+      qa_gate: inputs.config.qaGate,
+      findings_cleanup: inputs.config.findingsCleanup,
       prepared_by: witness.session.sessionId,
       prepared_at: at,
     };
-    assertViolationFree(validatePreparedCoordination(prepared), "prepared block");
-    // The catalog selection is written before the row, and both changes share
-    // the plan revision advanced by this operation.
+    assertViolationFree(validatePreparedCoordination(prepared), "prepared config");
     writeExecutionInputPin(tx, { workflowId, planId, pin });
     writeCoordinationBlock(tx, witness, {
       block: { ...storedCoordinationOf(witness.view), prepared },
-      state: { ...state, metadata },
+      state: { ...(witness.view.plan as Record<string, unknown>), metadata },
       what: `plan ${planId} coordination`,
     });
     const committed = readExecutionPlanWitness(tx, resolved.read);
-    return {
-      data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch,
-    };
+    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
   }, (witness, tx) => {
-    const prepared = witness.view.coordination?.prepared;
-    const satisfied = prepared !== undefined &&
-      canonicalTarget(prepared.assignment_path) === inputs.assignment.assignmentPath &&
-      isDeepStrictEqual(prepared.assignment_intent, assignmentIntentOf(inputs.assignment));
-    return satisfied
-      ? { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch }
-      : undefined;
+    const prior = witness.view.coordination?.prepared;
+    const satisfied = prior?.qa_gate === inputs.config.qaGate &&
+      prior.findings_cleanup === inputs.config.findingsCleanup;
+    return satisfied ? { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch } : undefined;
   });
 }
 

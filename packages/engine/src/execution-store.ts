@@ -133,20 +133,15 @@ export class ExecutionError extends Error {
   }
 }
 
-/** §2.1: the address kind a version token belongs to. */
-export type ExecutionKind = "root" | "workflow" | "plan" | "session" | "execution-lease" | "integration-lease" | "input";
-
-/** §3.1: an `exec-v1:` version token — an opaque CAS string, never a revision. */
+/** Versioned coordinator-owned execution records. */
+export type ExecutionKind = "root" | "workflow" | "plan" | "session" | "integration-lease" | "input";
 export type ExecutionToken = string & { readonly __executionToken: unique symbol };
-
-/** §3: the DB session reference a state view carries (an identity, not a credential). */
 export type ExecutionSessionRef = {
   storeId: string;
   epoch: number;
   workflowId: string;
-  role: "coordinator" | "plan-pm";
+  role: "coordinator";
   sessionId: string;
-  planId: string | null;
 };
 
 /** Recovery outcome and commit boundary carried by an execution action. */
@@ -161,13 +156,11 @@ export type ExecutionRead<T> = {
   operationRecovery?: ExecutionReceiptRecovery;
 };
 
-/** §3: the per-plan view of an authoritative state read. */
+/** One coordinator view of an explicitly addressed plan. */
 export type ExecutionPlanView = {
   workflow: Omit<WorkflowSnapshot, "plans" | "coordinator_session" | "integration_merge_lease">;
   plan: Omit<PlanRow, "coordination" | "execution_lease">;
-  coordination: Omit<RowCoordination, "session"> | null;
-  session: ExecutionSessionRef | null;
-  executionLease: ExecutionLease | null;
+  coordination: RowCoordination | null;
   integrationLease: IntegrationMergeLease | null;
   frozenInput: CatalogExecutionPin | null;
 };
@@ -193,9 +186,8 @@ export type ExecutionState = {
  */
 export type ExecutionCaller = {
   sessionId: string;
-  role: "coordinator" | "plan-pm";
+  role: "coordinator";
   workflowId: string;
-  planId: string | null;
 };
 
 /** §3: a domain call's context — the addressed store plus the trusted caller. */
@@ -1009,12 +1001,9 @@ function readWorkflowView(
   }
 
   const sessions = db
-    .prepare("select role, session_id, plan_id, epoch, state from execution_sessions where workflow_id = ?")
+    .prepare("select role, session_id, epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator'")
     .all(workflowId) as Array<Record<string, unknown>>;
   const activeSessions = sessions.filter((entry) => entry.state === "active");
-  const leases = db
-    .prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ?")
-    .all(workflowId) as Array<Record<string, unknown>>;
   const inputs = db
     .prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?")
     .all(workflowId) as Array<Record<string, unknown>>;
@@ -1080,69 +1069,22 @@ function readWorkflowView(
       );
     }
     // The row column is the revision; the stored block carries the rest (§2.2).
-    const projectedCoordination = { revision: planRevision, ...storedCoordination };
-    const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
-    const handoff = isPlainObject(storedCoordination.handoff) ? storedCoordination.handoff : undefined;
-    const submitter = handoff?.submitted_by;
-    const historicalSessionRow =
-      typeof submitter === "string"
-        ? sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId && entry.session_id === submitter)
-        : undefined;
-    // Historical association is exact: an arbitrary plan-pm row cannot satisfy
-    // a handoff naming another identity. The active projection remains separate.
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState as PlanRow),
-      submitterAssociated: handoff === undefined || historicalSessionRow !== undefined,
       what: `execution_plans(${workflowId},${planId}).coordination_json`,
     });
     if (coordinationViolations.length > 0) {
       throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
     }
     const hasCoordination = Object.keys(storedCoordination).length > 0;
-    const leaseRow = leases.find((entry) => entry.plan_id === planId);
     const inputRow = inputs.find((entry) => entry.plan_id === planId);
-    // §2.2/§3.1 the row's lease RECORD, held or released: a released row is a
-    // retained tombstone (revision and owner epoch intact, ABA guard) and is an
-    // existing key rather than an absent one, so the view serves it and the rules
-    // that need a HOLDER (`assertPlanOwnedWrite`, the shared `assertExecutionHolder`)
-    // are the ones that insist on `status: held`. The merge lease below is the
-    // opposite case, because there the row's presence IS the claim.
-    const executionLease = leaseRow
-      ? readExecutionLease(leaseRow.lease_json, `execution_leases(${workflowId},${planId}).lease_json`)
-      : null;
-    // §2.2: a held lease and the session row it names are ONE ownership fact
-    // recorded in two rows; the reader refuses a pair that disagrees. The row is
-    // looked up by the identity and role the lease itself names — the plan-pm
-    // session that claimed it, or the coordinator session a transfer moved it to.
-    if (leaseRow !== undefined && executionLease !== null) {
-      const holderRow =
-        executionLease.status === "held"
-          ? sessions.find(
-              (entry) =>
-                entry.role === executionLease.holder_role &&
-                entry.session_id === executionLease.holder_session_id &&
-                (entry.role === "coordinator" || entry.plan_id === planId),
-            )
-          : undefined;
-      assertLeaseOwnership(
-        executionLease,
-        holderRow,
-        storedRevision(leaseRow.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`),
-        store,
-        workflowId,
-        planId,
-      );
-    }
+    const projectedCoordination = { revision: planRevision, ...storedCoordination };
     planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
     plans.push({
       workflow: state as unknown as ExecutionPlanView["workflow"],
       plan: planState as unknown as ExecutionPlanView["plan"],
-      coordination: hasCoordination
-        ? (projectedCoordination as unknown as Omit<RowCoordination, "session">)
-        : null,
-      session: activeSessionRow ? sessionRef(store, workflowId, activeSessionRow) : null,
-      executionLease,
+      coordination: hasCoordination ? (projectedCoordination as unknown as RowCoordination) : null,
       integrationLease,
       frozenInput: inputRow
         ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`)
@@ -3140,112 +3082,31 @@ export function writeOperationReceipt(
 /** §2.3 the authorization one session-authorized plan address resolves to. */
 export type ResolvedPlanRead = {
   workflowId: string;
-  role: ExecutionCaller["role"];
+  role: "coordinator";
   sessionId: string;
   planId: string;
-  boundPlanId: string | null;
   referenceStoreId: string;
   referenceEpoch: number;
 };
 
-/**
- * §2.3 the reference gate of a plan read: the supplied reference names the
- * binding the trusted caller claims to hold, and the caller identity is what
- * authorizes the read. Possession of a reference — or of a legacy session file
- * — authorizes nothing on its own, and a plan-pm session addresses only its own
- * plan while a coordinator session addresses any plan of its workflow.
- *
- * Pure argument checks: no store is opened, so each transport decides where the
- * gate sits relative to its own store access. `readExecutionPlan` runs it
- * BEFORE opening the store, so a malformed, foreign-role or caller-mismatched
- * request is refused on its own; the DB dispatch runs it inside the transaction
- * it already owns.
- */
+/** Resolve an explicit plan address against the caller's coordinator identity. */
 export function resolvePlanRead(caller: ExecutionCaller, session: unknown, planId: unknown): ResolvedPlanRead {
-  const bound = session;
-  if (!isPlainObject(bound)) throw invalidInput("a plan read needs an execution session reference");
-  const { storeId, epoch, workflowId, role, sessionId, planId: boundPlanId } = bound;
+  if (!isPlainObject(session)) throw invalidInput("a plan read needs an execution session reference");
+  const { storeId, epoch, workflowId, role, sessionId } = session;
   if (
-    !isNonEmptyString(storeId) ||
-    typeof epoch !== "number" ||
-    !Number.isSafeInteger(epoch) ||
-    epoch <= 0 ||
-    !isNonEmptyString(workflowId) ||
-    !isNonEmptyString(sessionId)
+    !isNonEmptyString(storeId) || typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0 ||
+    !isNonEmptyString(workflowId) || !isNonEmptyString(sessionId) || role !== "coordinator"
   ) {
-    throw invalidInput(
-      `a session reference carries {storeId, epoch, workflowId, role, sessionId, planId} \u2014 got ${JSON.stringify(bound)}`,
-    );
+    throw invalidInput("a coordinator session reference needs storeId, epoch, workflowId, role and sessionId");
   }
-  if (role !== "coordinator" && role !== "plan-pm") {
-    throw sessionRoleRefusal(`a session reference carries role ${JSON.stringify(role)}`, { role });
-  }
-  let planScope: string | null = null;
-  if (role === "plan-pm") {
-    if (!isNonEmptyString(boundPlanId)) {
-      throw sessionRoleRefusal(
-        `a plan-pm session reference carries ${JSON.stringify(boundPlanId)} as its plan id \u2014 a plan-pm session names the plan it is bound to`,
-        { role, plan_id: boundPlanId },
-      );
-    }
-    planScope = boundPlanId;
-  } else if (boundPlanId !== null) {
-    throw sessionRoleRefusal(
-      `a coordinator session reference carries ${JSON.stringify(boundPlanId)} as its plan id \u2014 a coordinator address takes no plan id`,
-      { role, plan_id: boundPlanId },
-    );
-  }
-  if (!isNonEmptyString(caller?.sessionId)) throw invalidInput("the execution caller needs a non-empty session identity");
-  if (caller.role !== role) {
-    throw sessionRoleRefusal(
-      `the trusted caller is a ${caller.role} session; a ${role} session reference does not authorize it`,
-      { caller_role: caller.role, reference_role: role },
-    );
-  }
-  if (caller.sessionId !== sessionId || caller.workflowId !== workflowId || caller.planId !== planScope) {
-    const problem: RecoveryProblem = {
-      component: "session",
-      path: "session",
-      code: "coordination.session-mismatch",
-      sourcesTried: ["the trusted caller identity (the host adapter)", "the supplied session reference"],
-      currentFacts: [
-        `the trusted caller holds ${caller.role} session ${JSON.stringify(caller.sessionId)} of workflow ` +
-          `${JSON.stringify(caller.workflowId)} plan ${JSON.stringify(caller.planId)}`,
-        `the supplied reference names session ${JSON.stringify(sessionId)} of workflow ${JSON.stringify(workflowId)} ` +
-          `plan ${JSON.stringify(planScope)}`,
-      ],
-      needed:
-        "the reference of the session this caller itself holds \u2014 a reference is a lookup identity and is never " +
-        "adopted as the caller's authority",
-      withheldEffect:
-        "only the addressed effect: the named holder's binding was not adopted, so nothing was read or written for " +
-        "the addressed plan",
-      availableWork: [
-        `present the reference of your own ${caller.role} session ${JSON.stringify(caller.sessionId)}`,
-        ...(caller.planId === null ? [] : [`address the plan this caller is bound to (${JSON.stringify(caller.planId)})`]),
-      ],
-    };
+  if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the explicit plan id it selects");
+  if (caller.role !== "coordinator" || caller.sessionId !== sessionId || caller.workflowId !== workflowId) {
     throw new CoordinationError(
       "coordination.session-mismatch",
-      `the trusted caller is session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)} ` +
-        `plan ${JSON.stringify(caller.planId)}; the supplied reference names session ${JSON.stringify(sessionId)} of ` +
-        `workflow ${JSON.stringify(workflowId)} plan ${JSON.stringify(planScope)}`,
-      sessionRefusalDetails({
-        problem,
-        target: { workflowId },
-        facts: { caller_session: caller.sessionId, reference_session: sessionId },
-      }),
+      "the trusted caller does not match the coordinator session reference",
     );
   }
-  if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the plan id it selects");
-  if (role === "plan-pm" && planId !== planScope) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `plan session ${sessionId} addresses plan ${JSON.stringify(planScope)}; it cannot read plan ${JSON.stringify(planId)}`,
-      { session_id: sessionId, bound_plan: planScope, addressed_plan: planId },
-    );
-  }
-  return { workflowId, role, sessionId, planId, boundPlanId: planScope, referenceStoreId: storeId, referenceEpoch: epoch };
+  return { workflowId, role, sessionId, planId, referenceStoreId: storeId, referenceEpoch: epoch };
 }
 
 /**
@@ -3747,11 +3608,18 @@ export function readExecutionWorkflowWitness(
  * or caller-mismatched request is refused by itself, never by — or after — an
  * authority-state or store-open failure.
  */
+export function readExecutionPlan(context: ExecutionContext, planId: string): Promise<ExecutionRead<ExecutionPlanView>>;
+export function readExecutionPlan(context: ExecutionContext, session: ExecutionSessionRef, planId: string): Promise<ExecutionRead<ExecutionPlanView>>;
 export async function readExecutionPlan(
   context: ExecutionContext,
-  session: ExecutionSessionRef,
-  planId: string,
+  sessionOrPlanId: ExecutionSessionRef | string,
+  addressedPlanId?: string,
 ): Promise<ExecutionRead<ExecutionPlanView>> {
+  const planId = typeof sessionOrPlanId === "string" ? sessionOrPlanId : addressedPlanId;
+  if (!isNonEmptyString(planId)) throw invalidInput("a plan read needs the plan id it selects");
+  const session = typeof sessionOrPlanId === "string"
+    ? (await readOwnExecutionSession(context)).data
+    : sessionOrPlanId;
   const read = resolvePlanRead(context.caller, session, planId);
   return withExecutionReadTransaction(context, (tx) => {
     const witness = readExecutionPlanWitness(tx, read);
@@ -3786,7 +3654,7 @@ export async function readExecutionSession(
       workflowId: session.workflowId,
       role: session.role,
       sessionId: session.sessionId,
-      planId: session.planId,
+      planId: null,
     });
     return {
       data: live.ref,
@@ -3809,31 +3677,12 @@ export async function readExecutionSession(
  */
 function ownSessionAddress(caller: ExecutionCaller | undefined): SessionAddress {
   if (!isPlainObject(caller) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(caller.workflowId)) {
-    throw invalidInput(
-      "reconstructing the caller's own execution session needs the trusted caller's own workflow and session identity",
-    );
+    throw invalidInput("reconstructing the coordinator session needs workflowId and sessionId from the trusted caller");
   }
-  if (caller.role !== "coordinator" && caller.role !== "plan-pm") {
-    throw sessionRoleRefusal(`the trusted caller carries role ${JSON.stringify(caller.role)}`, { role: caller.role });
+  if (caller.role !== "coordinator") {
+    throw invalidInput("the only execution session role is coordinator");
   }
-  if (caller.role === "coordinator") {
-    if (caller.planId !== null) {
-      throw sessionRoleRefusal(
-        `the trusted coordinator caller carries plan ${JSON.stringify(caller.planId)} as its plan id \u2014 a coordinator ` +
-          `address takes no plan id`,
-        { plan_id: caller.planId },
-      );
-    }
-    return { workflowId: caller.workflowId, role: caller.role, sessionId: caller.sessionId, planId: null };
-  }
-  if (!isNonEmptyString(caller.planId)) {
-    throw sessionRoleRefusal(
-      `the trusted plan-pm caller carries ${JSON.stringify(caller.planId)} as its plan id \u2014 a plan-pm session names ` +
-        `the plan it is bound to`,
-      { plan_id: caller.planId },
-    );
-  }
-  return { workflowId: caller.workflowId, role: caller.role, sessionId: caller.sessionId, planId: caller.planId };
+  return { workflowId: caller.workflowId, role: "coordinator", sessionId: caller.sessionId, planId: null };
 }
 
 /**

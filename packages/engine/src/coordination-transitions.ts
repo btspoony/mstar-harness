@@ -49,49 +49,16 @@ import { isStandaloneDevelopmentWorkflow, type WorkflowSnapshot } from "./workfl
  * § Seats and the advertised operation set
  * ------------------------------------------------------------------------ */
 
-/** Bind roles: one coordinator per lifecycle, one plan session per plan. */
-export type CoordinationRole = "plan-pm" | "coordinator";
+/** The workflow-wide execution identity. */
+export type CoordinationSeat = { role: "coordinator"; sessionId: string };
 
-/**
- * The seat a call acts as. Both transports can state exactly these three
- * fields about their caller — the file route from its session envelope, the DB
- * route from its trusted caller — and no rule below needs more.
- */
-export type CoordinationSeat = {
-  role: CoordinationRole;
-  sessionId: string;
-  /** The plan a plan-pm seat is bound to; `null` for a coordinator seat. */
-  planId: string | null;
-};
-
-/** The operations this slice implements — the only ones ever advertised. */
 export const IMPLEMENTED_OPERATIONS: Record<string, true> = {
   prepare: true,
   progress: true,
   "residual-add": true,
   "residual-close": true,
-  handoff: true,
-  accept: true,
-  return: true,
-  "integration-start": true,
-  "integration-accept": true,
   complete: true,
-  "repair-delivery-source": true,
-  reconcile: true,
-  release: true,
 };
-
-/** Operations only a coordinator session may issue (spec §D/§E). */
-const COORDINATOR_OPERATIONS: readonly string[] = [
-  "prepare",
-  "accept",
-  "return",
-  "integration-start",
-  "integration-accept",
-  "complete",
-  "repair-delivery-source",
-  "reconcile",
-];
 
 /** Row statuses a claim may start from (mirrors the pure lease transition). */
 export function isClaimableStatus(status: string): boolean {
@@ -129,72 +96,17 @@ export function allowedOperations(
   snapshot: WorkflowSnapshot,
   row: PlanRow,
 ): string[] {
-  const coordination = rowCoordinationOf(row);
+  if (role !== "coordinator" || snapshot.coordination?.coordinator.session_id !== sessionId) return [];
   const status = rowStatusOf(row);
-  const handoff = coordination?.handoff;
-  const out: string[] = [];
-  if (role === "coordinator") {
-    // The coordinator seat is per workflow: an unbound session advertises nothing.
-    if (snapshot.coordination?.coordinator.session_id !== sessionId) return [];
-    if (
-      coordination?.prepared === undefined &&
-      coordination?.session === undefined &&
-      handoff === undefined &&
-      isClaimableStatus(status)
-    ) {
-      out.push("prepare");
-    }
-    switch (handoff?.state) {
-      case "submitted":
-        out.push("accept", "return");
-        break;
-      case "accepted":
-        if (isStandaloneDevelopmentWorkflow(snapshot)) {
-          out.push("return", "complete", "repair-delivery-source");
-        } else {
-          out.push("return", "integration-start");
-        }
-        break;
-      case "integrating":
-        out.push("integration-accept", "complete", "reconcile");
-        break;
-      case "merged":
-        out.push("complete", "reconcile");
-        break;
-      case "completed":
-        out.push("reconcile");
-        break;
-      default:
-        break;
-    }
-    const lease = isPlainObject(row.execution_lease) ? row.execution_lease : undefined;
-    if (
-      lease?.holder === sessionId &&
-      lease.status === "held" &&
-      (handoff === undefined || handoff.state === "returned")
-    ) {
-      out.push("release");
-    }
-  } else if (coordination?.session?.session_id === sessionId) {
-    // Identity is not ownership (§D): the four plan-session operations below are
-    // lease-gated (`assertExecutionHolder`), so a row this session is bound to
-    // but does not HOLD advertises none of them. That state is real — the D0
-    // claim bootstrap creates it (session binding, no lease) and the continuing
-    // bind later claims the lease — and advertising an operation the mutation
-    // guards refuse would make this public view disagree with the engine.
-    const ownsLease = isPlainObject(row.execution_lease) && row.execution_lease.holder === sessionId;
-    if (coordination.prepared === undefined) {
-      // Fixes #308: the row's own bound claimant holds an unprepared row and no
-      // lease, and preparing it is exactly what that seat may do.
-      if (handoff === undefined && isClaimableStatus(status)) out.push("prepare");
-    } else if (ownsLease && (handoff === undefined || handoff.state === "returned")) {
-      // A plan session keeps only `handoff`: returning a handoff restores the
-      // same session, so both directions stay available to it without rebinding.
-      out.push("progress", "residual-add", "residual-close", "handoff", "release");
-    }
-  }
-  return out.filter((kind) => IMPLEMENTED_OPERATIONS[kind] === true);
+  if (status === "Done") return [];
+  return ["prepare", "progress", "residual-add", "residual-close", "complete"];
 }
+export const PROGRESS_TRANSITIONS: Record<string, readonly string[]> = {
+  Todo: ["InProgress", "Blocked"],
+  InProgress: ["InProgress", "InReview", "Blocked"],
+  InReview: ["InReview", "InProgress", "Blocked"],
+  Blocked: ["Blocked", "InProgress"],
+};
 
 /* ------------------------------------------------------------------------ *
  * § Role and scope eligibility (spec §D/§E)
@@ -206,33 +118,16 @@ export function allowedOperations(
  * coordinator session coordinates, it does not execute.
  */
 export function assertOperationRole(seat: CoordinationSeat, kind: string): void {
-  if (kind === "release") return;
-  const coordinatorOperation = COORDINATOR_OPERATIONS.includes(kind);
-  if (coordinatorOperation && seat.role !== "coordinator") {
-    throw new CoordinationError(
-      "coordination.session-role",
-      `${kind} requires a coordinator session, not ${seat.role}`,
-      { role: seat.role, operation: kind },
-    );
-  }
-  if (!coordinatorOperation && seat.role !== "plan-pm") {
-    throw new CoordinationError(
-      "coordination.session-role",
-      `${kind} is a plan-session operation (a coordinator session coordinates, it does not execute)`,
-      { role: seat.role, operation: kind },
-    );
+  if (seat.role !== "coordinator") {
+    throw new CoordinationError("coordination.invalid-input", `${kind} requires the workflow coordinator`);
   }
 }
 
-/** A plan session addresses only its own plan; a coordinator selects one. */
-export function assertPlanAddress(seat: CoordinationSeat, requestedPlanId: string | undefined): void {
-  if (requestedPlanId === undefined || seat.role === "coordinator") return;
-  if (seat.planId !== requestedPlanId) {
-    throw new CoordinationError(
-      "coordination.session-mismatch",
-      `plan session ${seat.sessionId} addresses only its own plan ${String(seat.planId)}, not ${requestedPlanId}`,
-      { expected: seat.planId, actual: requestedPlanId },
-    );
+export function assertPlanAddress(_seat: CoordinationSeat, requestedPlanId: string | undefined): void {
+  if (!isNonEmptyString(requestedPlanId)) {
+    throw new CoordinationError("coordination.invalid-input", "planId is required to address a coordinator plan operation", {
+      path: "planId",
+    });
   }
 }
 
@@ -341,61 +236,13 @@ export function assertExecutionHolder(row: PlanRow, holder: string, planId: stri
  * catalog registration gate stay with the transport that owns them; what a row
  * must look like to be prepared is the same rule on either route.
  */
-export function assertPrepareAdmission(input: {
-  planId: string;
-  /** The addressed row; a transport whose lease lives outside the row passes it here. */
-  row: PlanRow;
-  coordination: RowCoordination | undefined;
-  /** Whether the transport records a bound plan session for this row. */
-  sessionBound: boolean;
-  /** Whether the transport records an execution lease for this row. */
-  leaseHeld: boolean;
-  /**
-   * `prepare`'s ONE self-service seat (fixes #308): the caller IS the session
-   * the row is bound to, so a claimed-but-unprepared row is its own claimant's
-   * to seal. The transport proves that identity against the row before it
-   * passes this (`mutatePrepare`'s locked precheck); the default keeps the
-   * ordered rule every other seat obeys — preparation precedes the bind.
-   */
-  rowClaimant?: boolean;
-}): void {
-  const { planId, row, coordination } = input;
-  if (coordination?.prepared !== undefined) {
-    throw new CoordinationError(
-      "coordination.prepare-already-prepared",
-      `plan ${planId} is already prepared from ${coordination.prepared.assignment_path}`,
-      { plan_id: planId },
-    );
-  }
-  if (input.sessionBound && input.rowClaimant !== true) {
-    throw new CoordinationError(
-      "coordination.prepare-session-bound",
-      `plan ${planId} already has a bound plan session \u2014 preparation precedes the bind`,
-      { plan_id: planId },
-    );
-  }
-  if (coordination?.handoff !== undefined) {
-    throw new CoordinationError(
-      "coordination.prepare-handoff-active",
-      `plan ${planId} is handed off \u2014 preparation precedes the handoff`,
-      { plan_id: planId },
-    );
-  }
-  // §D prepare: Todo/Blocked with no execution lease — a sealed row with a
-  // second owner would make the plan session ambiguous. `null` and tombstone
-  // objects are existing keys, not absent ones.
-  if (input.leaseHeld) {
-    throw new CoordinationError(
-      "coordination.duplicate-holder",
-      `plan ${planId} already carries an execution lease \u2014 prepare must not seal a second owner`,
-      { plan_id: planId, holder: isPlainObject(row.execution_lease) ? row.execution_lease.holder : null },
-    );
-  }
-  if (!isClaimableStatus(rowStatusOf(row))) {
+/** A direct prepare is revisable on every non-terminal row. */
+export function assertPrepareAdmission(input: { planId: string; row: PlanRow }): void {
+  if (rowStatusOf(input.row) === "Done") {
     throw new CoordinationError(
       "coordination.prepare-status",
-      `plan ${planId} is ${rowStatusOf(row)} \u2014 prepare requires Todo or Blocked`,
-      { plan_id: planId, status: row.status },
+      `plan ${input.planId} is Done and cannot be prepared`,
+      { plan_id: input.planId, status: input.row.status },
     );
   }
 }

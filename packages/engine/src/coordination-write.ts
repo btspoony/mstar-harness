@@ -301,157 +301,60 @@ export type PlanProgress = {
 
 /** Hash-pinned reference to a submitted evidence file. */
 export type EvidenceRef = { path: string; sha256: string };
-
-/** Handoff lifecycle state (`PlanHandoff.state`). */
-export type HandoffState = "submitted" | "accepted" | "returned" | "integrating" | "merged" | "completed";
-
-/** QC review outcome recorded on a handoff. */
-export type HandoffQc = { decision: string; reports: EvidenceRef[]; consolidated: EvidenceRef };
-
-/** QA verification outcome recorded on a handoff. */
-export type HandoffQa = { gate: string; decision: string; report: EvidenceRef };
-
-/** The single integration attempt recorded on a handoff. */
-export type HandoffIntegration = {
-  target_branch: string;
-  worktree_path: string;
-  base_sha: string;
-  started_at: string;
-  result_sha?: string;
-  verified_at?: string;
+export type QaGate = "mandatory" | "pm-acceptance";
+export type FindingsCleanupMode = "zero-residual" | "allow-residual";
+export type PlanPrepareConfig = {
+  worktreePath?: string;
+  workingBranch?: string;
+  qaGate?: QaGate;
+  findingsCleanup?: FindingsCleanupMode;
 };
-
-/** The durable review package of one plan (spec §B `PlanHandoff`). */
-export type PlanHandoff = {
-  id: string;
-  attempt: number;
-  state: HandoffState;
-  submitted_by: string;
-  submitted_at: string;
+export type CompletionEvidence = {
+  source_sha?: string;
+  review_base?: string;
+  review_head?: string;
+  qc: { decision: "Approve" | "Approve with residuals"; reports: string[]; consolidated: string };
+  qa: { gate: QaGate; decision: "pass"; report: string };
+};
+export type IntegrationResultInput = { base_sha: string; result_sha: string };
+export type CompletionRecord = {
   source_branch: string;
-  source_sha: string;
-  worktree_path: string;
-  review_base: string;
-  review_head: string;
-  qc: HandoffQc;
-  qa: HandoffQa;
-  accepted_by?: string;
-  accepted_at?: string;
-  returned_at?: string;
-  return_reason?: string;
-  integration?: HandoffIntegration;
-  completed_at?: string;
+  source_sha: string | null;
+  worktree_path: string | null;
+  review_base: string | null;
+  review_head: string | null;
+  qc: { decision: string; reports: EvidenceRef[]; consolidated: EvidenceRef };
+  qa: { gate: string; decision: string; report: EvidenceRef };
+  integration?: { target_branch: string; worktree_path: string; base_sha: string; result_sha: string; verified_at: string };
+  completed_by: string;
+  completed_at: string;
 };
-
-/**
- * The C1 header block one sealed Assignment declares, as the stored semantic
- * projection (`AssignmentIntent`). The order is the parser's own field order
- * (`parseAssignmentFile`), so a projection and the document it describes can
- * never enumerate different semantics.
- */
-export const ASSIGNMENT_INTENT_FIELDS = [
-  "execution_scope",
-  "execute_as",
-  "delegation",
-  "control_harness_root",
-  "workflow_id",
-  "plan_id",
-  "plan_path",
-  "worktree_path",
-  "working_branch",
-  "sdd_dir",
-  "qa_gate",
-  "findings_cleanup",
-  "prepare_gate",
-] as const;
-
-/**
- * Semantic Assignment fields captured at Prepare time. Later checks compare
- * these field values directly; document digests are not freshness gates.
- */
-export type AssignmentIntent = Readonly<Record<(typeof ASSIGNMENT_INTENT_FIELDS)[number], string>>;
-
-/** Coordinator-recorded preparation of one plan (spec §D `prepare`). */
 export type PreparedCoordination = {
-  assignment_path: string;
-  assignment_sha256: string;
-  plan_sha256: string;
-  qa_gate: string;
-  findings_cleanup: string;
-  /** Semantic Assignment projection when recorded by the Prepare producer. */
-  assignment_intent?: AssignmentIntent;
+  qa_gate: QaGate;
+  findings_cleanup: FindingsCleanupMode;
   prepared_by: string;
   prepared_at: string;
 };
-
-/** A bound session: identity + the canonical envelope that proves it. */
 export type CoordinatorBinding = { session_id: string; session_file: string; bound_at: string };
-
-/**
- * One immutable coordinator-identity recovery record (prerequisite contract
- * §3.3). Appended by `recoverPrepareCoordinator` under the snapshot write lock
- * and never rewritten: `operation_id` + `request_hash` are the replay
- * identity, `snapshot_version_before`/`compass_version` name the exact bytes
- * the recovery was authorized against, and no envelope body, bearer material
- * or credential path is recorded — only the two public session ids.
- */
 export type CoordinationIdentityRecovery = {
-  /** The caller-supplied recovery operation id (the replay key half). */
-  operation_id: string;
-  /** sha256 (bare hex) over the canonicalized request — the replay key's other half. */
-  request_hash: string;
-  workflow_id: string;
-  /** The coordinator the recovery replaced (the recorded binding at the time). */
-  prior_session_id: string;
-  /** The coordinator the recovery bound. */
-  session_id: string;
-  /** The operator's authorization reference. */
-  authorization_ref: string;
-  reason: string;
-  /** The prior holder(s) the operator attested stopped/reloaded. */
-  stopped_session_ids: string[];
-  /** `sha256:<64 hex>` of the snapshot bytes this recovery was authorized against. */
-  snapshot_version_before: string;
-  /** `sha256:<64 hex>` of the reviewed compass bytes at that moment. */
-  compass_version: string;
-  recovered_at: string;
+  operation_id: string; request_hash: string; workflow_id: string; prior_session_id: string;
+  session_id: string; authorization_ref: string; reason: string; stopped_session_ids: string[];
+  snapshot_version_before: string; compass_version: string; recovered_at: string;
 };
-
-
-export type CoordinationSelfAmendment = {
-  at: string;
-  session_id: string;
-  old_sha256: string;
-  new_sha256: string;
-  operation_id: string;
-  prepared_by_matches?: boolean;
-};
-
-/** Snapshot-level coordination block. */
 export type SnapshotCoordination = {
   coordinator: CoordinatorBinding;
   identity_recoveries?: CoordinationIdentityRecovery[];
-  self_amendments?: CoordinationSelfAmendment[];
 };
-
-/** Row-level coordination block (one plan). */
+export type PlanProgressStatus = "InProgress" | "InReview" | "Blocked";
+export type PlanProgress = {
+  status: PlanProgressStatus; summary: string; evidence_paths: string[]; track_branches?: string[];
+};
 export type RowCoordination = {
   revision: number;
   prepared?: PreparedCoordination;
-  session?: CoordinatorBinding;
   progress?: PlanProgress;
-  handoff?: PlanHandoff;
+  completion?: CompletionRecord;
 };
-
-export const HANDOFF_STATES: readonly HandoffState[] = [
-  "submitted",
-  "accepted",
-  "returned",
-  "integrating",
-  "merged",
-  "completed",
-];
-
 export const PLAN_PROGRESS_STATUSES: readonly PlanProgressStatus[] = ["InProgress", "InReview", "Blocked"];
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -528,270 +431,46 @@ export function validatePlanProgress(value: unknown, what = "coordination.progre
   return violations;
 }
 
-/** Route-aware stored handoff validation (spec A5). Default remains strict integration. */
 export type RowValidationRoute = "integration" | "standalone-development" | "standalone-report-only";
 
-/** Validate a stored `PlanHandoff`, including its state/field coherence. */
-export function validatePlanHandoff(
-  value: unknown,
-  what = "coordination.handoff",
-  route: RowValidationRoute = "integration",
-): ValidationResult[] {
-  if (!isPlainObject(value)) return [invalid("coordination.row.handoff-shape", `${what} must be an object`)];
-  const allowed = [
-    "id",
-    "attempt",
-    "state",
-    "submitted_by",
-    "submitted_at",
-    "source_branch",
-    "source_sha",
-    "worktree_path",
-    "review_base",
-    "review_head",
-    "qc",
-    "qa",
-    "accepted_by",
-    "accepted_at",
-    "returned_at",
-    "return_reason",
-    "integration",
-    "completed_at",
-  ];
-  const violations: ValidationResult[] = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.handoff-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  const required = [
-    "id",
-    "attempt",
-    "state",
-    "submitted_by",
-    "submitted_at",
-    "source_branch",
-    "source_sha",
-    "worktree_path",
-    "review_base",
-    "review_head",
-  ];
-  for (const key of required) {
-    if (value[key] === undefined) {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} is required`));
-    }
-  }
-  if (!Number.isInteger(value.attempt) || (value.attempt as number) < 1) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.attempt must be a positive integer`));
-  }
-  if (!HANDOFF_STATES.includes(value.state as HandoffState)) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.state must be one of ${HANDOFF_STATES.join(", ")}`));
-  }
-  if (value.id !== undefined && !isNonEmptyString(value.id)) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.id must be a non-empty string`));
-  }
-  for (const key of ["source_sha", "review_base", "review_head"]) {
-    if (value[key] !== undefined && !GIT_SHA.test(String(value[key]))) {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a 40-hex git object id`));
-    }
-  }
-  for (const key of ["submitted_at", "accepted_at", "returned_at", "completed_at"]) {
-    if (value[key] !== undefined && !isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a timestamp`));
-    }
-  }
-  if (value.worktree_path !== undefined && (!isNonEmptyString(value.worktree_path) || !isAbsolute(String(value.worktree_path)))) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.worktree_path must be an absolute path`));
-  }
-  if (value.qc !== undefined) {
-    if (!isPlainObject(value.qc)) {
-      violations.push(invalid("coordination.row.handoff-shape", `${what}.qc must be an object`));
-    } else {
-      const qc = value.qc;
-      const qcExtra = Object.keys(qc).filter((key) => !["decision", "reports", "consolidated"].includes(key));
-      if (qcExtra.length > 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc has unexpected key(s): ${qcExtra.join(", ")}`));
-      }
-      if (!isNonEmptyString(qc.decision)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc.decision must be a non-empty string`));
-      }
-      if (!Array.isArray(qc.reports) || qc.reports.length === 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc.reports must be a non-empty array`));
-      } else {
-        qc.reports.forEach((ref, index) => {
-          violations.push(...validateEvidenceRef(ref, `${what}.qc.reports[${index}]`));
-        });
-      }
-      violations.push(...validateEvidenceRef(qc.consolidated, `${what}.qc.consolidated`));
-    }
-  }
-  if (value.qa !== undefined) {
-    if (!isPlainObject(value.qa)) {
-      violations.push(invalid("coordination.row.handoff-shape", `${what}.qa must be an object`));
-    } else {
-      const qa = value.qa;
-      const qaExtra = Object.keys(qa).filter((key) => !["gate", "decision", "report"].includes(key));
-      if (qaExtra.length > 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa has unexpected key(s): ${qaExtra.join(", ")}`));
-      }
-      if (!isNonEmptyString(qa.gate)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa.gate must be a non-empty string`));
-      }
-      if (!isNonEmptyString(qa.decision)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa.decision must be a non-empty string`));
-      }
-      violations.push(...validateEvidenceRef(qa.report, `${what}.qa.report`));
-    }
-  }
-  if (value.integration !== undefined) {
-    if (!isPlainObject(value.integration)) {
-      violations.push(invalid("coordination.row.handoff-shape", `${what}.integration must be an object`));
-    } else {
-      const integration = value.integration;
-      const integrationAllowed = [
-        "target_branch",
-        "worktree_path",
-        "base_sha",
-        "started_at",
-        "result_sha",
-        "verified_at",
-      ];
-      const integrationExtra = Object.keys(integration).filter((key) => !integrationAllowed.includes(key));
-      if (integrationExtra.length > 0) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.integration has unexpected key(s): ${integrationExtra.join(", ")}`),
-        );
-      }
-      for (const key of ["target_branch", "worktree_path", "base_sha", "started_at"]) {
-        if (!isNonEmptyString(integration[key])) {
-          violations.push(invalid("coordination.row.handoff-field", `${what}.integration.${key} is required`));
-        }
-      }
-      for (const key of ["base_sha", "result_sha"]) {
-        if (integration[key] !== undefined && !GIT_SHA.test(String(integration[key]))) {
-          violations.push(
-            invalid("coordination.row.handoff-field", `${what}.integration.${key} must be a 40-hex git object id`),
-          );
-        }
-      }
-      if (integration.result_sha !== undefined && integration.verified_at === undefined) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.integration.result_sha requires verified_at`),
-        );
-      }
-    }
-  }
-  if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
-    if ((route === "standalone-development" || route === "standalone-report-only") && value.state === "completed") {
-      if (value.completed_at === undefined) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`),
-        );
-      }
-      if (!isNonEmptyString(value.accepted_at)) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.accepted_at is required for a standalone completed handoff`),
-        );
-      }
-      if (!isNonEmptyString(value.accepted_by)) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.accepted_by is required for a standalone completed handoff`),
-        );
-      }
-      if (value.qc === undefined) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.qc is required for a standalone completed handoff`),
-        );
-      }
-      if (value.qa === undefined) {
-        violations.push(
-          invalid("coordination.row.handoff-field", `${what}.qa is required for a standalone completed handoff`),
-        );
-      }
-    } else {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
-    }
-  }
-  return violations;
-}
-
-/** Validate a stored `PreparedCoordination`. */
 export function validatePreparedCoordination(value: unknown, what = "coordination.prepared"): ValidationResult[] {
   if (!isPlainObject(value)) return [invalid("coordination.row.prepared-shape", `${what} must be an object`)];
-  const allowed = [
-    "assignment_path",
-    "assignment_sha256",
-    "plan_sha256",
-    "qa_gate",
-    "findings_cleanup",
-    "assignment_intent",
-    "prepared_by",
-    "prepared_at",
-  ];
-  const violations: ValidationResult[] = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  for (const key of allowed) {
-    if (key !== "assignment_intent" && !isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
-    }
-  }
-  const intent = value.assignment_intent;
-  if (intent !== undefined) {
-    if (!isPlainObject(intent)) {
-      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
-    } else {
-      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
-      const unknown = Object.keys(intent).filter((key) => !(ASSIGNMENT_INTENT_FIELDS as readonly string[]).includes(key));
-      if (missing.length > 0) {
-        violations.push(
-          invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`),
-        );
-      }
-      if (unknown.length > 0) {
-        violations.push(
-          invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`),
-        );
-      }
-    }
-  }
-  if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {
-    violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_path must be absolute`));
-  }
-  for (const key of ["assignment_sha256", "plan_sha256"]) {
-    if (value[key] !== undefined && !SHA256_HEX.test(String(value[key]))) {
-      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} must be 64 lowercase hex`));
-    }
-  }
+  const allowed = ["qa_gate", "findings_cleanup", "prepared_by", "prepared_at"];
+  const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) =>
+    invalid("coordination.row.prepared-field", `${what} has unexpected key: ${key}`));
+  if (!["mandatory", "pm-acceptance"].includes(String(value.qa_gate))) violations.push(invalid("coordination.row.prepared-field", `${what}.qa_gate is invalid`));
+  if (!["zero-residual", "allow-residual"].includes(String(value.findings_cleanup))) violations.push(invalid("coordination.row.prepared-field", `${what}.findings_cleanup is invalid`));
+  for (const key of ["prepared_by", "prepared_at"]) if (!isNonEmptyString(value[key])) violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
   return violations;
 }
 
-/** Validate one plan row's `coordination` object (spec §C2). */
-export function validateRowCoordination(
-  value: unknown,
-  what = "coordination",
-  route: RowValidationRoute = "integration",
-): ValidationResult[] {
-  if (!isPlainObject(value)) return [invalid("coordination.row.shape", `${what} must be an object`)];
-  const allowed = ["revision", "prepared", "session", "progress", "handoff"];
-  const violations: ValidationResult[] = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+function validateCompletionRecord(value: unknown, what: string): ValidationResult[] {
+  if (!isPlainObject(value)) return [invalid("coordination.row.completion-shape", `${what} must be an object`)];
+  const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"];
+  const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.completion-field", `${what} has unexpected key: ${key}`));
+  for (const key of ["source_branch", "completed_by", "completed_at"]) if (!isNonEmptyString(value[key])) violations.push(invalid("coordination.row.completion-field", `${what}.${key} is required`));
+  for (const key of ["source_sha", "review_base", "review_head"]) {
+    const item = value[key];
+    if (item !== null && item !== undefined && (typeof item !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(item))) {
+      violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id or null`));
+    }
   }
-  if (!Number.isInteger(value.revision) || (value.revision as number) < 0) {
-    violations.push(invalid("coordination.row.revision", `${what}.revision must be a non-negative integer`));
-  }
-  if (value.prepared !== undefined) violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
-  if (value.session !== undefined) violations.push(...validateBinding(value.session, `${what}.session`));
-  if (value.progress !== undefined) violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
-  if (value.handoff !== undefined) violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`, route));
-  if (value.handoff !== undefined && value.session === undefined) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.handoff requires a bound plan session`));
-  }
+  if (!isPlainObject(value.qc) || !Array.isArray(value.qc.reports) || !isPlainObject(value.qc.consolidated)) violations.push(invalid("coordination.row.completion-field", `${what}.qc is invalid`));
+  if (!isPlainObject(value.qa) || !isPlainObject(value.qa.report)) violations.push(invalid("coordination.row.completion-field", `${what}.qa is invalid`));
   return violations;
 }
+
+export function validateRowCoordination(value: unknown, what = "coordination", _route: RowValidationRoute = "integration"): ValidationResult[] {
+  if (!isPlainObject(value)) return [invalid("coordination.row.shape", `${what} must be an object`)];
+  const allowed = ["revision", "prepared", "progress", "completion"];
+  const violations: ValidationResult[] = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.field", `${what} has unexpected key: ${key}`));
+  if (!Number.isInteger(value.revision) || (value.revision as number) < 0) violations.push(invalid("coordination.row.revision", `${what}.revision must be a non-negative integer`));
+  if (value.prepared !== undefined) violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
+  if (value.progress !== undefined) violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
+  if (value.completion !== undefined) violations.push(...validateCompletionRecord(value.completion, `${what}.completion`));
+  return violations;
+}
+
 
 /**
  * Validate one stored coordinator-identity recovery record (prerequisite

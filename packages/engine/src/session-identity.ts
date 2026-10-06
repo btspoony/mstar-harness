@@ -21,8 +21,8 @@
 import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent } from "./path.js";
 
-/** The two coordination seats a workflow's identity can name. */
-export type ExecutionIdentityRole = "coordinator" | "plan-pm";
+/** The sole execution identity role: a workflow coordinator. */
+export type ExecutionIdentityRole = "coordinator";
 
 /** Longest session id the identity/envelope contract accepts. */
 export const SESSION_ID_MAX_LENGTH = 128;
@@ -79,8 +79,7 @@ export type ExecutionIdentity = Readonly<{
   source: "host" | "local";
   sessionId: string;
   workflowId: string;
-  role: ExecutionIdentityRole;
-  planId: string | null;
+  role: "coordinator";
 }>;
 
 /** Per-call relaxations of the acquired-identity rule; default is strict. */
@@ -94,11 +93,10 @@ export type ExecutionIdentityOptions = Readonly<{
   allowUnsetSessionId?: boolean;
 }>;
 
-/** The scope an identity is validated against (the workflow/role/plan it addresses). */
+/** Scope is workflow-wide; plans are explicit operation addresses. */
 export type ExecutionIdentityScope = Readonly<{
   workflowId: string;
-  role: ExecutionIdentityRole;
-  planId: string | null;
+  role: "coordinator";
 }>;
 
 function isRole(value: unknown): value is ExecutionIdentityRole {
@@ -165,22 +163,10 @@ export function validateExecutionIdentity(
     throw new CoordinationError(
       "coordination.identity-mismatch",
       `the execution identity role ${JSON.stringify(value.role)} is not a coordination role`,
-      { expected: "coordinator|plan-pm", actual: value.role },
+      { expected: "coordinator", actual: value.role },
     );
   }
   const role = value.role;
-  const planId = value.planId;
-  if (role === "coordinator" && planId !== null) {
-    throw new CoordinationError("coordination.identity-mismatch", "a coordinator identity carries no plan scope", {
-      role,
-      plan_id: planId,
-    });
-  }
-  if (role === "plan-pm" && !isNonEmptyString(planId)) {
-    throw new CoordinationError("coordination.identity-missing", "a plan-pm identity carries a non-empty plan id", {
-      role,
-    });
-  }
   if (value.workflowId !== scope.workflowId) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
@@ -193,13 +179,6 @@ export function validateExecutionIdentity(
       "coordination.identity-mismatch",
       `the identity role ${role} does not address the ${scope.role} seat`,
       { expected: scope.role, actual: role },
-    );
-  }
-  if (planId !== scope.planId) {
-    throw new CoordinationError(
-      "coordination.identity-mismatch",
-      `the identity plan ${JSON.stringify(planId)} does not address plan ${JSON.stringify(scope.planId)}`,
-      { expected: scope.planId, actual: planId },
     );
   }
 }

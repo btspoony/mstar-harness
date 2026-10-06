@@ -68,12 +68,12 @@ import {
   validatePreparedCoordination,
   validateRowCoordination,
   withProtectedWrite,
-  type AssignmentIntent,
   type CoordinationErrorCode,
-  type HandoffIntegration,
-  type PlanHandoff,
   type PlanProgress,
   type PreparedCoordination,
+  type PlanPrepareConfig,
+  type CompletionEvidence,
+  type IntegrationResultInput,
   type RowCoordination,
   type CoordinatorBinding,
   type CoordinationIdentityRecovery,
@@ -229,50 +229,15 @@ export function persistPayloadContracts(): typeof PERSIST_PAYLOAD_CONTRACTS {
  */
 export { CoordinationError };
 
-/**
- * Bind roles: one coordinator per lifecycle, one plan session per plan. The
- * rule lives in `coordination-transitions.ts`, which the DB transport runs too;
- * this module re-exports it as the file route's public vocabulary.
- */
+/** The sole plan coordinator identity. */
 export type { CoordinationRole };
 
-/**
- * Scope address, both forms required by spec §B: from a pinned Assignment
- * path, or from a workflow/plan pair resolved through that row's `prepared`
- * block. Both forms resolve to the same `ResolvedPlanScope`.
- */
-export type PlanScopeInput =
-  | { assignmentPath: string }
-  | { workflowId: string; planId: string; harnessDir?: string };
-
-/** The fully pinned plan scope (spec §B `ResolvedPlanScope`). */
-export type ResolvedPlanScope = {
-  harnessRoot: string;
-  workflowId: string;
-  planId: string;
-  /** `{WORKFLOW_DIR}/<workflow-id>/snapshot.json`. */
-  snapshotPath: string;
-  /** The plan markdown pinned by the Assignment `Plan Path`. */
-  planPath: string;
-  assignmentPath: string;
-  worktreePath: string;
-  workingBranch: string;
-  projectId: string;
-  sddDir: string;
-};
-
-/**
- * Session envelope persisted at
- * `{WORKFLOW_DIR}/<workflow-id>/sessions/<role>-<session-id>.json` (mode `0600`).
- * The envelope is the durable proof of who holds the session: the snapshot
- * stores its canonical path and every later call must present the same file.
- */
+/** The workflow-wide coordinator envelope persisted by the engine. */
 export type CoordinationSession = {
   schema_version: 1;
-  role: CoordinationRole;
+  role: "coordinator";
   session_id: string;
   workflow_id: string;
-  plan_id?: string;
   harness_root: string;
 };
 
@@ -286,16 +251,10 @@ export type CoordinationSession = {
  * never writes and never re-identifies.
  */
 export type BindPlanSessionInput =
-  | { scope: PlanScopeInput; cwd: string; sessionId?: string }
   | {
       coordinator: true;
       workflowId: string;
       harnessDir?: string;
-      /**
-       * Provenance the adapter states for the acquired identity (§3.1). A
-       * managed host bootstrap states `host`; a plain local operator or an
-       * engine-local call is `local`. Unknown values are refused, never coerced.
-       */
       source?: "host" | "local";
       cwd: string;
       sessionId?: string;
@@ -305,25 +264,27 @@ export type BindPlanSessionInput =
 /** One artifact read: payload plus the byte version it was read at. */
 export type VersionedArtifact = { payload: unknown; version: string };
 
+/** Scope facts derived from ordinary row metadata and workflow branch anchors. */
+export type PlanCoordinationScope = {
+  projectId: string;
+  worktreePath: string | null;
+  workingBranch: string | null;
+  sourceBranch: string | null;
+  targetBranch: string | null;
+  integrationBranch: string | null;
+  integrationWorktreePath: string | null;
+};
+
 /** Everything `mstar plan show` needs, in one read. */
 export type PlanCoordinationView = {
-  /** Row `coordination.revision` (`0` when the row is not yet coordinated). */
   revision: number;
-  /** `sha256:…` of the snapshot bytes, or `"absent"`. */
   snapshot_version: string;
-  /** `null` while the row carries no `prepared` block. */
-  scope: ResolvedPlanScope | null;
+  scope: PlanCoordinationScope | null;
   row: PlanRow;
   prepared?: PreparedCoordination;
   session: CoordinationSession;
   session_file: string;
-  /** Operations this session may run now — implemented operations only. */
   allowed_operations: string[];
-  /**
-   * The plan's frozen-input pin state (contract §1). Present on every read
-   * view so a caller can observe frozen-vs-current catalog divergence; a
-   * mutation result omits it (the caller already holds the row it just wrote).
-   */
   catalog_pin?: ExecutionCatalogPinState;
 };
 
@@ -362,83 +323,13 @@ export type CoordinationResult = {
   issues?: CoordinationIssueReceipt[];
 };
 
-/**
- * One finding being captured on the plan (issue-governance cutover G2a): the
- * core issue `CaptureInput` minus `projectId` — the scoped plan supplies the
- * project. Capture records evidence and never a disposition (contract §6);
- * the entry is captured as an issue and linked to the plan through
- * `provenance(kind='plan', target=<plan-id>, origin='scoped')`.
- */
 export type ResidualInput = Omit<CaptureInput, "projectId">;
-
-export type PrepareCoordinationRequest = {
-  kind: "prepare";
-  /** The plan's pinned Assignment (absolute). */
-  assignmentPath: string;
-  expectedRevision: number;
-};
-
-export type ProgressCoordinationRequest = {
-  kind: "progress";
-  progress: PlanProgress;
-  expectedRevision: number;
-};
-
-/**
- * Scoped plan issue operations (G2a): the row's session binding and the
- * request `expectedRevision` (execution-row CAS) are preserved verbatim; the
- * DB mutation is guarded by the ISSUE revision, not a register byte version.
- * `residual-close` closes the named issue with the core closure semantics
- * (`disposition` + `evidence`); `expectedIssueRevision` is mandatory (issue
- * contract §2 — disposition changes require `expectedRevision`).
- */
-export type ResidualAddCoordinationRequest = {
-  kind: "residual-add";
-  entries: ResidualInput[];
-  /** Optional extra guard: the row revision must still match. */
-  expectedRevision?: number;
-};
-
-export type ResidualCloseCoordinationRequest = {
-  kind: "residual-close";
-  issueId: string;
-  disposition: TerminalDisposition;
-  evidence: ClosureEvidence;
-  expectedIssueRevision: number;
-  expectedRevision?: number;
-};
-
-/**
- * Handoff evidence (spec §D). Slice A types it so the union is stable; the
- * operations that consume it arrive with the handoff slice.
- */
-export type HandoffEvidence = {
-  source_sha: string;
-  review_base: string;
-  review_head: string;
-  qc: { decision: "Approve" | "Approve with residuals"; reports: string[]; consolidated: string };
-  qa: { gate: "mandatory" | "pm-acceptance"; decision: "pass"; report: string };
-};
-
-/**
- * The operation surface (spec §B): every kind is implemented and typed, so an
- * unknown shape is refused as `coordination.invalid-input` rather than
- * silently accepted.
- */
 export type PlanCoordinationOperation =
-  | { kind: "prepare"; assignmentPath: string }
+  | { kind: "prepare"; config?: PlanPrepareConfig }
   | { kind: "progress"; progress: PlanProgress }
   | { kind: "residual-add"; entries: ResidualInput[] }
   | { kind: "residual-close"; issueId: string; disposition: TerminalDisposition; evidence: ClosureEvidence; expectedIssueRevision: number }
-  | { kind: "handoff"; evidence: HandoffEvidence }
-  | { kind: "accept"; handoffId: string }
-  | { kind: "return"; handoffId: string; reason: string }
-  | { kind: "integration-start"; handoffId: string }
-  | { kind: "integration-accept"; handoffId: string }
-  | { kind: "complete"; handoffId: string }
-  | { kind: "repair-delivery-source"; handoffId: string }
-  | { kind: "release"; reason?: string }
-  | { kind: "reconcile"; handoffId: string }
+  | { kind: "complete"; evidence: CompletionEvidence; integration?: IntegrationResultInput };
 
 /**
  * One whole coordination request: one session, one operation, one precondition.
@@ -463,11 +354,8 @@ export type CoordinationRequest = {
    * string or session reference authorizes nothing on its own.
    */
   identity?: ExecutionIdentity;
-  /**
-   * Required for a coordinator session; never another plan for a plan session.
-   * Omitted → the addressed plan the resolved target names.
-   */
-  planId?: string;
+  /** Explicit plan selection required for every coordinator operation. */
+  planId: string;
   /**
    * The selected row's `coordination.revision` from `show` (absent row = 0).
    * §4.2 this is transport FRESHNESS, not the intent: a token whose revision
@@ -496,7 +384,7 @@ export type CoordinatedReplacement = {
 
 const SESSION_DIR = "sessions";
 const SNAPSHOT_FILE = "snapshot.json";
-const ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "plan_id", "harness_root"] as const;
+const ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "harness_root"] as const;
 const ASSIGNMENT_QA_GATES: Record<string, true> = { mandatory: true, "pm-acceptance": true };
 const ASSIGNMENT_FINDINGS_MODES: Record<string, true> = { "zero-residual": true, "allow-residual": true };
 
@@ -1447,9 +1335,8 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
   if (parsed.schema_version !== 1) {
     throw invalidInput(`session envelope ${abs} must declare schema_version 1`, { path: abs });
   }
-  const role = parsed.role;
-  if (role !== "plan-pm" && role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", `session envelope ${abs} has role ${JSON.stringify(role)}`, {
+  if (role !== "coordinator") {
+    throw new CoordinationError("coordination.invalid-input", `session envelope ${abs} has role ${JSON.stringify(role)}`, {
       path: abs,
     });
   }
@@ -1468,17 +1355,6 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
   if (!isAbsolute(harnessRoot)) {
     throw invalidInput(`session envelope ${abs} harness_root must be absolute`, { path: abs });
   }
-  const planId = parsed.plan_id;
-  if (role === "plan-pm" && !isNonEmptyString(planId)) {
-    throw new CoordinationError("coordination.session-role", `a plan-pm session envelope requires plan_id: ${abs}`, {
-      path: abs,
-    });
-  }
-  if (role === "coordinator" && planId !== undefined) {
-    throw new CoordinationError("coordination.session-role", `a coordinator session envelope takes no plan_id: ${abs}`, {
-      path: abs,
-    });
-  }
   const session: CoordinationSession = {
     schema_version: 1,
     role,
@@ -1486,7 +1362,6 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
     workflow_id: workflowId,
     harness_root: harnessRoot,
   };
-  if (role === "plan-pm" && isNonEmptyString(planId)) session.plan_id = planId;
   return session;
 }
 
@@ -2155,7 +2030,7 @@ function buildView(
   harnessRoot: string,
   workflowId: string,
   projectId: string,
-  scope: ResolvedPlanScope | null,
+  scope: PlanCoordinationScope | null,
   snapshot: WorkflowSnapshot,
   row: PlanRow,
   session: CoordinationSession,
@@ -2174,55 +2049,36 @@ function buildView(
     allowed_operations: allowedOperations(session.role, session.session_id, snapshot, row),
   };
 }
+function planScopeOfMetadata(row: PlanRow, snapshot: WorkflowSnapshot): PlanCoordinationScope | null {
+  const metadata = isPlainObject(row.metadata) ? row.metadata : {};
+  const worktreePath = isNonEmptyString(metadata.worktree_path) ? canonicalTarget(metadata.worktree_path) : null;
+  const workingBranch = isNonEmptyString(metadata.working_branch) ? metadata.working_branch : null;
+  if (worktreePath === null && workingBranch === null) return null;
+  const branch = isPlainObject(snapshot.branch) ? snapshot.branch : {};
+  return {
+    projectId: projectIdOf(row),
+    worktreePath,
+    workingBranch,
+    sourceBranch: isNonEmptyString(branch.source) ? branch.source : null,
+    targetBranch: isNonEmptyString(branch.target) ? branch.target : null,
+    integrationBranch: isNonEmptyString(branch.integration) ? branch.integration : null,
+    integrationWorktreePath: isNonEmptyString(snapshot.integration_worktree_path)
+      ? canonicalTarget(snapshot.integration_worktree_path)
+      : null,
+  };
+}
 
-/**
- * Read this session's plan coordination view (spec §B). A coordinator session
- * must select a plan; a plan session reads only its own row. A row that is not
- * yet prepared yields `scope: null` and the raw row.
- *
- * Read veto at the entry boundary (spec §4.3/§5): the envelope is read only to
- * learn which control harness this call addresses, and the authority verdict
- * precedes the `planId`/scope checks and the snapshot read below, so this
- * authoritative surface refuses on its own rather than inheriting a refusal
- * from a later reader.
- */
+/** Read the explicitly selected row as the workflow coordinator. */
 export async function readPlanCoordination(
   sessionPath: string,
-  planId?: string,
+  planId: string,
   cwd: string = process.cwd(),
 ): Promise<PlanCoordinationView> {
+  if (!isNonEmptyString(planId)) throw invalidInput("planId is required to select a plan");
   const anchor = entryAnchor(sessionPath);
   assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
   const session = anchor.session;
-  if (planId !== undefined && !isNonEmptyString(planId)) throw invalidInput("planId must be a non-empty string");
-  let targetPlanId: string;
-  if (session.role === "coordinator") {
-    if (planId === undefined) {
-      throw invalidInput("a coordinator session must select a plan (`--plan <id>`)", { session_id: session.session_id });
-    }
-    targetPlanId = safePlanId(planId, "planId");
-  } else {
-    const own = session.plan_id;
-    if (!isNonEmptyString(own)) {
-      throw new CoordinationError("coordination.session-role", `plan session ${session.session_id} carries no plan id`, {
-        session_id: session.session_id,
-      });
-    }
-    if (planId !== undefined && planId !== own) {
-      throw new CoordinationError(
-        "coordination.session-mismatch",
-        `plan session ${session.session_id} reads only its own plan ${own}, not ${planId}`,
-        { expected: own, actual: planId },
-      );
-    }
-    targetPlanId = own;
-  }
-
-  // The session envelope is this call's durable root association: the intent
-  // resolution keeps that trusted root for a Git-independent read, reports an
-  // unreadable process probe as a warning (R12/A24: a Git outage cannot
-  // invalidate an established root), and keeps a process root that answers and
-  // disagrees a conflict — now with the contract's recovery sidecar.
+  const targetPlanId = safePlanId(planId, "planId");
   const rootResolution = resolveIntentRoot({ cwd }, { root: anchor.harnessRoot, source: "session.envelope" });
   if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
   const harnessRoot = rootResolution.root;
@@ -2231,46 +2087,14 @@ export async function readPlanCoordination(
   assertSnapshotPath(harnessRoot, session.workflow_id, snapshotPath);
   const snapshot = readSnapshot(dirname(snapshotPath));
   const { row } = findPlanRow(snapshot, targetPlanId);
-  if (session.role === "coordinator") {
-    assertCoordinatorBinding(session, sessionPath, snapshot);
-  } else {
-    assertRowBinding(session, sessionPath, row, targetPlanId, { readOnly: true });
-  }
-
-  const prepared = rowCoordinationOf(row)?.prepared;
-  let scope: ResolvedPlanScope | null = null;
-  if (prepared !== undefined) {
-    // The RECORDED path is a sealed input: read through the same read-or-refuse
-  // door, so a prepared Assignment that cannot be read (deleted, moved, or
-  // replaced by something unreadable) reports the sealed-input refusal instead
-  // of a filesystem error escaping a mutation.
-  const assignment = readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers;
-    scope = scopeFromAssignment(assignment, cwd, {
-      requirePrepared: true,
-      chosenRoot: harnessRoot,
-      preloaded: { snapshot },
-    });
-    assertPreparedFresh(scope.assignmentPath, prepared);
-  }
+  assertCoordinatorBinding(session, sessionPath, snapshot);
+  const scope = planScopeOfMetadata(row, snapshot);
   return {
-    ...buildView(
-      harnessRoot,
-      session.workflow_id,
-      projectIdOf(row),
-      scope,
-      snapshot,
-      row,
-      session,
-      sessionPath,
-    ),
-    catalog_pin: await readExecutionCatalogPin({
-      harnessRoot,
-      workflowId: session.workflow_id,
-      planId: targetPlanId,
-      row,
-    }),
+    ...buildView(harnessRoot, session.workflow_id, projectIdOf(row), scope, snapshot, row, session, sessionPath),
+    catalog_pin: await readExecutionCatalogPin({ harnessRoot, workflowId: session.workflow_id, planId: targetPlanId, row }),
   };
 }
+
 
 /**
  * Read one coordinated artifact plus its byte version, from a **single** byte
@@ -2847,23 +2671,12 @@ export async function bindPlanSession(input: BindPlanSessionInput): Promise<Coor
     requireCwd(input.cwd);
     return resumeBoundSession(input.resumePath);
   }
-  if ("coordinator" in input) {
-    assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "source", "cwd", "sessionId"], "bind coordinator input");
-    if (input.coordinator !== true) throw invalidInput("`coordinator` is only meaningful as true");
-    if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required");
-    requireCwd(input.cwd);
-    const sessionId = safeSessionId(input.sessionId);
-    return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId, input.source);
-  }
-  assertExactKeys(input, ["scope", "cwd", "sessionId"], "bind plan input");
-  if (!isPlainObject(input.scope)) throw invalidInput("a plan bind requires a scope");
+  assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "source", "cwd", "sessionId"], "bind coordinator input");
+  if (input.coordinator !== true) throw invalidInput("`coordinator` is only meaningful as true");
+  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required");
   requireCwd(input.cwd);
   const sessionId = safeSessionId(input.sessionId);
-  // Spec §D0: only the Assignment-locator address carries what a claim needs,
-  // so that form — and only that form — may bind a row `prepare` has not
-  // sealed yet.
-  const claimLocator = isAssignmentScopeInput(input.scope) ? input.scope.assignmentPath : undefined;
-  return bindPlanSessionForPlan(await resolveBindScope(input.scope, input.cwd), sessionId, claimLocator);
+  return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId, input.source);
 }
 
 /** Every bind form is a cooperative local call: it needs a real cwd. */
@@ -2871,11 +2684,7 @@ function requireCwd(cwd: string): void {
   if (!isNonEmptyString(cwd) || !isAbsolute(cwd)) throw invalidInput("bind input requires an absolute cwd");
 }
 
-/**
- * Resume an existing session envelope (spec §C2). Read-only: it re-verifies the
- * persisted binding (and, for a plan session, its lease) and writes nothing. A
- * handed-off or released plan is reported as such rather than reacquired.
- */
+/** Resume is a read-only verification of the workflow coordinator binding. */
 function resumeBoundSession(resumePath: string): CoordinationResult {
   if (!isNonEmptyString(resumePath) || !isAbsolute(resumePath)) {
     throw invalidInput("resumePath must be an absolute path");
@@ -2887,54 +2696,8 @@ function resumeBoundSession(resumePath: string): CoordinationResult {
   const snapshotPath = snapshotPathOf(harnessRoot, session.workflow_id);
   assertSnapshotPath(harnessRoot, session.workflow_id, snapshotPath);
   const snapshot = readSnapshot(dirname(snapshotPath));
-  if (session.role === "coordinator") {
-    assertCoordinatorBinding(session, sessionPath, snapshot);
-    return { ok: true, operation: "bind", session, session_file: sessionPath, outcome: "resumed" };
-  }
-  const planId = session.plan_id;
-  if (!isNonEmptyString(planId)) {
-    throw new CoordinationError("coordination.session-role", `plan session ${session.session_id} carries no plan id`, {
-      session_id: session.session_id,
-    });
-  }
-  const { row } = findPlanRow(snapshot, planId);
-  assertRowBinding(session, sessionPath, row, planId, { readOnly: true });
-  // A session that no longer holds the row's lease was released: report it, do
-  // not reacquire (spec §C2 never infers a resume). `holder` is the ownership
-  // field — any other value that happens to equal the session id is not a claim.
-  const lease = row.execution_lease;
-  if (!isPlainObject(lease) || lease.holder !== session.session_id) {
-    throw new CoordinationError(
-      "coordination.duplicate-holder",
-      `plan ${planId} holds no live lease for session ${session.session_id} \u2014 it was released; a fresh bind is required`,
-      { plan_id: planId, session_id: session.session_id },
-    );
-  }
-  const prepared = rowCoordinationOf(row)?.prepared;
-  if (prepared === undefined) {
-    throw new CoordinationError("coordination.not-prepared", `plan ${planId} has no prepared Assignment`, {
-      plan_id: planId,
-    });
-  }
-  // The RECORDED path is a sealed input: read through the same read-or-refuse
-  // door, so a prepared Assignment that cannot be read (deleted, moved, or
-  // replaced by something unreadable) reports the sealed-input refusal instead
-  // of a filesystem error escaping a mutation.
-  const assignment = readAssignmentBytes(canonicalTarget(prepared.assignment_path)).headers;
-  const scope = scopeFromAssignment(assignment, harnessRoot, {
-    requirePrepared: true,
-    chosenRoot: harnessRoot,
-    preloaded: { snapshot },
-  });
-  assertPreparedFresh(scope.assignmentPath, prepared);
-  return {
-    ok: true,
-    operation: "bind",
-    session,
-    session_file: sessionPath,
-    outcome: "resumed",
-    view: buildView(harnessRoot, session.workflow_id, scope.projectId, scope, snapshot, row, session, sessionPath),
-  };
+  assertCoordinatorBinding(session, sessionPath, snapshot);
+  return { ok: true, operation: "bind", session, session_file: sessionPath, outcome: "resumed" };
 }
 
 /* ------------------------------------------------------------------------ *
