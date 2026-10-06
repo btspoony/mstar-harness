@@ -229,7 +229,11 @@ type Fixture = {
   coordinatorCaller: ExecutionCaller;
 };
 
-async function workflowFixture(label: string, additionalPlanIds: readonly string[] = []): Promise<Fixture> {
+async function workflowFixture(
+  label: string,
+  additionalPlanIds: readonly string[] = [],
+  workflowType: "plan" | "iteration" = "plan",
+): Promise<Fixture> {
   const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
   runGit(["init", "-q", "-b", "main"], repoRoot);
   runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
@@ -247,18 +251,18 @@ async function workflowFixture(label: string, additionalPlanIds: readonly string
 
   const coordinatorCaller = trustedCaller(COORDINATOR_ID, "coordinator");
   const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
-    entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` } as WorkflowEntry,
+    entry: { id: WORKFLOW_ID, type: workflowType, started_at: TS, dir: `workflows/${WORKFLOW_ID}` } as WorkflowEntry,
     snapshot: {
       schema_version: 1,
       id: WORKFLOW_ID,
-      type: "plan",
+      type: workflowType,
       status: "running",
       started_at: TS,
       updated_at: TS,
       phase: "phase-1-prepare",
       project: "harness",
       compass_ref: COMPASS_REF,
-      delivery_kind: "development",
+      ...(workflowType === "plan" ? { delivery_kind: "development" } : {}),
       branch: { base: "main", source: SOURCE_BRANCH, target: "main", integration: INTEGRATION_BRANCH },
       integration_worktree_path: integrationPath,
       execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
@@ -1779,6 +1783,96 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(completedReplay.replayed).toBe(true);
     expect(completedReplay.data).toEqual(completed.data);
     expect(completedReplay.token).toBe(completed.token);
+    expect(workflowFootprint(fixture.context)).toEqual(completedBeforeReplay);
+  });
+
+  test("interrupted integration completion refuses until the current replacement renews stop proof, then completes and replays", async () => {
+    const fixture = await workflowFixture("recovery-integration-completion", [], "iteration");
+    const sourcePath = join(fixture.repoRoot, "wt-source");
+    runGit(["worktree", "add", "-q", "-b", SOURCE_BRANCH, sourcePath], fixture.repoRoot);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "reviewed source"], sourcePath);
+    const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.integrationPath, encoding: "utf8" }).trim();
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", sourceSha, "-m", "serial source merge"], fixture.integrationPath);
+    const resultSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.integrationPath, encoding: "utf8" }).trim();
+    const harness = dirname(storeDbPath(fixture.context));
+    writeText(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n`);
+    await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-integration-config", planId: PLAN_ID,
+      operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: SOURCE_BRANCH } },
+    });
+    await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-integration-start", planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "source reviewed and merged", evidence_paths: [] } },
+    });
+    const reports = ["qc.md", "qc-consolidated.md", "qa.md"].map((name) => join(harness, "plans", PLAN_ID, name));
+    reports.forEach((path) => writeText(path, "# Isolated review fixture\n"));
+    const evidence: CompletionEvidence = {
+      source_sha: sourceSha, review_base: baseSha, review_head: sourceSha,
+      qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
+      qa: { gate: "mandatory", decision: "pass", report: reports[2]! },
+    };
+    const complete = {
+      operationId: "op-integration-complete", planId: PLAN_ID,
+      operation: {
+        kind: "complete" as const, evidence,
+        integration: { base_sha: baseSha, result_sha: resultSha },
+      },
+    };
+    plantMergeClaim(fixture.context, {
+      ownerEpoch: fixture.epoch, holder: COORDINATOR_ID,
+      claimed_at: "2026-01-02T05:00:00.000Z", target_branch: INTEGRATION_BRANCH,
+    });
+    const caller = trustedCaller(RECOVERY_ID, "coordinator");
+    const initial = await recoverExecutionCoordinator(domainContext(fixture.context, caller), {
+      expected: workflowTokenOfRow(fixture.context), operationId: "op-integration-recover",
+      priorSessionId: COORDINATOR_ID, reason: "integration coordinator stopped",
+      attestation: attestation([COORDINATOR_ID]),
+    });
+    const before = workflowFootprint(fixture.context);
+    const blocked = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, caller), complete));
+    expect(blocked.code).toBe("coordination.merge-lease-stopped-owner");
+    expect(blocked.details).toMatchObject({
+      claim_plan_id: PLAN_ID, claim_holder: COORDINATOR_ID,
+      claim_source_branch: SOURCE_BRANCH, claim_target_branch: INTEGRATION_BRANCH,
+    });
+    expect(workflowFootprint(fixture.context)).toEqual(before);
+    const insufficient = await refusalOf(() => recoverExecutionCoordinator(domainContext(fixture.context, caller), {
+      expected: workflowTokenOfRow(fixture.context), operationId: "op-integration-insufficient",
+      priorSessionId: COORDINATOR_ID, reason: "retry insufficient evidence", attestation: attestation([COORDINATOR_ID]),
+    }));
+    expect(insufficient.code).toBe("coordination.invalid-transition");
+    expect(insufficient.details.cause).toBe("the claim was taken after the attested stop");
+    expect(workflowFootprint(fixture.context)).toEqual(before);
+    const sessionsBefore = rows(fixture.context, "select * from execution_sessions order by session_id");
+    const rowsBefore = rows(fixture.context, "select * from execution_plans order by plan_id");
+    const renewal = {
+      expected: workflowTokenOfRow(fixture.context), operationId: "op-integration-renew",
+      priorSessionId: COORDINATOR_ID, reason: "renew applicable stop evidence",
+      attestation: { ...attestation([COORDINATOR_ID]), attestedAt: "2026-01-02T05:00:00.000Z" },
+    };
+    const renewed = await recoverExecutionCoordinator(domainContext(fixture.context, caller), renewal);
+    expect(renewed.data).toEqual(initial.data);
+    expect(renewed.token).toBe(initial.token);
+    expect(rows(fixture.context, "select * from execution_sessions order by session_id")).toEqual(sessionsBefore);
+    expect(rows(fixture.context, "select * from execution_plans order by plan_id")).toEqual(rowsBefore);
+    const renewedBeforeReplay = workflowFootprint(fixture.context);
+    const renewalReplay = await recoverExecutionCoordinator(domainContext(fixture.context, caller), renewal);
+    expect(renewalReplay.replayed).toBe(true);
+    expect(renewalReplay.data).toEqual(renewed.data);
+    expect(renewalReplay.token).toBe(renewed.token);
+    expect(workflowFootprint(fixture.context)).toEqual(renewedBeforeReplay);
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, caller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+    expect(completed.data.coordination?.completion).toMatchObject({
+      source_sha: sourceSha, completed_by: RECOVERY_ID,
+      integration: { base_sha: baseSha, result_sha: resultSha, target_branch: INTEGRATION_BRANCH },
+    });
+    const completedBeforeReplay = workflowFootprint(fixture.context);
+    const completionReplay = await mutateExecutionPlan(domainContext(fixture.context, caller), complete);
+    expect(completionReplay.replayed).toBe(true);
+    expect(completionReplay.data).toEqual(completed.data);
+    expect(completionReplay.token).toBe(completed.token);
     expect(workflowFootprint(fixture.context)).toEqual(completedBeforeReplay);
   });
 
