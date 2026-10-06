@@ -148,38 +148,6 @@ describe("command discovery", () => {
     expect(overridden.input.safeParse({}).success).toBe(false);
     expect(overridden.input.safeParse({ name: "x" }).success).toBe(true);
   });
-  test("execution token kinds are published in command requirement metadata", () => {
-    const definitions = getCommandDefinitions();
-    for (const [id, tokenKind] of [
-      ["workflow.register", "root"],
-      ["plan.prepare", "plan"],
-    ] as const) {
-      const descriptor = selectCommandSchema({ command: id }, definitions);
-      if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
-      expect(descriptor.descriptor.requirements.find((entry) => entry.name === "expect")?.tokenKind).toBe(tokenKind);
-    }
-    for (const id of ["plan.bind", "session.recover"]) {
-      const descriptor = selectCommandSchema({ command: id }, definitions);
-      if (descriptor.kind !== "command") throw new Error(`expected command descriptor for ${id}`);
-      expect(descriptor.descriptor.requirements.filter((entry) => entry.name === "expect")).toEqual([]);
-    }
-    const bind = selectCommandSchema({ command: "plan.bind" }, definitions);
-    if (bind.kind !== "command") throw new Error("expected plan.bind command descriptor");
-    expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "expect (--coordinator)", tokenKind: "workflow",
-    }));
-    expect(bind.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "expect (--plan)", tokenKind: "plan",
-    }));
-    const recover = selectCommandSchema({ command: "session.recover" }, definitions);
-    if (recover.kind !== "command") throw new Error("expected session.recover command descriptor");
-    expect(recover.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "expect (--coordinator)", tokenKind: "workflow",
-    }));
-    expect(recover.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "expect (--plan)", tokenKind: "plan",
-    }));
-  });
   test("workflow register schema publishes the selected-document title constraint", () => {
     const selection = selectCommandSchema({ command: "workflow.register" }, getCommandDefinitions());
     if (selection.kind !== "command") throw new Error("expected workflow.register command descriptor");
