@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createExecutionWorkflow, initializeExecutionAuthority, initializeStore, openStore, registerCatalogEntity } from "@mstar-harness/engine";
+import { bindExecutionSession, createExecutionWorkflow, executionContextFor, initializeExecutionAuthority, initializeStore, mutateExecutionPlan, registerCatalogEntity } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -74,7 +74,7 @@ describe("validation command family", () => {
       started_at: "2026-09-26", updated_at: "2026-09-26",
       branch: { base: "expected-main", integration: "integration" },
       integration_worktree_path: path.join(cwd, "integration"),
-      plans: [{ id: "plan-a", title: "Plan A", file: path.join(cwd, "plan.md"), status: "InProgress", execution_lease: { holder: "dev", claimed_at: "2026-09-26", worktree_path: path.join(cwd, "feature"), working_branch: "feature/plan-a" } }],
+      plans: [{ id: "plan-a", title: "Plan A", file: path.join(cwd, "plan.md"), status: "InProgress", metadata: { worktree_path: path.join(cwd, "feature"), working_branch: "feature/plan-a" } }],
     }));
     const result = await definition("worktree.check").execute(
       { planId: "plan-a", workflow: "wf-checkout", harness },
@@ -100,10 +100,9 @@ describe("validation command family", () => {
     (await initializeStore(storeContext)).close();
     const initialized = await initializeExecutionAuthority(storeContext);
     await registerCatalogEntity(storeContext, { kind: "plan", id: "plan-synthetic", title: "Synthetic plan", rootKind: "plans", relativePath: "plans/plan-synthetic.md" }, { operationId: "catalog-synthetic", actor: "test" });
-    await createExecutionWorkflow({
-      ...storeContext,
-      caller: { sessionId: "coordinator-synthetic", role: "coordinator", workflowId: "workflow-synthetic", planId: null },
-    }, {
+    const identity = { source: "local" as const, sessionId: "coordinator-synthetic", role: "coordinator" as const, workflowId: "workflow-synthetic" };
+    const execution = executionContextFor(storeContext, identity);
+    const created = await createExecutionWorkflow(execution, {
       entry: { id: "workflow-synthetic", type: "plan", status: "running", started_at: "2026-09-26T00:00:00Z", dir: "workflows/workflow-synthetic" },
       snapshot: {
         schema_version: 1, id: "workflow-synthetic", type: "plan", status: "running",
@@ -116,15 +115,21 @@ describe("validation command family", () => {
       expected: initialized.token,
       operationId: "workflow-synthetic",
     });
-    const leaseStore = await openStore(storeContext, "write");
-    try {
-      leaseStore.db.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, ?, ?)")
-        .run("workflow-synthetic", "plan-synthetic", initialized.epoch, JSON.stringify({
-          holder: "dev-synthetic", claimed_at: "2026-09-26T00:00:00Z",
-          worktree_path: path.join(cwd, "wrong-feature-worktree"), working_branch: "feature/synthetic",
-        }));
-      leaseStore.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    } finally { leaseStore.close(); }
+    const bound = await bindExecutionSession(execution, {
+      workflowId: identity.workflowId, expected: created.data.workflows[0]!.workflowToken,
+      operationId: "bind-synthetic",
+    });
+    const removedWorktree = path.join(cwd, "removed-feature-worktree");
+    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/synthetic", removedWorktree], { cwd });
+    mkdirSync(path.join(harness, "plans"), { recursive: true });
+    writeFileSync(path.join(harness, "plans", "plan-synthetic.md"), "# Synthetic plan\n");
+    await mutateExecutionPlan(execution, {
+      session: bound.data, planId: "plan-synthetic", operationId: "prepare-initial-source",
+      operation: { kind: "prepare", config: { worktreePath: removedWorktree, workingBranch: "feature/synthetic" } },
+    });
+    // The recorded checkout was real when prepared; its later removal must
+    // refuse dispatch, not turn the missing physical source into a default.
+    execFileSync("git", ["worktree", "remove", removedWorktree], { cwd });
     const result = await definition("worktree.check").execute(
       { planId: "plan-synthetic", workflow: "workflow-synthetic", harness, mainBranch: "main" },
       context(cwd, async ({ argv }) => argv[1] === "worktree"
@@ -132,18 +137,13 @@ describe("validation command family", () => {
         : { exitCode: 0, signal: null, stdout: "main", stderr: "" }),
     );
     expect(result.status).toBe("refused");
-    expect(violationsOf(result).some(({ code, message }) => /lease|worktree/i.test(`${code} ${message}`))).toBe(true);
+    expect(violationsOf(result)).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-missing" }));
     const featureWorktree = path.join(cwd, "feature-worktree");
-    execFileSync("git", ["worktree", "add", "-q", "-b", "feature/synthetic", featureWorktree], { cwd });
-    const leaseUpdate = await openStore(storeContext, "write");
-    try {
-      leaseUpdate.db.prepare("update execution_leases set revision = revision + 1, lease_json = ? where workflow_id = ? and plan_id = ?")
-        .run(JSON.stringify({
-          holder: "dev-synthetic", claimed_at: "2026-09-26T00:00:00Z",
-          worktree_path: featureWorktree, working_branch: "feature/synthetic",
-        }), "workflow-synthetic", "plan-synthetic");
-      leaseUpdate.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    } finally { leaseUpdate.close(); }
+    execFileSync("git", ["worktree", "add", "-q", featureWorktree, "feature/synthetic"], { cwd });
+    await mutateExecutionPlan(execution, {
+      session: bound.data, planId: "plan-synthetic", operationId: "prepare-synthetic",
+      operation: { kind: "prepare", config: { worktreePath: featureWorktree, workingBranch: "feature/synthetic" } },
+    });
     const matching = await definition("worktree.check").execute(
       { planId: "plan-synthetic", workflow: "workflow-synthetic", harness, mainBranch: "main" },
       context(cwd, async ({ argv }) => argv[1] === "worktree"

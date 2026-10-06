@@ -25,8 +25,8 @@ import {
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
 import { DatabaseSync } from "node:sqlite";
-import { executeCommand } from "./definitions.js";
-import type { CommandEnvelope, InvocationContext } from "./types.js";
+import { executeCommand } from "../src/definitions.js";
+import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const TS = "2026-01-02T03:04:05.000Z";
 const WORKFLOW_ID = "wf-1";
@@ -82,7 +82,7 @@ async function buildFixture(label: string): Promise<{
   runGit(["init", "-q", "-b", "main"], repoRoot);
   runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
   mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
-  const context: StoreContext = { harnessDir: repoRoot };
+  const context: StoreContext = { harnessDir: join(repoRoot, ".mstar") };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
@@ -244,7 +244,7 @@ function operationReceiptJson(context: StoreContext, operationId: string): strin
 
 describe("sparse plan intent admission", () => {
   test("a sparse active operation with sessionRef, plan, operation id and payload is admitted by the engine", async () => {
-    const { repoRoot, coordinatorRef } = await buildFixture("sparse-accepted");
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-accepted");
     const envelope = await runPlanCommand(
       repoRoot,
       { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-admitted", progress: PROGRESS },
@@ -257,7 +257,7 @@ describe("sparse plan intent admission", () => {
     expect(receipt.data?.coordination?.progress?.summary).toBe("sparse intent");
     // The authoritative read serves the written state, not just the receipt.
     const stored = await readExecutionPlan(
-      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
+      executionContextFor(context, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
       coordinatorRef,
       PLAN_ID,
     );
@@ -316,7 +316,7 @@ describe("sparse plan intent admission", () => {
   test("an explicit stale execution token is refused at the engine authority boundary", async () => {
     const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-stale");
     const staleToken: ExecutionToken = (await readExecutionPlan(
-      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
+      executionContextFor(context, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
       coordinatorRef,
       PLAN_ID,
     )).token;
@@ -360,7 +360,7 @@ describe("sparse plan intent admission", () => {
   });
 
   test("an active progress update without an operation id persists the plan state", async () => {
-    const { repoRoot, coordinatorRef } = await buildFixture("sparse-derived-operation");
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-derived-operation");
     const progress = { ...PROGRESS, summary: "persisted without explicit operation id" };
     const envelope = await runPlanCommand(
       repoRoot,
@@ -369,7 +369,7 @@ describe("sparse plan intent admission", () => {
     );
     expect(envelope.status).toBe("ok");
     const stored = await readExecutionPlan(
-      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
+      executionContextFor(context, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
       coordinatorRef,
       PLAN_ID,
     );

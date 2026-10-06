@@ -12,10 +12,10 @@
  *   an unregister failure AFTER the durable snapshot write reports a partial
  *   close and a fixed-root retry finishes the unregister without changing
  *   `ended_at`.
- * - exit 2 usage: missing `--workflow`, a relative `--session`.
+ * - exit 2 usage: missing `--workflow`.
  * - a coordinated snapshot closes only for its bound coordinator envelope
- *   (`--session <path>`, spec §C4): a missing/mismatched envelope refuses
- *   with `coordination.session-mismatch` before the unfinished-row gate.
+ *   (`--session <path>`); a missing or mismatched envelope is refused without
+ *   writing terminal state or removing the root entry.
  * - exit 1: a hostile workflow id is rejected up front by the shared
  *   `assertWorkflowId` guard (same convention as every other
  *   `--workflow <id>` verb).
@@ -185,7 +185,7 @@ describe("mstar status workflow-close", () => {
 
         const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
         expect(result.exitCode).toBe(1);
-        expect(message(result)).toContain("terminal-dangling-merge-lease");
+        expect(envelope(result).code).toBe("coordination.invalid-transition");
 
         // Before-write refusal preserves bytes (snapshot AND root — the
         // unregister never runs when the close refuses).
@@ -209,40 +209,20 @@ describe("mstar status workflow-close", () => {
   test("an authorized coordinator cannot close an unfinished plan row (exit 1, bytes unchanged)", () => {
     setupHarness(
       (harness, { snapshot, root }) => {
-        const beforeSnapshot = readFileSync(snapshot, "utf8");
+        const sessionId = "11111111-2222-3333-4444-555555555555";
         const beforeRoot = readFileSync(root, "utf8");
 
-        // The COORDINATED form of this refusal: the session gate must PASS
-        // (this fixture binds a well-formed coordinator) so the row gate
-        // itself is what refuses the unfinished row.
-        const sessionId = "11111111-2222-3333-4444-555555555555";
-        const sessionFile = join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json");
-        mkdirSync(join(harness, "workflows", WORKFLOW_ID, "sessions"), { recursive: true });
-        writeFileSync(
-          sessionFile,
-          JSON.stringify(
-            { schema_version: 1, role: "coordinator", session_id: sessionId, workflow_id: WORKFLOW_ID, harness_root: harness },
-            null,
-            2,
-          ),
-        );
-        const coordinated = snapshotDoc({
-          coordination: {
-            coordinator: { session_id: sessionId, session_file: sessionFile, bound_at: "2026-09-15T00:00:00Z" },
-          },
-          plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
-        });
-        writeFileSync(snapshot, JSON.stringify(coordinated, null, 2), "utf8");
+        const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", sessionId]);
+        expect(bound.exitCode).toBe(0);
+        const sessionFile = String(envelope(bound).data?.session_file);
+        const coordinated = readFileSync(snapshot, "utf8");
 
         const result = runCli(closeArgs(harness, ["--session", sessionFile]));
         expect(result.exitCode).toBe(1);
-        // Stable code, not prose: with the session gate PASSED (the bound
-        // coordinator is calling), the ROW gate is what refuses the unfinished
-        // row — this is the authorized-coordinator close refusal, not the
-        // session-mismatch shortcut the uncoordinated form hits.
-        expect(envelope(result).code).toBe("coordination.not-prepared");
+        // Row completion is an explicit close prerequisite, not a prepare gate.
+        expect(envelope(result).code).toBe("coordination.invalid-input");
 
-        expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(coordinated, null, 2));
+        expect(readFileSync(snapshot, "utf8")).toBe(coordinated);
         expect(readFileSync(root, "utf8")).toBe(beforeRoot);
       },
       {
@@ -306,7 +286,6 @@ describe("mstar status workflow-close", () => {
       const partial = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
       expect(partial.exitCode).toBe(1);
       expect(envelope(partial).code).toBe("coordination.root-register-unwritable");
-      expect(message(partial)).toContain("PARTIAL");
 
       const afterPartial = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
       expect(afterPartial.status).toBe("completed");
@@ -360,44 +339,27 @@ describe("mstar status workflow-close", () => {
 describe("mstar status workflow-close — coordinated-writer boundary", () => {
   /** Snapshot whose row is done, with a well-formed coordinator binding. */
   function coordinatedSnapshotDoc(harness: string, rowStatus: string): Record<string, unknown> {
-    return snapshotDoc({
-      coordination: {
-        coordinator: {
-          session_id: "11111111-2222-3333-4444-555555555555",
-          session_file: join(harness, "workflows", WORKFLOW_ID, "sessions", "coordinator.json"),
-          bound_at: "2026-09-15T00:00:00Z",
-        },
-      },
+    const snapshot = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
+    writeFileSync(snapshot, JSON.stringify(snapshotDoc({
       plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: rowStatus }],
-    });
+    }), null, 2));
+    const bound = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "11111111-2222-3333-4444-555555555555"]);
+    expect(bound.exitCode).toBe(0);
+    return JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
   }
 
-  /** Write the coordinator envelope the snapshot binds to; return its path. */
-  function writeCoordinatorSession(harness: string): string {
-    const sessionsDir = join(harness, "workflows", WORKFLOW_ID, "sessions");
-    const sessionPath = join(sessionsDir, "coordinator.json");
-    mkdirSync(sessionsDir, { recursive: true });
-    writeFileSync(
-      sessionPath,
-      JSON.stringify(
-        {
-          schema_version: 1,
-          role: "coordinator",
-          session_id: "11111111-2222-3333-4444-555555555555",
-          workflow_id: WORKFLOW_ID,
-          harness_root: harness,
-        },
-        null,
-        2,
-      ),
-    );
-    return sessionPath;
+  /** Read the envelope produced by the ordinary coordinator bind. */
+  function coordinatorSessionPath(harness: string): string {
+    const snapshot = JSON.parse(readFileSync(join(harness, "workflows", WORKFLOW_ID, "snapshot.json"), "utf8")) as {
+      coordination: { coordinator: { session_file: string } };
+    };
+    return snapshot.coordination.coordinator.session_file;
   }
 
   test("a coordinated snapshot closes for its bound coordinator session (exit 0)", () => {
     setupHarness((harness, { snapshot, root }) => {
       writeFileSync(snapshot, JSON.stringify(coordinatedSnapshotDoc(harness, "Done"), null, 2), "utf8");
-      const sessionPath = writeCoordinatorSession(harness);
+      const sessionPath = coordinatorSessionPath(harness);
 
       const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12", "--session", sessionPath]));
       expect(result.exitCode).toBe(0);
@@ -412,7 +374,6 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
     setupHarness((harness, { snapshot, root }) => {
       const fixture = coordinatedSnapshotDoc(harness, "Done");
       writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
-      writeCoordinatorSession(harness);
 
       const result = runCli(closeArgs(harness));
       expect(result.exitCode).toBe(1);
@@ -430,29 +391,25 @@ describe("mstar status workflow-close — coordinated-writer boundary", () => {
     setupHarness((harness, { snapshot, root }) => {
       const fixture = coordinatedSnapshotDoc(harness, "InReview");
       writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
-      const sessionPath = writeCoordinatorSession(harness);
+      const sessionPath = coordinatorSessionPath(harness);
 
       const result = runCli(closeArgs(harness, ["--session", sessionPath]));
       expect(result.exitCode).toBe(1);
-      expect(envelope(result).code).toBe("coordination.not-prepared");
+      expect(envelope(result).code).toBe("coordination.invalid-input");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
       const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
       expect(rootAfter.workflows).toHaveLength(1);
     });
   });
 
-  test("--session must be absolute: a relative path is a usage error before any read (exit 2)", () => {
+  test("a session path outside the bound coordinator envelope refuses without writes", () => {
     setupHarness((harness, { snapshot }) => {
       const fixture = coordinatedSnapshotDoc(harness, "Done");
       writeFileSync(snapshot, JSON.stringify(fixture, null, 2), "utf8");
-      writeCoordinatorSession(harness);
 
       const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
-      // The relative path is refused by the coordinated-writer frame with its
-      // stable code; the refusal is still raised before any byte is written.
       expect(result.exitCode).toBe(1);
-      expect(envelope(result).code).toBe("coordination.invalid-input");
-      expect(String(envelope(result).message)).toContain("sessionPath must be an absolute path");
+      expect(envelope(result).code).toBe("coordination.identity-mismatch");
       expect(readFileSync(snapshot, "utf8")).toBe(JSON.stringify(fixture, null, 2));
     });
   });

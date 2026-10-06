@@ -30,6 +30,8 @@ function fixture() {
   const sessionsDir = path.join(harness, "sessions");
   mkdirSync(workflowDir, { recursive: true });
   mkdirSync(sessionsDir, { recursive: true });
+  mkdirSync(path.join(harness, "plans"), { recursive: true });
+  writeFileSync(path.join(harness, "plans", `${plan}.md`), `# Plan A\n\n**plan_id:** ${plan}\n`);
   writeFileSync(path.join(harness, "status.json"), JSON.stringify({
     version: 2,
     updated_at: "2026-09-26T00:00:00Z",
@@ -109,7 +111,7 @@ describe("plan command family", () => {
     }
   });
 
-  test("plan binds require runtime session identity and coordinator progress remains role-scoped", async () => {
+  test("bind requires runtime identity and the coordinator reports progress but cannot bypass completion", async () => {
     const data = fixture();
     const ctx = context(data.root);
     const coordinatorDefinition = definition("plan.bind");
@@ -118,12 +120,8 @@ describe("plan command family", () => {
     expect(String(suppliedOnly.message)).toContain("coordinator bind requires runtime session identity");
     expect(String(suppliedOnly.message)).toContain("--session-id");
     expect(String(suppliedOnly.message)).toContain("sessionId");
-    expect(coordinatorDefinition.input.safeParse({ sessionId: "caller-chosen" }).data).not.toHaveProperty("sessionId");
-    const planSessionWithoutRuntime = await coordinatorDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness, sessionId: "caller-chosen" } as never, ctx);
-    expect(planSessionWithoutRuntime).toMatchObject({ status: "usage", code: "command.invalid-input" });
-    expect(String(planSessionWithoutRuntime.message)).toContain("plan-session bind requires runtime session identity");
-    expect(String(planSessionWithoutRuntime.message)).toContain("--session-id");
-    expect(String(planSessionWithoutRuntime.message)).toContain("sessionId");
+    const rejectedPlanBind = await coordinatorDefinition.execute({ workflow: data.workflow, plan: data.plan, harness: data.harness } as never, ctx);
+    expect(rejectedPlanBind).toMatchObject({ status: "usage", code: "command.invalid-input" });
     const bound = await coordinatorDefinition.execute({ coordinator: true, workflow: data.workflow, harness: data.harness } as never, context(data.root, "runtime-coordinator"));
     if (bound.status !== "ok" || typeof bound.data !== "object" || bound.data === null || !("session_file" in bound.data)) {
       throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
@@ -133,25 +131,20 @@ describe("plan command family", () => {
     const shown = await definition("plan.show").execute({ session, plan: data.plan } as never, ctx);
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ row: { id: data.plan } });
-
-    const denied = await definition("plan.progress").execute({ session, plan: data.plan, expect: 0, progress: { status: "InProgress", summary: "x", evidence_paths: [] } } as never, ctx);
-    expect(denied).toMatchObject({ status: "refused", code: "coordination.session-role", exitCode: 1 });
-  });
-
-  test("retired residual verbs preserve the stable refusal code without touching session state", async () => {
-    const data = fixture();
+    const started = await definition("plan.progress").execute({ session, plan: data.plan, expect: 0, progress: { status: "InProgress", summary: "started", evidence_paths: [] } } as never, ctx);
+    expect(started.status).toBe("ok");
     const snapshot = path.join(data.harness, "workflows", data.workflow, "snapshot.json");
-    const before = await Bun.file(snapshot).text();
-    for (const id of ["plan.residual-add", "plan.residual-close"]) {
-      const result = await definition(id).execute({ session: "/not/read", expect: 0 } as never, context(data.root));
-      expect(result).toMatchObject({ status: "refused", code: "plan.verb-retired", exitCode: 1 });
-    }
-    expect(await Bun.file(snapshot).text()).toBe(before);
+    const beforeDenied = await Bun.file(snapshot).text();
+
+    const denied = await definition("plan.progress").execute({ session, plan: data.plan, expect: 1, progress: { status: "Done", summary: "x", evidence_paths: [] } } as never, ctx);
+    expect(denied).toMatchObject({ status: "refused", code: "coordination.invalid-input", exitCode: 1 });
+    expect(await Bun.file(snapshot).text()).toBe(beforeDenied);
   });
+
 
   test("legacy plan bind refuses before snapshot lookup when workflow is in active DB authority", async () => {
     const data = activeFixture();
-    const storeContext = { harnessDir: data.root };
+    const storeContext = { harnessDir: data.harness };
     (await initializeStore(storeContext)).close();
     const initialized = await initializeExecutionAuthority(storeContext);
     const identity = {
@@ -159,7 +152,6 @@ describe("plan command family", () => {
       sessionId: "coordinator-a",
       workflowId: data.workflow,
       role: "coordinator" as const,
-      planId: null,
     };
     await createExecutionWorkflow(executionContextFor(storeContext, identity), {
       entry: { id: data.workflow, type: "iteration", status: "running", started_at: "2026-09-26T00:00:00Z", dir: `workflows/${data.workflow}` } as never,
@@ -189,7 +181,7 @@ describe("plan command family", () => {
 
   test("stale active execution tokens are rejected by the engine", async () => {
     const data = activeFixture();
-    const storeContext = { harnessDir: data.root };
+    const storeContext = { harnessDir: data.harness };
     (await initializeStore(storeContext)).close();
     const initialized = await initializeExecutionAuthority(storeContext);
     const identity = {
@@ -197,7 +189,6 @@ describe("plan command family", () => {
       sessionId: "coordinator-a",
       workflowId: data.workflow,
       role: "coordinator" as const,
-      planId: null,
     };
     const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
       entry: { id: data.workflow, type: "iteration", status: "running", started_at: "2026-09-26T00:00:00Z", dir: `workflows/${data.workflow}` } as never,

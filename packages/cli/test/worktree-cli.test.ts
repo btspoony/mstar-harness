@@ -6,10 +6,10 @@
  * A sibling `worktree qc-alignment` group verifies assignment alignment
  * fields independently of worktree isolation and topology.
  *
- * L1 input in v3 comes from the workflow snapshot through the canonical
- * reader (`readWorkflowSnapshot` — the v1 `control_worktree_path` key is
- * accepted as an in-memory alias with a medium migration advisory): plan
- * rows (with `plans[].execution_lease`), `integration_worktree_path` +
+ * L1 input comes from the workflow snapshot through the canonical reader
+ * (`readWorkflowSnapshot` — the v1 `control_worktree_path` key is accepted as
+ * an in-memory alias with a medium migration advisory): prepared plan metadata
+ * (`worktree_path`, `working_branch`), `integration_worktree_path` +
  * `branch.integration`, and the Git-derived main worktree. `--integration`
  * overrides the snapshot integration path; `--control` is the deprecated
  * one-release alias (stderr notice; both flags together are usage exit 2).
@@ -215,19 +215,12 @@ function standaloneSnapshotDoc(mainBranch: string, plans: unknown[], extra: Reco
   return snapshotDoc(plans, { type: "plan", branch: { base: mainBranch }, ...extra });
 }
 
-const LEASE = (worktreePath: string, workingBranch = "feature/plan-a") => ({
-  holder: "worktree-cli-test",
-  claimed_at: "2026-08-08",
-  worktree_path: worktreePath,
-  working_branch: workingBranch,
-});
-
 const PLAN_A = (worktreePath: string, workingBranch = "feature/plan-a") => ({
   id: "plan-a",
   title: "Plan A",
   file: "plans/plan-a.md",
   status: "InProgress",
-  execution_lease: LEASE(worktreePath, workingBranch),
+  metadata: { worktree_path: worktreePath, working_branch: workingBranch },
 });
 
 describe("mstar worktree check — L1 (main residency + integration + feature isolation)", () => {
@@ -485,8 +478,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         root,
         snapshotDoc(
           [
-            { id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress", execution_lease: LEASE(root) },
-            { plan_id: "plan-a", title: "Plan A (legacy)", file: "plans/plan-a.md", status: "InProgress", execution_lease: LEASE(root) },
+            PLAN_A(root),
+            { plan_id: "plan-a", title: "Plan A (legacy)", file: "plans/plan-a.md", status: "InProgress", metadata: PLAN_A(root).metadata },
           ],
           { control_worktree_path: root },
         ),
@@ -801,7 +794,7 @@ test("retained track ownership prevents main from carrying an active track", () 
   try {
     const linked = worktreeFixture(root);
     const mainBranch = git(["branch", "--show-current"], root);
-    const row = { ...PLAN_A(linked), metadata: { track_branches: [mainBranch] } };
+    const row = { ...PLAN_A(linked), metadata: { ...PLAN_A(linked).metadata, track_branches: [mainBranch] } };
     writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
     const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
     const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
