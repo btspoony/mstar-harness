@@ -59,12 +59,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
-import { assertEvidenceInsidePlanArea, planAreaRoots, type CompletionEvidence } from "./coordination.js";
+import { assertEvidenceInsidePlanArea, planAreaRoots } from "./coordination.js";
+import type { CompletionEvidence } from "./coordination-write.js";
 import { readCompletionEvidence } from "./coordination-transitions.js";
 import {
   completeExecutionPlan,
   prepareExecutionPlan,
   progressExecutionPlan,
+  setCompleteWitnessGapForTest,
 } from "./execution-coordination.js";
 import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
@@ -890,6 +892,39 @@ describe("retained evidence at the completion consumer", () => {
       expect(completed.data.plan.status).toBe("Done");
       expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
     } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("retained evidence: an alias moved outside the plan area during the proof gap refuses and can be corrected", async () => {
+    const fixture = await retainedCompletionFixture("retained-evidence-gap-alias");
+    try {
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+      const outside = join(fixture.context.harnessDir, "outside-gap-body.md");
+      writeBody(outside, "outside the declared evidence areas\n");
+      const alias = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "qa-alias.md");
+      symlinkSync(bodies.qa, alias);
+      const before = await retainedPlanRead(fixture);
+      setCompleteWitnessGapForTest(() => {
+        rmSync(alias);
+        symlinkSync(outside, alias);
+      });
+      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap")))
+        .toEqual({ code: "coordination.path-mismatch" });
+      expect(await retainedPlanRead(fixture)).toEqual(before);
+      setCompleteWitnessGapForTest(undefined);
+      rmSync(alias);
+      symlinkSync(bodies.qa, alias);
+      const completed = await retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap");
+      expect(completed.data.plan.status).toBe("Done");
+      expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
+      expect(completed.data.coordination?.completion?.qa.report.sha256)
+        .toBe(createHash("sha256").update(QA_BODY).digest("hex"));
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }
   });

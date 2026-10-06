@@ -153,8 +153,8 @@ export function makeFixture(): Fixture {
   const worktreePath = join(root, "wt-plana");
   const peerWorktreePath = join(root, "wt-planb");
 
-  writeText(planPath, "# plan a\n");
-  writeText(peerPlanPath, "# plan b\n");
+  writeText(planPath, "---\nplan_id: plan-a\n---\n# plan a\n");
+  writeText(peerPlanPath, "---\nplan_id: plan-b\n---\n# plan b\n");
   mkdirSync(sddDir, { recursive: true });
   mkdirSync(peerSddDir, { recursive: true });
   // Real feature checkouts on the branches a `prepare` names: the ordinary
