@@ -1,13 +1,13 @@
 /**
  * execution-workflow.ts — the DB transport of WORKFLOW-LEVEL lifecycle
- * transitions, coordinator recovery and exact plan-PM recovery
- * (primary spec §2.3/§3/§4.1/§4.2).
+ * transitions and coordinator recovery (primary spec §2.3/§3/§4.1/§4.2).
  *
  * W1–W4 built the plan-operation half of the execution authority: one accepted
  * plan operation is one transaction. This module adds the workflow's own half —
  * the phase, lifecycle, execution-policy, integration-checkout and delivery
- * transitions of one lifecycle — plus two distinct named recovery routes for
- * coordinator and plan-PM identities.
+ * transitions of one lifecycle — plus the named recovery route for the
+ * workflow's coordinator identity. Plan-scoped operations live in the plan
+ * transport; this module owns no plan-scoped identity of its own.
  *
  * Everything load-bearing is REUSED, never re-expressed:
  *
@@ -52,23 +52,16 @@
  *   operator authorization reference and the current-coordinator consumer);
  * - revocation and rebinding commit together with an immutable operation
  *   receipt recording the prior holder, the reason and the attestation digest;
- * - only ownership orphaned by revoking the NAMED coordinator holder is adopted
- *   by the recovery session, with `owner_epoch` UNCHANGED. Other plan or
- *   integration ownership is not swept into coordinator recovery; older-epoch
- *   leases remain for the existing explicit reconcile transition.
+ * - the coordinator holds no per-plan claim to adopt: the removed plan-PM
+ *   seat's leases are gone, and the workflow's own integration merge claim is
+ *   settled by the close/completion transitions that own it.
  *
- * Plan-PM recovery is separate: it uses the exact plan token and may revoke only
- * the matching plan-PM binding covered by stop evidence, even while that row is
- * still active in storage. It transfers only that plan's held current-epoch
- * claim to the caller's native identity, preserving row/evidence state and all
- * claim provenance. A foreign active owner, another plan's binding, submitted
- * or accepted/completed handoff, or a stale claim receipt keeps its existing
- * public lifecycle path; this route neither adopts siblings nor resets a
- * handoff.
+ * Plan-PM recovery is GONE with the seat it recovered. A plan row is ordinary
+ * coordinator data addressed by `planId`; there is no second plan-scoped
+ * identity to revoke and no per-plan claim to transfer.
  *
  * Nothing here is a public arbitrary writer: the package index publishes exactly
- * `mutateExecutionWorkflow`, `recoverExecutionCoordinator` and
- * `recoverExecutionPlanSession`.
+ * `mutateExecutionWorkflow` and `recoverExecutionCoordinator`.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -85,18 +78,12 @@ import {
   PLAN_PARALLELISM_VALUES,
   gitRead,
   prepareAmendmentComponent,
-  revalidateGitProofWitness,
 } from "./coordination.js";
 import { rowStatusOf, summarize } from "./coordination-transitions.js";
 import {
-  applyEntailedCompletion,
-  completionFrameFor,
-  readEntailedCompletions,
-  releaseStoppedExecutionLeases,
+  deliveryRouteOf,
   releaseStoppedMergeClaim,
   resolveSparseOwnSession,
-  type DeliveryRoutePin,
-  type EntailedRowCompletion,
   type ExecutionMutationIntent,
 } from "./execution-coordination.js";
 import {
@@ -107,11 +94,9 @@ import {
   assertOperationId,
   bindRecoveredSession,
   executionToken,
-  parseExecutionToken,
   readExecutionState,
   readExecutionStateGraph,
   readExecutionWorkflowWitness,
-  readHeldExecutionLeases,
   readOperationReplay,
   readWorkflowSessionRows,
   recordRootMembershipLoss,
@@ -122,7 +107,6 @@ import {
   revokeSessionRow,
   semanticRequestHash,
   serializeExecutionValue,
-  transferExecutionLease,
   withExecutionTransaction,
   withRecoveryDetails,
   writeOperationReceipt,
@@ -174,6 +158,7 @@ import {
 } from "./workflow.js";
 import { assertBranchAlignment, isDistinctCheckout, readMainWorktree } from "./worktree.js";
 import type { PlanRow } from "./status.js";
+import type { IntegrationMergeLease } from "./lease.js";
 
 /* ------------------------------------------------------------------------ *
  * §3 the closed workflow-operation union
@@ -222,37 +207,6 @@ function invalidWorkflowInput(detail: string): CoordinationError {
 /** The one carrier of lifecycle-ordering refusals (`coordination.invalid-transition`). */
 function invalidWorkflowTransition(detail: string, details: Record<string, unknown> = {}): CoordinationError {
   return new CoordinationError("coordination.invalid-transition", detail, details);
-}
-function planRecoveryRefusal(
-  error: Error,
-  input: {
-    workflowId: string;
-    planId: string;
-    path: string;
-    code: string;
-    currentFacts: readonly string[];
-    needed: string;
-    availableWork: readonly string[];
-  },
-): Error {
-  error.message = `${error.message} Recovery required: ${input.needed} Available next steps: ${input.availableWork.join(" ")}`;
-  return withRecoveryDetails(error, {
-    recovery: unresolvedRecovery({
-      target: { workflowId: input.workflowId, planId: input.planId },
-      unresolved: [
-        {
-          component: "plan-owner-recovery",
-          path: input.path,
-          code: input.code,
-          sourcesTried: [`execution workflow ${input.workflowId}`, `plan ${input.planId} session and claim records`],
-          currentFacts: input.currentFacts,
-          needed: input.needed,
-          withheldEffect: "No session binding, execution claim, plan state, or workflow state was changed.",
-          availableWork: input.availableWork,
-        },
-      ],
-    }),
-  });
 }
 
 /**
@@ -487,15 +441,6 @@ type WorkflowEvidence = {
   checkout?: { path: string; branch: string | null };
   /** `integration-worktree`: the canonical candidate path and the branch it was on. */
   worktree?: { path: string; branch: string };
-  /**
-   * §R5/§R10 (E10) the row completions a terminal `completed` close composes,
-   * derived before SQLite ownership from each owned row's recorded evidence.
-   * Empty for a close that has nothing to compose, and absent for every other
-   * transition.
-   */
-  completions?: readonly EntailedRowCompletion[];
-  /** The delivery route/policy pair those completions were proved against (§4.1). */
-  pinned?: DeliveryRoutePin;
 };
 
 /**
@@ -678,45 +623,17 @@ async function readWorkflowEvidence(
     case "integration-worktree":
       return readIntegrationWorktreeEvidence(context, workflowId, operation);
     case "lifecycle":
-      // §R5/§R10 a terminal `completed` close composes the fulfilment and the
-      // row completions its owned rows' recorded evidence entails. Every
-      // external read that composition needs (the report-only policy
-      // resolution, the development source proof, the integration merge proof
-      // and the findings gate) happens HERE, before SQLite ownership; the
-      // transaction re-verifies the pinned route, the digests and the Git
-      // witness at the commit boundary.
-      return operation.status === "completed"
-        ? readCloseEvidence(context, workflowId)
-        : {};
+      // A terminal `completed` close synthesizes NOTHING: the report-only
+      // fulfilment is the outer lifecycle fact an authorized `workflow evidence`
+      // call records, and a passing QA report never supplies it. The transaction
+      // consults the delivery evidence the snapshot itself records.
+      return {};
     default:
       // The other stored transitions (phase-less lifecycle, execution-policy,
       // delivery) read no external evidence: their inputs are the store's own
       // rows, which the transaction reads itself.
       return {};
   }
-}
-
-/**
- * §R5/§R10 the evidence of one terminal `completed` close. A workflow that is
- * no longer a registered active lifecycle — an exact retry whose receipt the
- * transaction below still serves — deliberately yields NO pending completion:
- * the close's own registry absence is not this preflight's to report, and the
- * transaction is the authority on why the address no longer resolves.
- */
-async function readCloseEvidence(context: ExecutionContext, workflowId: string): Promise<WorkflowEvidence> {
-  let state;
-  try {
-    state = await readExecutionState(context);
-  } catch {
-    // The transaction's own reads report the store's actual state (staged,
-    // corrupt or unavailable); swallowing it here keeps a completed retry
-    // reaching its recorded receipt instead of failing on a preflight read.
-    return {};
-  }
-  const workflow = state.data.workflows.find((candidate) => candidate.state.id === workflowId);
-  if (workflow === undefined) return {};
-  const derived = await readEntailedCompletions(context, workflow);
-  return { completions: derived.completions, pinned: derived.pinned };
 }
 
 /**
@@ -752,9 +669,6 @@ function revalidateWorkflowEvidence(evidence: WorkflowEvidence): void {
         { path, expected: branch },
       );
     }
-  }
-  for (const proof of evidence.completions ?? []) {
-    if (proof.gitWitness !== undefined) revalidateGitProofWitness(proof.gitWitness);
   }
 }
 
@@ -967,10 +881,9 @@ function amendmentComponentOf(operation: WorkflowExecutionOperation): string | u
  * problem shape, never a guess at the only or most recent workflow.
  */
 function unresolvedWorkflowAddress(caller: ExecutionCaller): CoordinationError {
-  const bound =
-    caller?.role === "coordinator" || caller?.role === "plan-pm"
-      ? `the trusted caller is a ${caller.role} session ${JSON.stringify(caller.sessionId)}`
-      : "the trusted caller carries no usable session identity";
+  const bound = isNonEmptyString(caller?.sessionId)
+    ? `the trusted caller is a ${String(caller.role)} session ${JSON.stringify(caller.sessionId)}`
+    : "the trusted caller carries no usable session identity";
   const code: CoordinationErrorCode = "coordination.invalid-input";
   const problem: RecoveryProblem = {
     component: "target",
@@ -1139,21 +1052,9 @@ export async function mutateExecutionWorkflow(
         }),
       };
     }
-    // §R11/A21 the failed/stopped close settles its OWN stopped claims BEFORE
-    // the whole-view witness: a held lease whose holder session stopped is
-    // exactly the state that reader refuses (`assertLeaseOwnership` cannot
-    // represent it), so settling those first is what makes the terminal outcome
-    // reachable at all — an unreachable terminal state forces an unguarded
-    // operation. Authorization is this caller's own live coordinator binding,
-    // resolved exactly as the witness resolves it, and the cleanup inherits this
-    // transaction: a close that refuses afterwards rolls it back whole.
-    // `at` is the ONE timestamp of this accepted operation, so the settled
-    // claims carry the same instant the close records.
+    // `at` is the ONE timestamp of this accepted operation: the header, the
+    // settled claim and the receipt all carry the same instant.
     const at = new Date().toISOString();
-    if (operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")) {
-      const session = resolveWorkflowSession(tx, resolved.read);
-      releaseStoppedExecutionLeases(tx, { workflowId, releasedBy: session.sessionId, at });
-    }
     const witness = readExecutionWorkflowWitness(tx, resolved.read);
     // §4.2 retry semantics are two cases and only two: the SAME operation id
     // replays its recorded receipt above, and any OTHER operation id is a fresh
@@ -1208,19 +1109,17 @@ export async function mutateExecutionWorkflow(
  * so a close that refuses leaves both the routing and the terminal state
  * exactly where they were.
  *
- * §R5/§R10 a terminal `completed` close composes the bookkeeping its owned rows'
- * recorded evidence entails (E10) — the report-only fulfilment, the row
- * `Done`/completed-handoff delta and the ownership release — BEFORE the terminal
- * decision, through the same completion rules the plan route's `complete`
- * applies. Everything therefore commits on ONE handle in ONE transaction: a
- * crash leaves either the whole close or none of it, and the terminal decision
- * judges the rows this transaction just completed.
+ * §R5/§R10 a terminal `completed` close composes the ONE report-only fulfilment
+ * its owned rows' recorded evidence entails (E10) BEFORE the terminal decision.
+ * A row `Done` is NOT composed here: the plan's own `complete` is the single
+ * place that happens, so this close never completes a row in a sibling step.
+ * Everything therefore commits on ONE handle in ONE transaction: a crash leaves
+ * either the whole close or none of it.
  *
  * §R11/A21 a `failed`/`stopped` close composes no row bookkeeping at all (no
  * successful-delivery precondition): it settles the workflow's own stopped
- * claims — the held execution leases before the witness, the integration claim
- * here — and the terminal decision then judges exactly the ownership this
- * transaction leaves behind.
+ * integration claim here, and the terminal decision then judges exactly the
+ * ownership this transaction leaves behind.
  */
 function applyWorkflowOperation(input: {
   tx: ExecutionTransaction;
@@ -1246,37 +1145,24 @@ function applyWorkflowOperation(input: {
       { workflow_id: workflowId, status: current.status },
     );
   }
-  const composed =
-    !residueRepair && operation.kind === "lifecycle" && operation.status === "completed"
-      ? composeEntailedCompletions({ tx, witness, read, evidence, at })
-      : { completions: [] as readonly EntailedRowCompletion[], fulfilment: null };
-  // §R11/A21 the integration-claim half of a failed/stopped close's own-claim
-  // cleanup, under the same rule the execution leases were settled by: the
-  // workflow's OWN merge claim goes when its holder's session is not active at
-  // this epoch, and stays when that holder is live. It reads the claim from the
-  // witness this transaction already holds (the whole-view reader carries a
-  // merge claim whatever its holder's state), so a settled claim re-reads the
-  // witness below.
+  // §R11/A21 the failed/stopped close settles the workflow's OWN merge claim:
+  // it goes when its holder's session is not active at this epoch, and stays
+  // when that holder is live. It reads the claim from the witness this
+  // transaction already holds (the whole-view reader carries a merge claim
+  // whatever its holder's state), so a settled claim re-reads the witness below.
   const claim = operation.kind === "lifecycle" && (operation.status === "failed" || operation.status === "stopped")
     ? witness.view.integrationLease
     : null;
   const settledClaim =
     claim !== null && releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: witness.session.sessionId, at });
-  // §R5 the rows the terminal decision reads are the ones this transaction just
-  // completed, and the ownership it reads is the ownership this transaction just
-  // released: both are re-read from the handle the transaction owns.
-  const effective = composed.completions.length === 0 && !settledClaim ? witness : readExecutionWorkflowWitness(tx, read);
+  // §R5 the ownership the terminal decision reads is the ownership this
+  // transaction just released, so a settled claim re-reads the witness from the
+  // handle the transaction owns. A `completed` close synthesizes NOTHING: the
+  // report-only fulfilment is the outer lifecycle fact an authorized `workflow
+  // evidence` call records, never a value this close derives from a QA report.
+  const effective = settledClaim ? readExecutionWorkflowWitness(tx, read) : witness;
   const rows = effective.view.plans.map((plan) => plan.plan as unknown as PlanRow);
   const header = { ...(effective.view.state as unknown as Record<string, unknown>) };
-  if (composed.fulfilment !== null) {
-    // The report-only fulfilment is the ONE member recorded BEFORE the row is
-    // marked `Done` (contract §1): the composition records it first, in the same
-    // atomic state the completion commits — never a second caller step and never
-    // a re-point of a fulfilment the row's `Done` was already authorized against
-    // (`entailedFulfilment` refuses that).
-    const stored = isPlainObject(header.delivery) ? (header.delivery as Record<string, unknown>) : {};
-    header.delivery = { ...stored, completion: composed.fulfilment };
-  }
   let membershipLost = false;
   switch (operation.kind) {
     case "phase":
@@ -1300,62 +1186,6 @@ function applyWorkflowOperation(input: {
   writeWorkflowState(tx, { workflowId, state: header });
   if (membershipLost) recordRootMembershipLoss(tx, { workflowId, now: at });
   return readExecutionStateGraph(tx);
-}
-
-/**
- * §R5/§R10 the row completions and the report-only fulfilment one terminal
- * `completed` close composes, applied inside the close's own transaction. Each
- * proof is matched to the row the transaction reads RIGHT NOW: a row that
- * already records `Done` in that read composes nothing (a sibling operation in
- * the window is never rewritten), and a row the preflight proved is completed
- * here through the same rules `complete` applies.
- */
-function composeEntailedCompletions(input: {
-  tx: ExecutionTransaction;
-  witness: ExecutionWorkflowWitness;
-  read: ResolvedWorkflowWrite;
-  evidence: WorkflowEvidence;
-  at: string;
-}): { completions: readonly EntailedRowCompletion[]; fulfilment: { policy: string; evidence: string } | null } {
-  const { tx, witness, read, evidence, at } = input;
-  const proofs = evidence.completions ?? [];
-  const pinned = evidence.pinned;
-  if (proofs.length === 0 || pinned === undefined) return { completions: [], fulfilment: null };
-  let fulfilment: { policy: string; evidence: string } | null = null;
-  const applied: EntailedRowCompletion[] = [];
-  for (const proof of proofs) {
-    // Each proof is matched to the row this transaction reads RIGHT NOW, and the
-    // ownership facts are read with it: a row another step of THIS transaction
-    // just completed is skipped, and a release composed for an earlier row is
-    // already visible to the next one instead of being re-derived from a stale
-    // sibling view.
-    const current = readExecutionWorkflowWitness(tx, read);
-    const row = current.view.plans.find((candidate) => candidate.plan.id === proof.planId);
-    if (row === undefined) continue;
-    if (proof.completesRow && rowStatusOf(row.plan as unknown as PlanRow) === "Done") continue;
-    const snapshot = {
-      ...(current.view.state as unknown as Record<string, unknown>),
-      plans: current.view.plans.map((plan) => plan.plan as unknown as PlanRow),
-      ...(current.view.integrationLease === null ? {} : { integration_merge_lease: current.view.integrationLease }),
-    } as unknown as WorkflowSnapshot;
-    applyEntailedCompletion({
-      tx,
-      frame: completionFrameFor({
-        workflow: current.view,
-        planId: proof.planId,
-        sessionId: witness.session.sessionId,
-      }),
-      snapshot,
-      pinned,
-      handoffId: proof.handoffId,
-      proof,
-      at,
-      what: "close",
-    });
-    if (proof.fulfilment !== null) fulfilment = proof.fulfilment;
-    applied.push(proof);
-  }
-  return { completions: applied, fulfilment };
 }
 
 /** The pre-transaction evidence a transition must have read (an internal invariant). */
@@ -1446,10 +1276,10 @@ function applyPhaseTransition(input: {
  * them), and the loss of registry membership commits with the terminal state.
  *
  * §R11/A21 `failed`/`stopped` demands NO successful-delivery evidence, and the
- * claims this workflow owns whose holder has stopped are settled before this
- * decision runs (`releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim`),
- * so what is left dangling here is exactly a live holder's claim — which this
- * route refuses on rather than releasing a claim that is another session's.
+ * workflow's own integration merge claim is settled before this decision runs
+ * when its holder has stopped (`releaseStoppedMergeClaim`), so what is left
+ * dangling here is exactly a live holder's claim — which this route refuses on
+ * rather than releasing a claim that is another session's.
  *
  * A restatement of the status the lifecycle is already in is ACCEPTED as an
  * ordinary operation (it changes only `updated_at`): the state machine has no
@@ -1505,11 +1335,11 @@ function applyLifecycleTransition(input: {
     throw invalidWorkflowTransition(
       status === "completed"
         ? `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 a terminal lifecycle ` +
-          `carries no dangling lease, and this route never deletes one: release it through the existing completion or ` +
-          `reconcile transition first`
-        : `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 this close settles only the ` +
-          `claims it owns whose holder has stopped, and a LIVE holder's claim needs that holder's own stop or transfer ` +
-          `(reconcile records the prior holder and the decision) before this lifecycle can end`,
+          `carries no dangling lease, and this route never deletes one: release it through the ordinary completion that ` +
+          `owns the claim first`
+        : `workflow ${workflowId} cannot become ${status} while it still owns ${dangling.join(", ")} \u2014 this close settles only a ` +
+          `claim whose holder has stopped, and a LIVE holder's claim needs that holder's own stop or the ordinary completion ` +
+          `that releases it`,
       { workflow_id: workflowId, status },
     );
   }
@@ -1520,19 +1350,14 @@ function applyLifecycleTransition(input: {
 
 /**
  * The outstanding ownership a terminal lifecycle may not carry, as named facts.
- * A failed/stopped close reaches it only after its own stopped claims were
- * settled (`releaseStoppedExecutionLeases` / `releaseStoppedMergeClaim`), so
- * what remains here is a claim a live holder still holds — plus an
- * earlier-epoch claim the store cannot authorize at this epoch, which is left
- * exactly where §2.3 says it stays.
+ * A failed/stopped close reaches it only after its own stopped merge claim was
+ * settled (`releaseStoppedMergeClaim`), so what remains here is a claim a live
+ * holder still holds. The removed per-plan write lease is gone with the plan-PM
+ * seat, so the workflow's integration merge claim is the whole remaining
+ * ownership this close may not leave dangling.
  */
 function danglingOwnership(witness: ExecutionWorkflowWitness): string[] {
   const dangling: string[] = [];
-  for (const plan of witness.view.plans) {
-    if (plan.executionLease !== null && plan.executionLease.status === "held") {
-      dangling.push(`the execution lease of plan ${String(plan.plan.id)} (holder ${plan.executionLease.holder_session_id})`);
-    }
-  }
   if (witness.view.integrationLease !== null) {
     dangling.push(`the integration merge lease (holder ${witness.view.integrationLease.holder})`);
   }
@@ -1652,20 +1477,23 @@ function applyDeliveryEvidence(input: {
       );
     }
   }
-  // §R5/A19 the delivery tail (compound | pr | merge) is EXTERNAL evidence that
-  // arrives when it arrives: the engine captures it whenever it is observed and
-  // never makes the row's `Done` projection an ordering prerequisite, because
-  // the close composes that projection itself from the same evidence (E10). The
-  // semantic boundary is the CLOSE, which still requires the declared kind's
-  // complete evidence (`consultDeliveryEvidence`) against rows it has completed —
-  // so the ordering is bookkeeping rather than a caller ceremony.
-  //
-  // Completion freezes its accepted policy/reference, not the document body.
+  // §R5/A19/A21 the completion freeze protects an ACCEPTED fulfilment, not the
+  // absence of one. Once the workflow is Done against a completion whose policy
+  // IS the registered one, that recorded policy/reference is frozen: editing the
+  // referenced document is normal, a different completed intent uses its own
+  // workflow. But an imported/historical Done row that recorded NO matching
+  // fulfilment (or one whose policy is not the registered policy) has no accepted
+  // fact to preserve, so ordinary `workflow evidence` is exactly the supported
+  // way to record the missing matching fulfilment — never QA-derived synthesis.
   if (members.includes("completion") && rows.some((row) => rowStatusOf(row) === "Done")) {
     const incoming = isPlainObject(delivery.completion) ? delivery.completion : undefined;
     const recorded = isPlainObject(stored.completion) ? stored.completion : undefined;
-    if (recorded === undefined || incoming === undefined ||
-        recorded.policy !== incoming.policy || recorded.evidence !== incoming.evidence) {
+    const registered = isNonEmptyString(header.completion_policy) ? header.completion_policy : undefined;
+    const recordedIsAccepted = recorded !== undefined && registered !== undefined && recorded.policy === registered;
+    const changesAccepted =
+      recordedIsAccepted &&
+      (incoming === undefined || incoming.policy !== recorded.policy || incoming.evidence !== recorded.evidence);
+    if (changesAccepted) {
       throw new CoordinationError(
         "coordination.completion-frozen",
         `workflow ${workflowId} is Done against its recorded completion policy/reference; edit the referenced document normally; a different completed intent uses its own workflow`,
@@ -1703,7 +1531,6 @@ function recoverCoordinatorRequestHash(
           session_id: caller.sessionId,
           role: caller.role,
           workflow_id: caller.workflowId,
-          plan_id: caller.planId,
         },
         prior_session_id: input.priorSessionId,
         reason: input.reason,
@@ -1723,8 +1550,8 @@ function recoverCoordinatorRequestHash(
  * Requirements, in order — every one of them is refused before a byte is
  * written:
  *
- * 1. the trusted caller is a COORDINATOR of the workflow it addresses (`planId`
- *    null): the recovery identity is never taken from request JSON;
+ * 1. the trusted caller is the workflow's COORDINATOR: the recovery identity is
+ *    never taken from request JSON;
  * 2. the exact workflow token is the CAS, and the lifecycle is still an active
  *    one (running/paused); a terminal lifecycle is never reopened;
  * 3. the named prior holder exists in this workflow's records, and `null` is
@@ -1742,28 +1569,23 @@ function recoverCoordinatorRequestHash(
  *    boundary, and without it this transition would be the silent takeover it
  *    must never be.
  *
- * The atomic effect: the prior session row is revoked, the caller's own row is
- * rebound active at the current epoch (fresh, or reactivated from its own
- * non-active row), the leases whose holder row this revocation orphaned — only
- * the NAMED holder's own ownership — are adopted by the recovery session with
- * their `owner_epoch` unchanged, the workflow header revision advances once and
- * an immutable operation receipt records the prior holder, the reason and the
- * attestation. A lease held by any other session keeps its ownership and stays
- * outstanding, and leases from an earlier epoch are left exactly as they are —
- * recovery never revives old-epoch ownership or takes foreign ownership, and
- * `reconcile` remains the transition that must move an interrupted attempt.
+ * Initial recovery revokes the predecessor and binds the caller atomically.
+ * A claim continuation preserves the current binding and requires the receipt
+ * that created its current epoch/revision/bound_at, the revoked predecessor and
+ * the exact registered held attempt with applicable renewed stop evidence.
+ * Both record a fresh workflow operation; only that predecessor's claim may be
+ * settled. Operator evidence does not establish observed process termination.
  */
 export async function recoverExecutionCoordinator(
   context: ExecutionContext,
   input: { expected: ExecutionToken; operationId: string; priorSessionId: string | null; reason: string; attestation: ActivationAttestation },
 ): Promise<ExecutionReceipt<ExecutionSessionRef>> {
   const caller = context.caller;
-  if (caller?.role !== "coordinator" || caller.planId !== null) {
+  if (caller?.role !== "coordinator") {
     throw new ExecutionError(
       "execution.scope-mismatch",
-      `recovering a coordinator identity is a coordinator operation; the supplied caller is a ${String(caller?.role)} session` +
-        `${caller?.planId === null || caller?.planId === undefined ? "" : ` for plan ${String(caller.planId)}`}. The caller ` +
-        `identity is never taken from request JSON.`,
+      `recovering a coordinator identity is a coordinator operation; the supplied caller is a ${String(caller?.role)} session. ` +
+        `The caller identity is never taken from request JSON.`,
     );
   }
   const workflowId = caller.workflowId;
@@ -1785,6 +1607,20 @@ export async function recoverExecutionCoordinator(
   // activation barrier: the existing validator project the declared shape, so a
   // credential-bearing or incomplete attestation never reaches the store.
   const attestation = validateActivationAttestation(input?.attestation);
+  // The replacement identity must be a genuinely acquired, CURRENT session: an
+  // attestation that names it as stopped/reloaded means the operator is asking
+  // this recovery to resurrect a stopped identity, which it never does. The
+  // refusal happens BEFORE any mutation, so every session row, claim and business
+  // fact is left exactly as it was; the supported retry uses a real acquired
+  // replacement and an attestation whose stop list covers only the prior holder.
+  if (attestation.stoppedSessions.some((session) => session.sessionId === caller.sessionId)) {
+    throw invalidWorkflowTransition(
+      `the replacement coordinator ${JSON.stringify(caller.sessionId)} is named as stopped/reloaded in this attestation; a recovery ` +
+          `binds a genuinely acquired CURRENT session and never resurrects a stopped one. Rerun with the replacement's own acquired session id ` +
+          `and an attestation whose stop list covers only the prior holder ${JSON.stringify(priorSessionId ?? "<none>")}.`,
+      { workflow_id: workflowId, session_id: caller.sessionId },
+    );
+  }
   const requestHash = recoverCoordinatorRequestHash(caller, workflowId, {
     expected: input.expected,
     priorSessionId,
@@ -1831,6 +1667,7 @@ export async function recoverExecutionCoordinator(
     }
     const rows = readCoordinatorRows(tx, workflowId);
     const live = rows.find((row) => row.state === "active" && row.ref.epoch === tx.epoch);
+    let continuation = false;
     if (priorSessionId === null) {
       if (rows.length > 0) {
         throw invalidWorkflowTransition(
@@ -1849,15 +1686,28 @@ export async function recoverExecutionCoordinator(
         );
       }
       // A LIVE holder is never replaced by another name: the recovery identity
-      // is the holder the stop evidence was given for, or nothing.
+      // is the holder the stop evidence was given for, or nothing. The ONE
+      // exception is the recovery-continuation path below: the caller IS the
+      // live coordinator, its binding was created by an immutable successful
+      // recovery receipt from the named predecessor, and a held integration
+      // claim still names that predecessor — so the continuation settles the
+      // claim without rebinding.
       if (live !== undefined && live.ref.sessionId !== priorSessionId) {
-        throw new CoordinationError(
-          "coordination.duplicate-holder",
-          `workflow ${workflowId} holds the ACTIVE coordinator session ${live.ref.sessionId} at epoch ${tx.epoch}; recovery ` +
-            `may replace only the holder it names (${priorSessionId}). Ownership is not replaceable by another identity, ` +
-            `and a live holder resumes through its own reference. Nothing was recovered.`,
-          { workflow_id: workflowId, holder: live.ref.sessionId, named: priorSessionId },
-        );
+        continuation =
+          live.ref.sessionId === caller.sessionId &&
+          prior.state === "revoked" &&
+          hasCoordinatorRecoveryChain(tx, workflowId, live, priorSessionId);
+        if (!continuation) {
+          throw new CoordinationError(
+            "coordination.duplicate-holder",
+            `workflow ${workflowId} holds the ACTIVE coordinator session ${live.ref.sessionId} at epoch ${tx.epoch}; recovery ` +
+              `may replace only the holder it names (${priorSessionId}). Ownership is not replaceable by another identity, ` +
+              `and a live holder resumes through its own reference. Nothing was recovered.`,
+            { workflow_id: workflowId, holder: live.ref.sessionId, named: priorSessionId },
+          );
+        }
+        // Qualification for the exact remaining claim is checked below before
+        // any mutation; this path never rebinds the current coordinator.
       }
       // The stop evidence is the trust boundary: the engine cannot observe a
       // dead process, so a named holder that nobody attested stopped is
@@ -1873,23 +1723,32 @@ export async function recoverExecutionCoordinator(
     }
 
     const now = new Date().toISOString();
-    if (priorSessionId !== null && priorSessionId !== caller.sessionId) {
-      revokeSessionRow(tx, { workflowId, role: "coordinator", sessionId: priorSessionId });
+    const claim = recoverableIntegrationClaim(tx, {
+      workflowId,
+      priorSessionId,
+      callerId: caller.sessionId,
+      attestedAt: attestation.attestedAt,
+      at: now,
+      required: continuation,
+    });
+    let revision: number;
+    if (continuation) {
+      revision = live!.revision;
+    } else {
+      if (priorSessionId !== null && priorSessionId !== caller.sessionId) {
+        revokeSessionRow(tx, { workflowId, role: "coordinator", sessionId: priorSessionId });
+      }
+      revision = bindRecoveredSession(tx, {
+        workflowId,
+        role: "coordinator",
+        sessionId: caller.sessionId,
+        epoch: tx.epoch,
+        now,
+      });
     }
-    const revision = bindRecoveredSession(tx, {
-      workflowId,
-      role: "coordinator",
-      sessionId: caller.sessionId,
-      planId: null,
-      epoch: tx.epoch,
-      now,
-    });
-    adoptLeasesOrphanedByRevocation(tx, {
-      workflowId,
-      revokedSessionId: priorSessionId,
-      recoveredSessionId: caller.sessionId,
-      now,
-    });
+    if (claim !== null) {
+      releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: caller.sessionId, at: now });
+    }
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data: {
@@ -1898,7 +1757,6 @@ export async function recoverExecutionCoordinator(
         workflowId,
         role: "coordinator",
         sessionId: caller.sessionId,
-        planId: null,
       },
       token: executionToken("session", tx.storeId, tx.epoch, sessionKey, revision),
       storeId: tx.storeId,
@@ -1928,470 +1786,89 @@ export async function recoverExecutionCoordinator(
   });
 }
 
-/**
- * Recover one stopped plan-PM binding without widening coordinator recovery to
- * plan ownership. The caller is the already-live coordinator; its native
- * session identity becomes the plan-PM identity in the same transaction that
- * revokes the stopped owner and transfers that plan's current claim.
- */
-export async function recoverExecutionPlanSession(
-  context: ExecutionContext,
-  input: {
-    planId: string;
-    expected: ExecutionToken;
-    operationId: string;
-    priorSessionId: string;
-    reason: string;
-    attestation: ActivationAttestation;
-  },
-): Promise<ExecutionReceipt<ExecutionSessionRef>> {
-  const caller = context.caller;
-  if (caller?.role !== "coordinator" || caller.planId !== null) {
-    const error = new ExecutionError(
-      "execution.scope-mismatch",
-      "recovering a plan-PM identity requires the workflow's coordinator; the identity is never taken from request JSON",
-    );
-    if (caller !== null && caller !== undefined && isNonEmptyString(caller.workflowId) && isNonEmptyString(input?.planId)) {
-      throw planRecoveryRefusal(error, {
-        workflowId: caller.workflowId,
-        planId: input.planId,
-        path: "caller.scope",
-        code: "plan-owner.wrong-caller",
-        currentFacts: [`caller role is ${String(caller.role)}`],
-        needed: "Invoke recovery only through the workflow's genuinely acquired current coordinator reference.",
-        availableWork: ["The current coordinator continues through its own reference.", "A plan-PM reference cannot invoke coordinator-scoped recovery and cannot be converted into coordinator authority."],
-      });
-    }
-    throw error;
-  }
-  const workflowId = caller.workflowId;
-  const planId = input?.planId;
-  if (!isNonEmptyString(workflowId) || !isNonEmptyString(caller.sessionId) || !isNonEmptyString(planId)) {
-    throw invalidWorkflowInput("plan-PM recovery needs a coordinator identity, workflow and plan");
-  }
-  const operationId = assertOperationId(input?.operationId);
-  const priorSessionId = input?.priorSessionId;
-  const reason = input?.reason;
-  if (!isNonEmptyString(priorSessionId) || !isNonEmptyString(reason)) {
-    throw invalidWorkflowInput("plan-PM recovery needs the named prior session and recorded reason");
-  }
-  const attestation = validateActivationAttestation(input?.attestation);
-  const requestHash = createHash("sha256")
-    .update(
-      serializeExecutionValue({
-        operation: "recoverExecutionPlanSession",
-        workflow_id: workflowId,
-        plan_id: planId,
-        expected: input.expected,
-        caller: { session_id: caller.sessionId, role: caller.role, workflow_id: workflowId, plan_id: null },
-        prior_session_id: priorSessionId,
-        reason,
-        attestation,
-      }),
-      "utf8",
-    )
-    .digest("hex");
-  return withExecutionTransaction(context, (tx) => {
-    if (tx.execution.authorityState !== "active") {
-      throw new ExecutionError("execution.not-active", "plan-PM recovery requires an active execution authority");
-    }
-    const sessionKey = [workflowId, "plan-pm", caller.sessionId] as const;
-    const replay = readOperationReplay<ExecutionSessionRef>(tx, {
-      operationId,
-      requestHash,
-      workflowId,
-      planId,
-      token: { kind: "session", key: sessionKey },
-    });
-    if (replay !== null) {
-      requirePlanRecoveryCoordinator(tx, workflowId, caller.sessionId, planId);
-      const binding = readWorkflowSessionRows(tx, workflowId, "plan-pm").find(
-        (row) => row.ref.sessionId === caller.sessionId && row.ref.planId === planId && row.state === "active" && row.ref.epoch === tx.epoch,
-      );
-      const claim = readHeldExecutionLeases(tx, workflowId).find((lease) => lease.planId === planId);
-      const receiptRevision = parseExecutionToken(replay.token).revision;
-      const recorded = tx.db
-        .prepare("select result_json from execution_operations where epoch = ? and operation_id = ?")
-        .get(tx.epoch, operationId) as { result_json?: unknown } | undefined;
-      const currentClaimRow = tx.db
-        .prepare("select revision from execution_leases where workflow_id = ? and plan_id = ?")
-        .get(workflowId, planId) as { revision?: unknown } | undefined;
-      let transferredAt: unknown;
-      let recordedClaimRevision: unknown;
-      try {
-        const receipt: unknown = JSON.parse(String(recorded?.result_json));
-        const recovery = isPlainObject(receipt) && isPlainObject(receipt.recovery) ? receipt.recovery : undefined;
-        transferredAt = recovery?.claim_transferred_at;
-        recordedClaimRevision = recovery?.claim_revision;
-      } catch {
-        transferredAt = undefined;
-        recordedClaimRevision = undefined;
-      }
-      const currentClaimRevision = Number(currentClaimRow?.revision);
-      if (
-        binding === undefined ||
-        binding.revision !== receiptRevision ||
-        claim === undefined ||
-        claim.ownerEpoch !== tx.epoch ||
-        claim.lease.holder_role !== "plan-pm" ||
-        claim.lease.holder_session_id !== caller.sessionId ||
-        claim.lease.holder_session_id === priorSessionId ||
-        claim.lease.transferred_from !== priorSessionId ||
-        !isNonEmptyString(transferredAt) ||
-        claim.lease.transferred_at !== transferredAt ||
-        !Number.isSafeInteger(currentClaimRevision) ||
-        currentClaimRevision !== recordedClaimRevision
-      ) {
-        const currentBinding = binding === undefined ? "no active target plan-PM binding" : `binding revision ${binding.revision}`;
-        const currentClaim =
-          claim === undefined
-            ? "no held target claim"
-            : `held claim owner ${String(claim.lease.holder_session_id)} (${claim.lease.holder_role}), epoch ${claim.ownerEpoch}`;
-        throw planRecoveryRefusal(
-          new ExecutionError("execution.session-unavailable", `plan recovery receipt for ${workflowId}/${planId} is stale`),
-          {
-            workflowId,
-            planId,
-            path: "recovery-receipt.ownership",
-            code: "plan-owner.replay-stale",
-            currentFacts: [currentBinding, currentClaim],
-            needed: "Read current authoritative ownership and continue under its current supported operation; do not replay this recovery receipt to restore an earlier claim.",
-            availableWork: ["Read the current plan and execution ownership using the active authorized reference.", "Continue its presently recorded release, transfer, completion, or reconcile path only when eligible; otherwise keep ownership unchanged."],
-          },
-        );
-      }
-      return replay;
-    }
-    requirePlanRecoveryCoordinator(tx, workflowId, caller.sessionId, planId);
-    const header = requireWorkflowState(tx, workflowId);
-    const workflowStatus = String(header.state.status ?? "");
-    if ((WORKFLOW_TERMINAL_STATUSES as readonly string[]).includes(workflowStatus)) {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`workflow ${workflowId} is terminal; plan-PM recovery cannot reopen it`), {
-        workflowId,
-        planId,
-        path: "workflow.status",
-        code: "plan-owner.workflow-terminal",
-        currentFacts: [`workflow status is ${workflowStatus}`],
-        needed: "Do not reopen a terminal workflow.",
-        availableWork: ["Read the terminal plan/workflow record and continue only its existing close or archive route."],
-      });
-    }
-    const planRow = tx.db
-      .prepare("select revision, state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
-      .get(workflowId, planId) as { revision?: unknown; state_json?: unknown; coordination_json?: unknown } | undefined;
-    if (planRow === undefined) {
-      throw planRecoveryRefusal(
-        new CoordinationError("coordination.plan-not-found", `workflow ${workflowId} holds no plan ${planId}`),
-        {
-          workflowId,
-          planId,
-          path: "workflow.plans",
-          code: "plan-owner.plan-not-found",
-          currentFacts: [`no registered plan row matches ${planId}`],
-          needed: "Address an exact plan id registered in this active workflow.",
-          availableWork: ["Read the current workflow plan index.", "Use its recorded plan id; do not create or substitute a plan as part of recovery."],
-        },
-      );
-    }
-    const revision = Number(planRow.revision);
-    try {
-      assertExecutionToken(input.expected, {
-        kind: "plan",
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        key: [workflowId, planId],
-        revision,
-      });
-    } catch (error) {
-      throw planRecoveryRefusal(error instanceof Error ? error : new Error(String(error)), {
-        workflowId,
-        planId,
-        path: "plan.expected-token",
-        code: "plan-owner.plan-token-stale",
-        currentFacts: [`the addressed plan is at revision ${revision} in epoch ${tx.epoch}`],
-        needed: "Re-read this exact plan from the current authorized coordinator context and retry with its current plan token.",
-        availableWork: ["Read current plan state and token through the current coordinator reference.", "Retry only if the addressed plan remains eligible; do not reuse an old or copied token."],
-      });
-    }
-    let planState: Record<string, unknown>;
-    let coordination: Record<string, unknown>;
-    try {
-      const parsedPlanState: unknown = JSON.parse(String(planRow.state_json));
-      const parsedCoordination: unknown = JSON.parse(String(planRow.coordination_json));
-      if (!isPlainObject(parsedPlanState) || !isPlainObject(parsedCoordination)) {
-        throw new StoreError("store.corrupt", `plan ${workflowId}/${planId} has unreadable stored object state`);
-      }
-      planState = parsedPlanState;
-      coordination = parsedCoordination;
-    } catch {
-      throw new StoreError("store.corrupt", `plan ${workflowId}/${planId} has unreadable stored state`);
-    }
-    if (typeof planState.status !== "string") {
-      throw new StoreError("store.corrupt", `plan ${workflowId}/${planId} has no valid stored row status`);
-    }
-    const status = rowStatusOf(planState as unknown as PlanRow);
-    if (["Done", "Canceled"].includes(status)) {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} is terminal (${status}); recovery cannot reopen it`), {
-        workflowId,
-        planId,
-        path: "plan.status",
-        code: "plan-owner.terminal",
-        currentFacts: [`the plan row is ${status}`],
-        needed: "Use the existing terminal plan/workflow path; plan-owner recovery does not reopen completed work.",
-        availableWork: ["Read the current plan and workflow state; continue ordinary workflow close or reconciliation only if that lifecycle currently admits it."],
-      });
-    }
-    const handoff = coordination.handoff;
-    if (handoff !== undefined && !isPlainObject(handoff)) {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} carries a malformed handoff record; recovery cannot replace it`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff",
-        code: "plan-owner.handoff-invalid",
-        currentFacts: ["the stored handoff is not a valid object"],
-        needed: "Inspect the authoritative coordination record and use its current public recovery route; do not edit the store manually.",
-        availableWork: ["Read the current plan through the execution authority.", "Escalate the malformed record for authorized repair; this API makes no changes."],
-      });
-    }
-    if (isPlainObject(handoff) && handoff.state === "submitted") {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} has a submitted handoff; recovery cannot replace the handoff owner`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff.state",
-        code: "plan-owner.handoff-submitted",
-        currentFacts: ["the handoff is submitted and has not been accepted"],
-        needed: "Continue the submitted handoff through the ordinary plan accept operation.",
-        availableWork: ["Read current plan and handoff ownership.", "Use the ordinary public plan accept operation; after acceptance continue integration and completion."],
-      });
-    }
-    if (isPlainObject(handoff) && handoff.state === "accepted") {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} has an accepted handoff; recovery cannot reset its completion path`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff.state",
-        code: "plan-owner.handoff-accepted",
-        currentFacts: ["the handoff is accepted and completion is in progress"],
-        needed: "Continue the existing integration and completion lifecycle.",
-        availableWork: ["Read current plan and integration ownership.", "Use the ordinary integration-start and integration-accept operations, then complete the plan through its public completion operation."],
-      });
-    }
-    if (isPlainObject(handoff) && handoff.state === "integrating") {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} has an integration attempt in progress; recovery cannot reset it`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff.state",
-        code: "plan-owner.handoff-integrating",
-        currentFacts: ["the accepted handoff owns an in-progress integration attempt"],
-        needed: "Continue the existing integration attempt under its recorded ownership.",
-        availableWork: ["Read the integration lease and source attempt.", "Use the ordinary integration-accept operation after the recorded merge succeeds, then complete the plan."],
-      });
-    }
-    if (isPlainObject(handoff) && handoff.state === "merged") {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} has a merged handoff awaiting completion`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff.state",
-        code: "plan-owner.handoff-merged",
-        currentFacts: ["the handoff records an accepted merge result"],
-        needed: "Finish the existing plan completion transition; do not create a new recovery attempt.",
-        availableWork: ["Read the recorded merge proof and plan ownership.", "Use the ordinary public plan complete operation."],
-      });
-    }
-    if (isPlainObject(handoff) && handoff.state === "completed") {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} has a completed handoff; use the existing completion path`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff.state",
-        code: "plan-owner.handoff-completed",
-        currentFacts: ["the handoff is completed"],
-        needed: "Do not reopen the completed handoff.",
-        availableWork: ["Read the current plan and workflow state; continue ordinary workflow close only if it remains eligible."],
-      });
-    }
-    if (isPlainObject(handoff) && handoff.state !== "returned") {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`plan ${planId} has an unsupported handoff state; recovery cannot change it`), {
-        workflowId,
-        planId,
-        path: "plan.coordination.handoff.state",
-        code: "plan-owner.handoff-invalid",
-        currentFacts: [`the recorded handoff state is ${String(handoff.state)}`],
-        needed: "Inspect the authoritative handoff and continue only through its supported state transition.",
-        availableWork: ["Read the current plan through the execution authority.", "Escalate an unsupported handoff state; do not edit stored state manually."],
-      });
-    }
-    const planPmRows = readWorkflowSessionRows(tx, workflowId, "plan-pm");
-    const prior = planPmRows.find((row) => row.ref.sessionId === priorSessionId && row.ref.planId === planId);
-    if (prior === undefined) {
-      throw planRecoveryRefusal(
-        new CoordinationError("coordination.session-not-found", `workflow ${workflowId} records no plan-PM session ${priorSessionId} for plan ${planId}`),
-        {
-          workflowId,
-          planId,
-          path: "plan.owner",
-          code: "plan-owner.prior-binding-not-found",
-          currentFacts: [`no plan-PM binding for ${priorSessionId} exists on the addressed plan`],
-          needed: "Name the exact prior plan-PM binding currently recorded for this plan.",
-          availableWork: ["Read the current execution plan and its active owner.", "Continue with the current owner's independently acquired reference; do not use another plan's owner."],
-        },
-      );
-    }
-    if (!attestation.stoppedSessions.some((session) => session.sessionId === priorSessionId)) {
-      throw planRecoveryRefusal(invalidWorkflowTransition(`the attestation does not name prior plan-PM ${priorSessionId} as stopped/reloaded`), {
-        workflowId,
-        planId,
-        path: "attestation.stoppedSessions",
-        code: "plan-owner.stop-attestation-missing",
-        currentFacts: [`the exact prior plan-PM ${priorSessionId} is not attested stopped/reloaded`],
-        needed: "Provide the genuine operator stop attestation for this exact binding, or let the current owner resume through its own reference.",
-        availableWork: ["Keep the current binding and claim unchanged.", "Obtain the authorized stop record for this exact session before retrying."],
-      });
-    }
-    if (prior.ref.epoch !== tx.epoch) {
-      throw planRecoveryRefusal(
-        invalidWorkflowTransition(`the named plan-PM binding ${priorSessionId} belongs to epoch ${prior.ref.epoch}, not current epoch ${tx.epoch}`),
-        {
-          workflowId,
-          planId,
-          path: "plan.owner.epoch",
-          code: "plan-owner.prior-epoch",
-          currentFacts: [`the named binding is from epoch ${prior.ref.epoch}`, `the active authority is epoch ${tx.epoch}`],
-          needed: "Do not revive an earlier-epoch binding; inspect current ownership and reconcile only through the public current-epoch route if admitted.",
-          availableWork: ["Read current plan ownership.", "Use the ordinary reconcile operation only when its current attempt and owner are eligible; never carry an old-epoch claim forward."],
-        },
-      );
-    }
-    if (caller.sessionId === priorSessionId) {
-      throw planRecoveryRefusal(invalidWorkflowTransition("the stopped prior owner and current coordinator share one native session identity"), {
-        workflowId,
-        planId,
-        path: "plan.owner.session_id",
-        code: "plan-owner.identity-conflict",
-        currentFacts: ["the attested stopped prior plan-PM and current coordinator have the same session identity"],
-        needed: "Use an independently acquired current coordinator identity; one session cannot simultaneously be the stopped owner and the recovery caller.",
-        availableWork: ["Leave the existing binding and claim unchanged.", "Resolve the identity collision through the authorized host/session acquisition path; do not borrow or copy a session reference."],
-      });
-    }
-    const foreignLiveOwner = planPmRows.find(
-      (row) => row.ref.planId === planId && row.ref.sessionId !== priorSessionId && row.state === "active" && row.ref.epoch === tx.epoch,
-    );
-    if (foreignLiveOwner !== undefined) {
-      throw planRecoveryRefusal(
-        new CoordinationError("coordination.duplicate-holder", `plan ${planId} also has a live plan-PM binding ${foreignLiveOwner.ref.sessionId}`),
-        {
-          workflowId,
-          planId,
-          path: "plan.owner",
-          code: "plan-owner.foreign-live-binding",
-          currentFacts: [`another plan-PM binding ${foreignLiveOwner.ref.sessionId} is active for this plan`],
-          needed: "Do not replace a foreign active plan-PM binding.",
-          availableWork: ["Read current plan and claim ownership.", "Let the live owner resume through its own reference or use its ordinary transfer/completion path."],
-        },
-      );
-    }
-    const conflictingTarget = planPmRows.find(
-      (row) => row.ref.sessionId === caller.sessionId && row.ref.planId !== planId,
-    );
-    if (conflictingTarget !== undefined) {
-      throw planRecoveryRefusal(
-        new CoordinationError(
-          "coordination.session-mismatch",
-          `the coordinator identity is already bound to plan ${String(conflictingTarget.ref.planId)} and cannot be rebound to ${planId}`,
-        ),
-        {
-          workflowId,
-          planId,
-          path: "target.plan-pm-binding",
-          code: "plan-owner.target-binding-conflict",
-          currentFacts: [`the caller identity is recorded for plan ${String(conflictingTarget.ref.planId)} as ${conflictingTarget.state}`],
-          needed: "Do not move or reactivate an identity across plans.",
-          availableWork: [
-            "Finish the already recovered plan through its ordinary reviewed handoff, coordinator acceptance, and completion; releasing its claim alone does not free this identity's immutable plan binding.",
-            "Have the operator confirm that this exact coordinator session is stopped, then obtain a genuinely new native coordinator session; this session cannot declare itself new or become stopped by label.",
-            "From that new session, run session recover --workflow <workflow-id> --prior-session <previous-coordinator-session> --reason <reason> --attestation <exact-stop-attestation-file> --expect <current-workflow-token> --operation <operation-id>.",
-            "Then run session recover --workflow <workflow-id> --plan <second-plan-id> --prior-session <stopped-plan-owner-session> --reason <reason> --attestation <exact-stop-attestation-file> --expect <current-plan-token> --operation <operation-id>.",
-          ],
-        },
-      );
-    }
-    const held = readHeldExecutionLeases(tx, workflowId).find((lease) => lease.planId === planId);
-    if (
-      held === undefined ||
-      held.ownerEpoch !== tx.epoch ||
-      held.lease.holder_role !== "plan-pm" ||
-      held.lease.holder_session_id !== priorSessionId
-    ) {
-      const currentClaim = held === undefined ? "no held claim" : `holder ${String(held.lease.holder_session_id)} (${held.lease.holder_role}), epoch ${held.ownerEpoch}`;
-      throw planRecoveryRefusal(
-        invalidWorkflowTransition(`plan ${planId} does not have the named prior owner's held current-epoch execution claim`),
-        {
-          workflowId,
-          planId,
-          path: "plan.execution-claim",
-          code: "plan-owner.claim-conflict",
-          currentFacts: [currentClaim],
-          needed: "Only the exact named current-epoch plan-PM claim is recoverable.",
-          availableWork: ["Read the current plan and lease owner through the execution authority.", "The actual holder should continue through its own public route; use ordinary reconcile only for an admitted interrupted attempt. An old-epoch claim is never revived."],
-        },
-      );
-    }
-    const now = new Date().toISOString();
-    if (priorSessionId !== caller.sessionId) {
-      revokeSessionRow(tx, { workflowId, role: "plan-pm", sessionId: priorSessionId });
-    }
-    const sessionRevision = bindRecoveredSession(tx, {
-      workflowId,
-      role: "plan-pm",
-      sessionId: caller.sessionId,
-      planId,
-      epoch: tx.epoch,
-      now,
-    });
-    transferExecutionLease(tx, {
-      workflowId,
-      planId,
-      lease: held.lease,
-      to: { sessionId: caller.sessionId, role: "plan-pm" },
-      now,
-    });
-    const transferredClaim = tx.db
-      .prepare("select revision from execution_leases where workflow_id = ? and plan_id = ?")
-      .get(workflowId, planId) as { revision?: unknown } | undefined;
-    const claimRevision = Number(transferredClaim?.revision);
-    if (!Number.isSafeInteger(claimRevision) || claimRevision < 1) {
-      throw new StoreError("store.corrupt", `transferred plan claim ${workflowId}/${planId} has no valid revision`);
-    }
-    const receipt: ExecutionRead<ExecutionSessionRef> = {
-      data: { storeId: tx.storeId, epoch: tx.epoch, workflowId, role: "plan-pm", sessionId: caller.sessionId, planId },
-      token: executionToken("session", tx.storeId, tx.epoch, sessionKey, sessionRevision),
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-    };
-    writeOperationReceipt(tx, {
-      operationId,
-      requestHash,
-      workflowId,
-      planId,
-      receipt: {
-        ...receipt,
-        recovery: {
-          prior_session_id: priorSessionId,
-          reason,
-          attested_at: attestation.attestedAt,
-          operator: attestation.operator,
-          stopped_sessions: attestation.stoppedSessions.map((session) => session.sessionId),
-          claim_transferred_at: now,
-          claim_revision: claimRevision,
-        },
-      } as ExecutionRead<ExecutionSessionRef>,
-      now,
-    });
-    return { ...receipt, operationId, replayed: false };
-  });
-}
-
 /** §2.2 the coordinator rows of one workflow, including the non-active ones. */
 function readCoordinatorRows(tx: ExecutionTransaction, workflowId: string): SessionRow[] {
   return readWorkflowSessionRows(tx, workflowId, "coordinator");
+}
+
+/**
+ * Select only the named predecessor's actual registered attempt, with an
+ * applicable operator stop instant. An initial replacement can leave a newer
+ * claim intact; a continuation must have a selected claim before any writes.
+ */
+function recoverableIntegrationClaim(
+  tx: ExecutionTransaction,
+  input: { workflowId: string; priorSessionId: string | null; callerId: string; attestedAt: string; at: string; required: boolean },
+): IntegrationMergeLease | null {
+  const { workflowId, priorSessionId, callerId, attestedAt, at } = input;
+  const workflow = readExecutionStateGraph(tx).data.workflows.find((candidate) => candidate.state.id === workflowId);
+  const claim = workflow?.integrationLease ?? null;
+  const row = claim === null ? undefined : workflow?.plans.find((candidate) => candidate.plan.id === claim.plan_id);
+  const metadata = row?.plan.metadata;
+  const snapshot = workflow === undefined ? undefined : {
+    ...workflow.state,
+    plans: workflow.plans.map((candidate) => candidate.plan),
+  } as WorkflowSnapshot;
+  const target = snapshot === undefined ? undefined :
+    deliveryRouteOf(snapshot) === "integration" ? snapshot.branch?.integration : snapshot.branch?.target;
+  const claimedAt = claim === null ? NaN : Date.parse(claim.claimed_at);
+  const stopAt = Date.parse(attestedAt);
+  const recoveryAt = Date.parse(at);
+  const cause =
+    claim === null ? "no held integration claim remains" :
+    priorSessionId === null || priorSessionId === callerId || claim.holder !== priorSessionId ? `the claim belongs to ${claim.holder}, not the named predecessor` :
+    row === undefined ? `claim plan ${claim.plan_id} is not registered in this workflow` :
+    !isPlainObject(metadata) || metadata.working_branch !== claim.source_branch ? `claim source ${claim.source_branch} does not match its registered row scope` :
+    !isNonEmptyString(target) || target !== claim.target_branch ? `claim target ${claim.target_branch} does not match the registered target ${String(target)}` :
+    !Number.isFinite(claimedAt) || !Number.isFinite(stopAt) || !Number.isFinite(recoveryAt) ? "claim or stop time is not a finite instant" :
+    claimedAt > stopAt ? "the claim was taken after the attested stop" :
+    stopAt > recoveryAt ? "the attested stop is in the future" : null;
+  if (cause === null) return claim;
+  if (!input.required) return null;
+  throw invalidWorkflowTransition(
+    `workflow ${workflowId} cannot renew predecessor recovery: ${cause}. The current binding and claim are unchanged. ` +
+      `Read this workflow's actual claim and plan scope. With no claim, resume ordinary plan operations using the current binding; ` +
+      `a current or foreign holder finishes its own attempt through plan complete. Correct this row's source scope through ` +
+      `plan prepare when needed, or retry mstar session recover with a new operation id and full stop evidence whose instant ` +
+      `covers the named predecessor's claim and is not in the future. For an absent claim plan, use the documented store execution ` +
+      `restore-preview --backup <valid-pre-corruption-backup> --out <preview>, then store execution restore --preview <preview> ` +
+      `--operator <name> --authorization <ref>; do not hand-edit state.`,
+    {
+      workflow_id: workflowId, session_id: callerId, prior_session_id: priorSessionId,
+      claim: claim ?? null, registered_source: isPlainObject(metadata) ? metadata.working_branch ?? null : null,
+      registered_target: target ?? null, attested_at: attestedAt, recovered_at: at, cause,
+    },
+  );
+}
+
+/** The successful receipt must have created this exact current binding. */
+function hasCoordinatorRecoveryChain(
+  tx: ExecutionTransaction,
+  workflowId: string,
+  current: SessionRow,
+  priorSessionId: string,
+): boolean {
+  const binding = tx.db.prepare(
+    "select bound_at from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ? and epoch = ?",
+  ).get(workflowId, current.ref.sessionId, tx.epoch) as { bound_at: string } | undefined;
+  if (binding === undefined) return false;
+  const token = executionToken("session", tx.storeId, tx.epoch, [workflowId, "coordinator", current.ref.sessionId], current.revision);
+  const receipts = tx.db.prepare(
+    "select result_json from execution_operations where workflow_id = ? and plan_id is null and store_id = ? and epoch = ? and committed_at = ?",
+  ).all(workflowId, tx.storeId, tx.epoch, binding.bound_at) as Array<{ result_json: string }>;
+  for (const receipt of receipts) {
+    const raw: unknown = JSON.parse(receipt.result_json);
+    if (!isPlainObject(raw) || raw.token !== token || raw.storeId !== tx.storeId || raw.epoch !== tx.epoch) continue;
+    const data = raw.data;
+    const recovery = raw.recovery;
+    if (!isPlainObject(data) || !isPlainObject(recovery)) continue;
+    if (
+      data.storeId === tx.storeId && data.epoch === tx.epoch && data.workflowId === workflowId &&
+      data.sessionId === current.ref.sessionId && data.role === "coordinator" &&
+      recovery.prior_session_id === priorSessionId
+    ) return true;
+  }
+  return false;
 }
 
 /** §2.3 a replay's authority revalidation: the caller must still hold its binding. */
@@ -2407,95 +1884,5 @@ function requireLiveCoordinator(tx: ExecutionTransaction, workflowId: string, se
     );
   }
 }
-/** Plan recovery requires the caller to be the sole current coordinator. */
-function requirePlanRecoveryCoordinator(tx: ExecutionTransaction, workflowId: string, sessionId: string, planId: string): void {
-  const live = readCoordinatorRows(tx, workflowId).filter((row) => row.state === "active" && row.ref.epoch === tx.epoch);
-  if (live.length !== 1 || live[0]!.ref.sessionId !== sessionId) {
-    const current = live.length === 0 ? "no active current-epoch coordinator" : `current coordinator ${live[0]!.ref.sessionId}`;
-    throw planRecoveryRefusal(
-      new CoordinationError("coordination.duplicate-holder", `workflow ${workflowId} is not solely held by coordinator ${sessionId}`),
-      {
-        workflowId,
-        planId,
-        path: "workflow.coordinator.owner",
-        code: "plan-owner.coordinator-conflict",
-        currentFacts: [current],
-        needed: "The action requires the current workflow coordinator's own acquired identity.",
-        availableWork: ["If another coordinator is active, let that coordinator continue through its own reference.", "If no coordinator is active, use the named coordinator recovery route with genuine stop evidence; do not borrow another identity or bypass the epoch guard."],
-      },
-    );
-  }
-}
 
-
-/**
- * §2.3/§4.2 the lease half of the recovery: recovery replaces exactly ONE
- * NAMED holder, so the ownership it may adopt is the ownership THAT holder's
- * revocation orphaned — a HELD lease of this workflow, in the CURRENT epoch,
- * whose holder session is the revoked holder and is not active any more. The
- * whole-view reader refuses exactly that pair, so the recovery session takes it
- * over, keeping `owner_epoch` and recording `transferred_from`; that is what
- * makes a workflow whose coordinator stopped readable again.
- *
- * The boundary is the named holder rather than "any lease nobody is active on".
- * A lease held by another session — an unrelated plan-pm row that stopped, or
- * any holder this recovery neither names nor attests — keeps its ownership and
- * stays outstanding: §2.3 is explicit that outstanding leases retain their
- * `owner_epoch` and must still pass explicit `reconcile` (or a recovery that
- * names THEIR holder) before reuse, so silently moving that ownership to the
- * new coordinator would be exactly the takeover this transition must not
- * perform. A recovery that names no holder revokes nothing and adopts nothing.
- *
- * A lease already held by the recovery session is left alone, a lease held by a
- * LIVE session is never touched (a live holder resumes through its own
- * reference), and a lease from an earlier epoch stays exactly where it is:
- * recovery repairs what its revocation orphaned, it neither revives nor steals
- * ownership. A held lease whose own holder identity is missing is a corrupt
- * record the view reader also refuses, so it is refused here rather than
- * adopted.
- */
-function adoptLeasesOrphanedByRevocation(
-  tx: ExecutionTransaction,
-  input: { workflowId: string; revokedSessionId: string | null; recoveredSessionId: string; now: string },
-): void {
-  const { workflowId, revokedSessionId, recoveredSessionId, now } = input;
-  const rowsByRole: Record<"coordinator" | "plan-pm", SessionRow[]> = {
-    coordinator: readCoordinatorRows(tx, workflowId),
-    "plan-pm": readWorkflowSessionRows(tx, workflowId, "plan-pm"),
-  };
-  const activeHolder = (role: "coordinator" | "plan-pm", sessionId: string, planId: string): boolean =>
-    rowsByRole[role].some(
-      (row) =>
-        row.ref.sessionId === sessionId &&
-        row.state === "active" &&
-        row.ref.epoch === tx.epoch &&
-        (row.ref.planId === null || row.ref.planId === planId),
-    );
-  for (const held of readHeldExecutionLeases(tx, workflowId)) {
-    if (held.ownerEpoch !== tx.epoch) continue;
-    const role = held.lease.holder_role;
-    const holder = held.lease.holder_session_id;
-    // A held lease whose ownership identity is missing is the same corrupt pair
-    // the view reader refuses; recovery refuses it too instead of adopting a
-    // claim nobody is named on.
-    if ((role !== "coordinator" && role !== "plan-pm") || !isNonEmptyString(holder)) {
-      throw new StoreError(
-        "store.corrupt",
-        `execution_leases(${workflowId},${held.planId}).lease_json is held in epoch ${held.ownerEpoch} without the holder ` +
-          `session identity and role it must agree with; the execution authority cannot be verified`,
-      );
-    }
-    if (holder === recoveredSessionId) continue;
-    if (activeHolder(role, holder, held.planId)) continue;
-    // The boundary: only the revoked holder's own ownership was orphaned by
-    // this recovery, and only that ownership is adopter-able here.
-    if (revokedSessionId === null || holder !== revokedSessionId) continue;
-    transferExecutionLease(tx, {
-      workflowId,
-      planId: held.planId,
-      lease: held.lease,
-      to: { sessionId: recoveredSessionId, role: "coordinator" },
-      now,
-    });
-  }
-}
+/** §2.2 the coordinator rows of one workflow, including the non-active ones. */
