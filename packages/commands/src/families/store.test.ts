@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { WORKFLOW_SNAPSHOT_FILE, initializeStore, openStore } from "@mstar-harness/engine";
 import type { InvocationContext } from "../types.js";
-import { getCommandDefinitions } from "../definitions.js";
+import { executeCommand, getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
 
 const controlRoot = join(tmpdir(), "mstar-store-upgrade-test-control");
@@ -47,6 +48,26 @@ function invocation(cwd: string): InvocationContext {
       writeStderr(message) { messages.push(message); },
     },
   };
+}
+
+async function protectedStoreState(harness: string) {
+  const store = await openStore({ harnessDir: harness }, "read");
+  try {
+    const schema = z.array(z.object({
+      type: z.string(), name: z.string(), tbl_name: z.string(), sql: z.string().nullable(),
+    })).parse(store.db.prepare(
+      "select type, name, tbl_name, sql from sqlite_schema where name not like 'sqlite_%' order by type, name",
+    ).all());
+    // Capture every stored surface, including registry, inputs, operations,
+    // sessions, claims, authority metadata and migration records, not counts.
+    const tables = Object.fromEntries(schema.filter(({ type }) => type === "table").map(({ name }) => [
+      name,
+      store.db.prepare(`select * from "${name.replaceAll('"', '""')}"`).all(),
+    ]));
+    return { schemaVersion: store.schemaVersion, schema, tables };
+  } finally {
+    store.close();
+  }
 }
 
 test("store.upgrade is the one-command minimal default and does not require attestation", async () => {
@@ -128,124 +149,186 @@ test("default registration removes only staged protocol faces and keeps independ
   expect(ids.has("store.execution.export")).toBe(true);
 });
 
-test("a held retired schema-8 claim refuses the upgrade without the operator document and settles on the attested retry", async () => {
+test("a held retired schema-8 claim refuses without mutation and settles on the same public command's attested retry", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-retired-claim-"));
   try {
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
-    // The schema-8 store the cutover migrates: one retired plan-PM session
-    // holding both a row lease and the workflow's integration mutex.
     const workflowId = "retired-claim-workflow";
     const planId = `${workflowId}-plan`;
     const sessionId = "retired-plan-holder";
+    const worktreePath = join(root, "wt-retired");
+    const workingBranch = `feature/${planId}`;
+    const businessPlan = { id: planId, title: "Retired claim plan", file: `${planId}.md`, status: "InProgress" };
+    const workflowState = {
+      schema_version: 1, id: workflowId, type: "plan", status: "running",
+      started_at: "2026-10-04", updated_at: "2026-10-04",
+      delivery_kind: "development", branch: { source: workingBranch, target: "main" },
+    };
+    const prepared = {
+      qa_gate: "mandatory", findings_cleanup: "allow-residual",
+      prepared_by: "host-coord", prepared_at: "2026-10-04T00:00:00Z",
+    };
     const initialized = await initializeStore({ harnessDir: harness });
     try {
+      // Reconstruct the actual schema-8 shape, as in the owning engine fixture:
+      // the historical session CHECK/indexes and per-plan lease table must exist
+      // before inserting the retired identity. Initialization alone is schema 9.
+      initialized.db.exec(`
+        delete from schema_version where version = 9;
+        create table execution_sessions_v8(
+          workflow_id text not null references execution_workflows(workflow_id),
+          role text not null check (role in ('coordinator','plan-pm')),
+          session_id text not null,
+          plan_id text,
+          epoch integer not null check (epoch > 0),
+          revision integer not null check (revision > 0),
+          state text not null check (state in ('active','suspended','revoked')),
+          bound_at text not null,
+          primary key (workflow_id, role, session_id),
+          foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id),
+          check ((role = 'coordinator' and plan_id is null) or (role = 'plan-pm' and plan_id is not null))
+        );
+        drop table execution_sessions;
+        alter table execution_sessions_v8 rename to execution_sessions;
+        create unique index execution_sessions_active_coordinator
+          on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+        create unique index execution_sessions_active_plan_pm
+          on execution_sessions(workflow_id, plan_id) where role = 'plan-pm' and state = 'active';
+        create table execution_leases(
+          workflow_id text not null,
+          plan_id text not null,
+          revision integer not null check (revision > 0),
+          owner_epoch integer not null check (owner_epoch > 0),
+          lease_json text not null,
+          primary key (workflow_id, plan_id),
+          foreign key (workflow_id, plan_id) references execution_plans(workflow_id, plan_id)
+        );
+      `);
+      initialized.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+      // Historical FK order: workflow, registry/business row, then identities
+      // and claims. Retirement is keyed by this actual workflow/session pair.
+      initialized.db.prepare(
+        "insert into execution_workflows(workflow_id, revision, state_json, created_at, updated_at) values (?, 1, ?, ?, ?)",
+      ).run(workflowId, JSON.stringify(workflowState), "2026-10-04", "2026-10-04");
       initialized.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(
         workflowId,
         JSON.stringify({ id: workflowId, type: "plan", started_at: "2026-10-04", dir: `workflows/${workflowId}` }),
       );
       initialized.db.prepare(
         "insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, 0, ?, ?)",
-      ).run(
-        workflowId,
-        planId,
-        JSON.stringify({
-          id: planId,
-          title: "Retired claim plan",
-          file: `${planId}.md`,
-          status: "InProgress",
-          metadata: { worktree_path: join(root, "wt-retired"), working_branch: `feature/${planId}` },
-        }),
-        JSON.stringify({
-          prepared: { qa_gate: "mandatory", findings_cleanup: "allow-residual", prepared_by: "host-coord", prepared_at: "2026-10-04T00:00:00Z" },
-          completion: { source_branch: `feature/${planId}`, completed_by: "host-coord", completed_at: "2026-10-04T03:00:00Z" },
-        }),
-      );
+      ).run(workflowId, planId, JSON.stringify(businessPlan), JSON.stringify({
+        revision: 1,
+        prepared,
+        session: { session_id: sessionId, session_file: join(root, "plan-pm.json"), bound_at: "2026-10-04T00:00:00Z" },
+      }));
+      initialized.db.prepare(
+        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+          "values (?, 'coordinator', 'host-coord', null, 1, 1, 'active', '2026-10-04T00:00:00Z')",
+      ).run(workflowId);
+      initialized.db.prepare(
+        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
+          "values (?, 'plan-pm', ?, ?, 1, 1, 'suspended', '2026-10-04T00:00:00Z')",
+      ).run(workflowId, sessionId, planId);
       initialized.db.prepare(
         "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
-      ).run(
-        workflowId,
-        planId,
-        JSON.stringify({
-          holder: sessionId,
-          holder_session_id: sessionId,
-          holder_role: "plan-pm",
-          claimed_at: "2026-10-04T00:00:00Z",
-          worktree_path: join(root, "wt-retired"),
-          working_branch: `feature/${planId}`,
-          status: "held",
-        }),
-      );
+      ).run(workflowId, planId, JSON.stringify({
+        holder: sessionId, holder_session_id: sessionId, holder_role: "plan-pm",
+        claimed_at: "2026-10-04T00:00:00Z",
+        worktree_path: worktreePath, working_branch: workingBranch, status: "held",
+      }));
       initialized.db.prepare(
         "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, 1, ?)",
-      ).run(
-        workflowId,
-        JSON.stringify({
-          holder: sessionId,
-          plan_id: planId,
-          claimed_at: "2026-10-04T00:30:00Z",
-          source_branch: `feature/${planId}`,
-          target_branch: "main",
-          status: "held",
-        }),
-      );
+      ).run(workflowId, JSON.stringify({
+        holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z",
+        source_branch: workingBranch, target_branch: "main", status: "held",
+      }));
     } finally {
       initialized.close();
     }
 
-    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
-    if (definition === undefined) throw new Error("missing store.upgrade definition");
-    // The published contract: the document schema lives under its own key and
-    // the option help names the absolute path, the optionality and the retry.
-    expect(definition.payloads?.existingActivationAttestation).toBeDefined();
-    const help = String(definition.cli.options.find((option) => option.key === "attestation")!.help);
-    expect(help).toContain("absolute");
-    expect(help).toContain("retry");
+    const before = await protectedStoreState(harness);
+    expect(before.schemaVersion).toBe(8);
+    const refused = await executeCommand("store.upgrade", { harness, operator: "fixture-operator" }, invocation(root));
+    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-attestation-missing", exitCode: 1 });
+    expect(await protectedStoreState(harness)).toEqual(before);
 
-    // WITHOUT the operator document the cutover refuses, keeps schema 8 and
-    // leaves every held claim byte intact.
-    const refused = await definition.execute(
-      definition.input.parse({ harness, operator: "fixture-operator" }),
-      invocation(root),
-    );
-    expect(refused).toMatchObject({ status: "refused", code: "store.upgrade-attestation-missing" });
+    // The same protected store also witnesses the public file-input boundary:
+    // none of these caller mistakes may start the schema cutover.
+    const malformedPath = join(root, "malformed-attestation.json");
+    writeFileSync(malformedPath, "{");
+    const malformedBytes = readFileSync(malformedPath);
+    for (const attestation of ["attestation.json", join(root, "absent-attestation.json"), malformedPath]) {
+      const invalid = await executeCommand("store.upgrade", {
+        harness, operator: "fixture-operator", attestation,
+      }, invocation(root));
+      expect(invalid).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
+      expect(await protectedStoreState(harness)).toEqual(before);
+    }
+    expect(readFileSync(malformedPath)).toEqual(malformedBytes);
 
-    // The SAME command with the full, exact-holder document is the supported
-    // retry: the attestation names this retired holder stopped AFTER its claim.
+    // The supported retry reads a full document naming the exact retired holder
+    // stopped after its claim; no fixture repair or replacement store intervenes.
     const attestationPath = join(root, "attestation.json");
     writeFileSync(attestationPath, JSON.stringify({
       version: 1,
       attestedAt: "2026-10-04T04:00:00Z",
       operator: { actor: "fixture-operator", authorizationRef: "fixture-authorization" },
       consumers: [{
-        entryId: "coordinator-cli",
-        kind: "coordinator",
-        entrypoint: "packages/cli/src/index.ts",
-        runtime: "node",
-        runtimeVersion: "24.18.0",
-        version: "0.0.0-test",
-        current: true,
-        disposition: "reloaded",
+        entryId: "coordinator-cli", kind: "coordinator",
+        entrypoint: "packages/cli/src/index.ts", runtime: "node", runtimeVersion: "24.18.0",
+        version: "0.0.0-test", current: true, disposition: "reloaded",
       }],
       stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
     }));
-    const result = await definition.execute(
-      definition.input.parse({ harness, operator: "fixture-operator", attestation: attestationPath }),
-      invocation(root),
-    );
+    const attestationBytes = readFileSync(attestationPath);
+    const result = await executeCommand("store.upgrade", {
+      harness, operator: "fixture-operator", attestation: attestationPath,
+    }, invocation(root));
     expect(result.status, result.status !== "ok" ? JSON.stringify(result) : "").toBe("ok");
+    expect(readFileSync(attestationPath)).toEqual(attestationBytes);
 
-    // Authoritative readback: schema 9, the retired claim is settled and the
-    // protected business state survives the cutover.
     const store = await openStore({ harnessDir: harness }, "read");
     try {
       expect(store.schemaVersion).toBe(9);
-      expect(store.db.prepare("select count(*) as n from execution_integration_leases").get()).toEqual({ n: 0 });
-      expect(store.db.prepare("select count(*) as n from execution_leases").get()).toEqual({ n: 0 });
-      const state = JSON.parse(
-        (store.db.prepare("select state_json from execution_plans where plan_id = ?").get(planId) as { state_json: string }).state_json,
-      ) as Record<string, unknown>;
-      expect(state).toMatchObject({ status: "Done", metadata: { working_branch: `feature/${planId}` } });
+      expect(store.db.prepare("select name from sqlite_schema where type = 'table' and name = 'execution_leases'").get()).toBeUndefined();
+      expect(store.db.prepare("select * from execution_sessions where workflow_id = ? and session_id = ?").get(workflowId, sessionId)).toBeUndefined();
+      expect(store.db.prepare("select * from execution_sessions where workflow_id = ?").all(workflowId)).toEqual([{
+        workflow_id: workflowId, role: "coordinator", session_id: "host-coord",
+        epoch: 1, revision: 1, state: "active", bound_at: "2026-10-04T00:00:00Z",
+      }]);
+      const plan = z.object({ revision: z.number(), state_json: z.string(), coordination_json: z.string() }).parse(
+        store.db.prepare(
+          "select revision, state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?",
+        ).get(workflowId, planId),
+      );
+      expect(plan.revision).toBe(1);
+      expect(JSON.parse(plan.state_json)).toEqual({
+        ...businessPlan, metadata: { worktree_path: worktreePath, working_branch: workingBranch },
+      });
+      expect(JSON.parse(plan.coordination_json)).toEqual({ prepared });
+      const workflow = z.object({ state_json: z.string() }).parse(
+        store.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(workflowId),
+      );
+      expect(JSON.parse(workflow.state_json)).toEqual(workflowState);
+      expect(store.db.prepare("select * from execution_registry where workflow_id = ?").get(workflowId))
+        .toEqual(before.tables.execution_registry[0]);
+      const claim = z.object({ revision: z.number(), owner_epoch: z.number(), lease_json: z.string() }).parse(
+        store.db.prepare(
+          "select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?",
+        ).get(workflowId),
+      );
+      expect(claim.revision).toBe(2);
+      expect(claim.owner_epoch).toBe(1);
+      expect(JSON.parse(claim.lease_json)).toEqual({
+        holder: sessionId, plan_id: planId, claimed_at: "2026-10-04T00:30:00Z",
+        source_branch: workingBranch, target_branch: "main", status: "released",
+        prior_holder: sessionId, released_by: "store-upgrade",
+        released_at: "2026-10-04T04:00:00Z", release_reason: `retired-plan-pm-seat:${sessionId}`,
+      });
+      for (const table of ["execution_lease_cutover", "execution_session_cutover", "execution_integration_cutover"]) {
+        expect(store.db.prepare("select name from sqlite_schema where type = 'table' and name = ?").get(table)).toBeUndefined();
+      }
     } finally {
       store.close();
     }

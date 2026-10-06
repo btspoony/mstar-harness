@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
 import { commandEnvelopeSchema, executeCommand, getCommandDefinitions } from "./definitions.js";
 import {
   CommandSchemaSelectionError,
@@ -288,7 +289,7 @@ test("workflow.evidence publishes the delivery evidence file contract and recove
   expect(String(attestation!.help)).toContain("ActivationAttestation");
 });
 
-test("workflow.recover-coordinator is FILE-only, names the ACTIVE pointer, and refuses on a real ACTIVE authority", async () => {
+test("workflow.recover-coordinator is FILE-only and returns usage with the supported ACTIVE recovery pointer", async () => {
   const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
   if (recovery === undefined) throw new Error("missing workflow.recover-coordinator definition");
   const keys = recovery.cli.options.map((option) => option.key);
@@ -302,8 +303,8 @@ test("workflow.recover-coordinator is FILE-only, names the ACTIVE pointer, and r
   // The published pointer names the supported ACTIVE verb and its inputs.
   expect(recovery.description).toContain("mstar session recover");
 
-  // A real ACTIVE execution authority refuses the FILE verb and names the
-  // supported session recovery.
+  // A real ACTIVE execution authority rejects the FILE transport as usage and
+  // names the supported session recovery.
   const root = mkdtempSync(join(tmpdir(), "mstar-recover-active-"));
   try {
     const harness = join(root, ".mstar");
@@ -339,8 +340,11 @@ test("workflow.recover-coordinator is FILE-only, names the ACTIVE pointer, and r
         async openBrowser() { throw new Error("browser is unavailable in this test"); },
       },
     });
-    expect(envelope.status).toBe("refused");
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     expect(String(envelope.message)).toContain("mstar session recover");
+    for (const flag of ["--workflow", "--prior-session", "--unowned", "--reason", "--attestation", "--expect", "--operation"]) {
+      expect(String(envelope.message)).toContain(flag);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -93,6 +93,7 @@ async function boundRecoveryFixture(): Promise<{
     updated_at: claimHolderAt,
     compass_ref: `iterations/${WORKFLOW_ID}/delivery-compass.md`,
     branch: { base: "main", integration: INTEGRATION_BRANCH, target: "main" },
+    integration_worktree_path: integrationPath,
     execution_policy: { plan_parallelism: "serial", worktree_mode: "required" },
     plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
   }, null, 2));
@@ -179,14 +180,33 @@ function writeAttestation(fixture: { root: string; claimHolderAt: string }, over
 test("the same bound fixture refuses recovery without the operator document and settles with it", async () => {
   const fixture = await boundRecoveryFixture();
   try {
-    // WITHOUT the operator document the engine refuses and names the stop
-    // attestation it needs; nothing about the held claim moves.
+    const beforeBytes = readFileSync(fixture.snapshotPath);
+    const before = JSON.parse(beforeBytes.toString("utf8")) as Record<string, unknown>;
+    const protectedPaths = [
+      join(fixture.harness, "status.json"),
+      join(fixture.harness, "iterations", WORKFLOW_ID, "delivery-compass.md"),
+      join(fixture.harness, "plans", `${PLAN_ID}.md`),
+      fixture.priorEnvelope,
+    ];
+    const protectedBytes = protectedPaths.map((path) => readFileSync(path));
+    const registeredCheckouts = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: fixture.root }).toString();
+    const replacementEnvelope = join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`);
+
+    // The refused attempt preserves the entire snapshot, including business
+    // rows, branch/checkout registration, prior binding and held claim.
     const refused = await executeCommand("workflow.recover-coordinator", recoveryInput(fixture), invocation(fixture.root));
-    expect(refused.status).toBe("refused");
-    expect(String(refused.message)).toContain("stop attestation");
-    const before = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as Record<string, unknown>;
-    expect(before.integration_merge_lease).toMatchObject({ holder: PRIOR_HOLDER });
-    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(false);
+    expect(refused).toMatchObject({
+      status: "refused",
+      code: "coordination.identity-recovery.unauthorized",
+      exitCode: 1,
+      details: { holder: PRIOR_HOLDER, claimed_at: fixture.claimHolderAt, attested_at: null },
+    });
+    expect(readFileSync(fixture.snapshotPath)).toEqual(beforeBytes);
+    for (const [index, path] of protectedPaths.entries()) {
+      expect(readFileSync(path)).toEqual(protectedBytes[index]);
+    }
+    expect(execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: fixture.root }).toString()).toBe(registeredCheckouts);
+    expect(existsSync(replacementEnvelope)).toBe(false);
 
     // The SAME fixture retries with the correct full document and succeeds.
     const attestationPath = writeAttestation(fixture);
@@ -199,7 +219,7 @@ test("the same bound fixture refuses recovery without the operator document and 
 
     // Authoritative readback: the replacement binding is recorded, the audit
     // names the prior holder, and the held claim is gone.
-    const after = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as {
+    const after = JSON.parse(readFileSync(fixture.snapshotPath, "utf8")) as Record<string, unknown> & {
       integration_merge_lease?: unknown;
       coordination?: {
         coordinator?: { session_id?: string; session_file?: string };
@@ -208,9 +228,42 @@ test("the same bound fixture refuses recovery without the operator document and 
     };
     expect(after.integration_merge_lease).toBeUndefined();
     expect(after.coordination?.coordinator?.session_id).toBe(CALLER_SESSION);
-    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(true);
-    const recovery = (after.coordination?.identity_recoveries ?? []).find((entry) => entry.prior_session_id === PRIOR_HOLDER);
-    expect(recovery?.stopped_session_ids).toContain(PRIOR_HOLDER);
+    expect(after.coordination?.coordinator?.session_file).toBe(replacementEnvelope);
+    expect(JSON.parse(readFileSync(replacementEnvelope, "utf8"))).toMatchObject({
+      role: "coordinator", workflow_id: WORKFLOW_ID, session_id: CALLER_SESSION, harness_root: fixture.harness,
+    });
+    const beforeCoordination = before.coordination as NonNullable<typeof after.coordination>;
+    const priorAudit = beforeCoordination.identity_recoveries ?? [];
+    const audit = after.coordination?.identity_recoveries ?? [];
+    expect(audit.slice(0, priorAudit.length)).toEqual(priorAudit);
+    expect(audit).toHaveLength(priorAudit.length + 1);
+    expect(audit[priorAudit.length]).toMatchObject({
+      operation_id: "recover-1", workflow_id: WORKFLOW_ID,
+      prior_session_id: PRIOR_HOLDER, session_id: CALLER_SESSION,
+      authorization_ref: AUTHORIZATION_REF, stopped_session_ids: [PRIOR_HOLDER],
+      attested_at: "2026-10-01T00:00:00.000Z",
+    });
+
+    // Only recovery-owned timestamp/binding/audit/claim fields may change.
+    // Compare every remaining business field to the actual pre-refusal baseline.
+    const businessBefore = { ...before };
+    const businessAfter = { ...after };
+    for (const field of ["updated_at", "coordination", "integration_merge_lease"]) {
+      delete businessBefore[field];
+      delete businessAfter[field];
+    }
+    expect(businessAfter).toEqual(businessBefore);
+    const coordinationBefore = { ...beforeCoordination };
+    const coordinationAfter = { ...after.coordination };
+    delete coordinationBefore.coordinator;
+    delete coordinationBefore.identity_recoveries;
+    delete coordinationAfter.coordinator;
+    delete coordinationAfter.identity_recoveries;
+    expect(coordinationAfter).toEqual(coordinationBefore);
+    for (const [index, path] of protectedPaths.entries()) {
+      expect(readFileSync(path)).toEqual(protectedBytes[index]);
+    }
+    expect(execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: fixture.root }).toString()).toBe(registeredCheckouts);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -241,18 +294,18 @@ test("an operator authorization mismatch refuses with its specific cause on the 
   }
 });
 
-test("a relative attestation path is a usage error naming the field, and an absent absolute file is refused", async () => {
+test("relative and absent absolute attestation inputs preserve the bound fixture at their public error boundaries", async () => {
   const fixture = await boundRecoveryFixture();
   try {
-    // The adapter's absolute-path boundary names the field without a flag
-    // prefix; the document is never read from a relative value.
+    const before = readFileSync(fixture.snapshotPath);
+    // A relative document is caller input, not a filesystem read.
     const usage = await executeCommand(
       "workflow.recover-coordinator",
       recoveryInput(fixture, "attestation.json"),
       invocation(fixture.root),
     );
-    expect(usage.status).toBe("usage");
-    expect(String(usage.message)).toContain("attestation must be an absolute path");
+    expect(usage).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(readFileSync(fixture.snapshotPath)).toEqual(before);
 
     // A genuinely absent absolute document is an engine-surfaced refusal, not
     // a usage error: the path is admitted and the read fails.
@@ -261,7 +314,9 @@ test("a relative attestation path is a usage error naming the field, and an abse
       recoveryInput(fixture, join(fixture.root, "absent", "attestation.json")),
       invocation(fixture.root),
     );
-    expect(absent.status).toBe("refused");
+    expect(absent).toMatchObject({ status: "refused", code: "ENOENT", exitCode: 1 });
+    expect(readFileSync(fixture.snapshotPath)).toEqual(before);
+    expect(existsSync(join(fixture.harness, "workflows", WORKFLOW_ID, "sessions", `coordinator-${CALLER_SESSION}.json`))).toBe(false);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
