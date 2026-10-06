@@ -415,10 +415,8 @@ describe("E1 explicit binding", () => {
     expect(wrongAuthority.ok === false && wrongAuthority.code).toBe("not-coordinator");
     const wrongIntent = await attempt({ ...start("fixture-other"), intent: "resume" });
     expect(wrongIntent.ok === false && wrongIntent.code).toBe("not-coordinator");
-    const wrongEntry = await attempt({ ...start("fixture-other"), entry: "iteration-drive" });
-    expect(wrongEntry.ok === false && wrongEntry.code).toBe("not-coordinator");
-    const taskSession = await attempt(start("fixture-other"), { ...host, taskSession: true });
-    expect(taskSession.ok === false && taskSession.code).toBe("not-coordinator");
+    const startSession = await attempt(start("fixture-other"), { ...host, taskSession: true });
+    expect(startSession.ok === false && startSession.code).toBe("not-coordinator");
     const noSession = await attempt(start("fixture-other"), { ...host, sessionId: "" });
     expect(noSession.ok === false && noSession.code).toBe("not-coordinator");
 
@@ -1541,37 +1539,23 @@ describe("E1 explicit binding on the ACTIVE route", () => {
     );
     expect(stale).toMatchObject({ ok: false, code: "not-coordinator" });
 
-    // A plan-scoped reference is not a coordinator binding.
-    const planScoped = await reserveHandoffBinding(
-      activeBindingInput(f.workflowId),
-      host({ ...adopted, session: { ...adopted.session, role: "plan-pm", planId: f.planId } }),
-      "reserve",
-    );
-    expect(planScoped).toMatchObject({ ok: false, code: "not-coordinator" });
-
-    // The engine's cross-field pairing is part of the binding SHAPE this arm
-    // admits (`assertRefShape`): a coordinator never carries a plan id and a
-    // plan-pm always carries a non-empty one. Either impossible pairing is
-    // refused as a binding the engine could never accept — it never reaches the
-    // seat comparison.
+    // The engine's own reference shape is part of the binding SHAPE this arm
+    // admits (`assertRefShape`): the workflow's coordinator seat and no per-plan
+    // scope. A reference declaring a plan id, or the removed plan-pm seat, is one
+    // the engine could never accept — it is refused as a binding and never
+    // reaches the seat comparison.
     const coordinatorWithPlan = await reserveHandoffBinding(
       activeBindingInput(f.workflowId),
-      host({ ...adopted, session: { ...adopted.session, role: "coordinator", planId: f.planId } }),
+      host({ ...adopted, session: { ...adopted.session, planId: f.planId } }),
       "reserve",
     );
     expect(coordinatorWithPlan).toMatchObject({ ok: false, code: "not-coordinator" });
-    const planPmWithoutPlan = await reserveHandoffBinding(
+    const planPmSeat = await reserveHandoffBinding(
       activeBindingInput(f.workflowId),
-      host({ ...adopted, session: { ...adopted.session, role: "plan-pm", planId: null } }),
+      host({ ...adopted, session: { ...adopted.session, role: "plan-pm" } }),
       "reserve",
     );
-    expect(planPmWithoutPlan).toMatchObject({ ok: false, code: "not-coordinator" });
-    const planPmWithEmptyPlan = await reserveHandoffBinding(
-      activeBindingInput(f.workflowId),
-      host({ ...adopted, session: { ...adopted.session, role: "plan-pm", planId: "" } }),
-      "reserve",
-    );
-    expect(planPmWithEmptyPlan).toMatchObject({ ok: false, code: "not-coordinator" });
+    expect(planPmSeat).toMatchObject({ ok: false, code: "not-coordinator" });
 
     // Another workflow's binding.
     const otherWorkflow = await reserveHandoffBinding(

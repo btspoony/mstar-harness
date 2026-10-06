@@ -18,7 +18,7 @@
  *    empty findings, and never passes a closure gate.
  * 4. A pending catalog registration refuses dispatch, while an
  *    uninitialized/staged store (pre-activation) does not.
- * 5. The current phase/leases still come from the JSON execution authority.
+ * 5. The current phase and the plan rows' recorded scope still come from the JSON execution authority.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
@@ -640,10 +640,10 @@ describe('store cutover — root selection is JSON-owned, registration is not', 
 })
 
 /* ===========================================================================
- * 5. Execution facts stay JSON: phase/leases/status come from the snapshot
+ * 5. Execution facts stay JSON: phase, status and the rows' recorded scope come from the snapshot
  * ========================================================================== */
-describe('store cutover — the JSON execution authority still owns phase and leases', () => {
-  it('phase, status and leases render from the snapshot even while the store is unavailable', async () => {
+describe('store cutover — the JSON execution authority still owns phase and recorded row scope', () => {
+  it('phase, status and row scope render from the snapshot even while the store is unavailable', async () => {
     const { app, harnessDir } = await appWithRoot('store-json-authority')
     const worktreePath = join(harnessDir, '..', 'wt')
     await seedHarness(harnessDir, {
@@ -657,9 +657,7 @@ describe('store cutover — the JSON execution authority still owns phase and le
           file: 'plans/plan-a.md',
           status: 'InProgress',
           progress: '3/5 tasks',
-          execution_lease: {
-            holder: 'dsh:session-1',
-            claimed_at: '2026-09-19',
+          metadata: {
             worktree_path: worktreePath,
             working_branch: 'feature/store-cutover',
           },
@@ -677,7 +675,7 @@ describe('store cutover — the JSON execution authority still owns phase and le
     expect(state.workflowType).toBe('iteration')
     expect(state.workflowStatus).toBe('paused')
     expect(state.plans).toEqual([{ id: 'plan-a', status: 'InProgress', doneAt: null, iterationRefs: [] }])
-    expect(state.leases).toEqual([{ planId: 'plan-a', holder: 'dsh:session-1', worktreePath }])
+    expect(state.rowScopes).toEqual([{ planId: 'plan-a', workingBranch: 'feature/store-cutover', worktreePath }])
     expect(state.iterationBaseBranch).toBe('dev')
     expect(state.targetBranch).toBe('main')
     expect(state.pushPolicy).toBe('no-push')

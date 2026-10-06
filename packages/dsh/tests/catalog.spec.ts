@@ -663,14 +663,21 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       title: 'Plan A',
       file: 'plans/plan-a.md',
       status: 'InProgress',
-      execution_lease: {
-        holder: 'dsh-session-1',
-        claimed_at: '2026-08-19',
+      metadata: {
         worktree_path: '/worktrees/plan-a',
         working_branch: 'feature/plan-a',
       },
     },
-    { id: 'plan-b', title: 'Plan B', file: 'plans/plan-b.md', status: 'Done', done_at: '2026-08-19' },
+    {
+      id: 'plan-b',
+      title: 'Plan B',
+      file: 'plans/plan-b.md',
+      status: 'Done',
+      done_at: '2026-08-19',
+      // A Done row keeps its recorded scope: it is ordinary metadata, never an
+      // active-lease/ownership claim.
+      metadata: { worktree_path: '/worktrees/plan-b', working_branch: 'feature/plan-b' },
+    },
   ]
   /**
    * The golden fixture's legacy project register. It exists ON DISK so the
@@ -825,7 +832,10 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
       pushPolicy: 'no-push',
       worktreeMode: 'feature-worktree',
       integrationWorktreePath: '/integration/worktree',
-      leases: [{ planId: 'plan-a', holder: 'dsh-session-1', worktreePath: '/worktrees/plan-a' }],
+      rowScopes: [
+        { planId: 'plan-a', workingBranch: 'feature/plan-a', worktreePath: '/worktrees/plan-a' },
+        { planId: 'plan-b', workingBranch: 'feature/plan-b', worktreePath: '/worktrees/plan-b' },
+      ],
       knowledge: { docCount: 1, categories: ['conventions'] },
       storeFacts: {
         kind: 'store',
@@ -866,7 +876,11 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
     expect(text).toContain('store: projection unavailable')
     expect(text).toContain('branch: dev-dsh → dev-dsh (spec integration: iteration/v2.2.0)')
     expect(text).toContain('policy: push no-push; worktree feature-worktree; integration /integration/worktree')
-    expect(text).toContain('leases: plan-a → dsh-session-1 (/worktrees/plan-a)')
+    // The InProgress row AND the Done row both appear as recorded scope: an
+    // ordinary Todo/Done row is never presented as an active lease/holder.
+    expect(text).toContain('row scope: plan-a → feature/plan-a (/worktrees/plan-a)')
+    expect(text).toContain('row scope: plan-b → feature/plan-b (/worktrees/plan-b)')
+    expect(text).toContain('plans: plan-a(InProgress) plan-b(Done)')
     expect(text).toContain('agent flow: 2 events; by role: fullstack-dev 1')
   })
   it('roadmap-authority failure is disclosed without dropping independent issue counts', async () => {
@@ -1103,43 +1117,39 @@ describe('mstar-engine-status catalog — v3 per-lifecycle aggregation ', () => 
   })
 })
 
-describe('mstar-engine-status catalog — state plans/leases join cap (spec D4)', () => {
+describe('mstar-engine-status catalog — state plans/row-scope join cap (spec D4)', () => {
   /** The pinned cap value (spec D1) — intentionally hardcoded, NOT imported,
    * so a drift of `CATALOG_STATE_JOIN_LIMIT` fails this matrix. */
   const CAP = 8
-  /** The fixture plan-row shape (snapshot `plans[]` entry with an execution lease). */
+  /** The fixture plan-row shape (snapshot `plans[]` entry with a recorded row scope). */
   interface CapRow {
     id: string
     title: string
     file: string
     status: string
-    execution_lease: {
-      holder: string
-      claimed_at: string
+    metadata: {
       worktree_path: string
       working_branch: string
     }
   }
-  /** One snapshot plan row carrying an execution lease (feeds BOTH joins). */
+  /** One snapshot plan row carrying recorded scope (feeds BOTH joins). */
   const capRow = (index: number): CapRow => ({
     id: `plan-${index}`,
     title: `Plan ${index}`,
     file: `plans/plan-${index}.md`,
     status: 'InProgress',
-    execution_lease: {
-      holder: `holder-${index}`,
-      claimed_at: '2026-08-30',
+    metadata: {
       worktree_path: `/worktrees/plan-${index}`,
       working_branch: `feature/plan-${index}`,
     },
   })
   /** The pre-cap (legacy) plans rendering — the byte-identical reference for ≤ CAP rows (separator `' '`). */
   const uncappedPlans = (rows: CapRow[]): string => rows.map((row) => `${row.id}(${row.status})`).join(' ')
-  /** The pre-cap (legacy) leases rendering — the byte-identical reference for ≤ CAP rows (separator `'; '`). */
+  /** The pre-cap (legacy) row-scope rendering — the byte-identical reference for ≤ CAP rows (separator `'; '`). */
   const uncappedLeases = (rows: CapRow[]): string =>
-    rows.map((row) => `${row.id} → ${row.execution_lease.holder} (${row.execution_lease.worktree_path})`).join('; ')
-  /** The exact `plans:` / `leases:` line of the catalog model text (byte-identity assertions, not substring). */
-  const lineOf = (text: string, prefix: 'plans:' | 'leases:'): string => {
+    rows.map((row) => `${row.id} → ${row.metadata.working_branch} (${row.metadata.worktree_path})`).join('; ')
+  /** The exact `plans:` / `row scope:` line of the catalog model text (byte-identity assertions, not substring). */
+  const lineOf = (text: string, prefix: 'plans:' | 'row scope:'): string => {
     const line = text.split('\n').find((l) => l.startsWith(`${prefix} `))
     if (line === undefined) throw new Error(`missing ${prefix} line`)
     return line
@@ -1162,52 +1172,52 @@ describe('mstar-engine-status catalog — state plans/leases join cap (spec D4)'
     return { text: textOf(row), state }
   }
 
-  it('empty (0) → caller ternary copy `none registered` / `none active` (joinCapped never reached)', async () => {
+  it('empty (0) → caller ternary copy `none registered` / `none recorded` (joinCapped never reached)', async () => {
     const { text, state } = await catalogFor(0)
     expect(lineOf(text, 'plans:')).toBe('plans: none registered')
-    expect(lineOf(text, 'leases:')).toBe('leases: none active')
+    expect(lineOf(text, 'row scope:')).toBe('row scope: none recorded')
     expect(state.plans).toEqual([])
-    expect(state.leases).toEqual([])
+    expect(state.rowScopes).toEqual([])
   })
 
   it('singleton (1) → full join, no overflow token, byte-identical to the uncapped rendering', async () => {
     const rows = [capRow(0)]
     const { text } = await catalogFor(1)
     expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows)}`)
-    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows)}`)
+    expect(lineOf(text, 'row scope:')).toBe(`row scope: ${uncappedLeases(rows)}`)
   })
 
   it('exactly at the limit (8) → full join, no overflow token, byte-identical to the uncapped rendering', async () => {
     const rows = Array.from({ length: CAP }, (_, index) => capRow(index))
     const { text, state } = await catalogFor(CAP)
     expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows)}`)
-    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows)}`)
+    expect(lineOf(text, 'row scope:')).toBe(`row scope: ${uncappedLeases(rows)}`)
     expect(state.plans).toHaveLength(CAP)
-    expect(state.leases).toHaveLength(CAP)
+    expect(state.rowScopes).toHaveLength(CAP)
   })
 
-  it('limit+1 (9) → first 8 rows + final `+1 more` join element (plans ` ` separator, leases `; `)', async () => {
+  it('limit+1 (9) → first 8 rows + final `+1 more` join element (plans ` ` separator, row scope `; `)', async () => {
     const rows = Array.from({ length: CAP + 1 }, (_, index) => capRow(index))
     const { text, state } = await catalogFor(CAP + 1)
     // The overflow token is the LAST join element (it carries no leading
     // space of its own — it lands after the separator).
     expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows.slice(0, CAP))} +1 more`)
-    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows.slice(0, CAP))}; +1 more`)
+    expect(lineOf(text, 'row scope:')).toBe(`row scope: ${uncappedLeases(rows.slice(0, CAP))}; +1 more`)
     // The capped row renders nowhere on the line.
     expect(lineOf(text, 'plans:')).not.toContain('plan-8')
-    expect(lineOf(text, 'leases:')).not.toContain('plan-8')
+    expect(lineOf(text, 'row scope:')).not.toContain('plan-8')
     // The aggregates stay full — the cap touches the text join only (D5).
     expect(state.plans).toHaveLength(CAP + 1)
-    expect(state.leases).toHaveLength(CAP + 1)
+    expect(state.rowScopes).toHaveLength(CAP + 1)
   })
 
   it('double-limit (16) → `+8 more` pins the D2 overflow wording', async () => {
     const rows = Array.from({ length: 2 * CAP }, (_, index) => capRow(index))
     const { text } = await catalogFor(2 * CAP)
     expect(lineOf(text, 'plans:')).toBe(`plans: ${uncappedPlans(rows.slice(0, CAP))} +8 more`)
-    expect(lineOf(text, 'leases:')).toBe(`leases: ${uncappedLeases(rows.slice(0, CAP))}; +8 more`)
+    expect(lineOf(text, 'row scope:')).toBe(`row scope: ${uncappedLeases(rows.slice(0, CAP))}; +8 more`)
     expect(lineOf(text, 'plans:')).not.toContain('plan-15')
-    expect(lineOf(text, 'leases:')).not.toContain('plan-15')
+    expect(lineOf(text, 'row scope:')).not.toContain('plan-15')
   })
 })
 
@@ -1393,9 +1403,9 @@ describe('D4 catalog identity encoding + selected compass path', () => {
     // Adjacent sessionId / cwd: `\u0000`-join fused these into one key.
     expect(catalogCacheKey(harness, 's', 'a\u0000b', undefined))
       .not.toBe(catalogCacheKey(harness, 's\u0000a', 'b', undefined))
-    // Adjacent leaseHolder / selectedWorkflowId — the same delimiter-shift.
-    expect(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x\u0000y', selectedWorkflowId: 'wf-a' }))
-      .not.toBe(catalogCacheKey(harness, 's', '/ws', { leaseHolder: 'x', selectedWorkflowId: 'y\u0000wf-a' }))
+    // Adjacent selectedWorkflowId / cwd — the same delimiter-shift.
+    expect(catalogCacheKey(harness, 's', '/ws', { cwd: 'x\u0000y', selectedWorkflowId: 'wf-a' }))
+      .not.toBe(catalogCacheKey(harness, 's', '/ws', { cwd: 'x', selectedWorkflowId: 'y\u0000wf-a' }))
   })
 
   const compassDoc = (id: string, direction: string): string => [

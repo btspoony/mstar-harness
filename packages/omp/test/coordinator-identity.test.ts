@@ -43,7 +43,6 @@ const FACTS: CoordinatorIdentityFacts = {
   cwd: "/repo/main",
   harnessRoot: "/repo/main/.mstar",
   leaf: false,
-  scopedPlanEntry: false,
 };
 
 /** A fake engine verb that records its input and returns a plausible result. */
@@ -98,11 +97,10 @@ describe("prerequisite identity — coordinator identity adapter input", () => {
     expect(engine.calls).toHaveLength(0);
   });
 
-  test("host facts gate the bind: no native id, a leaf session and a scoped-plan entry all refuse before the engine", async () => {
+  test("host facts gate the bind: no native id and a leaf session refuse before the engine", async () => {
     const cases = [
       { facts: { ...FACTS, sessionId: "" }, code: "identity-missing" },
       { facts: { ...FACTS, leaf: true }, code: "leaf-session" },
-      { facts: { ...FACTS, scopedPlanEntry: true }, code: "scoped-plan-route" },
       { facts: { ...FACTS, harnessRoot: null }, code: "harness-not-found" },
     ] as const;
     for (const entry of cases) {
@@ -358,7 +356,6 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     for (const entry of [
       { facts: { ...FACTS, sessionId: "" }, code: "identity-missing" },
       { facts: { ...FACTS, leaf: true }, code: "leaf-session" },
-      { facts: { ...FACTS, scopedPlanEntry: true }, code: "scoped-plan-route" },
       { facts: { ...FACTS, harnessRoot: null }, code: "harness-not-found" },
     ] as const) {
       const engine = fakeRecovery();
@@ -669,7 +666,6 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     for (const [facts, code] of [
       [{ ...FACTS, sessionId: "" }, "identity-missing"],
       [{ ...FACTS, leaf: true }, "leaf-session"],
-      [{ ...FACTS, scopedPlanEntry: true }, "scoped-plan-route"],
       [{ ...FACTS, harnessRoot: null }, "harness-not-found"],
     ] as const) {
       const engine = fakeAuthority();

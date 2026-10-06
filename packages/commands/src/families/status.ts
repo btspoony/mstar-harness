@@ -233,15 +233,15 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
               );
             }
             const acquired = context.executionIdentity;
-            if (acquired !== undefined && (acquired.workflowId !== workflow || acquired.role !== "coordinator" || acquired.planId !== null)) {
+            if (acquired !== undefined && (acquired.workflowId !== workflow || acquired.role !== "coordinator")) {
               return refused("status.workflow-close", "coordination.identity-mismatch", "acquired caller identity does not address this workflow's coordinator seat");
             }
             const executionContext = executionContextFor(
               { harnessDir },
-              acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator", planId: null },
+              acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator" },
             );
             const ref = parsed.data.sessionRef === undefined ? undefined : decodeExecutionSessionRef(parsed.data.sessionRef);
-            if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator" || ref.planId !== null)) {
+            if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator")) {
               return refused("status.workflow-close", "coordination.identity-mismatch", "sessionRef must address this workflow's coordinator seat");
             }
             const receipt = await mutateExecutionWorkflow(executionContext, {

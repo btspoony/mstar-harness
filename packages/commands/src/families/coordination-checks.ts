@@ -17,21 +17,14 @@ import {
   validateProjectRegister,
   validateIntegrationMergeLease,
   validateWorkflowSnapshot,
-  verifyPlanExecutionLease,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_SNAPSHOT_FILE,
-  type ExecutionPlanView,
-  type ExecutionState,
   type MigratePlan,
 } from "@mstar-harness/engine";
 import { z } from "zod";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
-function leaseRow(view: ExecutionPlanView): Record<string, unknown> {
-  const plan = view.plan as unknown as Record<string, unknown>;
-  return { ...plan, execution_lease: view.executionLease ?? undefined };
-}
 
 function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: `${command}.ok`, exitCode: 0, data };
@@ -63,10 +56,6 @@ function snapshotPath(context: InvocationContext, workflow: string, override?: s
   assertWorkflowId(workflow);
   const root = harnessDir(context, override);
   return path.join(resolveWorkflowDir(root, { harnessDir: root }), workflow, WORKFLOW_SNAPSHOT_FILE);
-}
-function solePlan(plans: Array<Record<string, unknown>>, label: string): Record<string, unknown> {
-  if (plans.length !== 1) throw new Error(`${label}: workflow snapshot has ${plans.length} plan rows — pass planId to pick one`);
-  return plans[0]!;
 }
 function validatePlanDocs(plan: MigratePlan): string[] {
   const warnings: string[] = [];
@@ -117,38 +106,6 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             return { version: 1, command: id, status: "error", code: "migrate.apply-failure", exitCode: 2, message: messageOf(error) };
           }
         } catch (error) { return engineFailure(id, error, "migrate.refused"); }
-      },
-    }),
-    command({
-      id: "lease.verify",
-      cli: { path: ["lease", "verify"], aliases: [], arguments: [], options: [{ key: "workflow", flags: "--workflow <id>", required: true }, { key: "plan", flags: "--plan <plan-id>", required: false }, { key: "harness", flags: "--harness <path>", required: false }] },
-      input: z.object({ workflow: z.string().min(1), plan: z.string().optional(), harness: z.string().optional() }),
-      output, effects: ["read", "validate"], description: "Verify one workflow plan execution lease without mutation.",
-      async execute(input, context) {
-        const id = "lease.verify";
-        try {
-          const root = harnessDir(context, input.harness);
-          const served = await readExecutionSource({ harnessDir: root }, input.plan === undefined ? { workflowId: input.workflow } : { workflowId: input.workflow, planId: input.plan });
-          let rows: Array<Record<string, unknown>>;
-          if (served.route === "execution") {
-            const data = served.read.data as ExecutionState;
-            rows = input.plan === undefined
-              ? (data.workflows[0]?.plans ?? []).map(leaseRow)
-              : [leaseRow(served.read.data as ExecutionPlanView)];
-          } else {
-            const file = snapshotPath(context, input.workflow, input.harness);
-            if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}` });
-            const doc = readJson(file);
-            rows = Array.isArray(doc.plans) ? doc.plans as Array<Record<string, unknown>> : [];
-          }
-          const matches = input.plan === undefined ? [solePlan(rows, `lease verify ${input.workflow}`)] : rows.filter((row) => row.id === input.plan || row.plan_id === input.plan);
-          if (input.plan !== undefined && matches.length === 0) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.plan-not-found", exitCode: 1, message: `no plan row with id/plan_id ${input.plan}` });
-          if (input.plan !== undefined && matches.length > 1) return refusalEnvelope({ command: id, status: "refused", code: "lease.verify.ambiguous", exitCode: 1, message: "multiple plan rows match (id and plan_id both present)" });
-          const row = matches[0]!;
-          const planId = input.plan ?? String(row.plan_id ?? row.id ?? "");
-          const result = verifyPlanExecutionLease(row, planId);
-          return result.ok ? ok(id, { workflow: input.workflow, plan: planId, lease: result.lease }) : refusalEnvelope({ command: id, status: "refused", code: result.violations[0]?.code ?? "lease.verify.invalid", exitCode: 1, message: result.violations.map((item) => `[${item.severity}] ${item.code}: ${item.message}`).join("; "), details: { violations: result.violations } });
-        } catch (error) { return engineFailure(id, error, "lease.verify.refused"); }
       },
     }),
     command({

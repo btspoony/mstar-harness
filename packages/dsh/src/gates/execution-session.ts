@@ -23,7 +23,7 @@ const SPOOF_KEYS = [
 type SessionScope = Omit<ExecutionCaller, 'sessionId'>
 type AdoptRequest = { operation: 'adopt'; sessionRef: string }
 type ClearRequest = { operation: 'clear' }
-type RunRequest = { operation: 'run'; workflowId: string; role: 'coordinator' | 'plan-pm'; planId: string | null; argv: string[] }
+type RunRequest = { operation: 'run'; workflowId: string; role: 'coordinator'; argv: string[] }
 type ExecutionRequest = AdoptRequest | ClearRequest | RunRequest
 
 type NativeSession = {
@@ -62,10 +62,10 @@ export function parseExecutionRequest(raw: string): ExecutionRequest {
     return { operation: 'adopt', sessionRef: value.sessionRef }
   }
   if (value.operation === 'run') {
-    if (Object.keys(value).length !== 5 || typeof value.workflowId !== 'string' || value.workflowId === '' || (value.role !== 'coordinator' && value.role !== 'plan-pm') || (value.planId !== null && (typeof value.planId !== 'string' || value.planId === '')) || !Array.isArray(value.argv) || value.argv.length === 0 || value.argv.some((arg) => typeof arg !== 'string' || arg === '')) {
-      throw new Error('run requires workflowId, role, planId, and a non-empty argv')
+    if (Object.keys(value).length !== 4 || typeof value.workflowId !== 'string' || value.workflowId === '' || value.role !== 'coordinator' || !Array.isArray(value.argv) || value.argv.length === 0 || value.argv.some((arg) => typeof arg !== 'string' || arg === '')) {
+      throw new Error('run requires workflowId, role coordinator, and a non-empty argv')
     }
-    return { operation: 'run', workflowId: value.workflowId, role: value.role, planId: value.planId, argv: value.argv as string[] }
+    return { operation: 'run', workflowId: value.workflowId, role: value.role, argv: value.argv as string[] }
   }
   throw new Error('unknown execution operation')
 }
@@ -113,12 +113,12 @@ async function handleExecutionCommand(invocation: CommandInvocation, resolver: H
     const ref = decodeExecutionSessionRef(request.sessionRef)
     if (ref.sessionId !== facts.sessionId) throw new Error('session reference does not match the native carrying session')
     const binding: ExecutionBinding = { version: 1, harnessRoot: harnessDir, session: ref }
-    const resumed = await resumeExecutionSession(executionContextFor({ harnessDir }, { source: 'host', sessionId: ref.sessionId, workflowId: ref.workflowId, role: ref.role, planId: ref.planId }), ref)
+    const resumed = await resumeExecutionSession(executionContextFor({ harnessDir }, { source: 'host', sessionId: ref.sessionId, workflowId: ref.workflowId, role: 'coordinator' }), ref)
     if (resumed.data.sessionId !== facts.sessionId || resumed.data.workflowId !== ref.workflowId) throw new Error('current execution session admission did not match the native session')
     if (!adoptExecutionBinding(harnessDir, facts.sessionId, facts.cwd, binding)) throw new Error('execution binding adoption refused')
     return { kind: 'success', text: `execution binding adopted for ${ref.workflowId}` }
   }
-  const scope = { workflowId: request.workflowId, role: request.role, planId: request.planId }
+  const scope = { workflowId: request.workflowId, role: request.role }
   executionContextFor({ harnessDir }, { source: 'host', sessionId: facts.sessionId, ...scope })
   const result = await runExecutionCommand(request.argv, identityEnv(process.env, { sessionId: facts.sessionId, ...scope }), invocation.signal)
   return { kind: result.code === 0 ? 'success' : 'error', text: result.code === 0 ? result.stdout : result.stderr || `execution exited with code ${result.code}` }

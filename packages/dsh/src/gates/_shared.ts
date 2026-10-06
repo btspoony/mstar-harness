@@ -267,7 +267,7 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * Cap on the plan / lease rows joined into the `<mstar_engine_status>`
  * catalog state lines : ONE catalog-owned
- * constant shared by the `plans:` and `leases:` joins so an oversized
+ * constant shared by the `plans:` and `row scope:` joins so an oversized
  * workflow snapshot cannot balloon the single-line catalog state section.
  * Numeric precedent: `DIGEST_PLAN_CAP` in `system-prompt.ts` (digest-side,
  * non-Done-only — intentionally NOT reused here; the catalog renders the
@@ -514,30 +514,6 @@ export function agentIdOf(agent: unknown): string | undefined {
   return typeof id === 'string' && id.trim() !== '' ? id : undefined
 }
 
-/**
- * The VERIFIED live lease-holder identity of one session's Agent — the id the
- * dispatch gate forwards to the shared resolvers for the SAME dispatch
- * (`sessionHintOf(exec.agent)` → `agentIdOf`). Every consumer of a
- * session-level hint (the host endpoint's control-state read, the workflow
- * ledger's attribution) must forward the SAME identity, or a session whose
- * lifecycle is only decidable by its lease (two active lifecycles sharing one
- * `control_worktree_path`) resolves differently per call site.
- *
- * The handle must BE that session's agent — its own `session.header.id` names
- * the session, and (when the caller has an authoritative cwd) its workspace
- * must equal it. Anything else answers `undefined`: the session id is never
- * substituted for a holder (they are opaque and distinct).
- * @param agent - the live agent the host resolves for the session (structural read).
- * @param sessionId - the session the hint is built for.
- * @param cwd - the session's workspace; `undefined` skips the workspace check
- *   (a caller with no authoritative cwd cannot verify one).
- */
-export function verifiedLeaseHolderOf(agent: unknown, sessionId: string, cwd: string | undefined): string | undefined {
-  if (agent === undefined) return undefined
-  if (sessionHeaderIdOf(agent) !== sessionId) return undefined
-  if (cwd !== undefined && sessionCwdOf(agent) !== cwd) return undefined
-  return agentIdOf(agent)
-}
 
 /**
  * The structural session hint one event's agent supplies to the workflow
@@ -554,12 +530,10 @@ export function verifiedLeaseHolderOf(agent: unknown, sessionId: string, cwd: st
 export function sessionHintOf(agent: unknown): SessionHint | undefined {
   const cwd = sessionCwdOf(agent)
   const sessionId = sessionHeaderIdOf(agent)
-  const leaseHolder = agentIdOf(agent)
-  if (cwd === undefined && sessionId === undefined && leaseHolder === undefined) return undefined
+  if (cwd === undefined && sessionId === undefined) return undefined
   return {
     ...(cwd === undefined ? {} : { cwd }),
     ...(sessionId === undefined ? {} : { sessionId }),
-    ...(leaseHolder === undefined ? {} : { leaseHolder }),
   }
 }
 

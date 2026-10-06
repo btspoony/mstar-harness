@@ -85,31 +85,20 @@ const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"
   "workflow.execution-policy": "workflow",
   "workflow.integration-worktree": "workflow",
   "status.workflow-close": "workflow",
-  "plan.bind": "plan",
+  "plan.bind": "workflow",
   "plan.prepare": "plan",
   "session.recover": "workflow",
 };
-const CONDITIONAL_EXPECT_TOKEN_KINDS: Readonly<Record<string, readonly CommandRequirement[]>> = {
-  "plan.bind": [
-    { name: "expect (--coordinator)", ownership: "caller", route: "cli", tokenKind: "workflow", help: "when --coordinator is selected" },
-    { name: "expect (--plan)", ownership: "caller", route: "cli", tokenKind: "plan", help: "when --plan is selected" },
-  ],
-  "session.recover": [
-    { name: "expect (--coordinator)", ownership: "caller", route: "cli", tokenKind: "workflow", help: "for coordinator recovery" },
-    { name: "expect (--plan)", ownership: "caller", route: "cli", tokenKind: "plan", help: "when --plan is selected" },
-  ],
-};
 
 function commandRequirements(definition: CommandDefinition): readonly CommandRequirement[] {
-  const conditionalTokenRequirements = CONDITIONAL_EXPECT_TOKEN_KINDS[definition.id];
-  const tokenKind = conditionalTokenRequirements === undefined && definition.cli.options.some((option) => option.key === "expect")
+  const tokenKind = definition.cli.options.some((option) => option.key === "expect")
     ? EXPECT_TOKEN_KINDS[definition.id]
       ?? (definition.id.startsWith("plan.") ? "plan" : definition.id.startsWith("workflow.") ? "workflow" : "none")
     : undefined;
   const explicit = definition.requirements ?? [];
   const overridden = new Set(explicit.map((entry) => `${entry.route}:${entry.name}`));
   const hinted = [...definition.cli.arguments, ...definition.cli.options.filter((option) => option.defaultValue === undefined && option.context === undefined)]
-    .filter((entry) => !overridden.has(`cli:${entry.key}`) && !(entry.key === "expect" && conditionalTokenRequirements !== undefined))
+    .filter((entry) => !overridden.has(`cli:${entry.key}`))
     .map((entry) => ({
       name: entry.key,
       ownership: "caller" as const,
@@ -119,7 +108,6 @@ function commandRequirements(definition: CommandDefinition): readonly CommandReq
   const requirements: CommandRequirement[] = [
     ...explicit,
     ...hinted,
-    ...(conditionalTokenRequirements ?? []),
   ];
   // Route-verified session facts from the adapters: CLI collects the session
   // selector from argv (with its environment fallback); MCP reads it from the

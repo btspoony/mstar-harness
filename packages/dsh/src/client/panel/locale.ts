@@ -243,7 +243,7 @@ export type PanelKey =
   | 'state.plans'
   | 'state.residuals'
   | 'state.policy'
-  | 'state.leases'
+  | 'state.rowScope'
   | 'state.knowledge'
   | 'state.direction'
   | 'state.none'
@@ -384,7 +384,7 @@ export const zh: LocaleDictOf<'mstar-panel'> = {
   'state.plans': '计划',
   'state.residuals': '未决残留',
   'state.policy': '策略',
-  'state.leases': '租约',
+  'state.rowScope': '行范围',
   'state.knowledge': '知识',
   'state.direction': '方向',
   'state.none': '无',
@@ -520,7 +520,7 @@ export const en: LocaleDictOf<'mstar-panel'> = {
   'state.plans': 'Plans',
   'state.residuals': 'Open residuals',
   'state.policy': 'Policy',
-  'state.leases': 'Leases',
+  'state.rowScope': 'Row scope',
   'state.knowledge': 'Knowledge',
   'state.direction': 'Direction',
   'state.none': 'none',

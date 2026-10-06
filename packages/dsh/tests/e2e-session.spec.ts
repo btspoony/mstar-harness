@@ -173,7 +173,7 @@ const LEASE_PLAN = {
   title: 'E2E lease plan',
   status: 'InProgress',
   execution_lease: {
-    holder: 'e2e-agent',
+    workingBranch: 'e2e-agent',
     claimed_at: '2026-08-08',
     worktree_path: '/dsh-e2e/lease-worktree',
     working_branch: 'feature/e2e-lease',
@@ -491,7 +491,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // the refusal instead of claiming there are no open issues.
     expect(text).toContain('residuals: unavailable — [store.not-initialized]')
     expect(text).toContain('branch: dev-dsh → dev-dsh')
-    expect(text).toContain('leases: none active')
+    expect(text).toContain('row scope: none recorded')
   })
 })
 

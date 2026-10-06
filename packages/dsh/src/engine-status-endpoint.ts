@@ -55,7 +55,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkflowSelectionView } from './types.ts'
-import { verifiedLeaseHolderOf, type HarnessResolver } from './gates/_shared.ts'
+import type { HarnessResolver } from './gates/_shared.ts'
 import { resolveActiveWorkflow, resolveReadWorkflow, type SessionHint } from './gates/workflow-selection.ts'
 import {
   readEngineStatusSnapshot,
@@ -351,11 +351,9 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     // (3) A higher-priority automatic binding wins: refusing the pick keeps
     // lease/cwd attribution authoritative instead of letting the panel
     // overrule it (the picker never appears for a bound session anyway).
-    const holder = this.leaseHolderOf(sid, liveCwd)
     const structural: SessionHint = {
       cwd: liveCwd,
       sessionId: sid,
-      ...(holder === undefined ? {} : { leaseHolder: holder }),
     }
     const automatic = resolveActiveWorkflow(harnessDir, structural)
     if (automatic.kind === 'active' && automatic.workflowId !== wid) return unavailable('binding-conflict')
@@ -399,33 +397,17 @@ export class MstarEngineStatusGateway extends TypertRemoteService {
     cwd: string,
     live: boolean,
   ): WorkflowSelectionView {
-    const holder = live ? this.leaseHolderOf(sessionId, cwd) : undefined
     const stored = readWorkflowSessionBinding(harnessDir, sessionId, cwd)
     const selected = stored.kind === 'ok' ? stored.binding?.selectedWorkflowId : undefined
     const hint: SessionHint = {
       cwd,
       sessionId,
-      ...(holder === undefined ? {} : { leaseHolder: holder }),
       ...(selected === undefined ? {} : { selectedWorkflowId: selected }),
     }
     return resolveReadWorkflow(harnessDir, hint)
   }
 
-  /**
-   * The opaque lease-holder `Agent.id` of the session's live Agent, when the
-   * public agents service resolves one whose own session header identifies the
-   * resolved Session (id AND cwd). Absent/mismatching Agent ⇒ undefined — the
-   * request's `sessionId` is never used as a holder shortcut. The verification
-   * itself is SHARED ({@link verifiedLeaseHolderOf}) with the other
-   * session-level hint builders (the workflow ledger), so a lease-bound
-   * session resolves the same lifecycle on every path.
-   */
-  private leaseHolderOf(sessionId: string, cwd: string): string | undefined {
-    const agents = this.ctx.get('agents') as AgentsView | undefined
-    const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined
-    return verifiedLeaseHolderOf(agent, sessionId, cwd)
-  }
-
+  
   /**
    * Resolve the authoritative cwd of one session: the LIVE session first
    * (`ctx.sessions.get(id)`), then the session controller's persisted
