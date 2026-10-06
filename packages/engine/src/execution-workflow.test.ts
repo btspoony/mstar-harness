@@ -1660,6 +1660,55 @@ describe("execution-coordinator-recovery: \u00A72.3/\u00A74.2 the named recovery
     expect(await workflowFootprint(fixture.context)).toEqual(before);
   });
 
+  test("continuation recovery settles a predecessor's integration claim after the initial recovery binds a replacement", async () => {
+    const fixture = await workflowFixture("recovery-claim-continuation");
+    // The crashed coordinator's own integration claim.
+    plantMergeClaim(fixture.context, { ownerEpoch: fixture.epoch, holder: COORDINATOR_ID });
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_sessions set state = 'revoked' where workflow_id = ? and session_id = ?").run(WORKFLOW_ID, COORDINATOR_ID);
+    });
+    const replacement = trustedCaller(RECOVERY_ID, "coordinator");
+
+    // Step 1: the initial recovery binds the replacement but preserves the
+    // newer-than-stop claim (the claim here postdates the attestation).
+    const initial = await recoverExecutionCoordinator(
+      domainContext(fixture.context, replacement),
+      {
+        expected: workflowTokenOfRow(fixture.context),
+        operationId: "op-recover-initial",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator stopped",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    );
+    expect(initial.replayed).toBe(false);
+    expect(storedMergeClaim(fixture.context)).toMatchObject({ holder: COORDINATOR_ID, status: "held" });
+
+    // Step 2: the CURRENT live coordinator re-invokes recovery naming the same
+    // predecessor. The immutable receipt chain authenticates the caller's
+    // binding, so the continuation settles the claim.
+    const continuation = await recoverExecutionCoordinator(
+      domainContext(fixture.context, replacement),
+      {
+        expected: workflowTokenOfRow(fixture.context),
+        operationId: "op-recover-claim-continuation",
+        priorSessionId: COORDINATOR_ID,
+        reason: "coordinator stopped mid-integration",
+        attestation: attestation([COORDINATOR_ID]),
+      },
+    );
+    expect(continuation.replayed).toBe(false);
+    expect(storedMergeClaim(fixture.context)).toMatchObject({
+      status: "released",
+      prior_holder: COORDINATOR_ID,
+      released_by: RECOVERY_ID,
+    });
+
+    // The current binding is unchanged by the continuation.
+    expect(sessionState(fixture.context, RECOVERY_ID)).toBe("active");
+    expect(sessionState(fixture.context, COORDINATOR_ID)).toBe("revoked");
+  });
+
   test("recovery invalidates the old reference, binds the caller and replays idempotently", async () => {
     const fixture = await workflowFixture("recovery-ok");
     const expected = await liveWorkflowToken(fixture);
