@@ -78,7 +78,7 @@ Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifec
       "execution_lease": {
         "holder": "omp:demo-session",
         "claimed_at": "2026-08-30T02:30:00Z",
-        "worktree_path": ".worktrees/demo-plan",
+        "worktree_path": "/abs/parent/repo.worktrees/demo-plan",
         "working_branch": "feature/demo-plan"
       }
     }
@@ -96,7 +96,7 @@ Register 文档的关闭形态（迁移读入形态）：closed entry 带 `lifec
     "target_branch": "iteration/iter-demo"
   },
   "branch": { "base": "main", "integration": "iteration/iter-demo", "target": "main" },
-  "integration_worktree_path": "/abs/repo/.worktrees/iter-demo-integration",
+  "integration_worktree_path": "/abs/parent/repo.worktrees/iter-demo-integration",
   "legacy_metadata": {},
   "compass_ref": "iterations/iter-demo/delivery-compass.md"
 }
