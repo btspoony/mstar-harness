@@ -1,6 +1,5 @@
 import { executionInputHash, executionInputSelection, type CatalogExecutionPin } from "./coordination.js";
-import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
-import { storedCoordinationViolations } from "./coordination-transitions.js";
+import { isNonEmptyString, isPlainObject, validateRowCoordination } from "./coordination-write.js";
 import { ExecutionError, type ExecutionTransaction } from "./execution-store.js";
 import { validatePlanRow, type WorkflowEntry } from "./status.js";
 import { rowValidationRoute, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
@@ -9,9 +8,11 @@ export type ImportedSessionBinding = { session_id: string; session_file: string;
 export type ImportedPlan = {
   id: string;
   row: Record<string, unknown>;
-  session: ImportedSessionBinding | null;
-  lease: Record<string, unknown> | null;
   pin: CatalogExecutionPin | null;
+  /** A legacy per-plan session binding the stopped workspace still records. */
+  droppedSession: boolean;
+  /** A legacy per-plan execution lease the stopped workspace still records. */
+  droppedLease: boolean;
 };
 export type ImportedWorkflow = {
   entry: WorkflowEntry | null;
@@ -25,13 +26,79 @@ function conflict(message: string): never {
   throw new ExecutionError("execution.migration-conflict", message);
 }
 
-function insertSession(tx: ExecutionTransaction, workflowId: string, role: "coordinator" | "plan-pm", planId: string | null, value: ImportedSessionBinding): void {
-  // §2.2 stopped-workspace import: imported sessions are HISTORICAL facts —
-  // a snapshot proves past binding, never current liveness — so they import
-  // suspended. Continuation goes through public `plan bind` with a fresh
-  // identity (no lease row is imported, so nothing blocks the fresh claim).
-  tx.db.prepare("insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) values (?, ?, ?, ?, ?, 1, 'suspended', ?)")
-    .run(workflowId, role, value.session_id, planId, tx.epoch, value.bound_at);
+/**
+ * §2.2 stopped-workspace import: an imported session is a HISTORICAL fact — a
+ * snapshot proves a past binding, never current liveness — so it imports
+ * suspended. The workflow coordinator is the only session identity the engine
+ * still has; a legacy plan-PM row is dropped by the importer instead of being
+ * resurrected as a seat that no longer exists.
+ */
+function insertCoordinatorSession(tx: ExecutionTransaction, workflowId: string, value: ImportedSessionBinding): void {
+  tx.db
+    .prepare(
+      "insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) " +
+        "values (?, 'coordinator', ?, ?, 1, 'suspended', ?)",
+    )
+    .run(workflowId, value.session_id, tx.epoch, value.bound_at);
+}
+
+/**
+ * Project one stopped workspace's legacy row-coordination block onto the
+ * coordinator-only shape the store now writes.
+ *
+ * A stopped workspace's block may carry the removed plan-PM seat's own
+ * projections: a per-plan `session` binding, a sealed `handoff` (whose QC/QA
+ * verdict and recorded integration result are the business evidence of a
+ * finished attempt) and an `assignment`-sealed `prepared`. Those are MAPPED, not
+ * rejected — the row's real completion evidence is exactly what this import
+ * preserves — and the members the seat owned are dropped. A `returned` handoff
+ * is not a completion, so it projects nothing.
+ */
+function projectLegacyRowCoordination(row: Record<string, unknown>): Record<string, unknown> {
+  const legacy = isPlainObject(row.coordination) ? row.coordination : {};
+  const out: Record<string, unknown> = { revision: 1 };
+  const prepared = legacy.prepared;
+  if (isPlainObject(prepared)) {
+    const qaGate = prepared.qa_gate;
+    const findings = prepared.findings_cleanup;
+    if (
+      isNonEmptyString(prepared.prepared_by) &&
+      isNonEmptyString(prepared.prepared_at) &&
+      (qaGate === "mandatory" || qaGate === "pm-acceptance") &&
+      (findings === "zero-residual" || findings === "allow-residual")
+    ) {
+      out.prepared = { qa_gate: qaGate, findings_cleanup: findings, prepared_by: prepared.prepared_by, prepared_at: prepared.prepared_at };
+    }
+  }
+  if (isPlainObject(legacy.progress)) out.progress = legacy.progress;
+  const handoff = legacy.handoff;
+  if (isPlainObject(handoff) && handoff.state === "completed") {
+    const qc = handoff.qc;
+    const qa = handoff.qa;
+    const integration = handoff.integration;
+    const mapped: Record<string, unknown> = {
+      source_branch: isNonEmptyString(handoff.source_branch) ? handoff.source_branch : "",
+      source_sha: isNonEmptyString(handoff.source_sha) ? handoff.source_sha : null,
+      worktree_path: isNonEmptyString(handoff.worktree_path) ? handoff.worktree_path : null,
+      review_base: isNonEmptyString(handoff.review_base) ? handoff.review_base : null,
+      review_head: isNonEmptyString(handoff.review_head) ? handoff.review_head : null,
+      qc: isPlainObject(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
+      qa: isPlainObject(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      completed_by: isNonEmptyString(handoff.accepted_by) ? handoff.accepted_by : "",
+      completed_at: isNonEmptyString(handoff.completed_at) ? handoff.completed_at : "",
+    };
+    if (isPlainObject(integration)) {
+      mapped.integration = {
+        target_branch: isNonEmptyString(integration.target_branch) ? integration.target_branch : "",
+        worktree_path: isNonEmptyString(integration.worktree_path) ? integration.worktree_path : "",
+        base_sha: isNonEmptyString(integration.base_sha) ? integration.base_sha : "",
+        result_sha: isNonEmptyString(integration.result_sha) ? integration.result_sha : "",
+        verified_at: isNonEmptyString(integration.verified_at) ? integration.verified_at : "",
+      };
+    }
+    out.completion = mapped;
+  }
+  return out;
 }
 
 /** Reused transaction row mapping for file-imported workflow state. */
@@ -46,39 +113,39 @@ export function writeImportedExecutionWorkflow(tx: ExecutionTransaction, source:
   if (snapshot.coordination?.identity_recoveries !== undefined) {
     header.identity_recoveries = snapshot.coordination.identity_recoveries;
   }
-  if (snapshot.coordination?.self_amendments !== undefined) {
-    header.self_amendments = snapshot.coordination.self_amendments;
-  }
+  delete header.self_amendments;
   tx.db.prepare("insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, ?, ?, ?, ?)")
     .run(id, coordinator?.session_id ?? null, JSON.stringify(header), snapshot.started_at, snapshot.updated_at);
   if (entry !== null) tx.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)").run(id, JSON.stringify(entry));
-  if (coordinator !== null) insertSession(tx, id, "coordinator", null, coordinator);
+  if (coordinator !== null) insertCoordinatorSession(tx, id, coordinator);
   const insertPlan = tx.db.prepare("insert into execution_plans(workflow_id, plan_id, revision, ordinal, state_json, coordination_json) values (?, ?, 1, ?, ?, ?)");
   const insertInput = tx.db.prepare("insert into execution_inputs(workflow_id, plan_id, revision, input_json, input_hash, catalog_pin_json) values (?, ?, 1, ?, ?, ?)");
   const routeSnapshot = { ...(snapshot as unknown as WorkflowSnapshot), plans: plans.map((plan) => ({ id: plan.id })) } as WorkflowSnapshot;
-  plans.forEach(({ id: planId, row, session, lease, pin }, ordinal) => {
+  plans.forEach(({ id: planId, row, pin, droppedLease }, ordinal) => {
+    // The state copy is taken BEFORE the projection below, which may promote a
+    // completed legacy attempt to `Done` on the row it is handed.
     const state: Record<string, unknown> = { ...row, id: planId };
-    if (lease !== null && state.status === "InProgress") state.status = "Blocked";
+    const block = projectLegacyRowCoordination(row);
+    // A stopped workspace's in-progress claim is not carried into the new
+    // authority as live work: that is why the row imports as Blocked rather
+    // than apparently being worked on.
+    if (droppedLease && state.status === "InProgress") state.status = "Blocked";
+    if (!isNonEmptyString(state.status) || state.status === "Todo") {
+      const projected = isPlainObject(block.completion) ? "Done" : undefined;
+      if (projected !== undefined) state.status = projected;
+    }
     delete state.coordination;
     delete state.execution_lease;
     const stateGate = validatePlanRow(state);
-    const block: Record<string, unknown> = isPlainObject(row.coordination) ? { ...row.coordination } : {};
-    delete block.revision;
-    delete block.session;
-    const violations = storedCoordinationViolations(block, {
-      revision: 1,
-      route: rowValidationRoute(routeSnapshot, state as never),
-      submitterAssociated: !isPlainObject(block.handoff) || (
-        typeof block.handoff.submitted_by === "string" &&
-        session !== null && session.session_id === block.handoff.submitted_by
-      ),
-      activeSessionBound: session !== null,
-      what: `execution_plans(${id},${planId}).coordination_json`,
-    });
+    if (!stateGate.ok) conflict(`plan ${planId} of workflow ${id} has an invalid stored row (${stateGate.violations.map((v) => v.code).join(", ")}).`);
+    const violations = validateRowCoordination(
+      block,
+      `execution_plans(${id},${planId}).coordination_json`,
+      rowValidationRoute(routeSnapshot, state as never),
+    );
     if (violations.length > 0) conflict(`plan ${planId} of workflow ${id} has malformed coordination data (${violations.map((v) => v.code).join(", ")}).`);
     insertPlan.run(id, planId, ordinal, JSON.stringify(state), JSON.stringify(block));
     insertInput.run(id, planId, JSON.stringify(executionInputSelection(row, planId)), executionInputHash(row, planId), pin === null ? null : JSON.stringify(pin));
-    if (session !== null) insertSession(tx, id, "plan-pm", planId, session);
   });
   const merge = snapshot.integration_merge_lease;
   if (merge !== undefined) {

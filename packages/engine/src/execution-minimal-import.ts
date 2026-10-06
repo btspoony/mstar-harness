@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { readSessionEnvelope, type CoordinationSession } from "./coordination.js";
 import { isNonEmptyString, isPlainObject } from "./coordination-write.js";
-import { validateExecutionLease, withStatusWriteLock } from "./lease.js";
+import { withStatusWriteLock } from "./lease.js";
 import { rowPlanId, validatePlanRow, validateStatusV2, validateWorkflowEntry, type StatusV2Doc, type WorkflowEntry } from "./status.js";
 import { validateWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import { ExecutionError, assertOperationId, suppliedCatalogPin, withExecutionTransaction } from "./execution-store.js";
@@ -56,18 +56,18 @@ function readRegularJson(path: string, label: string): unknown | typeof UNPARSEA
   try { return JSON.parse(bytes.toString("utf8")); } catch { return UNPARSEABLE_JSON; }
 }
 
-function verifyBinding(value: Binding, source: { root: string; dir: string; workflowId: string; role: "coordinator" | "plan-pm"; planId: string | null }): CoordinationSession {
+function verifyBinding(value: Binding, source: { root: string; dir: string; workflowId: string }): CoordinationSession {
   const sessionsDir = join(source.dir, "sessions");
   const path = canonicalPath(value.session_file);
   if (!isPathWithin(canonicalPath(sessionsDir), path) || path === canonicalPath(sessionsDir)) {
-    conflict(`${source.role} binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding, then rerun store upgrade.`);
+    conflict(`coordinator binding ${value.session_id} points outside ${sessionsDir}; move its envelope into that workflow's sessions directory or remove the binding, then rerun store upgrade.`);
   }
   let envelope: CoordinationSession;
   try { envelope = readSessionEnvelope(path); }
-  catch { conflict(`${source.role} session envelope ${path} is malformed; repair the envelope or remove its ${source.role} binding, then rerun store upgrade.`); }
-  if (envelope.workflow_id !== source.workflowId || envelope.session_id !== value.session_id || envelope.role !== source.role ||
-      (source.role === "plan-pm" && envelope.plan_id !== source.planId) || canonicalPath(envelope.harness_root) !== canonicalPath(source.root)) {
-    conflict(`${source.role} binding ${value.session_id} disagrees with envelope ${path}; repair the envelope/binding identity or remove the binding, then rerun store upgrade.`);
+  catch { conflict(`coordinator session envelope ${path} is malformed; repair the envelope or remove its coordinator binding, then rerun store upgrade.`); }
+  if (envelope.workflow_id !== source.workflowId || envelope.session_id !== value.session_id || envelope.role !== "coordinator" ||
+      canonicalPath(envelope.harness_root) !== canonicalPath(source.root)) {
+    conflict(`coordinator binding ${value.session_id} disagrees with envelope ${path}; repair the envelope/binding identity or remove the binding, then rerun store upgrade.`);
   }
   return envelope;
 }
@@ -176,6 +176,13 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
         const envelopeBytes = readSourceBytes(sessionPath, `session envelope for workflow ${entry.id}`);
         let rawEnvelope: unknown;
         try { rawEnvelope = JSON.parse(envelopeBytes.toString("utf8")); } catch { rawEnvelope = null; }
+        if (isPlainObject(rawEnvelope) && rawEnvelope.role === "plan-pm") {
+          // A legacy per-plan PM envelope is a projection of the removed seat.
+          // It is dropped, never verified or resurrected: the stopped
+          // workspace's business rows are what this import preserves.
+          skipped.push({ path: relative(root, sessionPath).split(/[\\/]+/).join("/"), reason: "legacy plan-PM session envelope dropped; the seat was removed" });
+          continue;
+        }
         if (isPlainObject(rawEnvelope) &&
             ((typeof rawEnvelope.workflow_id === "string" && rawEnvelope.workflow_id !== entry.id) ||
              (typeof rawEnvelope.harness_root === "string" && canonicalPath(rawEnvelope.harness_root) !== canonicalPath(root)))) {
@@ -204,15 +211,16 @@ function discover(context: StoreContext): { root: string; rootDoc: StatusV2Doc; 
       planIds.add(id);
       const planRow: Record<string, unknown> = { ...rawPlan, id };
       delete planRow.plan_id;
-      const planSessionValue = isPlainObject(planRow.coordination) ? planRow.coordination.session : undefined;
-      const session = planSessionValue === undefined ? null : binding(planSessionValue);
-      if (planSessionValue !== undefined && session === null) conflict(`plan ${id} of workflow ${entry.id} has a malformed session binding; repair or remove the binding, then rerun store upgrade.`);
-      const lease = isPlainObject(planRow.execution_lease) ? planRow.execution_lease : null;
-      if (lease !== null && !validateExecutionLease(lease).ok) conflict(`plan ${id} of workflow ${entry.id} has an invalid execution lease; repair or remove the lease, then rerun store upgrade.`);
-      if (session !== null) verifyBinding(session, { root, dir, workflowId: entry.id, role: "plan-pm", planId: id });
-      plans.push({ id, row: planRow, session, lease, pin: suppliedCatalogPin(planRow, entry.id, id) });
+      // A legacy per-plan PM binding and a legacy held lease are DROPPED
+      // projections of the removed seat, not preconditions: the stopped
+      // workspace's business row state (status, progress, evidence) imports
+      // unchanged, and a row that was apparently in progress under a claim
+      // nobody now holds imports as Blocked rather than as live work.
+      const droppedSession = isPlainObject(planRow.coordination) && planRow.coordination.session !== undefined;
+      const droppedLease = isPlainObject(planRow.execution_lease);
+      plans.push({ id, row: planRow, pin: suppliedCatalogPin(planRow, entry.id, id), droppedSession, droppedLease });
     }
-    if (coordinator !== null) verifyBinding(coordinator, { root, dir, workflowId: entry.id, role: "coordinator", planId: null });
+    if (coordinator !== null) verifyBinding(coordinator, { root, dir, workflowId: entry.id });
     for (const dirent of readdirSync(dir, { withFileTypes: true })) {
       if (dirent.name === WORKFLOW_SNAPSHOT_FILE || dirent.name === "sessions") continue;
       const path = join(dir, dirent.name);
@@ -263,10 +271,11 @@ export async function importExecutionMinimal(input: { context: StoreContext; ope
         existing.add(row.id);
         imported++;
         for (const plan of row.plans) {
-          if (plan.lease !== null) dispositions.push(`workflow ${row.id} plan ${plan.id}: stale held lease released on import; re-acquire via plan bind`);
+          if (plan.droppedLease) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy per-plan execution lease dropped on import; the row imports as Blocked and the coordinator continues it through ordinary plan operations`);
+          if (plan.droppedSession) dispositions.push(`workflow ${row.id} plan ${plan.id}: legacy plan-PM session binding dropped on import; that seat no longer exists`);
         }
         if (row.snapshot.integration_merge_lease !== undefined) {
-          dispositions.push(`workflow ${row.id}: integration lease released on import; re-claim via plan integration-start`);
+          dispositions.push(`workflow ${row.id}: integration merge lease dropped on import; the coordinator re-establishes serial integration ownership through the ordinary completion operation`);
         }
       }
       const storeAuthority = tx.db.prepare("select authority_state from store_meta where id = 1").get() as { authority_state?: unknown } | undefined;

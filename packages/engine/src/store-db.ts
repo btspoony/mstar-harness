@@ -813,6 +813,8 @@ values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailab
  * plan that does not exist (no dangling lease), one plan-pm identity cannot
  * silently move between plans (session primary key), and at most one ACTIVE
  * coordinator per workflow / one ACTIVE plan-pm per plan can exist at a time.
+ * Migration 9 removes the per-plan-lease and plan-PM half of this; the block
+ * stays verbatim as the recorded history of what version 4 created.
  */
 export const MIGRATION_4_SQL = `
 create table execution_meta(
@@ -990,6 +992,49 @@ alter table provenance add column origin text not null default 'scoped' check (o
 `;
 
 
+/**
+ * Migration 9 — coordinator-only execution sessions, and no per-plan lease.
+ *
+ * The removed plan-PM seat left two storage artefacts behind: per-plan session
+ * rows and per-plan write leases. Neither has a producer any more, and the
+ * coordinator's own exclusion is `BEGIN IMMEDIATE` plus CAS tokens plus the
+ * operation receipts, so this migration deletes the obsolete rows and the
+ * lease table rather than keeping an inert protocol around: a store that still
+ * carried a second seat's identity or a stale held claim would describe an
+ * ownership the engine can no longer act on.
+ *
+ * `execution_sessions` keeps only workflow-scoped coordinator rows, so the
+ * `plan_id` column and the role check that admitted `plan-pm` go with them —
+ * SQLite cannot drop a column's CHECK in place, hence the table rewrite. The
+ * rewrite is inside the migration runner's single `BEGIN IMMEDIATE`, so it is
+ * atomic with the recorded version row; the workflow foreign key and the
+ * ACTIVE-coordinator partial unique index are re-created on the new table.
+ *
+ * Migrations 1–8 stay byte-identical: every applied store keeps its recorded
+ * checksum, and the historical DDL that once created these rows remains
+ * readable provenance rather than a second live authority.
+ */
+export const MIGRATION_9_SQL = `
+delete from execution_sessions where role = 'plan-pm';
+create table execution_sessions_coordinator(
+  workflow_id text not null references execution_workflows(workflow_id),
+  role text not null check (role = 'coordinator'),
+  session_id text not null,
+  epoch integer not null check (epoch > 0),
+  revision integer not null check (revision > 0),
+  state text not null check (state in ('active','suspended','revoked')),
+  bound_at text not null,
+  primary key (workflow_id, role, session_id)
+);
+insert into execution_sessions_coordinator(workflow_id, role, session_id, epoch, revision, state, bound_at)
+  select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions;
+drop table execution_sessions;
+alter table execution_sessions_coordinator rename to execution_sessions;
+create unique index execution_sessions_active_coordinator
+  on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+drop table execution_leases;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1000,16 +1045,22 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
   { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
   { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
+  { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL },
 ];
 
-/** Execution tables created by migration 4 — the executable form of §2.2. */
+/**
+ * Execution tables the migrated schema must carry — the executable form of
+ * §2.2 after migration 9. Migration 4 created `execution_leases`; migration 9
+ * removed it with the plan-PM seat, so it is deliberately absent here: a store
+ * at the current version that still held it would be drift, not a state to
+ * reinterpret.
+ */
 const EXECUTION_TABLE_NAMES = [
   "execution_meta",
   "execution_workflows",
   "execution_registry",
   "execution_plans",
   "execution_sessions",
-  "execution_leases",
   "execution_integration_leases",
   "execution_inputs",
   "execution_operations",
@@ -1192,6 +1243,10 @@ export type StoreContext = { harnessDir: string };
  * Execution-domain authority state (primary spec §2.1). This is its own
  * namespace: `store_meta.authority_state` covers issue/catalog only, so an
  * active issue/catalog store is NOT an active execution authority.
+ *
+ * The execution authority is coordinator-only: migration 9 removed the
+ * plan-PM session rows and the per-plan `execution_leases` table, so nothing
+ * here reads or writes a second seat's identity or a per-plan claim.
  */
 export type ExecutionAuthorityState = "legacy" | "staged" | "active";
 
