@@ -81,11 +81,11 @@ const inputSchema = z.object({
   integrationResultSha: z.string().min(1).optional(),
   expectIssue: z.number().int().nonnegative().optional(),
 });
-const bindInputSchema = inputSchema.omit({ plan: true }).strict();
-const bindOptionKeys = Object.keys(bindInputSchema.shape);
+const bindInputSchema = inputSchema.omit({ plan: true }).extend({ sessionId: z.string().min(1).optional() }).strict();
 type PlanInput = z.infer<typeof inputSchema>;
 
 const optionKeys = Object.keys(inputSchema.shape);
+const bindOptionKeys = optionKeys.filter((key) => key !== "plan");
 class PlanInputError extends Error {}
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
