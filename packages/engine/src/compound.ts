@@ -13,8 +13,8 @@
  *   catalog-completeness query over `store.db`
  *   (state-projection contract §4); the README table is not a register.
  * - mstar-compound-refresh SKILL.md § 产物与操作路径 (scope SSOT): only
- *   `{HARNESS_DIR}/knowledge/**` + `*.md` files, `knowledge/README.md`,
- *   `<repo-root>/CONCEPTS.md` + `{HARNESS_DIR}/status.json`.
+ *   `{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, and
+ *   `<repo-root>/CONCEPTS.md`.
  */
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
@@ -584,8 +584,8 @@ function isFileLikeRoot(root: string): boolean {
 /**
  * Guard an operation path against the allowed root set (compound-refresh
  * scope SSOT: only knowledge/**, knowledge/README.md, and CONCEPTS.md may be
- * written). File-like roots require an exact match;
- * rejected via `resolve()` normalization.
+ * File-like roots require an exact match; `..` traversal out of an allowed
+ * root is rejected after `resolve()` normalization.
  *
  * Limitation (documented): the guard is lexical — `resolve()` never follows
  * symlinks, so a symlink inside an allowed root that points outside is not
@@ -609,7 +609,7 @@ export function scopeGuard(path: string, allowedRoots: readonly string[]): GateR
       violation(
         "medium",
         "compound.scope.outside",
-        `path "${path}" is outside the compound-refresh scope (allowed: ${allowedRoots.join(", ")}) \u2014 compound-refresh operates only on {HARNESS_DIR}/knowledge/**, {HARNESS_DIR}/knowledge/README.md, <repo-root>/CONCEPTS.md, {HARNESS_DIR}/status.json (mstar-compound-refresh SKILL.md \u00a7 \u4ea7\u7269\u4e0e\u64cd\u4f5c\u8def\u5f84)`,
+        `path "${path}" is outside the compound-refresh scope (allowed: ${allowedRoots.join(", ")}) — compound-refresh operates only on {HARNESS_DIR}/knowledge/**, {HARNESS_DIR}/knowledge/README.md, <repo-root>/CONCEPTS.md (mstar-compound-refresh SKILL.md § 产物与操作路径)`,
         "point the operation at one of the allowed paths",
       ),
     ],
