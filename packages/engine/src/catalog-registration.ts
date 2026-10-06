@@ -1180,7 +1180,7 @@ if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.ki
     );
   });
   throw conflictError(
-    `the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity — recover with mstar catalog purge-registration --workflow ${plan.workflowId} --operation ${plan.request.operationId} --expect ${plan.request.expectedCatalogRevision} --actor ${plan.request.actor}.`,
+    `the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity -- recover with mstar catalog purge-registration --workflow ${plan.workflowId} --operation ${plan.request.operationId} --expect ${plan.request.expectedCatalogRevision} --actor ${plan.request.actor}.`,
   );
 }
 if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
