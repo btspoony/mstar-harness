@@ -60,9 +60,9 @@ describe("catalog and roadmap command families", () => {
   });
 
 
-  test("registers exactly the assigned thirteen catalog and roadmap identities", () => {
+  test("registers exactly the assigned fourteen catalog and roadmap identities", () => {
     expect([...Object.keys(catalog), ...Object.keys(roadmap)]).toEqual([
-      "catalog.discover", "catalog.import", "catalog.register", "catalog.update", "catalog.link", "catalog.list", "catalog.show", "catalog.export", "catalog.reconcile",
+      "catalog.discover", "catalog.import", "catalog.register", "catalog.update", "catalog.link", "catalog.list", "catalog.show", "catalog.export", "catalog.reconcile", "catalog.purge-registration",
       "roadmap.import", "roadmap.replace", "roadmap.show", "roadmap.export",
     ]);
   });

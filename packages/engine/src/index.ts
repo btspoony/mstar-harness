@@ -802,8 +802,8 @@ export type {
   CatalogExecutionWorkflow,
   CatalogRegistrationErrorCode,
   CatalogRegistrationState,
-  CatalogRevisions,
   PendingCatalogRegistration,
+  PurgeCatalogRegistrationReceipt,
 } from "./catalog-registration.js";
 export {
   CATALOG_REGISTRATION_JOURNAL_VERSION,
@@ -816,6 +816,7 @@ export {
   registerCatalogExecution,
   registerShippedCatalogExecution,
   resolveCatalogRegistrationState,
+  purgeCatalogRegistration,
 } from "./catalog-registration.js";
 // §7 the ACTIVE registration route: the ONE verb that publishes a reviewed
 // catalog delta together with the execution lifecycle it registers. It is the

@@ -16,24 +16,24 @@ import {
   existsSync as existsSync14,
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync6,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync12,
   readdirSync as readdirSync8,
   statSync as statSync5,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute11, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
+import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute12, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute8, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
 import { dirname as dirname3, join as join3, resolve as resolvePath, sep } from "node:path";
 import { readFileSync as readFileSync3, statSync } from "node:fs";
 import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
 import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
+import { dirname as dirname7, isAbsolute as isAbsolute7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
 import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { basename as basename4, isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
@@ -43,7 +43,7 @@ import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
 import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash14 } from "node:crypto";
-import { readFileSync as readFileSync19 } from "node:fs";
+import { readFileSync as readFileSync20 } from "node:fs";
 import { join as join30 } from "node:path";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
@@ -11173,7 +11173,7 @@ function defaultWorkspaceRoot(startDir) {
 }
 function isAtOrBelow2(dir, root) {
   const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute8(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve8(harnessDir);
@@ -12921,7 +12921,7 @@ function text4(value) {
 function readSource(spec) {
   let content3;
   try {
-    content3 = readFileSync19(spec.absolutePath, "utf8");
+    content3 = readFileSync20(spec.absolutePath, "utf8");
   } catch (error) {
     const code2 = error.code ?? "";
     if (code2 === "ENOENT" || code2 === "ENOTDIR") {
