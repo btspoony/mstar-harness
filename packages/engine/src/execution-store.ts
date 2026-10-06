@@ -2473,6 +2473,22 @@ export function readPlanOperationReplay<T>(
 }
 
 /**
+ * §3.1 the same replay on the READ route, before any write transaction is opened:
+ * the committed receipt of one operation id, or `null` for a first attempt. A
+ * `complete` (or any plan verb) whose external proof is expensive or destructive
+ * to repeat consults this FIRST — a matching operation id whose receipt carries
+ * the same request fingerprint is served without re-running Git or re-hashing
+ * evidence. It is a pure read: no revision, row or receipt changes, and a
+ * mismatched fingerprint still refuses `execution.operation-conflict`.
+ */
+export async function readPlanOperationReplayBeforeProof<T>(
+  context: ExecutionContext,
+  input: { operationId: string; requestHash: string; workflowId: string; planId: string },
+): Promise<ExecutionReceipt<T> | null> {
+  return withExecutionReadTransaction(context, (tx) => readPlanOperationReplay<T>(tx, input));
+}
+
+/**
  * §3.1 the same replay for ANY addressed record: the committed receipt of one
  * operation id, or `null` for a first attempt. `token` names the address the
  * receipt must carry — a plan, a session, the workflow header — so a receipt
@@ -2719,17 +2735,31 @@ export async function bindExecutionSession(
     // (c) the creating identity owns the first bind; a foreign identity never
     // adopts a lifecycle, and adoption is unavailable once any record exists.
     if (header.creatorSessionId !== null && header.creatorSessionId !== bind.sessionId) {
+      // §2.3 the recovery holder is a session THIS STORE records, never the
+      // creator header: a creator that never bound has no row to recover, so the
+      // truthful facts are the rows (possibly none) and, when history exists, the
+      // recorded identity with its own epoch.
+      const recorded = rows[0];
       throw sessionBindRefusal({
         code: "coordination.identity-mismatch",
         detail:
           `workflow ${bind.workflowId} was created by session ${JSON.stringify(header.creatorSessionId)}; the trusted caller is ` +
-          `${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity, or through ` +
-          `recoverExecutionCoordinator naming the recorded holder with stop attestation. Nothing was bound.`,
+          `${JSON.stringify(bind.sessionId)}. A coordinator session binds only through the creating identity` +
+          (recorded === undefined
+            ? `, and this workflow records NO coordinator session row to recover — its supported route is recoverExecutionCoordinator ` +
+              `with priorSessionId: null, a reason and a valid activation attestation`
+            : `, or through recoverExecutionCoordinator naming the recorded coordinator ${JSON.stringify(recorded.ref.sessionId)} ` +
+              `(epoch ${recorded.ref.epoch}) with stop attestation`) +
+          `. Nothing was bound.`,
         workflowId: bind.workflowId,
         sessionId: bind.sessionId,
-        holder: header.creatorSessionId,
-        holderEpoch: tx.epoch,
-        facts: { creator_session_id: header.creatorSessionId, caller_session_id: bind.sessionId },
+        holder: recorded === undefined ? null : recorded.ref.sessionId,
+        holderEpoch: recorded === undefined ? tx.epoch : recorded.ref.epoch,
+        facts: {
+          creator_session_id: header.creatorSessionId,
+          caller_session_id: bind.sessionId,
+          recorded_coordinator_rows: rows.length,
+        },
       });
     }
     if (header.creatorSessionId === null) {
@@ -2737,16 +2767,18 @@ export async function bindExecutionSession(
       // coordinator record means the lifecycle already had a creator, so a
       // creator-less header with records is a recovery case, not an adoption.
       if (rows.length > 0) {
+        const recorded = rows[0]!;
         throw sessionBindRefusal({
           code: "coordination.identity-mismatch",
           detail:
             `workflow ${bind.workflowId} records ${String(rows.length)} coordinator session row(s) while its creator identity is ` +
-            `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator with the recorded holder and its ` +
-            `stop/reload attestation. Nothing was bound.`,
+            `unset, so first-bind adoption is unavailable — use recoverExecutionCoordinator naming the recorded coordinator ` +
+            `${JSON.stringify(recorded.ref.sessionId)} (epoch ${recorded.ref.epoch}) with its stop/reload attestation, or ` +
+            `priorSessionId: null with a valid activation attestation. Nothing was bound.`,
           workflowId: bind.workflowId,
           sessionId: bind.sessionId,
-          holder: rows[0]!.ref.sessionId,
-          holderEpoch: rows[0]!.ref.epoch,
+          holder: recorded.ref.sessionId,
+          holderEpoch: recorded.ref.epoch,
           facts: { coordinator_rows: rows.length },
         });
       }
@@ -2788,16 +2820,24 @@ function sessionBindRefusal(input: {
     currentFacts: [input.detail],
     needed:
       input.holder === null
-        ? `a coordinator binding this identity can hold: bind workflow ${JSON.stringify(input.workflowId)} for a newly created lifecycle`
-        : `the supported coordinator recovery: run recoverExecutionCoordinator naming ${JSON.stringify(input.holder)} (epoch ` +
-          `${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own live reference`,
+        ? `the supported route for a workflow with no recorded coordinator row: recoverExecutionCoordinator with priorSessionId: null, ` +
+          `a non-empty reason and a valid activation attestation, or — while the workflow is still unbound — a bind by the creating identity`
+        : `the supported coordinator recovery: run recoverExecutionCoordinator naming the RECORDED coordinator ` +
+          `${JSON.stringify(input.holder)} (epoch ${input.holderEpoch}) with its stop/reload attestation, or resume that holder's own ` +
+          `live reference while it is current`,
     withheldEffect:
       "the session binding and its revision: authority was withheld, so no row, revision or receipt changed under this operation",
-    availableWork: [
-      `resume the caller's own binding through resumeExecutionSession (it reconstructs the store's current row)`,
-      `run recoverExecutionCoordinator for a stopped prior holder with stop evidence`,
-      "independent operations on other workflows continue",
-    ],
+    availableWork:
+      input.holder === null
+        ? [
+            `run recoverExecutionCoordinator with priorSessionId: null once the workflow needs a new coordinator`,
+            "independent operations on other workflows continue",
+          ]
+        : [
+            `resume the recorded coordinator's own binding through resumeExecutionSession while its row is current`,
+            `run recoverExecutionCoordinator for that recorded holder once its stop/reload is attested`,
+            "independent operations on other workflows continue",
+          ],
   };
   return new ExecutionError("execution.session-unavailable", input.detail, {
     component: problem.component,

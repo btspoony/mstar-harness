@@ -76,6 +76,7 @@ import {
   readExecutionState,
   readLiveSessionIdentities,
   readPlanOperationReplay,
+  readPlanOperationReplayBeforeProof,
   releaseIntegrationMergeLease,
   resolvePlanRead,
   resolveTokenFreshness,
@@ -134,7 +135,7 @@ import {
 } from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
 import type { IntegrationMergeLease } from "./lease.js";
-import type { PlanRow } from "./status.js";
+import { normalizeSeverity, type PlanRow } from "./status.js";
 
 /** The same closed direct-coordinator operation union is used on both routes. */
 export type CoordinationOperation = PlanCoordinationOperation;
@@ -422,21 +423,6 @@ function planRecovery(input: {
 }
 
 /**
- * §4.1 (R6/A09/A12) the sidecar of a served replay: the requested effect is the
- * one the recorded receipt already committed, so the call returns current
- * success without a second commit.
- */
-function replayRecovery(witness: ExecutionPlanWitness, kind: string): RecoveryDetails {
-  return planRecovery({
-    witness,
-    kind,
-    outcome: "already-satisfied",
-    commitState: "committed",
-    resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
-  });
-}
-
-/**
  * §4.1/§4.2 (A11) the refusal of one plan operation whose token is no longer the
  * addressed row's CAS. Unlike a workflow header — whose revision moves when any
  * child changes — a plan row's revision moves only when THAT row changes, so a
@@ -566,8 +552,8 @@ function withExecutionPlanOperation<T>(
   context: ExecutionContext,
   resolved: ResolvedPlanOperation<CoordinationOperation>,
   requestHash: string,
+  preflight: ((witness: ExecutionPlanWitness, tx: ExecutionTransaction) => void) | undefined,
   run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<T>,
-  alreadySatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<T> | undefined,
 ): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
@@ -579,6 +565,20 @@ function withExecutionPlanOperation<T>(
       );
     }
     const witness = readExecutionPlanWitness(tx, read);
+    // §4.1/§4.2 (R6/A09) a committed receipt is served BEFORE any external proof
+    // or evidence hash: an identical retry returns the RECORDED receipt verbatim
+    // — never re-derived, never with a rewritten timestamp — so a cleaned-up
+    // checkout, a moved HEAD or an edited report cannot turn a success into a
+    // failure. The caller's own semantic hash is the whole admission here; a
+    // reused operation id with a different payload still refuses inside the
+    // lookup.
+    const replay = readPlanOperationReplay<T>(tx, {
+      operationId: request.operationId,
+      requestHash,
+      workflowId: witness.workflowId,
+      planId: witness.planId,
+    });
+    if (replay !== null) return replay;
     const freshness = resolveTokenFreshness(
       request.expected,
       {
@@ -590,37 +590,14 @@ function withExecutionPlanOperation<T>(
       },
       { target: { workflowId: witness.workflowId, planId: witness.planId } },
     );
-    const replay = readPlanOperationReplay<T>(tx, {
-      operationId: request.operationId,
-      requestHash,
-      workflowId: witness.workflowId,
-      planId: witness.planId,
-    });
-    if (replay !== null) {
-      const { operationRecovery, ...recorded } = replay;
-      return { ...recorded, recovery: { ...replayRecovery(witness, request.operation.kind) } };
-    }
     assertRunningWorkflow(witness);
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
-    const satisfiedReceipt = alreadySatisfied?.(witness, tx);
-    if (satisfiedReceipt !== undefined) {
-      const recovery = planRecovery({
-        witness,
-        kind: request.operation.kind,
-        outcome: "already-satisfied",
-        commitState: "none",
-        resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
-      });
-      writePlanOperationReceipt(tx, {
-        operationId: request.operationId,
-        requestHash,
-        workflowId: witness.workflowId,
-        planId: witness.planId,
-        receipt: { ...satisfiedReceipt, operationRecovery: recovery },
-        now: new Date().toISOString(),
-      });
-      return { ...satisfiedReceipt, operationId: request.operationId, replayed: false, recovery };
-    }
+    // §4.1 the race seam: it observes the FIRST attempt after the plan token is
+    // admitted and BEFORE any external proof is captured, so a regression can move
+    // the workflow header, the Git checkout or the issue store in the window the
+    // preflight below and the committing body must notice.
+    completeWitnessGapForTest?.();
+    preflight?.(witness, tx);
     const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
     // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
@@ -680,13 +657,13 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
  * recorded configuration, including while the row is active; the row's status,
  * progress and completion are never reset.
  *
- * §4.1 a SUPPLIED scope is validated against the ACTUAL filesystem and Git — the
- * requested checkout must be a readable, clean Git worktree on the requested
- * branch — never merely stored as a string and never compared to an old value
- * (a mistaken prior config stays correctable). Admission (a `Done` row refuses)
- * applies to an equal configuration too, so a no-op on a terminal row is refused
- * rather than reported as satisfied. Only same-operation-id request-hash
- * conflicts govern replay; document digests remain provenance.
+ * §4.1 the preflight validates the EFFECTIVE scope — the row's recorded
+ * worktree/branch with the supplied members applied — against the actual
+ * filesystem and Git, so a branch-only or path-only edit is checked too and a
+ * `Done` row is refused before the transaction (as is the already-equal no-op).
+ * An equal configuration whose requested checkout is genuinely unchanged is
+ * `already-satisfied`: it writes no receipt and no byte, so its result is
+ * resolved from its own read rather than from a fabricated identity.
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
@@ -696,63 +673,105 @@ export async function prepareExecutionPlan(
   const operation = resolved.call.operation;
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
   const inputs = readPrepareInputs(resolved.call);
-  // §4.1 the actual-checkout validation runs BEFORE SQLite ownership: it spawns
-  // Git and stats the filesystem, which no transaction body may do.
-  if (inputs.config.worktreePath !== undefined) {
-    validateSuppliedCheckout(inputs.config.worktreePath, inputs.config.workingBranch, resolved.read.planId);
-  }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  const { planId, workflowId } = resolved.read;
-  return withExecutionPlanOperation(context, resolved, requestHash, (witness, tx, at) => {
-    const plan = witness.view.plan as PlanRow;
-    assertPrepareAdmission({ planId, row: plan });
-    assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), workflowId);
-    const sealed = readExecutionSealedInput(tx, workflowId, planId);
-    if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
-      throw new ExecutionPinConflictError(
-        `plan ${planId}'s recorded catalog identity belongs to another store`,
-        { workflow_id: workflowId, plan_id: planId, store_id: tx.storeId },
-      );
-    }
-    const pin = selectCatalogPinOn(catalogPinFactsOn(tx.db, tx.storeId, workflowId, planId), sealed.inputHash);
-    const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
-    if (inputs.config.worktreePath !== undefined) metadata.worktree_path = canonicalTarget(inputs.config.worktreePath);
-    if (inputs.config.workingBranch !== undefined) metadata.working_branch = inputs.config.workingBranch;
-    const prepared: PreparedCoordination = {
-      qa_gate: inputs.config.qaGate,
-      findings_cleanup: inputs.config.findingsCleanup,
-      prepared_by: witness.session.sessionId,
-      prepared_at: at,
-    };
-    writeExecutionInputPin(tx, { workflowId, planId, pin });
-    writeCoordinationBlock(tx, witness, {
-      block: { ...storedCoordinationOf(witness.view), prepared },
-      state: { ...(witness.view.plan as Record<string, unknown>), metadata },
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  }, (witness) => {
-    // §4.1 an already-equal configuration is `already-satisfied`: the recorded
-    // block and the row metadata already say what this prepare asks for, so no
-    // byte is rewritten and the row's CAS does not advance for a no-op. ADMISSION
-    // still applies here — the no-op path never reaches the body, so a `Done` row
-    // is refused rather than reported satisfied.
-    assertPrepareAdmission({ planId, row: witness.view.plan as PlanRow });
-    const prior = witness.view.coordination?.prepared;
-    if (prior === undefined) return undefined;
-    if (prior.qa_gate !== inputs.config.qaGate || prior.findings_cleanup !== inputs.config.findingsCleanup) return undefined;
-    const metadata = isPlainObject((witness.view.plan as unknown as Record<string, unknown>).metadata)
-      ? ((witness.view.plan as unknown as Record<string, unknown>).metadata as Record<string, unknown>)
-      : {};
-    if (inputs.config.worktreePath !== undefined && canonicalTarget(inputs.config.worktreePath) !== metadata.worktree_path) {
-      return undefined;
-    }
-    if (inputs.config.workingBranch !== undefined && inputs.config.workingBranch !== metadata.working_branch) {
-      return undefined;
-    }
-    return { data: witness.view, token: witness.token, storeId: "", epoch: 0 };
+  return withExecutionPlanOperation<ExecutionPlanView>(
+    context,
+    resolved,
+    requestHash,
+    (witness) => {
+      // §4.1 admission and actual-scope validation both run on the first attempt,
+      // before any write. `validateEffectiveScope` resolves the row's recorded
+      // scope, applies the supplied members and checks THAT against Git — a
+      // mistaken prior value stays revisable, and a supplied value is never an
+      // exemption from the check.
+      assertPrepareAdmission({ planId: witness.planId, row: witness.view.plan as PlanRow });
+      const effective = effectiveScope(witness.view, inputs.config);
+      if (effective.worktreePath !== undefined) {
+        validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
+      }
+    },
+    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at),
+  );
+}
+
+/**
+ * The scope one `prepare` actually asks for: the row's recorded worktree/branch
+ * with the supplied members applied. Omitted members fall back to the row, so
+ * `workingBranch`-only and `worktreePath`-only edits are validated against the
+ * same pair they commit.
+ */
+function effectiveScope(
+  view: ExecutionPlanView,
+  config: PlanPrepareConfig,
+): { worktreePath: string | undefined; workingBranch: string | undefined } {
+  const metadata = isPlainObject((view.plan as unknown as Record<string, unknown>).metadata)
+    ? ((view.plan as unknown as Record<string, unknown>).metadata as Record<string, unknown>)
+    : {};
+  const recordedWorktree = isNonEmptyString(metadata.worktree_path) ? canonicalTarget(metadata.worktree_path) : undefined;
+  const recordedBranch = isNonEmptyString(metadata.working_branch) ? metadata.working_branch : undefined;
+  return {
+    worktreePath: config.worktreePath === undefined ? recordedWorktree : canonicalTarget(config.worktreePath),
+    workingBranch: config.workingBranch ?? recordedBranch,
+  };
+}
+
+/** The writing half of `prepare`, once the preflight admitted it. */
+function writePreparedConfig(
+  context: ExecutionContext,
+  read: ResolvedPlanRead,
+  inputs: PreparedInputs,
+  witness: ExecutionPlanWitness,
+  tx: ExecutionTransaction,
+  at: string,
+): ExecutionRead<ExecutionPlanView> {
+  const { planId, workflowId } = read;
+  const plan = witness.view.plan as PlanRow;
+  const prior = witness.view.coordination?.prepared;
+  const storedMetadata = isPlainObject(plan.metadata) ? plan.metadata : {};
+  const nextWorktree = inputs.config.worktreePath === undefined
+    ? (isNonEmptyString(storedMetadata.worktree_path) ? canonicalTarget(storedMetadata.worktree_path) : undefined)
+    : canonicalTarget(inputs.config.worktreePath);
+  const nextBranch = inputs.config.workingBranch ??
+    (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
+  const equal =
+    prior !== undefined &&
+    prior.qa_gate === inputs.config.qaGate &&
+    prior.findings_cleanup === inputs.config.findingsCleanup &&
+    nextWorktree === (isNonEmptyString(storedMetadata.worktree_path) ? canonicalTarget(storedMetadata.worktree_path) : undefined) &&
+    nextBranch === (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
+  if (equal) {
+    // §4.1 an already-equal configuration with an unchanged checkout is
+    // `already-satisfied`: NO row byte, NO revision advance and NO receipt is
+    // written, so the result is a plain read of the row this transaction holds —
+    // never a fabricated identity.
+    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
+  }
+  assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), workflowId);
+  const sealed = readExecutionSealedInput(tx, workflowId, planId);
+  if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
+    throw new ExecutionPinConflictError(
+      `plan ${planId}'s recorded catalog identity belongs to another store`,
+      { workflow_id: workflowId, plan_id: planId, store_id: tx.storeId },
+    );
+  }
+  const pin = selectCatalogPinOn(catalogPinFactsOn(tx.db, tx.storeId, workflowId, planId), sealed.inputHash);
+  const metadata: Record<string, unknown> = { ...storedMetadata };
+  if (nextWorktree !== undefined) metadata.worktree_path = nextWorktree;
+  if (nextBranch !== undefined) metadata.working_branch = nextBranch;
+  const prepared: PreparedCoordination = {
+    qa_gate: inputs.config.qaGate,
+    findings_cleanup: inputs.config.findingsCleanup,
+    prepared_by: witness.session.sessionId,
+    prepared_at: at,
+  };
+  writeExecutionInputPin(tx, { workflowId, planId, pin });
+  writeCoordinationBlock(tx, witness, {
+    block: { ...storedCoordinationOf(witness.view), prepared },
+    state: { ...(witness.view.plan as Record<string, unknown>), metadata },
+    what: `plan ${planId} coordination`,
   });
+  const committed = readExecutionPlanWitness(tx, read);
+  return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
 }
 
 /**
@@ -847,7 +866,7 @@ export async function progressExecutionPlan(
   // §D the areas a plan's own evidence may live in: derived from the harness
   // root this store lives in, never from a caller-supplied path.
   const planAreas = planAreaRoots(controlHarnessRoot(context), planId);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
     const state = witness.view.plan as Record<string, unknown>;
     const plan = state as PlanRow;
     requireProgressStatus(plan, progress.status, planId);
@@ -981,7 +1000,7 @@ export async function residualAddExecutionPlan(
   }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
     assertRunningWorkflow(witness);
     assertIssueStoreActive(tx.db);
     const projectId = projectBucketOf(witnessSnapshot(witness));
@@ -1053,7 +1072,7 @@ export async function residualCloseExecutionPlan(
   assertClosureAuthority(operation.disposition, operation.evidence);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
     assertRunningWorkflow(witness);
     assertIssueStoreActive(tx.db);
     assertIssueLinkedToPlanOn(tx.db, operation.issueId, witness.planId);
@@ -1438,7 +1457,6 @@ function requireCompletableStatus(row: PlanRow, planId: string): void {
  */
 function assertFindingsClosedOn(
   tx: ExecutionTransaction,
-  workflowId: string,
   planId: string,
   prepared: PreparedCoordination,
   what: string,
@@ -1525,13 +1543,35 @@ export async function completeExecutionPlan(
   const operation = resolved.call.operation;
   assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "evidence", "integration"], "complete operation");
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  // §4.1 the external half: read the workflow snapshot and capture the Git
-  // witnesses BEFORE SQLite ownership. `completeWitnessGap` then observes the gap
-  // between this captured proof and the commit, where the transaction re-validates
-  // every witness and re-derives the route/policy pair from its own snapshot.
+  // §4.1/§4.2 (R6/A09/A12) RECEIPT-FIRST: a committed receipt for this exact
+  // semantic request is served on the READ route, before any Git command or
+  // evidence hash. An identical retry therefore never re-runs Git and never
+  // fails because the committed checkout, HEAD or report moved in the meantime.
+  const replayed = await readPlanOperationReplayBeforeProof<ExecutionPlanView>(context, {
+    operationId: resolved.call.operationId,
+    requestHash,
+    workflowId: resolved.read.workflowId,
+    planId: resolved.read.planId,
+  });
+  if (replayed !== null) return replayed;
+  // §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot and
+  // capture the Git witnesses before SQLite ownership. `completeWitnessGap`
+  // observes the gap between this captured proof and the commit, where the frame
+  // re-validates every witness, re-derives the route/policy pair from its own
+  // snapshot and re-checks the authoritative issues.
   const witnesses = await captureCompletionWitnesses(context, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) =>
-    completeInTransaction(witness, tx, at, resolved.read, operation, witnesses),
+  return withExecutionPlanOperation<ExecutionPlanView>(
+    context,
+    resolved,
+    requestHash,
+    () => {
+      // §4.1 the commit-boundary re-check: every Git witness captured before the
+      // race seam is re-read here, inside the write transaction, so a checkout,
+      // ref or HEAD that moved in the gap refuses instead of committing a stale
+      // proof.
+      for (const captured of witnesses.git) revalidateGitProofWitness(captured);
+    },
+    (witness, tx, at) => completeInTransaction(witness, tx, at, resolved.read, operation),
   );
 }
 
@@ -1551,7 +1591,7 @@ async function captureCompletionWitnesses(
   read: ResolvedPlanRead,
   operation: CompleteOperation,
 ): Promise<CompletionWitnesses> {
-  const before = await readExecutionPlan(context, read.workflowId, read.planId);
+  const before = await readExecutionPlan(context, read.planId);
   const snapshot = await readWorkflowSnapshot(context, read.workflowId);
   const route = deliveryRouteOf(snapshot);
   if (route === "integration" && operation.integration === undefined) {
@@ -1602,7 +1642,6 @@ function completeInTransaction(
   at: string,
   read: ResolvedPlanRead,
   operation: CompleteOperation,
-  witnesses: CompletionWitnesses,
 ): ExecutionRead<ExecutionPlanView> {
   const planId = witness.planId;
   // §E admission: the reviewed state is already recorded (`InReview`) or the one
@@ -1680,14 +1719,13 @@ function completeInTransaction(
     // own claim for this plan and source. A live foreign holder refuses with the
     // ordinary recovery route; a claim left by a stopped owner is settled by
     // `releaseStoppedMergeClaim`, never silently here.
-    requireOwnMergeClaim(witness, planId, scope!.workingBranch);
+    requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch);
   }
-  // §4.1 re-validate every preflight Git witness, then the authoritative findings
-  // gate on THIS transaction's handle: a checkout, ref or issue moved after the
-  // preflight refuses instead of committing a stale proof or decision.
-  for (const witness of witnesses.git) revalidateGitProofWitness(witness);
-  completeWitnessGapForTest?.();
-  assertFindingsClosedOn(tx, witness.workflowId, planId, prepared, "complete");
+  // §4.1 the authoritative findings gate on THIS transaction's handle: an issue
+  // captured after the preflight refuses the completion instead of being judged
+  // against a stale list. (The Git witnesses were already re-validated by the
+  // frame's commit-boundary preflight, which runs after the race seam.)
+  assertFindingsClosedOn(tx, planId, prepared, "complete");
   applyCompletion({ tx, witness, planId, record, scope, at, what: `plan ${planId} coordination` });
   const settled = readExecutionPlanWitness(tx, read);
   return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
@@ -1702,28 +1740,45 @@ function completeInTransaction(
  * the close's own `releaseStoppedMergeClaim`, so it refuses here rather than
  * being silently dropped by a row completion.
  */
-function requireOwnMergeClaim(witness: ExecutionPlanWitness, planId: string, sourceBranch: string): void {
+function requireOwnMergeClaim(
+  tx: ExecutionTransaction,
+  witness: ExecutionPlanWitness,
+  planId: string,
+  sourceBranch: string,
+  targetBranch: string,
+): void {
   const lease = witness.view.integrationLease;
   if (lease === null) return;
-  if (lease.plan_id !== planId || lease.source_branch !== sourceBranch) {
+  if (lease.plan_id !== planId || lease.source_branch !== sourceBranch || lease.target_branch !== targetBranch) {
     throw new CoordinationError(
       "coordination.merge-lease-foreign",
-      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt ` +
-        `(${planId} source ${sourceBranch}) — a foreign claim is never reused or released`,
+      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
+        `not this attempt (${planId} source ${sourceBranch} target ${targetBranch}) — a foreign claim is never reused or released`,
       {
         plan_id: planId,
         holder_plan_id: lease.plan_id,
         holder_source_branch: lease.source_branch,
+        holder_target_branch: lease.target_branch,
         source_branch: sourceBranch,
+        target_branch: targetBranch,
       },
     );
   }
   if (lease.holder === witness.session.sessionId) return;
+  if (readLiveSessionIdentities(tx, witness.workflowId).has(lease.holder)) {
+    throw new CoordinationError(
+      "coordination.identity-mismatch",
+      `plan ${planId} merge lease is held by coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
+        `${JSON.stringify(witness.session.sessionId)} — resume that holder's own binding, or run recoverExecutionCoordinator ` +
+        `naming it with stop attestation before this completion may release the claim`,
+      { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
+    );
+  }
   throw new CoordinationError(
-    "coordination.identity-mismatch",
-    `plan ${planId} merge lease is held by coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
-      `${JSON.stringify(witness.session.sessionId)} — resume that holder's own binding, or run recoverExecutionCoordinator ` +
-      `naming it with stop attestation before this completion may release the claim`,
+    "coordination.merge-lease-stopped-owner",
+    `plan ${planId} merge lease is held by stopped coordinator ${JSON.stringify(lease.holder)}, whose session is not active at ` +
+      `this epoch — a row completion does not take over a stopped owner's claim; a terminal close settles it (or ` +
+      `recoverExecutionCoordinator reactivates the holder) before this row completes`,
     { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
   );
 }
