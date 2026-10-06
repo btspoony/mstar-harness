@@ -1545,6 +1545,13 @@ export async function readPlanCoordination(
   const rootResolution = resolveIntentRoot({ cwd, controlRoot }, { root: anchor.harnessRoot, source: "session.envelope" });
   if (!rootResolution.ok) refuseResolution(rootResolution.problem, rootResolution.resolvedFrom);
   const harnessRoot = rootResolution.root;
+  if (harnessRoot !== anchor.harnessRoot) {
+    throw new CoordinationError(
+      "coordination.scope-mismatch",
+      `selected control root ${harnessRoot} does not match this coordinator envelope's root ${anchor.harnessRoot}; retry plan show with --harness ${JSON.stringify(anchor.harnessRoot)}, or use a coordinator envelope bound to the requested root`,
+      { expected: anchor.harnessRoot, actual: harnessRoot },
+    );
+  }
   localStore(harnessRoot);
   const snapshotPath = snapshotPathOf(harnessRoot, session.workflow_id);
   assertSnapshotPath(harnessRoot, session.workflow_id, snapshotPath);
