@@ -1704,6 +1704,20 @@ export async function recoverExecutionCoordinator(
       epoch: tx.epoch,
       now,
     });
+    // A crashed coordinator can leave its OWN integration merge claim behind. The
+    // recovery already authenticated the exact named prior holder against live
+    // stop evidence and revoked that holder above, so its claim is safe to
+    // settle — and only a claim whose holder IS that named prior holder is
+    // touched. A LIVE holder's claim, the current caller's own claim, and any
+    // other session's claim stay exactly where they are; `releaseStoppedMergeClaim`
+    // re-checks liveness at this instant and is a no-op for them.
+    if (priorSessionId !== null && priorSessionId !== caller.sessionId) {
+      const graph = readExecutionStateGraph(tx);
+      const claim = graph.data.workflows.find((workflow) => workflow.state.id === workflowId)?.integrationLease ?? null;
+      if (claim !== null && claim.holder === priorSessionId) {
+        releaseStoppedMergeClaim(tx, { workflowId, claim, releasedBy: caller.sessionId, at: now });
+      }
+    }
     advanceWorkflowHeaderRevision(tx, { workflowId, now });
     const receipt: ExecutionRead<ExecutionSessionRef> = {
       data: {
