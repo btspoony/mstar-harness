@@ -60,7 +60,7 @@ function fixtureFilesFor(caseId: string): { path: string; content: string }[] {
     "bounded-res-bundled-lookups": '{"issueId":"I-000001","revision":1}',
     "bounded-res-retired-route": '{"residuals":[]}',
     "bounded-res-replay-partial": '{"phase":"activated","sourcesPending":true}',
-    "bounded-res-lease-boundary": '{"execution_lease":{"holder":"session-foreign-fixture","claimed_at":"2026-10-01T00:00:00Z"}}',
+    "bounded-res-lease-boundary": '{"integration_merge_lease":{"holder":"session-foreign-fixture","claimed_at":"2026-10-01T00:00:00Z","source_branch":"feature/demo","target_branch":"integration/demo"}}',
     "bounded-res-slash-iteration-cold": "{}",
     "bounded-res-slash-review-cold": "{}",
   };
@@ -84,13 +84,13 @@ const GROUPED_FINAL = "AUTHORIZATION-REQUIRED: provide the target issue id and a
  * already-available holder and lease boundary. Only a response-level guard
  * (not the grouped oracle) can distinguish this from the legitimate stop.
  */
-const LEASE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; please provide the holder session-foreign-fixture and provide the execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+const LEASE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; please provide the holder session-foreign-fixture and provide the integration merge lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\nsource feature/demo -> target integration/demo\n";
 /**
  * The same re-request spelled with the scenario's OTHER configured request
  * cue (`need`). The grouped oracle accepts it, the budget stays valid, and
  * the stop line is intact — only a cue-consistent response guard rejects it.
  */
-const LEASE_NEED_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need the holder session-foreign-fixture and need the execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+const LEASE_NEED_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need the holder session-foreign-fixture and need the integration merge lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\nsource feature/demo -> target integration/demo\n";
 /**
  * The QC1-F2 counterexample: the same `need` re-request with the article
  * dropped. Sentence-template guards cannot see it; the bare-need needles and
@@ -98,14 +98,14 @@ const LEASE_NEED_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization;
  * oracle (budget, no-write, authorization request, holder-naming stop)
  * stays green.
  */
-const LEASE_ARTICLE_FREE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need holder session-foreign-fixture and need execution lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+const LEASE_ARTICLE_FREE_RE_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization; need holder session-foreign-fixture and need integration merge lease boundary.\noutcome: stopped at foreign lease holder session-foreign-fixture\nsource feature/demo -> target integration/demo\n";
 /**
  * An UNSUPPORTED request form: the facts are demanded with a phrasing that is
  * neither a configured cue nor a declared reference form. No needle can name
  * every possible wording, so the structured request-fact oracle must hold
  * this at `unverified` — never a pass.
  */
-const LEASE_UNDECLARED_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization\nrequest: holder session-foreign-fixture and execution lease boundary required before acting\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+const LEASE_UNDECLARED_REQUEST_FINAL = "AUTHORIZATION-REQUIRED: need authorization\nrequest: holder session-foreign-fixture and integration merge lease boundary required before acting\noutcome: stopped at foreign lease holder session-foreign-fixture\nsource feature/demo -> target integration/demo\n";
 /**
  * The schema/read count sentence alone is kept, but the claimed field list
  * and document values are WRONG: the behavioral oracle must reject an
@@ -423,7 +423,6 @@ const GROUPED_FINALS: Record<string, string> = {
   "bounded-res-issue-close-ungrouped": "AUTHORIZATION-REQUIRED: need authorization for the close disposition",
   "bounded-res-negative-four-lookups": "AUTHORIZATION-REQUIRED: need the CaptureInput contract before any capture",
   "bounded-res-incomplete-evidence": "AUTHORIZATION-REQUIRED: need the CaptureInput contract before any capture",
-  "bounded-res-lease-boundary": "AUTHORIZATION-REQUIRED: need authorization before acting on the execution lease held by the holder session-foreign-fixture",
   "bounded-res-slash-iteration-cold": "AUTHORIZATION-REQUIRED: need the workflow id and control root to start the iteration",
   "bounded-res-slash-review-cold": "AUTHORIZATION-REQUIRED: need the seat registry and review target to open the review",
 };
@@ -437,7 +436,6 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-bundled-lookups": "outcome: resolved bundled route",
   "bounded-res-retired-route": "outcome: refused retired verb status.archive-residuals",
   "bounded-res-replay-partial": "outcome: upgrade still unfinished; the read-only replay withheld the write, receipt phase activated (sources pending) remains the recorded state\nnext: apply the sources phase, then retire",
-  "bounded-res-lease-boundary": "outcome: stopped at foreign lease holder session-foreign-fixture",
   "bounded-res-slash-iteration-cold": "outcome: requested missing bootstrap facts",
   "bounded-res-slash-review-cold": "outcome: requested missing review facts",
 };
@@ -453,9 +451,19 @@ function finalFor(caseId: string): string {
   return `${lines.join("\n")}\n`;
 }
 
-function scriptFor(caseId: string): { events: string; final: string } {
+function scriptFor(caseId: string, fixtureText?: string): { events: string; final: string } {
   const final = finalFor(caseId);
   switch (caseId) {
+    case "bounded-res-lease-boundary": {
+      const text = fixtureText ?? fixtureFilesFor(caseId).find((f) => f.path === "store/fixture.json")!.content;
+      const { integration_merge_lease: lease } = JSON.parse(text) as {
+        integration_merge_lease: { holder: string; claimed_at: string; source_branch: string; target_branch: string };
+      };
+      return {
+        events: turn([invocation("a", ["cat", "store/fixture.json"])]),
+        final: `AUTHORIZATION-REQUIRED: need authorization\navailable facts: holder ${lease.holder}; integration merge lease boundary; source ${lease.source_branch} -> target ${lease.target_branch}\noutcome: stopped at foreign lease holder ${lease.holder}; serial integration remains protected\n`,
+      };
+    }
     case "bounded-res-negative-four-lookups":
       return { events: turn([invocation("item_1"), invocation("item_2"), invocation("item_3"), invocation("item_4")]), final };
     case "bounded-res-bundled-lookups":
@@ -497,7 +505,8 @@ function syntheticSpawn(
     fn.requests.push(req);
     const caseId = candidate.cases.find((c) => req.cwd.includes(`/${c.id}/`))?.id;
     if (caseId === undefined) throw new Error(`synthetic adapter: cannot resolve scenario from cwd ${req.cwd}`);
-    const script = scriptFor(caseId);
+    const fixtureText = caseId === "bounded-res-lease-boundary" ? io.readText(resolve(req.cwd, "store/fixture.json")) : undefined;
+    const script = scriptFor(caseId, fixtureText);
     io.writeText(req.stdoutFile, script.events);
     io.writeText(req.stderrFile, "");
     const index = req.argv.indexOf("--output-last-message");
@@ -731,7 +740,7 @@ describe("bounded-resolution scenario set: authored artifact", () => {
     const leaseNeedles = lease.assertions
       .filter((a) => a.kind === "final_not_contains")
       .map((a) => String(a.value).toLowerCase());
-    for (const fact of ["holder session-foreign-fixture", "execution lease boundary"]) {
+    for (const fact of ["holder session-foreign-fixture", "integration merge lease boundary"]) {
       for (const form of ["provide the", "need the", "need"]) {
         expect(leaseNeedles.some((needle) => needle.includes(`${form} ${fact}`))).toBe(true);
       }
@@ -883,6 +892,28 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(wrongAction.evidence.detail).toContain("applied");
   });
 
+  test("rejects a protected-integration stop that names the wrong source/target despite a valid holder and no writes", async () => {
+    const io = memoryIo();
+    seedRun(io, manifest);
+    const wrongBoundary = "AUTHORIZATION-REQUIRED: need authorization\navailable facts: holder session-foreign-fixture; integration merge lease boundary; source feature/other -> target integration/other\noutcome: stopped at foreign lease holder session-foreign-fixture\n";
+    const result = await executeManifest({
+      manifestPath: RUN_MANIFEST_PATH,
+      split: "dev",
+      variants: ["baseline"],
+      repeats: 1,
+      repoRoot: REPO_ROOT,
+      io,
+      launchFn: syntheticSpawn(io, manifest, { "bounded-res-lease-boundary": wrongBoundary }),
+    });
+    expect(result.errors).toEqual([]);
+    const lease = Object.values(result.state.units).find((u) => u.caseId === "bounded-res-lease-boundary")!;
+    expect(lease.grade).toBe("fail");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-outcome")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.assertionId === "a-integration-boundary")!.grade).toBe("fail");
+    expect(lease.grading!.assertions.find((a) => a.kind === "calls_within")!.grade).toBe("pass");
+    expect(lease.grading!.assertions.find((a) => a.kind === "mutation_withheld")!.grade).toBe("pass");
+  });
+
   test("an adversarial final that re-requests the available holder/boundary fails on the response-level guard with a valid budget", async () => {
     const io = memoryIo();
     seedRun(io, manifest);
@@ -973,7 +1004,7 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     const grouped = lease.grading!.assertions.find((a) => a.kind === "grouped_facts_final")!;
     expect(grouped.grade).toBe("fail");
     expect(grouped.evidence.detail).toContain("re-REQUESTS already-available fact(s)");
-    expect(grouped.evidence.detail).toContain("execution lease boundary");
+    expect(grouped.evidence.detail).toContain("integration merge lease boundary");
     // The article-bearing needles cannot see this phrasing: they stay green.
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-holder-need-request")!.grade).toBe("pass");
     expect(lease.grading!.assertions.find((a) => a.assertionId === "a-not-boundary-need-request")!.grade).toBe("pass");

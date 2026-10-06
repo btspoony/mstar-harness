@@ -1258,21 +1258,21 @@
     },
     {
       "id": "phase2-owned-and-capacity",
-      "prompt": "iteration Phase 2：task B 已有 owner 并在运行；一个待启动的 primary 占满最后一个 plan-primary 槽位；本机 native background task 槽位仍空闲。",
+      "prompt": "One Phase-2 coordinator has B owned/running, independent ready work and native leaf capacity. Old terminal input names an extra-primary slot. Schedule without duplicate B or deleted primary-capacity machinery.",
       "expected_route": [
         "@project-manager"
       ],
       "must_have_artifacts": [
         "Context Loaded declaration",
         "no duplicate dispatch for owned B",
-        "no additional primary while the pending launch fills the last slot",
+        "no extra-primary launch/slot/settings or per-row PM",
         "independent native task work considered and started when ready",
-        "capacity reason recorded (`capacity-changed` / `capacity`), not a duplicate work unit"
+        "real native capacity/ownership reason recorded, no invented primary counter"
       ],
       "hard_fail_if": [
         "missing Context Loaded declaration",
         "re-dispatches or duplicates B's owned/running work",
-        "starts another primary beyond the available slot",
+        "starts another primary or uses deleted primary-slot capacity",
         "treats pane idle, terminal label or lease age as ownership evidence",
         "manufactures work to stay busy",
         "assignment uses non-English field keys"
