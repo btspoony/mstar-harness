@@ -15,7 +15,7 @@ Knowledge documents in `{KNOWLEDGE_DIR}` age. Code changes, conventions evolve, 
 
 ## 产物与操作路径
 
-**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 `mstar catalog link`，不写 status/snapshot metadata（载体决策待定：issue I-000370）。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
+**SSOT**: `mstar-conventions/references/artifact-storage-paths.md`。本 skill 仅操作 `{HARNESS_DIR}/knowledge/**/*.md` + `{HARNESS_DIR}/knowledge/README.md`（**散文**，见 Phase 4）+ `<repo-root>/CONCEPTS.md`；知识关联经 `mstar catalog link`，不写 status/snapshot metadata。**禁止**操作 `docs/`、`{PLAN_DIR}/`、`{ITERATION_DIR}/`、`{SPECS_DIR}/`。
 
 > **Engine check (when available):** run `mstar compound validate <doc-path> --knowledge-dir <dir>` (or `import { scopeGuard, compoundRefreshScope } from "@mstar-harness/engine"` in a host hook) to resolve the allowed scope above (`{HARNESS_DIR}/knowledge/**`, `knowledge/README.md`, `<repo-root>/CONCEPTS.md`) and guard every write against it; this scope never authorizes ACTIVE status/snapshot writes. On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
