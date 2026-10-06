@@ -56,7 +56,7 @@ Scoped boot does **not** load `mstar-compound` or the Phase 3–6 detail files m
 
    `bind` is the only operation without an external `--expect`: it reads, checks and claims atomically against current ownership. Fresh coordinator bind initializes the workflow's coordinator only when absent; a second fresh coordinator fails exactly like a duplicate plan holder. A **resume is read-only** — it never reacquires ownership, never re-identifies the caller and is **never** the recovery path for a stopped owner.
 
-   A fresh **plan** bind has three states, all decided against the row it holds under the snapshot lock:
+   A fresh **plan** bind has three states, decided against the held row inside an ACTIVE SQLite transaction (pre-activation: snapshot write lock):
 
    - **Prepared row** (any fresh form): claims the row's `execution_lease`, records the session binding and moves the row to `InProgress`. A row already bound to a session fails with `coordination.duplicate-holder` naming the holder — a live holder resumes, it is never re-bound or taken over.
    - **Claim bootstrap** (`--assignment` on an unclaimed, unprepared `Todo`/`Blocked` row, no session, no handoff, no lease): writes the row's plan-pm **session binding** and emits the session envelope, claims **no** lease and leaves the status untouched. This is the admission step for an agent that finds a row nobody has prepared; the same session then prepares the row (§4.1) and binds again to claim the lease. Its `show` reports `scope: null` and advertises exactly `prepare` until then. A second claim on the claimed row is `coordination.duplicate-holder`; `--workflow/--plan` cannot reach this shape (no locator) and keeps its `coordination.not-prepared` refusal.
@@ -81,7 +81,7 @@ A scoped actor writes **only its own row and the issues linked to it that it cap
 
 | Permitted | Forbidden |
 |---|---|
-| row `coordination.*`（`prepared` / `progress` / `handoff`）, row `status`, row `revision`, retained `metadata.working_branch` / `metadata.worktree_path` / `metadata.track_branches` | sibling rows, lifecycle anchors, snapshot `branch` / `integration_worktree_path` / `execution_policy`, `compass_ref` |
+| row `coordination.*`（`prepared` / `progress` / `handoff`）, row `status`, row `revision`, retained `metadata.working_branch` / `metadata.worktree_path` / `metadata.track_branches` | sibling rows, lifecycle anchors (`branch` / `integration_worktree_path` / `execution_policy` / `compass_ref`: ACTIVE workflow execution row; pre-activation snapshot top-level) |
 | issues in `{HARNESS_DIR}/store.db` linked to this plan, via `issue-add` / `issue-close` | any other plan's issues, the retired `projects/<project-id>/residuals.json` register bucket, the v2 root `status.json` register, shared indexes (`{KNOWLEDGE_DIR}` / `{ITERATION_DIR}`), iteration PR, Phase 3–6 |
 | `progress` / `issue-add` / `issue-close` / `handoff`（plan session）；`release`（acquired holder releases its own claim only） | any raw `writeWorkflowSnapshot` / direct snapshot or register edit, `--force`, arbitrary holder input, takeover, another holder's lease release |
 
@@ -176,7 +176,7 @@ A stopped or unreachable coordinator is replaced **only** by `mstar session reco
    ```
 
    Argument-array invocation, never shell interpolation; no squash, no rebase, no moving branch-name merge. CLI state verbs never execute this merge.
-6. **`integration-accept`** records the observed verified result（`integrating → merged`）and keeps both leases and `InReview`. Then **`complete`** performs the single atomic completion: verified Git proof + evidence + findings gate → `status: Done`, retain `metadata.working_branch` / `metadata.worktree_path` / existing track branches, and delete the row `execution_lease` **and** the coordinator's `integration_merge_lease` in **one** snapshot write.
+6. **`integration-accept`** records the observed verified result（`integrating → merged`）and keeps both leases and `InReview`. Then **`complete`** performs the single atomic completion: verified Git proof + evidence + findings gate → `status: Done`, retain working-branch / worktree / track metadata, and delete the execution and coordinator integration leases in **one DB transition** (pre-activation: one snapshot write).
 7. **Crash recovery uses `reconcile` only** — never a caller-supplied success flag and never a second merge:
 
    | Observed state | `reconcile` result |

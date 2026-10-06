@@ -171,21 +171,23 @@ Allowed owners are `product-manager`, `architect`, `writing-specialist` or `PM` 
 迭代 identity、compass 位置、description 与 project/iteration 归属是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1）—— **不**在 `{ITERATION_DIR}/README.md` 维护「一行 = 一次迭代」的登记行（README 只作散文导览）。
 
 - **登记/查询**：单行 `mstar catalog register`（或多个）与关系 `mstar catalog link`；批量走 reviewed 流程 `mstar catalog discover`（只读提案：配置根 tracked 正文 + legacy 索引行，带显式 `unknowns`）→ 人工 review mapping → `mstar catalog import`（冲突或 source 漂移整单拒绝，不创建 workflow session）。
-- **执行注册**：§1.5 的 snapshot + 根 entry 与 catalog delta 必须由**同一个 registration journal** 发布（contract §3）；中途崩溃留下 pending 状态 `catalog.registration-pending`，用 `mstar catalog reconcile` 收口（只读列出与 abort 形态见 help）。
+- **执行注册**：ACTIVE 的 workflow / plan 行、DB 根 register 与 catalog delta 必须由**同一个 registration journal** 发布（contract §3）；pre-activation 才发布 snapshot + 文件根 entry。pending 状态 `catalog.registration-pending` 用 `mstar catalog reconcile` 收口（只读列出与 abort 形态见 help）。
 - **限制**：`store.db` 本地且默认 gitignored —— tracked 正文（compass/README 散文）**无法**重建本地 catalog 历史；`discover` 从不假设文件名编码迭代归属或生命周期，未声明项以显式 `unknowns` 披露。
 
 > **Engine check (when available):** import `readCatalogCompleteness` / `assertCatalogCompleteness` from `@mstar-harness/engine` (or read the rows with `mstar catalog list` / `mstar catalog show`) in a host hook to read the catalog rows above (no CLI form for the completeness report yet). On `fail` -> do not proceed; fix and re-run. Skill text below remains authoritative when the runtime is absent.
 
-## 1.5 登记到 v2 状态面（formal iteration 必填）
+## 1.5 登记执行状态（formal iteration 必填）
 
-iteration 正式全流程**必须**登记 `{HARNESS_DIR}/status.json`（v2 根）+ `{WORKFLOW_DIR}/<id>/snapshot.json`：
+iteration 正式全流程**必须**经 **`mstar iteration register`** 注册到当前权威：
 
-- 用 **`mstar iteration register`** 一次写入两份文档：create-only 的 `type: "iteration"` snapshot（`{WORKFLOW_DIR}/<id>/snapshot.json`）+ 根 `status.json` `workflows[]` active entry（`{ "id": "<iteration-id>", "type": "iteration", "started_at", "dir": "workflows/<iteration-id>" }`），二者在同一把根锁内完成。snapshot 已存在而 root entry 缺失（两次写入之间崩溃）时，重跑即恢复：保留既有 snapshot 字节，只补写缺失的 root entry。必填输入：workflow id、compass ref、三个 branch anchors、Todo plan 行（registration 从不授权实现）。store-pinning / 写入顺序 / rollback 语义 → **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md` §4a。flag 集合与措辞以命令 help 为准（`mstar iteration register --help`），本文件不复述。
-- snapshot 顶层 `branch` anchors：`base`（= `iteration_base_branch`，创建 `spec_integration_branch` 的祖先 ref——**不是**隐式 `main`）、`integration`（= `spec_integration_branch`）、`target`（= iteration-close 后 PR 的目标分支）。
+- **ACTIVE**：registration journal 写 `{HARNESS_DIR}/store.db` 的 workflow / Todo plan 行、`execution_registry` 与 catalog delta；使用 `--expect <root-execution-token> --operation <id>`，token 经 `mstar status validate` 获取。注册不授权实现。仅 **pre-activation / engine-absent** 回退为 create-only `{WORKFLOW_DIR}/<id>/snapshot.json` + 根 `status.json` entry；文件路由重跑可补缺失 root entry，ACTIVE 不读写这两份文件。store-pinning / 写入顺序 / rollback 语义 → **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md` §4a。输入与 flags 以 `mstar iteration register --help` 为准。
+- 分支锚点在 ACTIVE workflow 执行行（pre-activation：snapshot 顶层 `branch`）：`base`（= `iteration_base_branch`，创建 integration 的祖先 ref，**不是**隐式 `main`）、`integration`（= `spec_integration_branch`）、`target`（= PR 目标分支）。
 - 各 plan 行的 `file` 指针统一走**唯一**的注册 plan 解析器：落盘的是**规范绝对路径** `{PLAN_DIR}/<plan-id>.md`，不是调用方拼写的副本。可接受的输入只有规范绝对路径或**规范化 harness 相对路径**；仓库相对拼写 `.mstar/plans/<id>.md` 在第一条 journal 行、snapshot 或任何根写入之前即被拒绝（诊断给出收到的形式、base、期望的规范目标与允许的形式）。既有合法的 harness 相对行仍由同一解析器可读——这是声明的输入形式，不是回退搜索。
 - 各 plan 行 `metadata.iteration_refs`、`spec_integration_branch`、`merge_target`（`merge_target` 通常为 `spec_integration_branch`）由 producer 从 compass / integration 输入**派生**——PM 无需也不应手工构造这些字段。
 
-compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与** snapshot `branch` 一致；若仅写在 compass 而 snapshot 缺失，Phase 2 §2.3 同轮 backfill。
+compass frontmatter 的 `iteration_base_branch` / `target_branch` **必须与**当前权威 workflow `branch` 一致；缺失处理见 Phase 2 §2.3。ACTIVE 不手工回填 snapshot，文件回填只属于 pre-activation。
+
+ACTIVE 的中途增减范围先经 `mstar plan bind --execution --workflow <id> --coordinator --expect <root-execution-token> --operation <id>` 获取 coordinator 身份，再使用 `mstar workflow show-prepare` / `amend-prepare` 的 ACTIVE 传输（session reference、完整 scope token、operation id；形状见 help）。下面的文件会话 bootstrap 形态仅用于 **pre-activation**。
 
 **中途增减范围（已存在且仍在 Prepare 的 workflow）**：用户/产品批准的范围扩张**不得**手改受保护状态。先以**显式获取的身份**建立该 workflow 的 coordinator 会话 —— 本地操作者用 `mstar plan bind --coordinator --workflow <id> --session-id <id>`（引擎从不生成 coordinator id，继承的 `MSTAR_HOST_SESSION_ID` 不再授权 coordinator bootstrap），托管宿主走其宿主自有入口而**不经** shell；再经受守卫入口 `mstar workflow show-prepare` 读取快照与 compass 两个字节版本，并以 `mstar workflow amend-prepare` 追加已批准的 Todo 行、登记已 review 的 integration checkout 与 `plan_parallelism`（仅 Prepare 且无执行所有权时可用；无 force/replace/init 通道）。既有行若 plan 指针已畸形，用同一次 `amend-prepare` 的 `correctPlanFiles`（每条恰为 `{id, expectedFile, file}`；`appendPlans` 仍在，仅做修正时传空数组）修正：只有该行 `file` 与常规 `updated_at` 变化，`expectedFile` 必须与行内 `file` **逐字相等**且指向同一 plan，新 `file` 走同一解析器。owner 席位丢失时另有受审计的 JSON Prepare 恢复（`mstar workflow recover-coordinator`），它**不是** active-store 的 session 恢复。守卫与字段权威 → **`mstar-artifacts`** `references/status-and-residuals.md`「Prepare workflow amendment」/「Prepare coordinator recovery」；forms / exit codes → **`mstar-use-cli`** `references/plan-and-workflow.md`。
 
