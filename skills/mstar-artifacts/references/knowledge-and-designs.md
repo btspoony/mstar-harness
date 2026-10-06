@@ -61,7 +61,7 @@
 
 ## 与执行 plan 行及 catalog 的链接
 
-- 某 plan 的**权威设计输入**在规格或迭代 compass 中时，经公共 prepare 域边界冻结到 store 执行 plan 行的 `metadata`（pre-activation：snapshot `plans[]`）：`primary_spec` / `spec_refs` → 优先 `{SPECS_DIR}/`；`iteration_compass` / `iteration_refs` → `{ITERATION_DIR}/`。知识关联走 catalog relations（`mstar catalog link`），不写 snapshot `metadata.knowledge_refs`；知识引用载体决策待定（I-000370），不推定新的 engine 行为。iteration-start 不得新增 knowledge 路径。
+- 某 plan 的**权威设计输入**在规格或迭代 compass 中时，经公共 prepare 域边界冻结到 store 执行 plan 行的 `metadata`（pre-activation：snapshot `plans[]`）：`primary_spec` / `spec_refs` → 优先 `{SPECS_DIR}/`；`iteration_compass` / `iteration_refs` → `{ITERATION_DIR}/`。知识关联载体是 catalog relations（`mstar catalog link`）；snapshot `plans[].metadata.knowledge_refs` 仅 legacy 只读，不推定新的 engine 行为。iteration-start 不得新增 knowledge 路径。
 - 执行方在 **implement 前**：先查 catalog（`mstar catalog list`，按 kind / document kind / lifecycle 过滤见 help）发现与当轮相关的 `active` 文档（发现式阅读，不要求通读全库；README 散文可作导览，但表格不是权威）；再按 metadata 读取已登记路径；均与主 plan 核对；不得在未读链接文档的情况下**静默偏离**其中已写明的决策（若需偏离，先回写 knowledge 或 plan 并走 PM/architect 门禁）。
 
 ## 维护规则
@@ -70,7 +70,7 @@
    - **Specs（长期）**：文件落 `{SPECS_DIR}/` → **登记** catalog document 行（`mstar catalog register` / `mstar catalog link`，或 reviewed `discover`+`import`）→ `plans[].metadata` 的 `primary_spec` / `spec_refs`
    - **迭代 package**：文件落 `{ITERATION_DIR}/<iteration-id>/guides|specs/` → **登记** catalog document 行 + `belongs-to`/`documents` 关系 → `iteration_refs`（**不再**写 `{ITERATION_DIR}/README.md` 目录行或 package Documents 表）
    - **Knowledge**：**`mstar-compound`** @ iteration-close（含 package **提升**）→ 落 `{KNOWLEDGE_DIR}/<category>/` + **登记** catalog document 行（写入位置与 SSOT：**`mstar-conventions/references/artifact-storage-paths.md`**）
-2. **阅读**：开发类 agent 编码前，先按 **catalog** 查询当轮相关 `active` knowledge/document 行；读取 catalog relations 与当前冻结输入指向的文档，PM 可在 Assignment 点名路径。不得把知识关联写为 snapshot `knowledge_refs`。
+2. **阅读**：开发类 agent 编码前，先按 **catalog** 查询当轮相关 `active` knowledge/document 行；读取 catalog relations 与当前冻结输入指向的文档，PM 可在 Assignment 点名路径。snapshot `knowledge_refs` 仅 legacy 只读，不是知识关联写入面。
 3. **修订**：评审或规格变更若改动了 knowledge 文件，同步更新其 catalog 行（`mstar catalog update`；identity 不可改，可改字段与 revision 守卫见 help）；版本迭代优先新文件名 `v<N+1>`，旧版改 catalog 生命周期为 `superseded`。
 4. **归档**：
    - **iteration-start（强制）**：`writing-specialist` §1.6 以 **`{SPECS_DIR}/` 全库卫生为主**；对**既有** `{KNOWLEDGE_DIR}/` 仅归档/错放纠正，**不**新增 knowledge。细则 → **`mstar-iteration/references/iteration-corpus-hygiene.md`**。

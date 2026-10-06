@@ -106,7 +106,7 @@ Classify each doc → Keep / Update / Consolidate / Replace / Delete. Apply chan
 
 1. For every doc whose verdict changed its metadata or lifecycle (`Update` / `Consolidate` / `Replace` / `Delete`), update its catalog row: `mstar catalog update` for title/description/path/source hash and for the catalog lifecycle (`active` / `archived` / `superseded`), and `mstar catalog link` for provenance/supersession relations (identity is never patched; the revision guard is in `--help`). A doc deleted outside the iteration-start §1.6 archive gate leaves git history as its record — set/keep its catalog lifecycle so the row is not a silent dangling claim.
 2. A knowledge body with **no** catalog row is a completeness gap, not a pass: register it (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`) or report it. `{KNOWLEDGE_DIR}/README.md` index tables are **not** maintained as a register — README is prose.
-3. Maintain knowledge associations through catalog relations (`mstar catalog link`); do not write snapshot `metadata.knowledge_refs` or root status metadata. The knowledge-reference carrier decision remains pending (issue I-000370).
+3. The knowledge-association carrier is catalog relations (`mstar catalog link`). Snapshot `plans[].metadata.knowledge_refs` and root status knowledge metadata are legacy read-only, not write targets.
 
 ### Phase 5: Report
 
@@ -147,7 +147,7 @@ Read that file from the mstar-compound skill directory before Phase 6.
 
 ## Evidence
 
-正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + catalog 行对账（Phase 4：`mstar catalog update` / `register`，生命周期 `active` / `archived` / `superseded`）+ catalog relations 知识关联（`mstar catalog link`；不写 status/snapshot `knowledge_refs`，载体决策待定：issue I-000370） + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
+正确结果 = 每篇候选文档有明确 verdict（Keep / Update / Consolidate / Replace / Delete）并落到产物：文档改动 + catalog 行对账（Phase 4：`mstar catalog update` / `register`，生命周期 `active` / `archived` / `superseded`）+ catalog relations 知识关联（`mstar catalog link`；status/snapshot `knowledge_refs` 仅 legacy 只读） + 维护报告（Phase 5：reviewed / kept / updated / consolidated / replaced / deleted / flagged）+ `CONCEPTS.md` 对账（Phase 6）。
 
 ## References
 

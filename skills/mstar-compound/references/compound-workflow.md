@@ -156,7 +156,7 @@ If `CONCEPTS.md` doesn't exist yet, ask whether to seed it. A seed populates the
 ## Phase 6: Catalog registration
 
 1. Register each new knowledge document in the store.db catalog (`mstar catalog register`, or reviewed `mstar catalog discover` + `mstar catalog import`). README is prose, not a register; no index-row obligation.
-2. Associate knowledge through catalog relations (`mstar catalog link`); do not write snapshot `metadata.knowledge_refs`. The knowledge-reference carrier decision remains pending (issue I-000370).
+2. The knowledge-association carrier is catalog relations (`mstar catalog link`). Snapshot `plans[].metadata.knowledge_refs` is legacy read-only, not a write target.
 
 **iteration-close gate**: `mstar-iteration` §3.2 #5 — **each** new doc in the compound round must complete this phase; do not skip for lightweight captures.
 
