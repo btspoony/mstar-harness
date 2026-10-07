@@ -410,8 +410,58 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       rmSync(root, { recursive: true, force: true });
     }
   });
+  test("anchor-less sibling working_branch on the expected main branch does not block residency", () => {
+    const root = tmpRoot("worktree-l1-main-row-");
+    try {
+      const wts = worktreeFixture(root, ["feature/current"]);
+      const repo = join(root, "repo");
+      const main = mainInfo(repo);
+      const result = l1PreDispatchCheck({
+        workflowType: "plan", integrationWorktreePath: "", integrationBranch: "",
+        mainWorktree: main, expectedMainBranch: "main",
+        lifecycleBranches: [{ branch: "main", workflowId: "wf-sibling", planId: "plan-main-row" }],
+        rowWorktreePath: wts.get("feature/current")!, rowWorkingBranch: "feature/current", planId: "plan-current",
+      });
+      expect(result.ok).toBe(true);
+      expect(codesOf(result)).not.toContain("worktree.main.residency-switched");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 
-  test("main on a lifecycle-owned branch is refused even when the recorded expectation matches it", () => {
+  test("a sibling-owned feature branch refusal names its owning workflow and plan", () => {
+    const root = tmpRoot("worktree-l1-owner-copy-");
+    try {
+      const wts = worktreeFixture(root, ["feature/current"]);
+      const main = mainInfo(join(root, "repo"));
+      const result = l1PreDispatchCheck({
+        workflowType: "plan", integrationWorktreePath: "", integrationBranch: "",
+        mainWorktree: { ...main, branch: "feature/x" }, expectedMainBranch: "main",
+        lifecycleBranches: [{ branch: "feature/x", workflowId: "wf-owner", planId: "plan-owner" }],
+        rowWorktreePath: wts.get("feature/current")!, rowWorkingBranch: "feature/current", planId: "plan-current",
+      });
+      expect(result.ok).toBe(false);
+      const ownerViolation = result.violations.find((entry) => entry.message.includes("workflow wf-owner"));
+      expect(ownerViolation?.message).toContain("plan-owner");
+      expect(ownerViolation?.fix).toContain("mstar plan prepare");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("ownership still refuses when main matches a lifecycle row but not its recorded expectation", () => {
+    const root = tmpRoot("worktree-l1-expectation-mismatch-");
+    try {
+      const wts = worktreeFixture(root, ["feature/current"]);
+      const main = mainInfo(join(root, "repo"));
+      const result = l1PreDispatchCheck({
+        workflowType: "plan", integrationWorktreePath: "", integrationBranch: "",
+        mainWorktree: main, expectedMainBranch: "feature/other",
+        lifecycleBranches: [{ branch: "main", workflowId: "wf-owner", planId: "plan-owner" }],
+        rowWorktreePath: wts.get("feature/current")!, rowWorkingBranch: "feature/current", planId: "plan-current",
+      });
+      expect(result.ok).toBe(false);
+      expect(codesOf(result)).toContain("worktree.main.residency-switched");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("main on an expected lifecycle-owned branch is sanctioned residency", () => {
     const root = tmpRoot("worktree-l1-owned-");
     try {
       const repo = gitRepo(root);
@@ -428,13 +478,13 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/int",
         mainWorktree: { root: realpathSync(repo), branch: "iteration/owned" },
         expectedMainBranch: "iteration/owned",
-        lifecycleBranches: ["iteration/owned", "iteration/int", "feature/a"],
+        lifecycleBranches: [{ branch: "iteration/owned", workflowId: "wf-own", planId: "plan-own" }],
         rowWorktreePath: paths.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
       });
-      expect(result.ok).toBe(false);
-      expect(codesOf(result)).toEqual(["worktree.main.residency-switched"]);
+      expect(result.ok).toBe(true);
+      expect(codesOf(result)).not.toContain("worktree.main.residency-switched");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

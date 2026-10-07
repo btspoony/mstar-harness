@@ -737,12 +737,12 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
     return [] // no recorded row scope to compare — nothing to verify
   }
   const snapshot = read.snapshot
-  const lifecycleBranches = new Set(collectActiveLifecycleBranches([snapshot]))
+  const lifecycleBranches = collectActiveLifecycleBranches([snapshot])
   const siblingScan = scanActiveLifecycleBranches(harnessDir, read.workflowId)
   if (siblingScan.kind === 'refusal') {
     return [worktreeViolation(siblingScan.code, siblingScan.detail, 'repair or unregister the unreadable lifecycle state before dispatch')]
   }
-  for (const branch of siblingScan.branches) lifecycleBranches.add(branch)
+  for (const branch of siblingScan.branches) lifecycleBranches.push({ branch, workflowId: 'active sibling lifecycle', planId: null })
   // Recorded residency expectation: the Assignment header transports the
   // value recorded at lifecycle start; the explicit `branch.base` is the
   // conservative fallback — never the branch observed at check time.
@@ -754,7 +754,7 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
     integrationBranch: typeof snapshot.branch?.integration === 'string' ? snapshot.branch.integration : '',
     mainWorktree: readMainWorktree(harnessDir),
     expectedMainBranch,
-    lifecycleBranches: [...lifecycleBranches],
+    lifecycleBranches,
     rowWorktreePath,
     rowWorkingBranch,
     planId,

@@ -111,25 +111,24 @@ function gateData(result: GateResult) { return { ok: result.ok, violations: resu
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function activeGraphLifecycleBranches(graph: ExecutionState): string[] {
-  const branches = new Set<string>();
+function activeGraphLifecycleBranches(graph: ExecutionState): Array<{ branch: string; workflowId: string; planId: string | null }> {
+  const branches = new Map<string, { branch: string; workflowId: string; planId: string | null }>();
   for (const workflow of graph.workflows) {
+    const workflowId = workflow.state.id;
     const integration = workflow.state.branch?.integration;
-    if (typeof integration === "string" && integration.trim() !== "") branches.add(integration);
+    if (typeof integration === "string" && integration.trim() !== "") branches.set(`${workflowId}\0`, { branch: integration, workflowId, planId: null });
     for (const view of workflow.plans) {
       const metadata = view.plan.metadata;
       if (!isPlainRecord(metadata)) continue;
-      const trackBranches = metadata.track_branches;
-      if (Array.isArray(trackBranches)) {
-        for (const branch of trackBranches) {
-          if (typeof branch === "string" && branch.trim() !== "") branches.add(branch);
-        }
-      }
-      const retainedBranch = metadata.working_branch;
-      if (typeof retainedBranch === "string" && retainedBranch.trim() !== "") branches.add(retainedBranch);
+      const planId = typeof view.plan.id === "string" ? view.plan.id : null;
+      const add = (branch: unknown) => {
+        if (typeof branch === "string" && branch.trim() !== "") branches.set(`${workflowId}\0${planId}\0${branch}`, { branch, workflowId, planId });
+      };
+      if (Array.isArray(metadata.track_branches)) for (const branch of metadata.track_branches) add(branch);
+      add(metadata.working_branch);
     }
   }
-  return [...branches];
+  return [...branches.values()];
 }
 function absolute(_cwd: string, input: string): string { return resolveCliPath(input); }
 
@@ -271,7 +270,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             integrationBranch: String(branch.integration ?? ""),
             mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
             expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),
-            lifecycleBranches: [...lifecycleBranches],
+            lifecycleBranches,
             rowWorktreePath: typeof metadata.worktree_path === "string" ? metadata.worktree_path : "",
             rowWorkingBranch: typeof metadata.working_branch === "string" ? metadata.working_branch : "",
             planId: selectedPlanId,
@@ -310,10 +309,10 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
         const observedMainBranch = mainBranch.stdout.trim();
         const rowMetadata = isPlainRecord(rows[0].metadata) ? rows[0].metadata : {};
-        const lifecycleBranches = new Set<string>();
+        const lifecycleBranches: Array<{ branch: string; workflowId: string; planId: string | null }> = [];
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
         if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail);
-        for (const other of siblingScan.branches) lifecycleBranches.add(other);
+        for (const branch of siblingScan.branches) lifecycleBranches.push({ branch, workflowId: "active sibling lifecycle", planId: null });
         // The selected row's source checkout/branch uses the dedicated identity
         // guard; its retained tracks and other snapshot ownership still block main.
         const snapshotWithoutSelectedSource = {
@@ -322,7 +321,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             row.id === plan || row.plan_id === plan ? { ...row, metadata: { track_branches: rowMetadata.track_branches } } : row,
           ),
         };
-        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedSource])) lifecycleBranches.add(branch);
+        lifecycleBranches.push(...collectActiveLifecycleBranches([snapshotWithoutSelectedSource]));
         const integrationPath = input.integration ?? input.control ?? snapshot.integration_worktree_path;
         const integrationBranch = snapshot.branch?.integration;
         const gate = l1PreDispatchCheck({
@@ -331,7 +330,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           integrationBranch: typeof integrationBranch === "string" ? integrationBranch : "",
           mainWorktree: { root: primary, branch: observedMainBranch },
           expectedMainBranch: input.mainBranch ?? String(snapshot.branch?.base ?? ""),
-          lifecycleBranches: [...lifecycleBranches],
+          lifecycleBranches,
           rowWorktreePath: String(rowMetadata.worktree_path ?? ""), rowWorkingBranch: String(rowMetadata.working_branch ?? ""), planId: plan,
         });
         if (
