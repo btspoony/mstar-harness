@@ -8,7 +8,18 @@ For project roadmap content, use the CLI `mstar roadmap` family (not a slash com
 
 ## Store CLI upgrade and recovery
 
-`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing legacy workflow state. It creates or opens the local store, imports recognizable records, activates execution authority, and reports unrecognized or unresolvable items without moving them from their original paths. The import is intended for a stopped, disposable local workspace; it is not an online production cutover.
+`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing legacy workflow state. It creates or opens the local store, imports recognizable records, activates execution authority, and reports unrecognized or unresolvable items without moving them from their original paths. Stop writers and align consumers before upgrading an existing store; this is not an online production cutover.
+
+The six `store` verbs administer project harnesses, including the main worktree's canonical control root. `--harness <path>` selects that project explicitly; omitting it uses normal discovery from the working directory. CLI and MCP use the same domain operations and retain their maintenance locks, verified-backup checks and migration/activation guards.
+
+For an existing store, retain a verified recovery image before upgrading:
+
+```text
+mstar store backup --harness {HARNESS_DIR} --out <absolute-backup.db>
+mstar store upgrade --harness {HARNESS_DIR} --operator <name>
+```
+
+If a retired held claim requires the operator's full stop attestation, construct the document using `mstar schema --command store.upgrade` and retry the same upgrade with `--attestation <absolute-json>`. Do not hand-edit the store or replace the project target with a fixture to evade a refusal.
 
 The remaining `store` verbs are `init`, `migrate`, `backup`, `activate`, and `retire`. `migrate` / `activate` / `retire` remain the separate issue/catalog migration flow. The only remaining `store execution` verbs are `restore-preview`, `restore`, and `export`: restore previews and restores use a standalone `store backup` image; export reports the current execution state. Staged execution preview/apply/activate/retire/abort and the safe-upgrade verb are removed.
 
