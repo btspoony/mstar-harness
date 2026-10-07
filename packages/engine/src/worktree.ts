@@ -419,12 +419,17 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
     }
     const owner = lifecycleBranches.find((entry) => entry.branch === mainWorktree.branch && entry.branch !== expectedMainBranch);
     if (mainWorktree.branch !== "" && owner) {
+      const ownerLabel = owner.workflowId === null ? "an active lifecycle with no recorded workflow id" : `workflow ${owner.workflowId}`;
+      const ownerRecovery =
+        owner.workflowId === null
+          ? "wait for the owning lifecycle to finish and close through its documented lifecycle verbs"
+          : `wait for workflow ${owner.workflowId} to finish and close through its documented lifecycle verbs`;
       violations.push(
         violation(
           "high",
           "worktree.main.residency-switched",
-          `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", owned by workflow ${owner.workflowId}${owner.planId ? ` plan ${owner.planId}` : ""}`,
-          `wait for workflow ${owner.workflowId} to finish and close through its documented lifecycle verbs, or have its coordinator correct the row via mstar plan prepare`,
+          `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", owned by ${ownerLabel}${owner.planId ? ` plan ${owner.planId}` : ""}`,
+          `${ownerRecovery}, or have its coordinator correct the row via mstar plan prepare`,
         ),
       );
     }

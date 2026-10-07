@@ -8,6 +8,7 @@ import {
   assertSddTddTriple,
   assertTriIdentity,
   classifySkillLint,
+  activeLifecyclePlanId,
   collectActiveLifecycleBranches,
   completenessLevel,
   executionModeToN,
@@ -37,6 +38,7 @@ import {
   validateRoleMapping,
   validateSchemaYaml,
   type GateResult,
+  type ActiveLifecycleBranch,
   type QcAlignmentAssignment,
   WorkflowSnapshotValidationError,
   readWorkflowSnapshot,
@@ -111,8 +113,8 @@ function gateData(result: GateResult) { return { ok: result.ok, violations: resu
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function activeGraphLifecycleBranches(graph: ExecutionState): Array<{ branch: string; workflowId: string; planId: string | null }> {
-  const branches = new Map<string, { branch: string; workflowId: string; planId: string | null }>();
+function activeGraphLifecycleBranches(graph: ExecutionState): ActiveLifecycleBranch[] {
+  const branches = new Map<string, ActiveLifecycleBranch>();
   for (const workflow of graph.workflows) {
     const workflowId = workflow.state.id;
     const integration = workflow.state.branch?.integration;
@@ -120,9 +122,9 @@ function activeGraphLifecycleBranches(graph: ExecutionState): Array<{ branch: st
     for (const view of workflow.plans) {
       const metadata = view.plan.metadata;
       if (!isPlainRecord(metadata)) continue;
-      const planId = typeof view.plan.id === "string" ? view.plan.id : null;
+      const planId = activeLifecyclePlanId(view.plan);
       const add = (branch: unknown) => {
-        if (typeof branch === "string" && branch.trim() !== "") branches.set(`${workflowId}\0${planId}\0${branch}`, { branch, workflowId, planId });
+        if (typeof branch === "string" && branch.trim() !== "") branches.set(`${workflowId}\0${planId ?? ""}\0${branch}`, { branch, workflowId, planId });
       };
       if (Array.isArray(metadata.track_branches)) for (const branch of metadata.track_branches) add(branch);
       add(metadata.working_branch);
@@ -309,7 +311,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
         const observedMainBranch = mainBranch.stdout.trim();
         const rowMetadata = isPlainRecord(rows[0].metadata) ? rows[0].metadata : {};
-        const lifecycleBranches: Array<{ branch: string; workflowId: string; planId: string | null }> = [];
+        const lifecycleBranches: ActiveLifecycleBranch[] = [];
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
         if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail);
         lifecycleBranches.push(...siblingScan.branches);

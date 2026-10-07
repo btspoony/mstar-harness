@@ -448,6 +448,23 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
+  test("an owner without a recorded workflow id is described without inventing one", () => {
+    const root = tmpRoot("worktree-l1-owner-identity-missing-");
+    try {
+      const wts = worktreeFixture(root, ["feature/current"]);
+      const main = mainInfo(join(root, "repo"));
+      const result = l1PreDispatchCheck({
+        workflowType: "plan", integrationWorktreePath: "", integrationBranch: "",
+        mainWorktree: { ...main, branch: "feature/x" }, expectedMainBranch: "main",
+        lifecycleBranches: [{ branch: "feature/x", workflowId: null, planId: "plan-owner" }],
+        rowWorktreePath: wts.get("feature/current")!, rowWorkingBranch: "feature/current", planId: "plan-current",
+      });
+      const ownerViolation = result.violations.find((entry) => entry.message.includes("owned by"));
+      expect(ownerViolation?.message).toContain("no recorded workflow id");
+      expect(ownerViolation?.message).not.toContain("workflow unknown");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("ownership still refuses when main matches a lifecycle row but not its recorded expectation", () => {
     const root = tmpRoot("worktree-l1-expectation-mismatch-");
     try {

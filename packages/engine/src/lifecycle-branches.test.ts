@@ -20,3 +20,9 @@ test("ownership returns branch provenance, excludes anchors, and keeps anchor-le
     { branch: "main", workflowId: "wf-anchorless", planId: "plan-main" },
   ]);
 });
+
+test("missing workflow ids remain absent instead of fabricating owner provenance", () => {
+  expect(collectActiveLifecycleBranches([{ plans: [{ plan_id: "legacy-plan", metadata: { working_branch: "feature/legacy" } }] }])).toEqual([
+    { branch: "feature/legacy", workflowId: null, planId: "legacy-plan" },
+  ]);
+});

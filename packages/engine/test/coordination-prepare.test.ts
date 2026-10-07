@@ -3497,19 +3497,20 @@ async function dbPrepareFixture(deliveryKind: "development" | "verification/repo
   });
   const caller: ExecutionCaller = { sessionId: FIXTURE_COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID };
   const domain: ExecutionContext = { harnessDir: context.harnessDir, caller };
+  const snapshot: WorkflowSnapshot = {
+    schema_version: 1,
+    id: WORKFLOW_ID,
+    type: "plan",
+    status: "running",
+    started_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    delivery_kind: deliveryKind,
+    ...(deliveryKind === "verification/report-only" ? { completion_policy: "report" } : {}),
+    plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
+  };
   const created = await createExecutionWorkflow(domain, {
     entry: { id: WORKFLOW_ID, type: "plan", started_at: "2026-01-01T00:00:00.000Z", dir: `workflows/${WORKFLOW_ID}` },
-    snapshot: {
-      schema_version: 1,
-      id: WORKFLOW_ID,
-      type: "plan",
-      status: "running",
-      started_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-      delivery_kind: deliveryKind,
-      ...(deliveryKind === "verification/report-only" ? { completion_policy: "report" } : {}),
-      plans: [{ id: PLAN_ID, title: PLAN_ID, file: `plans/${PLAN_ID}.md`, status: "Todo" }],
-    } as unknown as WorkflowSnapshot,
+    snapshot,
     expected: initialized.token,
     operationId: "create-prepare-guard-workflow",
   });
@@ -3517,7 +3518,7 @@ async function dbPrepareFixture(deliveryKind: "development" | "verification/repo
     workflowId: WORKFLOW_ID,
     expected: created.data.workflows[0]!.workflowToken,
     operationId: "bind-prepare-guard-coordinator",
-  } as Parameters<typeof bindExecutionSession>[1]);
+  });
   const state = await readExecutionState(context);
   return { fixture, domain, session: bound.data, token: state.data.workflows[0]!.planTokens[PLAN_ID]! };
 }
@@ -3574,5 +3575,19 @@ describe("prepare control checkout branch guard", () => {
       else process.env.PATH = priorPath;
       rmSync(shim, { recursive: true, force: true });
     }
+  });
+
+  test("fails closed for a detached control checkout", async () => {
+    const { fixture, domain, session, token } = await dbPrepareFixture();
+    git(["checkout", "--detach", "HEAD"], fixture.root);
+    await expect(
+      prepareExecutionPlan(domain, {
+        operationId: "prepare-detached-control-branch",
+        session,
+        expected: token,
+        planId: PLAN_ID,
+        operation: { kind: "prepare", config: { workingBranch: "feature/plan-a" } },
+      }),
+    ).rejects.toMatchObject({ code: "plan.prepare.control-branch-unresolved" });
   });
 });
