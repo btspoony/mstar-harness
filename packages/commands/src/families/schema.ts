@@ -76,6 +76,9 @@ export type CommandSchemaSelection =
  * entries override derived ones per name; anything unannotated stays unknown,
  * never all-optional.
  */
+/**
+ * `revision` is an integer CAS from the command's read surface, not an execution token.
+ */
 const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"]>> = {
   "workflow.register": "root",
   "iteration.register": "root",
@@ -85,6 +88,8 @@ const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"
   "workflow.execution-policy": "workflow",
   "workflow.integration-worktree": "workflow",
   "status.workflow-close": "workflow",
+  "workflow.adopt-terminal": "revision",
+  "issue.reopen": "revision",
   "plan.bind": "workflow",
   "plan.prepare": "plan",
   "session.recover": "workflow",

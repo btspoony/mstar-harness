@@ -395,6 +395,8 @@ var GIT_SHA;
 var HASH_RE;
 var init_coordination_write = __esm(() => {
   COORDINATION_ERROR_CODES = [
+    "plan.prepare.working-branch-control",
+    "plan.prepare.control-branch-unresolved",
     "coordination.harness-not-found",
     "coordination.workflow-not-found",
     "coordination.plan-not-found",
@@ -11766,6 +11768,9 @@ var init_issue = __esm(() => {
         description: "Authority alignment reference; required for resolved/waived closure"
       }
     },
+    IssueReopen: {
+      reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true }
+    },
     IssueLink: {
       relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
       issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
@@ -15582,6 +15587,7 @@ function readExecutionGraph(db, store, meta) {
   const registry = db.prepare("select workflow_id, entry_json from execution_registry order by rowid").all();
   const entries = [];
   const workflows = [];
+  const registeredIds = new Set;
   for (const row of registry) {
     const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
     const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
@@ -15591,10 +15597,41 @@ function readExecutionGraph(db, store, meta) {
     if (entry.id !== workflowId) {
       throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
     }
+    registeredIds.add(workflowId);
     entries.push(entry);
     workflows.push(readWorkflowView(db, store, workflowId));
   }
-  return { root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries }, workflows };
+  const terminalUnregistered = [];
+  const terminalAdoptions = [];
+  const headers = db.prepare("select workflow_id, revision, state_json from execution_workflows order by rowid").all();
+  for (const row of headers) {
+    const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+    if (registeredIds.has(id))
+      continue;
+    const state = storedJsonObject(row.state_json, `execution_workflows(${id}).state_json`);
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed")
+      continue;
+    const revision = storedRevision(row.revision, `execution_workflows(${id}).revision`);
+    if (isNonEmptyString(state.lifecycle_adopted_at) && isNonEmptyString(state.adopt_reason) && isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
+      terminalAdoptions.push({
+        id,
+        status: state.status,
+        revision,
+        lifecycle_adopted_at: state.lifecycle_adopted_at,
+        adopt_reason: state.adopt_reason,
+        actor_session_id: state.adoption_actor_session_id,
+        operation_id: state.adoption_operation_id
+      });
+    } else {
+      terminalUnregistered.push({ id, status: state.status, revision });
+    }
+  }
+  return {
+    root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries },
+    workflows,
+    ...terminalUnregistered.length === 0 ? {} : { terminalUnregistered },
+    ...terminalAdoptions.length === 0 ? {} : { terminalAdoptions }
+  };
 }
 var ownedTransactions = new AsyncLocalStorage3;
 async function withExecutionReadTransaction(context, body) {
@@ -17165,11 +17202,45 @@ function toWorkflowDTO(row, plans, leases, identities) {
     badges
   };
 }
+function readTerminalState(db) {
+  const rows = db.prepare("select h.workflow_id, h.revision, h.state_json from execution_workflows h left join execution_registry r on r.workflow_id = h.workflow_id where r.workflow_id is null order by h.workflow_id").all();
+  const unregistered = [];
+  const adopted = [];
+  for (const row of rows) {
+    const parsed = JSON.parse(row.state_json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      continue;
+    const state = parsed;
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed")
+      continue;
+    if (typeof state.lifecycle_adopted_at === "string" && typeof state.adopt_reason === "string" && typeof state.adoption_actor_session_id === "string" && typeof state.adoption_operation_id === "string") {
+      adopted.push({
+        id: row.workflow_id,
+        status: state.status,
+        revision: row.revision,
+        lifecycle_adopted_at: state.lifecycle_adopted_at,
+        adopt_reason: state.adopt_reason,
+        actor_session_id: state.adoption_actor_session_id,
+        operation_id: state.adoption_operation_id
+      });
+    } else {
+      unregistered.push({ id: row.workflow_id, status: state.status, revision: row.revision });
+    }
+  }
+  return { unregistered, adopted };
+}
 function readWorkflowList(db, filters) {
+  const terminal = readTerminalState(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
-  if (generated.generation === null)
-    return { items: [], total: 0 };
+  if (generated.generation === null) {
+    return {
+      items: [],
+      total: 0,
+      ...terminal.unregistered.length === 0 ? {} : { terminalUnregistered: terminal.unregistered },
+      ...terminal.adopted.length === 0 ? {} : { terminalAdoptions: terminal.adopted }
+    };
+  }
   const projectId = text5(filters.projectId);
   const plansByWorkflow = new Map;
   for (const plan of generated.plans) {
@@ -17192,7 +17263,9 @@ function readWorkflowList(db, filters) {
   ]);
   return {
     items: page.map((workflow) => toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities)),
-    total: scoped.length
+    total: scoped.length,
+    ...terminal.unregistered.length === 0 ? {} : { terminalUnregistered: terminal.unregistered },
+    ...terminal.adopted.length === 0 ? {} : { terminalAdoptions: terminal.adopted }
   };
 }
 function readWorkflowDetail(db, filters) {

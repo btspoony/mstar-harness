@@ -136,6 +136,9 @@ export const ISSUE_PAYLOAD_SCHEMAS = {
       description: "Authority alignment reference; required for resolved/waived closure",
     },
   },
+  IssueReopen: {
+    reason: { required: true, type: "string", description: "Reason for reopening; nonblank", nonblankWhenPresent: true },
+  },
   IssueLink: {
     relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
     issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
@@ -299,6 +302,7 @@ export type ClosureEvidence = {
   canonicalIssueId?: string;
   alignmentRef?: string;
 };
+export type IssueReopen = { reason: string };
 
 export type IssueLink =
   | { relation: "related" | "blocks" | "duplicate-of" | "superseded-by"; issueId: string }
@@ -1674,6 +1678,51 @@ export function closeIssueOn(
   recordOperation(db, mutation.operationId, hash, receipt, at);
   return receipt;
 }
+/**
+ * The terminal-to-open transition body on an already-owned store handle.
+ * `closure_note` is deliberately not updated: it records the prior closure
+ * reason, while the transition append records this reopening reason.
+ */
+export function reopenIssueOn(
+  db: StoreDb,
+  issueId: string,
+  payload: IssueReopen,
+  mutation: AuthorizedIssueMutation,
+  composed?: ComposedTransactionRevision,
+): IssueReceipt {
+  const reason = requireNonblank("reason", payload.reason);
+  const hash = requestHash("reopenIssue", {
+    issueId,
+    reason,
+    mutation: { operationId: mutation.operationId, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
+  });
+  const existingOp = lookupOperation(db, mutation.operationId);
+  if (existingOp) return replayOrConflict(existingOp, hash);
+
+  const issue = db.prepare("select id, revision, disposition from issues where id = ?").get(issueId) as
+    | { id: string; revision: number; disposition: string }
+    | undefined;
+  if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
+  requireExpectedRevision(mutation, issue.revision);
+  if (issue.disposition === "open") {
+    throw new IssueError("issue.invalid-disposition", "Only terminal\u2192open is accepted; open cannot transition to open");
+  }
+  if (!Object.hasOwn(TERMINAL, issue.disposition)) {
+    throw new IssueError("issue.invalid-disposition", `Only terminal\u2192open is accepted; ${issue.disposition} is not terminal`);
+  }
+
+  const at = nowRfc3339();
+  const revision = issue.revision + 1;
+  db.prepare("update issues set disposition = 'open', closed_at = null, revision = ?, updated_at = ? where id = ?")
+    .run(revision, at, issueId);
+  db.prepare(
+    "insert into issue_transitions(issue_id, from_disposition, to_disposition, actor, occurred_at, recorded_at, reason, evidence_json, imported, issue_revision) values (?, ?, 'open', ?, ?, ?, ?, ?, 0, ?)",
+  ).run(issueId, issue.disposition, mutation.actor, at, at, reason, JSON.stringify({ reason }), revision);
+  const storeRevision = receiptStoreRevision(db, composed);
+  const receipt: IssueReceipt = { issueId, revision, storeRevision, created: false };
+  recordOperation(db, mutation.operationId, hash, receipt, at);
+  return receipt;
+}
 
 export async function closeIssue(
   context: StoreContext,
@@ -1686,6 +1735,16 @@ export async function closeIssue(
   assertTerminalDisposition(disposition);
   assertClosureAuthority(disposition, evidence);
   return withWrite(context, (handle) => closeIssueOn(handle.db, issueId, disposition, evidence, mutation));
+}
+export async function reopenIssue(
+  context: StoreContext,
+  issueId: string,
+  payload: IssueReopen,
+  mutation: MutationContext,
+): Promise<IssueReceipt> {
+  requireCaptureSeat(mutation.actor);
+  requireNonblank("reason", payload.reason);
+  return withWrite(context, (handle) => reopenIssueOn(handle.db, issueId, payload, mutation));
 }
 
 export async function assignIssueMilestone(

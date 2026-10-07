@@ -203,6 +203,7 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "workflow.lifecycle": unverified("drive the workflow lifecycle", "requires coordinator session authority; no in-package fixture"),
   "workflow.execution-policy": unverified("set workflow execution policy", "requires coordinator session authority; no in-package fixture"),
   "workflow.integration-worktree": unverified("configure the integration worktree", "requires coordinator session authority; no in-package fixture"),
+  "workflow.adopt-terminal": unverified("adopt a terminal but unregistered workflow header at its current revision", "requires active execution authority and a terminal-unregistered snapshot; not exercised in bounded-resolution fixtures"),
   // issue family
   "issue.add": witnessed("malformed capture is refused with the exact missing contract fields; the listing leg verifies nothing was created", "issue-capture (malformed refusal + no-mutation listing leg, 2 calls)", "warm", 2, "grouped-missing-facts"),
   "issue.list": witnessed("a single store page read reflects the controlled setup capture", "issue-list (1 call after a controlled setup capture)", "warm", 1, "resolved"),
@@ -210,6 +211,7 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "issue.occurrence": unverified("append an occurrence under mutation scope", "mutation scope and authorization matrix not exercised in this baseline suite"),
   "issue.triage": witnessed("current revision accepted and stale revision refused with no state change", "issue-cas (stale refusal + readback, 2 calls after a controlled setup capture)", "warm", 2, "safety-refusal"),
   "issue.close": witnessed("actor-only terminal disposition succeeds and readback verifies the resolved issue", "issue-disposition-guard (successful close + readback, 2 calls after a controlled setup capture)", "warm", 2, "resolved"),
+  "issue.reopen": unverified("reopen a terminal issue with a revision-guarded reason", "requires an existing terminal issue and capture-seat mutation scope; not exercised in bounded-resolution fixtures"),
   "issue.waive": unverified("waive an issue", "terminal disposition behavior is exercised by actor-only close but this verb has no separate fixture"),
   "issue.duplicate": unverified("mark an issue duplicate", "terminal disposition behavior is exercised by actor-only close but this verb has no separate fixture"),
   "issue.supersede": unverified("supersede an issue", "actor-only supersede is exercised in the CLI acceptance test, not this witness suite"),

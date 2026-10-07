@@ -25,9 +25,12 @@ import {
   assertIssueStoreActive,
   captureIssue,
   captureIssueOn,
+  closeIssue,
   closeIssueOn,
   getIssue,
   linkIssueOn,
+  reopenIssue,
+  reopenIssueOn,
   listIssues,
   type CaptureInput,
   type ClosureEvidence,
@@ -280,6 +283,39 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     expect(after.revision).toBe(closable.revision);
     expect(after.transitions).toEqual([]);
   });
+  test("a reopen body rolls back with a later refused transition in its owner transaction", async () => {
+    const context = await activeStore("reopen-then-refused-step");
+    const created = await captureIssue(context, baseInput({ occurrenceKey: "reopen-rollback" }), {
+      operationId: "reopen-rollback-seed",
+      actor: ACTOR,
+    });
+    const closed = await closeIssue(context, created.issueId, "resolved", resolvedEvidence, {
+      operationId: "reopen-rollback-close",
+      actor: ACTOR,
+      expectedRevision: created.revision,
+    });
+    const before = await issueFacts(context);
+    const refused = await refusalOf(() =>
+      inTransaction(context, (db) => {
+        const reopened = reopenIssueOn(db, created.issueId, { reason: "retry with new evidence" }, {
+          operationId: "atomic-reopen",
+          actor: ACTOR,
+          expectedRevision: closed.revision,
+        });
+        reopenIssueOn(db, created.issueId, { reason: "illegal repeated reopen" }, {
+          operationId: "atomic-reopen-again",
+          actor: ACTOR,
+          expectedRevision: reopened.revision,
+        });
+      }),
+    );
+    expect(refused.code).toBe("issue.invalid-disposition");
+    expect(await issueFacts(context)).toEqual(before);
+    const after = await getIssue(context, created.issueId);
+    expect(after.disposition).toBe("resolved");
+    expect(after.revision).toBe(closed.revision);
+    expect(after.transitions).toHaveLength(1);
+  });
 
   test("the public verbs keep one transaction each and the store precondition", async () => {
     const context = await activeStore("public-verbs-own-transaction");
@@ -301,6 +337,20 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     );
     expect(refused.code).toBe("issue.ambiguous-identity");
     expect(await issueFacts(context)).toEqual(accepted);
+    const closed = await closeIssue(context, created.issueId, "resolved", resolvedEvidence, {
+      operationId: "public-close",
+      actor: ACTOR,
+      expectedRevision: created.revision,
+    });
+    expect(closed.storeRevision).toBe(accepted.storeRevision + 1);
+    const beforeReopen = await issueFacts(context);
+    const reopened = await reopenIssue(context, created.issueId, { reason: "public reopen" }, {
+      operationId: "public-reopen",
+      actor: ACTOR,
+      expectedRevision: closed.revision,
+    });
+    expect(reopened.storeRevision).toBe(beforeReopen.storeRevision + 1);
+    expect((await getIssue(context, created.issueId)).disposition).toBe("open");
 
     // A staged store refuses the composed route exactly where it refuses the
     // public one, before any body runs.

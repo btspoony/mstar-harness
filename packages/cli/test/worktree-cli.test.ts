@@ -558,7 +558,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
 });
 
 describe("mstar worktree check — lifecycle-owned branches from ALL active workflows (L1 caller policy)", () => {
-  test("a sibling active workflow's integration branch is collected — main on it refuses (residency-switched)", () => {
+  test("a sibling active workflow integration branch is attributed when main differs from the recorded expectation", () => {
     const root = tmpRoot("mstar-wt-l1-sibling-int-");
     try {
       // Standalone governing plan (no integration topology of its own).
@@ -571,11 +571,14 @@ describe("mstar worktree check — lifecycle-owned branches from ALL active work
       writeSnapshot(root, snapshotDoc([], { id: "wf-2", type: "plan", branch: { integration: mainBranch } }), "wf-2");
       writeRegister(root, [WORKFLOW_ID, "wf-2"]);
       const result = runCli(
-        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
+        ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", "recorded-main"],
         root,
       );
       const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
-      expect(output.message).toContain("owned by an active lifecycle");
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({
+        code: "worktree.main.residency-switched",
+        message: expect.stringContaining("owned by workflow wf-2"),
+      }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -792,7 +795,7 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
 });
 
 
-test("retained track ownership refuses main and ordinary progress repairs retired tracks", () => {
+test("retained track equal to recorded main is accepted and ordinary progress can retire stale tracks", () => {
   const root = tmpRoot("mstar-retained-track-");
   try {
     const linked = worktreeFixture(root);
@@ -803,8 +806,7 @@ test("retained track ownership refuses main and ordinary progress repairs retire
     const beforeSnapshot = readFileSync(snapshot, "utf8");
     const beforeRegister = readFileSync(register, "utf8");
     const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
-    const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
-    expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.main.residency-switched", severity: "high" }));
+    expectOutput(result, "ok", "worktree.check.ok", 0);
     expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
     expect(readFileSync(register, "utf8")).toBe(beforeRegister);
 

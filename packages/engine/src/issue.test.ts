@@ -18,8 +18,9 @@ import {
   appendOccurrence,
   captureIssue,
   closeIssue,
-  computeIdentityKey,
   getIssue,
+  reopenIssue,
+  computeIdentityKey,
   linkIssue,
   listIssues,
   linkIssueScoped,
@@ -766,6 +767,53 @@ describe("issue dispositions, revisions, and relations", () => {
         pmMut(authority, "close-other", { expectedRevision: closed.revision }),
       ),
     ).rejects.toMatchObject({ code: "issue.invalid-disposition" });
+  });
+  test("reopen restores open state, appends reason, preserves closure note and replays by operation id", async () => {
+    const context = ctx("reopen-terminal-");
+    await initializeStore(context).then((handle) => handle.close());
+    const created = await captureIssue(context, baseInput(), mut("reopen-seed"));
+    const closureReason = "acceptance verified";
+    const closed = await closeIssue(context, created.issueId, "resolved", {
+      reason: closureReason,
+      references: ["qa/reopen.md"],
+      alignmentRef: "QA gate: Approve",
+    }, { operationId: "reopen-close", actor: "project-manager", expectedRevision: created.revision });
+    const beforeReopen = await listIssues(context, {});
+    const reason = "new evidence reopens investigation";
+    const reopened = await reopenIssue(context, created.issueId, { reason }, {
+      operationId: "reopen-once", actor: "project-manager", expectedRevision: closed.revision,
+    });
+    expect(reopened.revision).toBe(closed.revision + 1);
+    expect(reopened.storeRevision).toBe(beforeReopen.storeRevision + 1);
+
+    const detail = await getIssue(context, created.issueId);
+    expect(detail.disposition).toBe("open");
+    expect(detail.closedAt).toBeNull();
+    expect(detail.closureNote).toBe(closureReason);
+    expect(detail.revision).toBe(reopened.revision);
+    expect(detail.transitions).toHaveLength(2);
+    expect(detail.transitions[1]).toMatchObject({
+      fromDisposition: "resolved",
+      toDisposition: "open",
+      reason,
+      evidence: { reason },
+      actor: "project-manager",
+      issueRevision: reopened.revision,
+    });
+
+    expect(await reopenIssue(context, created.issueId, { reason }, {
+      operationId: "reopen-once", actor: "project-manager", expectedRevision: closed.revision,
+    })).toEqual(reopened);
+    await expect(reopenIssue(context, created.issueId, { reason: "again" }, {
+      operationId: "reopen-open-guard", actor: "project-manager", expectedRevision: reopened.revision,
+    })).rejects.toMatchObject({
+      code: "issue.invalid-disposition",
+      message: "[issue.invalid-disposition] Only terminal\u2192open is accepted; open cannot transition to open",
+    });
+    await expect(reopenIssue(context, created.issueId, { reason }, {
+      operationId: "reopen-stale", actor: "project-manager", expectedRevision: closed.revision,
+    })).rejects.toMatchObject({ code: "issue.revision-conflict" });
+    expect(await getIssue(context, created.issueId)).toEqual(detail);
   });
 
   test("duplicate and superseded require a canonical issue", async () => {

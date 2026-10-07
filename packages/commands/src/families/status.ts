@@ -115,7 +115,14 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
               const authority = await resolveCurrentAuthority({ harnessDir });
               if (authority.route === "execution") {
                 const read = await readExecutionAuthority({ harnessDir });
-                return ok("status.validate", { authority: read.data, token: read.token, workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [], state: "active" });
+                return ok("status.validate", {
+                  authority: read.data,
+                  token: read.token,
+                  workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
+                  terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
+                  terminalAdoptions: "terminalAdoptions" in read.data ? read.data.terminalAdoptions : [],
+                  state: "active",
+                });
               }
             } catch (error) {
               const code = engineCode(error, "status.authority-unreadable");

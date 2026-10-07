@@ -141,10 +141,127 @@ describe("mstar issue CLI bundle", () => {
       required: false,
       requiredWhen: ["waive"],
     });
-
+    const reopenSchema = runBundle("bun-shebang", ["schema", "IssueReopen"], process.cwd());
+    expect(reopenSchema.exitCode).toBe(0);
+    expect((jsonOf(reopenSchema).data as { fields: Array<{ name: string; required: boolean; nonblankWhenPresent?: boolean }> }).fields)
+      .toContainEqual(expect.objectContaining({ name: "reason", required: true, nonblankWhenPresent: true }));
+    const commandSchema = runBundle("bun-shebang", ["schema", "--command", "issue.reopen"], process.cwd());
+    expect(commandSchema.exitCode).toBe(0);
+    const descriptor = (jsonOf(commandSchema).data as { descriptor: { requirements: Array<Record<string, unknown>> } }).descriptor;
+    expect(descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect",
+      tokenKind: "revision",
+    }));
+    const reopenHelp = runBundle("bun-shebang", ["issue", "reopen", "--help"], process.cwd());
+    expect(`${reopenHelp.stdout}${reopenHelp.stderr}`).toContain("Exact current issue revision from `mstar issue");
   });
 
 
+  test("reopen is terminal-only, CAS guarded, and preserves the prior closure note", async () => {
+    const { root, harness } = await makeHarness();
+    const captureFile = join(root, "capture.json");
+    writeJson(captureFile, capturePayload());
+    const added = runBundle("node", [
+      "issue", "add", "--file", captureFile, "--operation-id", "reopen-seed",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(added.exitCode).toBe(0);
+    const created = jsonOf(added).data as { issueId: string; revision: number };
+
+    const closeFile = join(root, "close.json");
+    writeJson(closeFile, {
+      reason: "acceptance verified",
+      references: ["qa/reopen-run.md"],
+      alignmentRef: "QA gate: Approve",
+    });
+    const closed = runBundle("node", [
+      "issue", "close", "--id", created.issueId, "--disposition", "resolved", "--file", closeFile,
+      "--expect", String(created.revision), "--operation-id", "reopen-close",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(closed.exitCode).toBe(0);
+    const closeReceipt = jsonOf(closed).data as { revision: number };
+
+    const reopenFile = join(root, "reopen.json");
+    writeJson(reopenFile, { reason: "new evidence requires investigation" });
+    const args = [
+      "issue", "reopen", "--id", created.issueId, "--file", reopenFile,
+      "--expect", String(closeReceipt.revision), "--operation-id", "reopen-once",
+      "--actor", "project-manager", "--harness", harness,
+    ];
+    const reopened = runBundle("node", args, root);
+    expect(reopened.exitCode).toBe(0);
+    expect(jsonOf(reopened).data).toMatchObject({ issueId: created.issueId, revision: closeReceipt.revision + 1, created: false });
+    const replay = runBundle("node", args, root);
+    expect(replay.exitCode).toBe(0);
+    expect(jsonOf(replay).data).toEqual(jsonOf(reopened).data);
+
+    const operationConflict = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId,
+      "--payload", JSON.stringify({ reason: "different request on reserved key" }),
+      "--expect", String(closeReceipt.revision), "--operation-id", "reopen-once",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(operationConflict.exitCode).toBe(1);
+    expect(jsonOf(operationConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    expect(String(jsonOf(operationConflict).message)).toContain(
+      "Recovery: Replay the original request that reserved this operation id unchanged to receive its recorded receipt",
+    );
+    expect(String(jsonOf(operationConflict).message)).toContain("or run this operation with a fresh `--operation-id`");
+
+    const closeIdConflict = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId,
+      "--payload", JSON.stringify({ reason: "different command reserved the id" }),
+      "--expect", String(closeReceipt.revision), "--operation-id", "reopen-close",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(closeIdConflict.exitCode).toBe(1);
+    expect(jsonOf(closeIdConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    expect(String(jsonOf(closeIdConflict).message)).toContain(
+      "Recovery: Replay the original request that reserved this operation id unchanged",
+    );
+
+    const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
+    expect(shown.exitCode).toBe(0);
+    const detail = jsonOf(shown).data as {
+      disposition: string; closedAt: string | null; closureNote: string; revision: number;
+      transitions: Array<{ fromDisposition: string; toDisposition: string; reason: string }>;
+    };
+    expect(detail).toMatchObject({
+      disposition: "open",
+      closedAt: null,
+      closureNote: "acceptance verified",
+      revision: closeReceipt.revision + 1,
+    });
+    expect(detail.transitions).toHaveLength(2);
+    expect(detail.transitions[1]).toMatchObject({
+      fromDisposition: "resolved",
+      toDisposition: "open",
+      reason: "new evidence requires investigation",
+    });
+
+    const openRefusal = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId, "--payload", JSON.stringify({ reason: "duplicate attempt" }),
+      "--expect", String(detail.revision), "--operation-id", "reopen-open",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(openRefusal.exitCode).toBe(1);
+    expect(jsonOf(openRefusal)).toMatchObject({ status: "refused", code: "issue.invalid-disposition" });
+    expect(String(jsonOf(openRefusal).message)).toContain("Only terminal→open is accepted; open cannot transition to open");
+    expect(String(jsonOf(openRefusal).message)).toContain("Help: mstar issue reopen --help");
+    expect(String(jsonOf(openRefusal).message)).toContain("Recovery: Run `mstar issue show --id I-000001`");
+
+    const stale = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId, "--payload", JSON.stringify({ reason: "stale attempt" }),
+      "--expect", String(closeReceipt.revision), "--operation-id", "reopen-stale",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
+    expect(String(jsonOf(stale).message)).toContain("Recovery: Run `mstar issue show --id I-000001`");
+    const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
+    expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
+  });
   test("unknown schema type is a usage refusal with available type names", () => {
     const result = runBundle("bun-shebang", ["schema", "HandofffEvidence"], process.cwd());
     expect(result.exitCode).toBe(2);

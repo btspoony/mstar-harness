@@ -421,8 +421,8 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
       const main = mainInfo(repo);
       const result = l1PreDispatchCheck({
         workflowType: "plan", integrationWorktreePath: "", integrationBranch: "",
-        mainWorktree: main, expectedMainBranch: "main",
-        lifecycleBranches: [{ branch: "main", workflowId: "wf-sibling", planId: "plan-main-row" }],
+        mainWorktree: main, expectedMainBranch: main.branch,
+        lifecycleBranches: [{ branch: main.branch, workflowId: "wf-sibling", planId: "plan-main-row" }],
         rowWorktreePath: wts.get("feature/current")!, rowWorkingBranch: "feature/current", planId: "plan-current",
       });
       expect(result.ok).toBe(true);

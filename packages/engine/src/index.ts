@@ -621,6 +621,7 @@ export type {
 } from "./execution-store.js";
 export {
   ExecutionError,
+  adoptTerminalWorkflow,
   bindExecutionSession,
   createExecutionWorkflow,
   initializeExecutionAuthority,
@@ -661,6 +662,7 @@ export type {
   IssueLink,
   IssuePage,
   IssueReceipt,
+  IssueReopen,
   IssueTriage,
   MutationContext,
   OccurrenceInput,
@@ -678,6 +680,8 @@ export {
   getIssue,
   linkIssue,
   listIssues,
+  reopenIssue,
+  reopenIssueOn,
   triageIssue,
   assignIssueMilestone,
   ISSUE_PAYLOAD_SCHEMAS,

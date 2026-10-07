@@ -110,6 +110,9 @@ export type ExecutionErrorCode =
   | "execution.lease-held"
   | "execution.partial-effect"
   | "execution.migration-conflict"
+  | "execution.adoption-refused"
+  | "execution.header-revision-conflict"
+  | "execution.adoption-invalid"
   | "store.not-active"
   | "store.stale-epoch";
 
@@ -174,6 +177,9 @@ export type ExecutionState = {
     coordinator: ExecutionSessionRef | null;
     integrationLease: IntegrationMergeLease | null;
   }>;
+  /** Terminal headers outside ACTIVE registry membership, including their CAS revision. */
+  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number }>;
+  terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
 };
 
 /**
@@ -1020,6 +1026,7 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
     .all() as Array<{ workflow_id?: unknown; entry_json?: unknown }>;
   const entries: WorkflowEntry[] = [];
   const workflows: ExecutionState["workflows"] = [];
+  const registeredIds = new Set<string>();
   for (const row of registry) {
     const workflowId = storedText(row.workflow_id, "execution_registry.workflow_id");
     const entry = storedJsonObject(row.entry_json, `execution_registry(${workflowId}).entry_json`);
@@ -1028,10 +1035,39 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
     if (entry.id !== workflowId) {
       throw corrupt(`execution_registry(${workflowId}).entry_json carries id ${JSON.stringify(entry.id)}`);
     }
+    registeredIds.add(workflowId);
     entries.push(entry as unknown as WorkflowEntry);
     workflows.push(readWorkflowView(db, store, workflowId));
   }
-  return { root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries }, workflows };
+  const terminalUnregistered: NonNullable<ExecutionState["terminalUnregistered"]> = [];
+  const terminalAdoptions: NonNullable<ExecutionState["terminalAdoptions"]> = [];
+  const headers = db.prepare("select workflow_id, revision, state_json from execution_workflows order by rowid")
+    .all() as Array<{ workflow_id?: unknown; revision?: unknown; state_json?: unknown }>;
+  for (const row of headers) {
+    const id = storedText(row.workflow_id, "execution_workflows.workflow_id");
+    if (registeredIds.has(id)) continue;
+    const state = storedJsonObject(row.state_json, `execution_workflows(${id}).state_json`);
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") continue;
+    const revision = storedRevision(row.revision, `execution_workflows(${id}).revision`);
+    if (isNonEmptyString(state.lifecycle_adopted_at) && isNonEmptyString(state.adopt_reason) &&
+        isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
+      terminalAdoptions.push({
+        id, status: state.status, revision,
+        lifecycle_adopted_at: state.lifecycle_adopted_at,
+        adopt_reason: state.adopt_reason,
+        actor_session_id: state.adoption_actor_session_id,
+        operation_id: state.adoption_operation_id,
+      });
+    } else {
+      terminalUnregistered.push({ id, status: state.status, revision });
+    }
+  }
+  return {
+    root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries },
+    workflows,
+    ...(terminalUnregistered.length === 0 ? {} : { terminalUnregistered }),
+    ...(terminalAdoptions.length === 0 ? {} : { terminalAdoptions }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1841,6 +1877,93 @@ export function writeExecutionCreation(
  */
 export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
   return executionToken("root", tx.storeId, tx.epoch, [], readExecutionMetaRow(tx.db).revision);
+}
+
+/**
+ * Adopt a terminal header that was imported without ACTIVE registry membership.
+ * This is deliberately not a close: the terminal state is unchanged and no
+ * registry membership is created.
+ */
+export async function adoptTerminalWorkflow(
+  context: ExecutionContext,
+  input: { workflowId: string; expectedRevision: number; reason: string; operationId: string },
+): Promise<ExecutionReceipt<ExecutionState>> {
+  const caller = context.caller;
+  if (caller.role !== "coordinator" || caller.workflowId !== input.workflowId || !isNonEmptyString(caller.sessionId)) {
+    throw new ExecutionError("execution.scope-mismatch", "terminal adoption requires an acquired coordinator identity addressing the selected workflow");
+  }
+  if (!isNonEmptyString(input.workflowId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1 ||
+      !isNonEmptyString(input.reason) || !isNonEmptyString(input.operationId)) {
+    throw new ExecutionError("execution.adoption-invalid", "workflowId, positive expectedRevision, non-empty reason, and operationId are required");
+  }
+  const requestHash = semanticRequestHash({
+    operation: "workflow.adopt-terminal",
+    address: { workflowId: input.workflowId },
+    caller,
+    intent: { expectedRevision: input.expectedRevision, reason: input.reason },
+  });
+  return withExecutionTransaction(context, (tx) => {
+    if (tx.execution.authorityState !== "active") {
+      throw new ExecutionError("execution.not-active", `the execution authority is ${tx.execution.authorityState}; terminal adoption requires an active authority`);
+    }
+    const replay = readOperationReplay<ExecutionState>(tx, {
+      operationId: input.operationId,
+      requestHash,
+      workflowId: input.workflowId,
+      planId: null,
+      token: { kind: "root", key: [] },
+    });
+    if (replay !== null) return replay;
+    const row = tx.db.prepare("select revision, state_json from execution_workflows where workflow_id = ?")
+      .get(input.workflowId) as { revision?: unknown; state_json?: unknown } | undefined;
+    if (row === undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no terminal header to adopt; register the workflow through the supported workflow registration route`);
+    }
+    const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
+    if (revision !== input.expectedRevision) {
+      throw new ExecutionError("execution.header-revision-conflict", `workflow ${input.workflowId} header revision is ${revision}, not expected revision ${input.expectedRevision}; re-read status validate and retry with its listed revision`);
+    }
+    const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(input.workflowId);
+    if (registered !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is already registered; finish its lifecycle through mstar status workflow-close`);
+    }
+    const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; no supported exit exists for a non-terminal header without registry membership`);
+    }
+    if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.stop_reason)) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason`);
+    }
+    const activeSession = tx.db.prepare(
+      "select session_id from execution_sessions where workflow_id = ? and epoch = ? and state = 'active' limit 1",
+    ).get(input.workflowId, tx.epoch);
+    if (activeSession !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has an ACTIVE coordinator session at the current epoch; no supported exit exists for a terminal header holding an ACTIVE session at the current epoch`);
+    }
+    if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
+    }
+    const now = new Date().toISOString();
+    const nextState = {
+      ...state,
+      lifecycle_adopted_at: now,
+      adopt_reason: input.reason,
+      adoption_actor_session_id: caller.sessionId,
+      adoption_operation_id: input.operationId,
+    };
+    tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?")
+      .run(JSON.stringify(nextState), now, input.workflowId, input.expectedRevision);
+    tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
+    tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    const receipt: ExecutionRead<ExecutionState> = {
+      data: readExecutionGraph(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, readExecutionMetaRow(tx.db)),
+      token: executionRootTokenOf(tx),
+      storeId: tx.storeId,
+      epoch: tx.epoch,
+    };
+    writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
+    return { ...receipt, operationId: input.operationId, replayed: false };
+  });
 }
 
 /**
