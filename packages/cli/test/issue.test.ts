@@ -196,6 +196,19 @@ describe("mstar issue CLI bundle", () => {
     expect(replay.exitCode).toBe(0);
     expect(jsonOf(replay).data).toEqual(jsonOf(reopened).data);
 
+    const operationConflict = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId,
+      "--payload", JSON.stringify({ reason: "different request on reserved key" }),
+      "--expect", String(closeReceipt.revision), "--operation-id", "reopen-once",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(operationConflict.exitCode).toBe(1);
+    expect(jsonOf(operationConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    expect(String(jsonOf(operationConflict).message)).toContain(
+      "Recovery: Replay the original `mstar issue reopen` request unchanged",
+    );
+    expect(String(jsonOf(operationConflict).message)).toContain("or retry this request with a fresh `--operation-id`");
+
     const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect(shown.exitCode).toBe(0);
     const detail = jsonOf(shown).data as {
