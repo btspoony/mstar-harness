@@ -698,7 +698,7 @@ function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: 
   if (workingBranch === controlBranch) {
     throw new CoordinationError(
       "plan.prepare.working-branch-control",
-      `workingBranch "${workingBranch}" is the control checkout branch; record a feature branch — the primary worktree is the control checkout and is never a plan's working lane`,
+      `workingBranch "${workingBranch}" is the control checkout branch; record a feature branch \u2014 the primary worktree is the control checkout and is never a plan's working lane`,
       { working_branch: workingBranch, control_branch: controlBranch },
     );
   }

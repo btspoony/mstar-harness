@@ -395,6 +395,8 @@ var GIT_SHA;
 var HASH_RE;
 var init_coordination_write = __esm(() => {
   COORDINATION_ERROR_CODES = [
+    "plan.prepare.working-branch-control",
+    "plan.prepare.control-branch-unresolved",
     "coordination.harness-not-found",
     "coordination.workflow-not-found",
     "coordination.plan-not-found",
