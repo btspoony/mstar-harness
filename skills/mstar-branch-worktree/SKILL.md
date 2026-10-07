@@ -89,8 +89,8 @@ Spec branch naming → mstar-conventions. L1/L2 checkout isolation → Worktree 
 
 在首次写仓库或 `commit` 之前：
 
-1. 校验当前分支与 Assignment 是否一致。
-2. 若 Assignment 含 `Worktree path`，先 `cd` 到该目录，并通过 `git rev-parse --show-toplevel` 校验当前检出根目录与该路径一致；不一致则停下并回报 PM，不得写入。
+1. 若 Assignment 含 `Worktree path`，先 `cd` 到该目录，并通过 `git rev-parse --show-toplevel` 校验当前检出根目录与该路径一致；不一致则停下并回报 PM，不得写入。分支校验必须在该目录内进行，避免在 primary checkout 上校验分支而误报冲突。
+2. 在上一步校验过的检出目录内校验当前分支与 Assignment 是否一致。
 3. 只能执行 PM 在 Assignment 中定义的分支策略。
 4. 禁止自行切回 `main`/`master` 再重开分支流程。
 5. 若 Assignment 含糊或与本地分支状态冲突，先停下并回报 PM。
