@@ -120,6 +120,7 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
                   token: read.token,
                   workflows: "workflows" in read.data ? read.data.workflows.map((entry) => ({ id: entry.state.id, token: entry.workflowToken })) : [],
                   terminalUnregistered: "terminalUnregistered" in read.data ? read.data.terminalUnregistered : [],
+                  terminalAdoptions: "terminalAdoptions" in read.data ? read.data.terminalAdoptions : [],
                   state: "active",
                 });
               }

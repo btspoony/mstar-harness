@@ -47,6 +47,13 @@ function invocation(cwd: string): InvocationContext {
 test("workflow adopt-terminal publishes revision source, replays, and reports adopted terminal state", async () => {
   const { root, harness } = await fixture();
   const input = { workflow: "wf-command", harness, expect: "1", operation: "command-adopt-1", reason: "close imported terminal header" };
+  const before = await executeCommand("status.validate", {}, invocation(root));
+  expect(before.status).toBe("ok");
+  if (before.status === "ok") {
+    expect((before.data as { terminalUnregistered: unknown[]; terminalAdoptions: unknown[] }).terminalUnregistered)
+      .toEqual([{ id: "wf-command", status: "completed", revision: 1 }]);
+    expect((before.data as { terminalAdoptions: unknown[] }).terminalAdoptions).toEqual([]);
+  }
   const first = await executeCommand("workflow.adopt-terminal", input, invocation(root));
   expect(first).toMatchObject({ status: "ok" });
   const replay = await executeCommand("workflow.adopt-terminal", input, invocation(root));
@@ -56,8 +63,9 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   const status = await executeCommand("status.validate", {}, invocation(root));
   expect(status.status).toBe("ok");
   if (status.status === "ok") {
-    expect((status.data as { terminalUnregistered: Array<{ id: string; revision: number; adoption: unknown }> }).terminalUnregistered)
-      .toMatchObject([{ id: "wf-command", revision: 2, adoption: { reason: input.reason } }]);
+    expect((status.data as { terminalUnregistered: unknown[]; terminalAdoptions: Array<{ id: string; revision: number; lifecycle_adopted_at: string; adopt_reason: string }> }).terminalUnregistered).toEqual([]);
+    expect((status.data as { terminalAdoptions: Array<{ id: string; revision: number; lifecycle_adopted_at: string; adopt_reason: string }> }).terminalAdoptions)
+      .toMatchObject([{ id: "wf-command", revision: 2, lifecycle_adopted_at: expect.any(String), adopt_reason: input.reason }]);
   }
   const definition = getCommandDefinitions().find((entry) => entry.id === "workflow.adopt-terminal");
   expect(definition).toBeDefined();
