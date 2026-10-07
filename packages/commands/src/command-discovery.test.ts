@@ -62,7 +62,7 @@ async function usageMessage(envelope: CommandEnvelope): Promise<string> {
 }
 
 type SchemaCommandData =
-  | { kind: "command"; descriptor: { id: string; description: string; effects: readonly string[]; requirements: readonly { name: string; ownership: string; route: string; help?: string; tokenKind?: "root" | "workflow" | "plan" | "none" }[]; payloadSchemas: Record<string, unknown> } }
+  | { kind: "command"; descriptor: { id: string; description: string; effects: readonly string[]; requirements: readonly { name: string; ownership: string; route: string; help?: string; tokenKind?: "root" | "workflow" | "plan" | "revision" | "none" }[]; payloadSchemas: Record<string, unknown> } }
   | { kind: "family"; family: string; members: readonly { id: string; description: string }[] };
 
 describe("command discovery", () => {

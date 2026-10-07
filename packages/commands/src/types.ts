@@ -21,7 +21,7 @@ export type PayloadDescriptor = Readonly<{
 
 export type CommandRequirementOwnership = "caller" | "derivable" | "unknown";
 
-export type CommandTokenKind = "root" | "workflow" | "plan" | "none";
+export type CommandTokenKind = "root" | "workflow" | "plan" | "revision" | "none";
 
 export type CommandRequirementRoute = "cli" | "mcp";
 

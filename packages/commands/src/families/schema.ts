@@ -76,6 +76,10 @@ export type CommandSchemaSelection =
  * entries override derived ones per name; anything unannotated stays unknown,
  * never all-optional.
  */
+/**
+ * `revision` is a decimal header-row CAS, not an execution token. Its
+ * acquisition source is the terminal-unregistered rows in `status validate`.
+ */
 const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"]>> = {
   "workflow.register": "root",
   "iteration.register": "root",
@@ -85,6 +89,7 @@ const EXPECT_TOKEN_KINDS: Readonly<Record<string, CommandRequirement["tokenKind"
   "workflow.execution-policy": "workflow",
   "workflow.integration-worktree": "workflow",
   "status.workflow-close": "workflow",
+  "workflow.adopt-terminal": "revision",
   "plan.bind": "workflow",
   "plan.prepare": "plan",
   "session.recover": "workflow",

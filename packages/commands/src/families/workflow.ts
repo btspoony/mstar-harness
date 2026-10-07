@@ -4,7 +4,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import {
   WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
-  commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
+  adoptTerminalWorkflow, commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
@@ -49,9 +49,20 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
     : undefined;
+  const message = error instanceof Error ? error.message : String(error);
   const recovery = code === "workflow.register.title-constraint"
     ? "Use the title in the selected plan document's H1, or correct that document before registering."
-    : undefined;
+    : code === "execution.header-revision-conflict"
+      ? "Run `mstar status validate`, then retry `mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>`."
+      : code === "execution.adoption-refused" && message.includes("already registered")
+        ? "Run `mstar status workflow-close --workflow <id>` to finish the existing close path."
+        : code === "execution.adoption-refused" && message.includes("ACTIVE session")
+          ? "Run `mstar session recover --workflow <id> --prior-session <id> --reason <text> --expect <token> --operation <id>`, then retry terminal adoption."
+          : code === "execution.adoption-refused" && message.includes("not terminal")
+            ? "Register the non-terminal workflow through `mstar workflow register`, then use its registered lifecycle route."
+            : code.startsWith("execution.adoption")
+              ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
+              : undefined;
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
@@ -315,6 +326,48 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, [{ key: "sessionId", context: "sessionId" }], {
       attestation: "absolute path to the operator's ActivationAttestation JSON \u2014 the engine requires it when an interrupted integration-merge claim is held",
     }),
+    makeDefinition(
+      "workflow.adopt-terminal",
+      "Record an adoption receipt for an already-terminal header without registry membership. Read `mstar status validate` and use the listed `revision` with --expect; this is a header revision, not an execution token.",
+      "write",
+      ["workflow", "harness", "expect", "operation", "reason"],
+      async (input, context) => {
+        const id = "workflow.adopt-terminal";
+        try {
+          if (context.sessionId === undefined || context.sessionId.trim() === "") {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `terminal adoption requires an acquired coordinator identity (${IDENTITY_RECOVERY})` });
+          }
+          const acquired = context.executionIdentity;
+          const workflowId = input.workflow ?? acquired?.workflowId;
+          if (workflowId === undefined || input.expect === undefined || input.operation === undefined || input.reason === undefined) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, expect (header revision), operation and reason are required; obtain the revision from status validate" });
+          }
+          if (!/^[1-9]\d*$/.test(input.expect) || !Number.isSafeInteger(Number(input.expect))) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--expect must be the positive integer header revision listed by status validate" });
+          }
+          if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator")) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
+          }
+          const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
+          if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
+          const active = await resolveExecutionReadRoute({ harnessDir });
+          if (active !== "execution") {
+            return refusalEnvelope({ command: id, status: "refused", code: "execution.adoption-refused", exitCode: 1, message: "terminal adoption requires an active execution authority; register the workflow through the supported workflow registration route" });
+          }
+          const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
+          return ok(id, await adoptTerminalWorkflow(executionContextFor({ harnessDir }, identity), {
+            workflowId,
+            expectedRevision: Number(input.expect),
+            reason: input.reason,
+            operationId: input.operation,
+          }));
+        } catch (error) {
+          return engineRefusal(id, error);
+        }
+      },
+      [{ key: "sessionId", context: "sessionId" }],
+      { expect: "Header revision CAS (positive integer) acquired from the terminalUnregistered[].revision entry in `mstar status validate`, not an execution token." },
+    ),
   ];
   for (const transition of transitions) {
     const id = `workflow.${transition.name}`;
