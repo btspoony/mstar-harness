@@ -17,7 +17,6 @@
  * `mutateExecutionPlan`.
  */
 import { dirname, isAbsolute } from "node:path";
-import { execFileSync } from "node:child_process";
 import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
 import {
   CoordinationError,
@@ -680,17 +679,20 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
 /** Refuse assigning any plan row to the branch attached to the control checkout. */
 function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: string | undefined): void {
   if (workingBranch === undefined) return;
-  let controlBranch: string;
+  const controlRoot = controlHarnessRoot(context);
+  let repositoryRoot: string | undefined;
+  let controlBranch: string | undefined;
   try {
-    const controlRoot = controlHarnessRoot(context);
-    const repositoryRoot = execFileSync("git", ["-C", controlRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-    controlBranch = execFileSync("git", ["-C", repositoryRoot, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
-    if (repositoryRoot === "" || controlBranch === "" || controlBranch === "HEAD") throw new Error("control branch is unresolved");
+    repositoryRoot = gitRead(controlRoot, ["rev-parse", "--show-toplevel"]);
+    if (repositoryRoot !== undefined) controlBranch = gitRead(repositoryRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
   } catch {
+    // Bounded Git probe failures are converted below to the actionable refusal.
+  }
+  if (repositoryRoot === undefined || controlBranch === undefined || controlBranch === "" || controlBranch === "HEAD") {
     throw new CoordinationError(
       "plan.prepare.control-branch-unresolved",
       "cannot resolve the control checkout branch; run prepare where the control checkout is a valid git repo",
-      { harness_root: controlHarnessRoot(context) },
+      { harness_root: controlRoot },
     );
   }
   if (workingBranch === controlBranch) {

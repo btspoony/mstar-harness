@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: engine
+packages: root, engine
 ---
 
 - **L1 worktree ownership:** ignore a row claiming the recorded main-worktree branch when checking residency and identify the owning workflow and plan for real ownership conflicts.

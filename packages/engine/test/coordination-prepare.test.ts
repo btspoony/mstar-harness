@@ -23,7 +23,7 @@ import {
 import { initializeExecutionAuthority } from "../src/execution-store.js";
 import type { RecoveryDetails } from "../src/recovery-intent.js";
 import { ACTIVATION_PROTOCOL_VERSION, StoreActivationError, type ActivationAttestation } from "../src/store-activation.js";
-import { initializeStore } from "../src/store-db.js";
+import { initializeStore, type StoreContext } from "../src/store-db.js";
 import { CoordinationError } from "../src/coordination-write.js";
 import type { ExecutionIdentity } from "../src/session-identity.js";
 import { registerWorkflow } from "../src/status.js";
@@ -32,7 +32,6 @@ import { writeWorkflowSnapshot, type WorkflowSnapshot } from "../src/workflow.js
 import { registerCatalogEntity } from "../src/catalog.js";
 import { prepareExecutionPlan } from "../src/execution-coordination.js";
 import { bindExecutionSession, createExecutionWorkflow, readExecutionState, type ExecutionCaller, type ExecutionContext } from "../src/execution-store.js";
-import { initializeStore, type StoreContext } from "../src/store-db.js";
 import {
   FIXTURE_COORDINATOR_ID,
   PLAN_ID,
