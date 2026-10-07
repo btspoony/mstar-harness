@@ -28,6 +28,7 @@ import type {
   RoadmapDTO,
 } from "@mstar-harness/engine";
 import { html } from "htm/preact";
+import type { ComponentChildren } from "preact";
 
 import type { Disclosure, Envelope, LoadState } from "../components";
 import {
@@ -313,87 +314,128 @@ function MilestoneIssues(props: { issues: MilestoneGroup["issues"] }) {
   </ul>`;
 }
 
-/** One milestone card: stored name, status, nullable target, the four counts, its issues. */
+/** The four stored counts, compact enough to sit in one board column. */
+function MilestoneCounts(props: { milestone: ProjectMilestoneDTO }) {
+  return html`<ul class="board-counts">
+    ${milestoneCountRows(props.milestone).map(
+      (row) => html`<li key=${row.label} class="board-count">
+        <span class="board-count-label">${row.label}</span>
+        <span class="mono">${row.value}</span>
+      </li>`,
+    )}
+  </ul>`;
+}
+
+/**
+ * One board column: the milestone's stored name and id, its status, its
+ * nullable target, its counts and — as the items — the issues assigned to it.
+ * The milestone's status and an issue's disposition are store vocabulary, so
+ * neither is derived from the historical document below the board.
+ *
+ * Hook-free so the column order, the item shape and the rendered text are
+ * checkable from a group alone (`view-model.test.ts`, the panel precedent).
+ */
 export function MilestoneCard(props: { group: MilestoneGroup }) {
   const milestone = props.group.milestone;
-  return html`<li class="history-item">
-    <p class="history-head">
+  return html`<li class="board-column">
+    <p class="board-column-head">
       <span class="history-kind">${milestone.name}</span>
       <span class="mono">${milestone.milestoneId}</span>
     </p>
     <dl class="facts">
       <${Field} label="Milestone status"><${Badge} tone="neutral">${milestone.status}</${Badge}></${Field}>
       <${Field} label="Target">${milestoneTargetText(milestone.target)}</${Field}>
-      ${milestoneCountRows(milestone).map(
-        (row) => html`<${Field} key=${row.label} label=${row.label}>${row.value}</${Field}>`,
-      )}
     </dl>
+    <${MilestoneCounts} milestone=${milestone} />
     <${MilestoneIssues} issues=${props.group.issues} />
   </li>`;
 }
 
-export function RoadmapView() {
-  const project = roadmapProject(window.location.search);
-  const load = useEnvelope<RoadmapDTO | null>(
-    project === null ? null : `/api/roadmap?${new URLSearchParams({ project }).toString()}`,
-  );
-  const panel = roadmapPanel(project, load);
+/**
+ * The milestone board (issue 306): one column per milestone in the read's §4
+ * ordinal order, plus the project's explicitly named unassigned column. The
+ * unassigned count is the only unassigned data the envelope carries, so that
+ * column names the count and never invents rows.
+ *
+ * Read-only by construction: the board renders stored data and nothing else —
+ * no control, no link, no derivation across the two authorities.
+ */
+export function MilestoneBoard(props: MilestoneGroups) {
+  return html`<ul class="board">
+    ${props.groups.map((group) => html`<${MilestoneCard} key=${group.milestone.milestoneId} group=${group} />`)}
+    <li class="board-column board-column-unassigned">
+      <p class="board-column-head"><span class="history-kind">Unassigned issues</span></p>
+      <p class="hint">${unassignedIssuesLine(props.unassignedIssues)}</p>
+    </li>
+  </ul>`;
+}
 
-  const heading = html`<h1 class="heading-28" id="roadmap-heading" tabindex="-1">Roadmap</h1>`;
+/**
+ * A section demoted below the board: the content authority's prose, kept
+ * collapsed so the board stays the page's core visual. Native
+ * `<details>`/`<summary>` keeps it keyboard-accessible with no script and no
+ * custom control (DESIGN.md "Controls, focus and accessibility").
+ */
+function CollapsibleSection(props: { title: string; children: ComponentChildren }) {
+  return html`<details class="collapsible detail-section">
+    <summary class="collapsible-summary"><h2 class="heading-20">${props.title}</h2></summary>
+    ${props.children}
+  </details>`;
+}
 
-  if (panel.kind === "no-project") {
-    return html`${heading}<${ProjectEntry} />`;
-  }
-
+/**
+ * The roadmap panel's body for a selected project, hook-free so the board, the
+ * demoted content sections and the refusal render are checkable from a panel
+ * alone. `RoadmapView` owns the no-project branch (`ProjectEntry` is the read).
+ */
+export function RoadmapBody(props: { project: string; panel: Exclude<RoadmapPanel, { kind: "no-project" }> }) {
+  const project = props.project;
+  const panel = props.panel;
   const state = panel.kind === "ready" ? panel.state : null;
   const roadmap = state === null || state.content.kind === "not-found" ? null : state.content.roadmap;
   const disclosure = state === null ? null : projectionDisclosure(state.freshness.projection);
-  const milestoneCount = state?.milestones === null || state?.milestones === undefined ? 0 : state.milestones.groups.length;
+  const groups = state === null ? null : state.milestones;
+  const milestoneCount = groups === null ? 0 : groups.groups.length;
   const announcement =
-    load.status === "error"
-      ? load.message
-      : load.status === "loading"
+    panel.kind === "refused"
+      ? panel.message
+      : panel.kind === "loading"
         ? "Loading roadmap."
         : state?.content.kind === "not-found"
           ? `Project ${project} was not found in the catalog.`
           : `${milestoneCount} milestones loaded.`;
 
-  return html`${heading}
-    <p class="hint">Project ${project} · Direction and the store's milestone grouping. Read-only: import or replace content with the roadmap CLI, add or update milestones with the milestone CLI.</p>
+  return html`<p class="hint">Project ${project} · Direction and the store's milestone grouping. Read-only: import or replace content with the roadmap CLI, add or update milestones with the milestone CLI.</p>
     <${LiveRegion} message=${announcement} />
-    ${load.status === "loading" ? html`<p class="hint">Loading roadmap…</p>` : null}
-    ${load.status === "error" ? html`<${Notice} tone="error">${load.message}</${Notice}>` : null}
+    ${panel.kind === "loading" ? html`<p class="hint">Loading roadmap…</p>` : null}
+    ${panel.kind === "refused" ? html`<${Notice} tone="error">${panel.message}</${Notice}>` : null}
     ${state?.content.kind === "not-found"
       ? html`<${EmptyState}><p class="prose">Project ${project} was not found in the catalog. Check the project id and try again.</p></${EmptyState}>`
       : null}
     ${state !== null && roadmap !== null
       ? html`<${DetailSection} title="Catalog"><${CatalogFacts} catalog=${roadmap.catalog} /></${DetailSection}>`
       : null}
-    ${state !== null && roadmap !== null
+    ${state !== null && groups !== null
       ? html`<${DetailSection} title="Milestones">
           <p class="hint">Milestones are stored records grouped with the issues assigned to them; a milestone's status and an issue's disposition come from the store, never from the historical document.</p>
-          ${state.milestones === null || state.milestones.groups.length === 0
-            ? html`<${EmptyState}>
-                <p class="prose">No milestones are recorded for this project. ${unassignedIssuesLine(state.milestones?.unassignedIssues ?? 0)}</p>
-              </${EmptyState}>`
-            : html`<ul class="history">
-                ${state.milestones.groups.map(
-                  (group) => html`<${MilestoneCard} key=${group.milestone.milestoneId} group=${group} />`,
-                )}
-              </ul>
-              <p class="hint">${unassignedIssuesLine(state.milestones.unassignedIssues)}</p>`}
+          ${groups.groups.length === 0
+            ? html`<p class="hint">No milestones are recorded for this project.</p>`
+            : null}
+          <div class="table-scroll" role="region" aria-label="Milestone board" tabindex="0">
+            <${MilestoneBoard} groups=${groups.groups} unassignedIssues=${groups.unassignedIssues} />
+          </div>
         </${DetailSection}>`
       : null}
     ${roadmap?.content != null
-      ? html`<${DetailSection} title="Direction">
+      ? html`<${CollapsibleSection} title="Direction">
             ${roadmap.content.direction === null
               ? html`<p class="prose">No direction text is recorded in the roadmap document.</p>`
               : html`<p class="prose">${roadmap.content.direction}</p>`}
-          </${DetailSection}>
-          <${DetailSection} title="Stored document (historical)">
+          </${CollapsibleSection}>
+          <${CollapsibleSection} title="Stored document (historical)">
             <p class="hint">Historical source text, kept verbatim: its goal checkboxes and frontmatter milestone names are not a live status source. Milestone status and issue counts come from the store, shown above.</p>
             <pre class="prose">${roadmap.content.contentMarkdown}</pre>
-          </${DetailSection}>`
+          </${CollapsibleSection}>`
       : null}
     ${roadmap === null && state?.content.kind === "absent"
       ? html`<${DetailSection} title="Stored document">
@@ -411,4 +453,22 @@ export function RoadmapView() {
           ${disclosure === null ? null : html`<${ProjectionNotice} disclosure=${disclosure} />`}
         </${DetailSection}>`
       : null}`;
+}
+
+export function RoadmapView() {
+  const project = roadmapProject(window.location.search);
+  const load = useEnvelope<RoadmapDTO | null>(
+    project === null ? null : `/api/roadmap?${new URLSearchParams({ project }).toString()}`,
+  );
+  const panel = roadmapPanel(project, load);
+
+  const heading = html`<h1 class="heading-28" id="roadmap-heading" tabindex="-1">Roadmap</h1>`;
+
+  // No project selected: the catalog's project list. `ProjectEntry` is the read,
+  // so it stays outside the hook-free body.
+  if (project === null || panel.kind === "no-project") {
+    return html`${heading}<${ProjectEntry} />`;
+  }
+
+  return html`${heading}<${RoadmapBody} project=${project} panel=${panel} />`;
 }

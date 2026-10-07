@@ -47,8 +47,10 @@ import {
 import { chartModel, chartSummary, flowNotes, flowPanelState, originLabel, yAxisTicks } from "./views/issue-flow";
 import { compassState, iterationExecutionState, iterationListState, iterationPlanRow } from "./views/iterations";
 import {
+  MilestoneBoard,
   MilestoneCard,
   ProjectListPanel,
+  RoadmapBody,
   milestoneCountsLine,
   milestoneGroups,
   milestoneTargetText,
@@ -819,8 +821,12 @@ type VNodeLike = {
   type?: unknown;
   props: {
     children?: unknown;
+    class?: unknown;
+    "data-tone"?: unknown;
     dangerouslySetInnerHTML?: unknown;
     href?: unknown;
+    open?: unknown;
+    tabindex?: unknown;
     "aria-label"?: unknown;
   };
 };
@@ -1042,6 +1048,232 @@ describe("milestone freshness disclosure", () => {
     expect(projectionStateLine({ ...noTimes, generation: null, freshness: "unavailable" })).toContain(
       "no valid generation is published",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The milestone board: one column per milestone in ordinal order, the explicit
+// unassigned trailing column, and Direction demoted below it
+// ---------------------------------------------------------------------------
+
+/** Every vnode the tree renders, in the order the browser would paint them. */
+function walkVNodes(node: unknown): VNodeLike[] {
+  if (Array.isArray(node)) return node.flatMap(walkVNodes);
+  if (!isVNode(node)) return [];
+  const body = typeof node.type === "function" ? node.type(node.props) : node.props.children;
+  return [node, ...walkVNodes(body)];
+}
+
+function classNames(node: VNodeLike): string[] {
+  return typeof node.props.class === "string" ? node.props.class.split(/\s+/) : [];
+}
+
+/** Every vnode the tree renders with this class, same hook-free walk as `renderedText`. */
+function vnodesByClass(node: unknown, className: string): VNodeLike[] {
+  return walkVNodes(node).filter((child) => classNames(child).includes(className));
+}
+
+/** The board's own columns, in paint order: the milestone columns plus the trailing unassigned one. */
+function boardColumns(board: unknown): VNodeLike[] {
+  return walkVNodes(board).filter((node) => classNames(node).includes("board-column"));
+}
+
+describe("milestone board", () => {
+  test("the board renders one column per milestone in ordinal order, with the unassigned count as its trailing column", () => {
+    const groups = milestoneGroups(
+      milestoneRead({
+        milestones: [
+          milestone({ milestoneId: "m-2", name: "Phase 2", ordinal: 1, target: null, status: "planned" }),
+          milestone({ milestoneId: "m-1", name: "Phase 1", ordinal: 0 }),
+        ],
+        issues: [
+          linkedIssue("I-2", "m-1"),
+          linkedIssue("I-1", "m-1", { disposition: "resolved" }),
+          linkedIssue("I-3", "m-2"),
+        ],
+        unassignedIssues: 2,
+      }),
+    );
+    const board = MilestoneBoard(groups);
+    const columns = boardColumns(board);
+    // One column per group, plus exactly one named column for the unassigned count.
+    expect(columns).toHaveLength(groups.groups.length + 1);
+    const unassigned = columns.filter((column) => classNames(column).includes("board-column-unassigned"));
+    expect(unassigned).toHaveLength(1);
+    expect(columns[columns.length - 1]).toBe(unassigned[0]!);
+
+    // Columns keep the read's ordinal order, whatever order the rows arrived in.
+    expect(
+      columns
+        .slice(0, -1)
+        .map((column) => renderedText(vnodesByClass(column, "board-column-head")).join("\n")),
+    ).toEqual(["Phase 1\nm-1", "Phase 2\nm-2"]);
+
+    // The unassigned column names the count in its own copy and invents no rows.
+    expect(renderedText(unassigned[0]!).join("\n")).toContain(unassignedIssuesLine(2));
+    expect(vnodesByClass(unassigned[0]!, "relations")).toEqual([]);
+
+    // A read-only board: nothing in it is a link, a control or a raw-HTML sink.
+    expect(renderedHrefs(board)).toEqual([]);
+    expect(renderedAriaLabels(board)).toEqual([]);
+
+    // Rendered inside the panel the board sits in a labelled, focusable scroll
+    // region (DESIGN.md "Data tables may scroll inside a labelled container").
+    const panel = RoadmapBody({
+      project: "engine",
+      panel: {
+        kind: "ready",
+        state: readyState(
+          roadmap({
+            milestones: milestoneRead({
+              milestones: [
+                milestone({ milestoneId: "m-2", name: "Phase 2", ordinal: 1 }),
+                milestone({ milestoneId: "m-1", name: "Phase 1", ordinal: 0 }),
+              ],
+              issues: [linkedIssue("I-2", "m-1")],
+              unassignedIssues: 2,
+            }),
+          }),
+        ),
+      },
+    });
+    const region = walkVNodes(panel).find((node) => classNames(node).includes("table-scroll"));
+    expect(region?.props["aria-label"]).toBe("Milestone board");
+    expect(region?.props.tabindex).toBe("0");
+
+    expect(walkVNodes(board).filter((node) => ["button", "input", "select", "a"].includes(String(node.type)))).toEqual([]);
+    expect(markupSinks(board)).toEqual([]);
+
+    // The milestone header keeps its stored status label and the nullable target.
+    const firstText = renderedText(columns[0]!).join("\n");
+    expect(firstText).toContain("Phase 1");
+    expect(firstText).toContain("2026-10-01");
+    expect(firstText).toContain("active");
+    const secondText = renderedText(columns[1]!).join("\n");
+    expect(secondText).toContain("Phase 2");
+    expect(secondText).toContain("No target");
+    expect(secondText).toContain("planned");
+  });
+
+  test("each column lists its own issues as items: mono id, disposition badge and stored title", () => {
+    const groups = milestoneGroups(
+      milestoneRead({
+        milestones: [
+          milestone({ milestoneId: "m-1", name: "Phase 1" }),
+          milestone({ milestoneId: "m-2", name: "Phase 2", ordinal: 1 }),
+        ],
+        issues: [
+          linkedIssue("I-2", "m-1"),
+          linkedIssue("I-1", "m-1", { disposition: "resolved" }),
+          linkedIssue("I-3", "m-2", { disposition: "waived" }),
+          linkedIssue("I-9", "m-2", { title: HOSTILE_NAME }),
+        ],
+        unassignedIssues: 0,
+      }),
+    );
+    const columns = boardColumns(MilestoneBoard(groups));
+    const [first, second] = columns;
+
+    const firstItems = vnodesByClass(first!, "relations")[0]!;
+    expect(vnodesByClass(firstItems, "mono").map((node) => renderedText(node).join(""))).toEqual(["I-2", "I-1"]);
+    expect(vnodesByClass(firstItems, "badge").map((badge) => badge.props["data-tone"])).toEqual(["neutral", "success"]);
+    expect(renderedText(firstItems).join("\n")).toContain("I-1 stored title");
+    // Every issue sits under its own milestone, never repeated in another column.
+    expect(renderedText(first!).join("\n")).not.toContain("I-3");
+
+    const secondItems = vnodesByClass(second!, "relations")[0]!;
+    expect(renderedText(secondItems).join("\n")).toContain("I-3 stored title");
+    expect(vnodesByClass(secondItems, "badge").map((badge) => badge.props["data-tone"])).toEqual(["terminal", "neutral"]);
+    // The hostile title survives verbatim as text and injects nothing.
+    expect(renderedText(secondItems).join("\n")).toContain(HOSTILE_NAME);
+    expect(markupSinks(secondItems)).toEqual([]);
+  });
+
+  test("the unassigned column names the count on the ready branch and on the empty branch alike", () => {
+    // Ready branch: groups present, the unassigned column still trails them.
+    const readyText = renderedText(
+      MilestoneBoard(
+        milestoneGroups(
+          milestoneRead({ milestones: [milestone({ milestoneId: "m-1" })], issues: [linkedIssue("I-2", "m-1")], unassignedIssues: 0 }),
+        ),
+      ),
+    ).join("\n");
+    expect(readyText).toContain(unassignedIssuesLine(0));
+
+    // Empty branch: no milestones at all, the count is still named in its own column.
+    const emptyPanel = RoadmapBody({
+      project: "engine",
+      panel: { kind: "ready", state: readyState(roadmap({ milestones: milestoneRead({ unassignedIssues: 3 }) })) },
+    });
+    const emptyText = renderedText(emptyPanel).join("\n");
+    expect(emptyText).toContain("No milestones are recorded for this project.");
+    expect(emptyText).toContain(unassignedIssuesLine(3));
+    const emptyColumns = boardColumns(emptyPanel);
+    expect(emptyColumns).toHaveLength(1);
+    expect(classNames(emptyColumns[0]!)).toContain("board-column-unassigned");
+  });
+
+  test("Direction and the stored historical document stay present below the board, collapsed and separately labelled", () => {
+    const state = readyState(
+      roadmap({
+        milestones: milestoneRead({
+          milestones: [milestone({ milestoneId: "m-1", name: "Phase 1" })],
+          issues: [linkedIssue("I-2", "m-1")],
+        }),
+      }),
+    );
+    const tree = RoadmapBody({ project: "engine", panel: { kind: "ready", state } });
+    const order = walkVNodes(tree);
+    const boardIndex = order.findIndex((node) => classNames(node).includes("board"));
+    expect(boardIndex).toBeGreaterThanOrEqual(0);
+
+    // Both content-authority sections are collapsed — details/summary, closed by default.
+    const collapsed = order.filter((node) => node.type === "details");
+    expect(collapsed).toHaveLength(2);
+    for (const section of collapsed) {
+      expect(section.props.open).toBeUndefined();
+      expect(order.indexOf(section)).toBeGreaterThan(boardIndex);
+      expect(vnodesByClass(section, "heading-20")).not.toEqual([]);
+    }
+
+    const [direction, historical] = collapsed;
+    // Direction stays its own section, with its stored text.
+    expect(renderedText(vnodesByClass(direction!, "heading-20")).join("")).toBe("Direction");
+    expect(renderedText(direction!).join("\n")).toContain("One local store.");
+    // The historical document stays a separate section with its own wording.
+    expect(renderedText(vnodesByClass(historical!, "heading-20")).join("")).toBe("Stored document (historical)");
+    const historicalText = renderedText(historical!).join("\n");
+    expect(historicalText).toContain("Historical source text, kept verbatim");
+    expect(historicalText).toContain("Milestone status and issue counts come from the store");
+    expect(historicalText).toContain("project_id: engine");
+
+    // The two authorities still read as two, in the open sections.
+    const text = renderedText(tree).join("\n");
+    expect(text).toContain("never from the historical document");
+    expect(text).toContain("Milestone grouping and counts come from store revision 12");
+
+    // Catalog and freshness stay open: only the content authority is demoted.
+    for (const title of ["Catalog", "Store and projection freshness"]) {
+      expect(
+        collapsed.some((section) => renderedText(section).join("\n").includes(title)),
+      ).toBe(false);
+      expect(vnodesByClass(tree, "detail-section").some((section) => renderedText(vnodesByClass(section, "heading-20")).join("") === title)).toBe(true);
+    }
+  });
+
+  test("a refused roadmap read renders its notice and never a board", () => {
+    const refusal = "store.not-initialized: no store — initialize the issue store with the CLI, then reload.";
+    const panel = roadmapPanel("engine", { status: "error", envelope: null, message: refusal });
+    expect(panel).toEqual({ kind: "refused", message: refusal });
+
+    const tree = RoadmapBody({ project: "engine", panel });
+    const text = renderedText(tree).join("\n");
+    expect(text).toContain(refusal);
+    expect(vnodesByClass(tree, "notice")).toHaveLength(1);
+    // A refusal is never an empty board and never the empty-milestones state.
+    expect(vnodesByClass(tree, "board")).toEqual([]);
+    expect(vnodesByClass(tree, "empty-state")).toEqual([]);
+    expect(text).not.toContain("No milestones are recorded for this project.");
   });
 });
 
