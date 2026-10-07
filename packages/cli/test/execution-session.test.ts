@@ -1520,3 +1520,348 @@ describe("mstar plan — direct coordinator prepare and completion (standalone d
     expect(after.workflow).toBe(tokens.workflow);
   }, 30_000);
 });
+
+/* ------------------------------------------------------------------------ *
+ * ACTIVE multi-plan continuation — ONE session id drives TWO plans of ONE
+ * workflow (issue #400 acceptance #5, carried onto the removed-plan-PM model)
+ *
+ * The plan-PM seat and its execution leases are gone: one workflow holds one
+ * coordinator session, and every plan verb is an ordinary operation of that
+ * session. This case drives the acceptance scenario end to end through the
+ * public CLI on a REAL ACTIVE authority: the SAME `--session-id` prepares,
+ * progresses and completes plan A, then prepares, progresses and completes
+ * plan B of the same running iteration — no second seat, no re-bind, no
+ * release/handoff and no session/role gating anywhere in the chain.
+ *
+ * What is asserted is what the landed engine actually records: both rows reach
+ * `Done`, each completion's `completed_by` is that one session identity, the
+ * workflow is still `running` and still registered, the store holds exactly
+ * ONE coordinator session row for the workflow, and every accepted operation
+ * is receipted under its own plan row. The iteration route's serial merge is
+ * performed for real in the registered integration checkout, so the completion
+ * proof is the exact two-parent merge the engine re-derives.
+ * ------------------------------------------------------------------------ */
+
+const CONTINUATION_WORKFLOW = "wf-exec-session-continuation";
+const CONTINUATION_PLAN_A = "20260924-continuation-plan-a";
+const CONTINUATION_PLAN_B = "20260924-continuation-plan-b";
+const CONTINUATION_INTEGRATION_BRANCH = "integration/exec-session-continuation";
+const CONTINUATION_COMPASS_REF = `iterations/${CONTINUATION_WORKFLOW}/delivery-compass.md`;
+/** A `session-role`/qualification refusal anywhere in the chain is the regression. */
+const SESSION_GATE_REFUSAL = /^coordination\.(session-role|session-mismatch|identity-mismatch)|^execution\.scope-mismatch/;
+
+interface ContinuationPlan {
+  id: string;
+  worktree: string;
+  branch: string;
+  sddDir: string;
+  qaReport: string;
+  qcReport: string;
+  qcConsolidated: string;
+  sourceSha: string;
+  /** The integration HEAD this plan's serial merge started from. */
+  mergeBase: string;
+  /** The exact two-parent merge commit the completion names. */
+  mergeResult: string;
+}
+
+interface ContinuationFixture extends Fixture {
+  plans: readonly ContinuationPlan[];
+  integrationPath: string;
+  rootCommit: string;
+}
+
+function headAt(cwd: string): string {
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+}
+
+function mergeInto(integrationPath: string, sourceSha: string, message: string): string {
+  execFileSync(
+    "git",
+    ["-C", integrationPath, "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", sourceSha, "-m", message],
+    { stdio: ["ignore", "ignore", "ignore"] },
+  );
+  return headAt(integrationPath);
+}
+
+/**
+ * A temp Git workspace with an ACTIVE authority and TWO plan rows of ONE
+ * iteration: a real feature checkout per row and a real integration checkout
+ * on the registered integration branch. The rows are registered through the
+ * CLI (`iteration register`), so the fixture only prepares the artifacts.
+ */
+async function continuationFixture(label: string): Promise<ContinuationFixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  const rootCommit = headAt(root);
+
+  const harnessDir = join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  const context: StoreContext = { harnessDir };
+  const store = await initializeStore(context);
+  store.close();
+  await initializeExecutionAuthority(context);
+
+  writeText(
+    join(harnessDir, CONTINUATION_COMPASS_REF),
+    `---\nstatus: active\nplans:\n  - ${CONTINUATION_PLAN_A}\n  - ${CONTINUATION_PLAN_B}\ntargetBranch: main\n---\n`,
+  );
+
+  const integrationPath = join(root, "wt-integration");
+  execFileSync("git", ["worktree", "add", "-q", "-b", CONTINUATION_INTEGRATION_BRANCH, integrationPath, "main"], { cwd: root });
+
+  const plans: ContinuationPlan[] = [];
+  for (const [index, planId] of [CONTINUATION_PLAN_A, CONTINUATION_PLAN_B].entries()) {
+    writeText(join(harnessDir, "plans", `${planId}.md`), `# Continuation plan ${index + 1}\n\n**plan_id:** ${planId}\n`);
+    const worktree = join(root, `wt-${planId}`);
+    const branch = `feature/${planId}`;
+    execFileSync("git", ["worktree", "add", "-q", "-b", branch, worktree], { cwd: root });
+    writeText(join(worktree, `slice-${index + 1}.txt`), `slice ${index + 1}\n`);
+    execFileSync("git", ["add", `.`], { cwd: worktree });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", `feat: slice ${index + 1}`], { cwd: worktree });
+    const sddDir = join(harnessDir, "sdd", planId);
+    const qaReport = join(sddDir, "qa.md");
+    const qcReport = join(sddDir, "review", "qc1.md");
+    const qcConsolidated = join(sddDir, "review", "qc.md");
+    writeText(qaReport, "# QA\nverdict: pass\n");
+    writeText(qcReport, "# QC 1\ndecision: Approve\n");
+    writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+    plans.push({
+      id: planId,
+      worktree,
+      branch,
+      sddDir,
+      qaReport,
+      qcReport,
+      qcConsolidated,
+      sourceSha: headAt(worktree),
+      mergeBase: "",
+      mergeResult: "",
+    });
+  }
+
+  return {
+    root,
+    harnessDir,
+    context,
+    planMarkdown: join(harnessDir, "plans", `${CONTINUATION_PLAN_A}.md`),
+    worktreePath: plans[0]!.worktree,
+    sddDir: plans[0]!.sddDir,
+    evidencePath: plans[0]!.qaReport,
+    plans,
+    integrationPath,
+    rootCommit,
+  };
+}
+
+/** The one coordinator identity that drives the whole continuation. */
+function continuationIdentity(): ExecutionIdentity {
+  return { source: "local", sessionId: COORDINATOR_ID, workflowId: CONTINUATION_WORKFLOW, role: "coordinator" };
+}
+
+async function continuationWorkflowToken(fixture: ContinuationFixture): Promise<string> {
+  const state = await readExecutionAuthority(fixture.context, { workflowId: CONTINUATION_WORKFLOW });
+  if (!("workflows" in state.data)) throw new Error("the workflow read did not return a state");
+  const workflow = state.data.workflows.find((entry) => entry.state.id === CONTINUATION_WORKFLOW);
+  if (workflow === undefined) throw new Error(`workflow ${CONTINUATION_WORKFLOW} is not in the authority register`);
+  return workflow.workflowToken;
+}
+
+async function continuationPlanToken(fixture: ContinuationFixture, planId: string): Promise<string> {
+  return (await readExecutionAuthority(fixture.context, { workflowId: CONTINUATION_WORKFLOW, planId })).token;
+}
+
+async function continuationPlanRow(fixture: ContinuationFixture, planId: string): Promise<ExecutionPlanView> {
+  const read = await readExecutionAuthority(fixture.context, { workflowId: CONTINUATION_WORKFLOW, planId });
+  if (!("plan" in read.data)) throw new Error("the plan read did not return a plan view");
+  return read.data;
+}
+
+describe("mstar plan — ONE session drives two plans of one workflow (issue #400 acceptance #5)", () => {
+  test("the same session id prepares, progresses and completes plan A, then plan B, with no session/role gate", async () => {
+    const fixture = await continuationFixture("mstar-multi-plan-continuation");
+    // The whole chain runs on the EXPLICIT `--session-id` transport alone: no
+    // copied session reference and no minted launch identity are supplied, so
+    // every plan verb must derive the caller's own live coordinator binding
+    // from that one session id. A binding that gated the second plan, or
+    // refused a verb for role/seat reasons, would fail here.
+    const sessionArg = ["--session-id", COORDINATOR_ID];
+    const harnessArg = ["--harness", fixture.harnessDir];
+    /** The addressed workflow is the plan verbs' selection, never a seat. */
+    const workflowArg = ["--workflow", CONTINUATION_WORKFLOW];
+    const refusalCodes: Array<string | undefined> = [];
+    /** Run one CLI step and record its refusal code, so the whole chain is audited at the end. */
+    const step = (args: string[], label: string): RunResult => {
+      const result = runCli(args, fixture);
+      refusalCodes.push(result.exitCode === 0 ? undefined : String(jsonOf(result).code));
+      expect(result.exitCode, `${label}: ${result.stdout}${result.stderr}`).toBe(0);
+      return result;
+    };
+
+    // (1) Register BOTH rows of ONE iteration through the CLI producer.
+    const registered = step(
+      [
+        "iteration", "register",
+        "--workflow", CONTINUATION_WORKFLOW,
+        "--compass-ref", CONTINUATION_COMPASS_REF,
+        "--branch-base", "main",
+        "--branch-integration", CONTINUATION_INTEGRATION_BRANCH,
+        "--branch-target-iteration", "main",
+        "--row", JSON.stringify({ id: CONTINUATION_PLAN_A, title: "Continuation plan 1", file: `plans/${CONTINUATION_PLAN_A}.md` }),
+        "--row", JSON.stringify({ id: CONTINUATION_PLAN_B, title: "Continuation plan 2", file: `plans/${CONTINUATION_PLAN_B}.md` }),
+        "--expect", (await readExecutionAuthority(fixture.context)).token,
+        "--operation", "register-continuation",
+        ...harnessArg,
+      ],
+      "iteration register",
+    );
+    expect(jsonOf(registered).command).toBe("iteration.register");
+
+    // (2) ONE coordinator bind for the whole workflow: every later plan verb is
+    // an ordinary operation of this very session, never a second seat.
+    const bound = step(
+      [
+        "plan", "bind", "--execution",
+        "--workflow", CONTINUATION_WORKFLOW,
+        "--coordinator",
+        "--expect", await continuationWorkflowToken(fixture),
+        "--operation", "bind-continuation",
+        ...sessionArg,
+        ...harnessArg,
+      ],
+      "plan bind",
+    );
+    const reference = dataOf(bound).data as unknown as ExecutionSessionRef;
+    expect(reference.sessionId).toBe(COORDINATOR_ID);
+    expect(reference.role).toBe("coordinator");
+
+    // (3) The registered integration checkout the serial merge will happen in.
+    step(
+      [
+        "workflow", "integration-worktree",
+        "--workflow", CONTINUATION_WORKFLOW,
+        "--expect", await continuationWorkflowToken(fixture),
+        "--operation", "iw-continuation",
+        "--path", fixture.integrationPath,
+        ...sessionArg,
+        ...harnessArg,
+      ],
+      "workflow integration-worktree",
+    );
+
+    // (4) The one session drives plan A's whole chain, then plan B's, in the
+    // order the registered serial integration lane requires.
+    let mergeBase = headAt(fixture.integrationPath);
+    for (const [index, plan] of fixture.plans.entries()) {
+      const label = `plan ${index + 1} (${plan.id})`;
+
+      const prepared = step(
+        [
+          "plan", "prepare",
+          "--plan", plan.id,
+          "--worktree-path", plan.worktree,
+          "--working-branch", plan.branch,
+          "--qa-gate", "mandatory",
+          "--findings-cleanup", "allow-residual",
+          "--expect", await continuationPlanToken(fixture, plan.id),
+          "--operation", `prepare-${plan.id}`,
+          ...sessionArg,
+          ...workflowArg,
+          ...harnessArg,
+        ],
+        `${label} prepare`,
+      );
+      expect(jsonOf(prepared).command).toBe("plan.prepare");
+
+      // The row's own progression: prepare preserves the row status, so the
+      // first report moves Todo -> InProgress and the review report closes it.
+      for (const status of ["InProgress", "InReview"] as const) {
+        const progressPath = join(fixture.root, `progress-${plan.id}-${status}.json`);
+        writeJson(progressPath, { status, summary: `${plan.id} ${status}`, evidence_paths: [plan.qaReport] });
+        const progressed = step(
+          ["plan", "progress", "--plan", plan.id, "--file", progressPath, ...sessionArg, ...workflowArg, ...harnessArg],
+          `${label} progress ${status}`,
+        );
+        expect(jsonOf(progressed).command).toBe("plan.progress");
+      }
+
+      // The serial merge the coordinator actually performs for this row.
+      plan.mergeBase = mergeBase;
+      plan.mergeResult = mergeInto(fixture.integrationPath, plan.sourceSha, `Merge ${plan.id}`);
+      mergeBase = plan.mergeResult;
+
+      const evidencePath = join(fixture.root, `completion-${plan.id}.json`);
+      writeJson(evidencePath, {
+        source_sha: plan.sourceSha,
+        review_base: fixture.rootCommit,
+        review_head: plan.sourceSha,
+        qc: { decision: "Approve", reports: [plan.qcReport], consolidated: plan.qcConsolidated },
+        qa: { gate: "mandatory", decision: "pass", report: plan.qaReport },
+      });
+      const completed = step(
+        [
+          "plan", "complete",
+          "--plan", plan.id,
+          "--file", evidencePath,
+          "--integration-base-sha", plan.mergeBase,
+          "--integration-result-sha", plan.mergeResult,
+          ...sessionArg,
+          ...workflowArg,
+          ...harnessArg,
+        ],
+        `${label} complete`,
+      );
+      expect(jsonOf(completed).command).toBe("plan.complete");
+
+      // The very same session id is what the store records against the row.
+      const row = await continuationPlanRow(fixture, plan.id);
+      expect(row.plan.status).toBe("Done");
+      expect(row.coordination?.completion?.completed_by).toBe(COORDINATOR_ID);
+      expect(row.coordination?.completion?.source_sha).toBe(plan.sourceSha);
+      expect(row.coordination?.completion?.integration).toMatchObject({
+        base_sha: plan.mergeBase,
+        result_sha: plan.mergeResult,
+      });
+    }
+
+    // (5) Both completions are recorded and the workflow is still running with
+    // BOTH rows Done — the continuation never closed or forked the lifecycle.
+    const state = await readExecutionAuthority(fixture.context, { workflowId: CONTINUATION_WORKFLOW });
+    if (!("workflows" in state.data)) throw new Error("the workflow read did not return a state");
+    const workflow = state.data.workflows.find((entry) => entry.state.id === CONTINUATION_WORKFLOW);
+    if (workflow === undefined) throw new Error(`workflow ${CONTINUATION_WORKFLOW} is not in the authority register`);
+    expect(workflow.state.status).toBe("running");
+    expect(workflow.coordinator?.sessionId).toBe(COORDINATOR_ID);
+    expect(workflow.plans.map((row) => [row.plan.id, row.plan.status])).toEqual([
+      [CONTINUATION_PLAN_A, "Done"],
+      [CONTINUATION_PLAN_B, "Done"],
+    ]);
+    const rootRead = await readExecutionAuthority(fixture.context);
+    if (!("workflows" in rootRead.data)) throw new Error("the register read did not return the whole state");
+    expect(rootRead.data.root.workflows.map((entry) => entry.id)).toEqual([CONTINUATION_WORKFLOW]);
+
+    // (6) ONE session row, one identity: the two plans share the coordinator
+    // binding instead of each carrying an attribution seat of its own.
+    const handle = await openStore(fixture.context, "read");
+    try {
+      const sessions = handle.db
+        .prepare("select role, session_id, state from execution_sessions where workflow_id = ?")
+        .all(CONTINUATION_WORKFLOW) as Array<{ role: string; session_id: string; state: string }>;
+      expect(sessions).toEqual([{ role: "coordinator", session_id: COORDINATOR_ID, state: "active" }]);
+      // Every plan operation was receipted under its own addressed row.
+      const receipts = handle.db
+        .prepare("select plan_id, count(*) as n from execution_operations where workflow_id = ? group by plan_id order by plan_id")
+        .all(CONTINUATION_WORKFLOW) as Array<{ plan_id: string | null; n: number }>;
+      expect(receipts.map((row) => row.plan_id)).toEqual([null, CONTINUATION_PLAN_A, CONTINUATION_PLAN_B]);
+      for (const row of receipts.filter((entry) => entry.plan_id !== null)) expect(row.n).toBeGreaterThanOrEqual(3);
+    } finally {
+      handle.close();
+    }
+
+    // (7) No step in the whole chain refused on a session or role ground.
+    expect(refusalCodes.every((code) => code === undefined)).toBe(true);
+    for (const code of refusalCodes) expect(String(code)).not.toMatch(SESSION_GATE_REFUSAL);
+  }, 120_000);
+});
