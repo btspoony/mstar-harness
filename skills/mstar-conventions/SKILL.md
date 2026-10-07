@@ -106,7 +106,7 @@ enforcement=hard
 
 ## Issue/catalog store 路径与权威分界
 
-Issue 身份、证据、影响、处置、occurrences、关系与 provenance，以及 project/iteration/plan/document **catalog** 身份与关系，权威在 **`{HARNESS_DIR}/store.db`**（激活后）；roadmap/milestone 规则 → **`mstar-project-governance`**。ACTIVE 执行路由、root register、plan 行、lease、session 与冻结执行输入在该 store 的 **execution_* 表**。`status.json` / workflow `snapshot.json` / `sessions/*.json` 仅 pre-activation / engine-absent 文件路由；ACTIVE 写/读分别拒绝 `execution.direct-write-refused` / `execution.consumer-not-ready`。这不把保留文件产物的 `ArtifactStore` 改成通用 SQLite 后端。
+Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; roadmap/milestone rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. `status.json` / workflow `snapshot.json` / session JSON are pre-activation / engine-absent transports only; ACTIVE file writes/reads refuse `execution.direct-write-refused` / `execution.consumer-not-ready`. Retained file artifacts remain with `ArtifactStore`; it neither becomes a general SQLite backend nor bypasses ACTIVE authority.
 
 ### Catalog 字段权威（contract §1）
 
@@ -114,11 +114,11 @@ Issue 身份、证据、影响、处置、occurrences、关系与 provenance，�
 |------|------|------|
 | project / iteration / plan / document 的 identity、路径、kind、description、project/iteration 归属、spec/knowledge 关系、catalog 生命周期（`active` / `archived` / `superseded`） | **DB catalog** 行 | catalog 域 API；`mstar catalog list` / `mstar catalog show` |
 | 文档正文（compass 叙述、plan、spec/knowledge 内容、README 散文） | **文件** | 直接读文件 |
-| root register 路由与 active 归属；workflow 的 status/phase/branch/lease/coordination/session | **DB execution_* 执行权威** | `mstar status validate` / `mstar plan show`；dashboard 只读投影 |
-| plan 行 status/progress/task/QC/QA/done_at/branch/worktree | **DB execution_plans 执行权威** | 永不由 catalog 或投影刷新 |
-| 执行 plan 行 `id/title/file` 与 `metadata` 引用（pre-activation：snapshot `plans[]`） | prepare 时从某个 catalog revision 复制来的**冻结执行输入** | 不可当作 catalog 登记编辑；后续 catalog 变更不静默改写在途 plan |
+| Root register and workflow status/phase/anchors/configuration/completion/coordinator/merge exclusion | ACTIVE DB `execution_*` authority; pre-activation file transport only | `mstar status validate` / `mstar plan show`; dashboard is projection |
+| Row status/progress/task/QC/QA/done_at/source branch/worktree | Same selected execution authority (`execution_plans` when ACTIVE) | Domain calls; catalog and projections never reset runtime state |
+| Registered plan id/title/file and metadata | Registered row inputs from a catalog revision (`execution_inputs` / `catalog_pin`) | Correct supported source/configuration facts through ordinary writers; catalog edits never silently relocate an active plan or rewrite its registered inputs |
 
-`store.db` 是进程本地（默认 gitignored），ACTIVE execution_* 表与 issue/catalog 域各守自身权威边界。**激活前** legacy 索引仍是 catalog 权威；store 未初始化/未激活时 catalog 查询**拒绝**（`store.not-initialized` / `store.not-active`），**不**读作「空 catalog」。root/snapshot/session 文件仅为 pre-activation / engine-absent 回退，不是 ACTIVE 第二份权威。
+Store is process-local and gitignored. Issue/catalog and execution domains retain their own authority boundaries; pre-activation legacy indexes retain their catalog authority. Missing stores refuse `store.not-initialized` rather than answering an empty catalog. Staged stores support ordinary read-only catalog list/show; catalog mutations require an active store and refuse `store.not-active` while staged. Staged catalog inspection does not activate execution authority, and ACTIVE execution reads never fall back to leftover root/snapshot/session files. Bootstrap/migration changes authority only through supported operator operations.
 
 ### Markdown 索引退役（contract §4）
 

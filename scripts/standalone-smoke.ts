@@ -11,8 +11,7 @@
  *      (S-d): every `mstar-*` dir + `pm` must load — an unlisted new
  *      mstar-* skill fails loudly instead of becoming "optional"; optional
  *      bundled skills (e.g. `grill-me`) are load-checked too but reported
- *      separately from the harness set. The `mstar-engine-legacy`
- *      conditional-load gate is pinned here as well (S-b).
+ *      separately from the harness set.
  *   2. No skill markdown references `@mstar-harness/engine` or
  *      `@mstar-harness/cli` outside an advisory `**Engine check (when
  *      available):**` blockquote. Fenced code blocks are allowed only when
@@ -131,25 +130,6 @@ for (const expected of expectedDirs) {
 }
 const mstarSkillCount = expectedDirs.filter((dir) => dir.startsWith("mstar-")).length;
 
-/* 1b. mstar-engine-legacy conditional-load gate (S-b): engine-present hosts
- * must NOT load the sink; the negative load condition is pinned in BOTH the
- * core load-condition note and the legacy description, so a rewrite that
- * silently drops the gate fails here (engine-absent hosts are exactly what
- * this smoke simulates). */
-{
-  const coreText = readFileSync(join(root, "skills", "mstar-harness-core", "SKILL.md"), "utf8");
-  const legacyText = readFileSync(join(root, "skills", "mstar-engine-legacy", "SKILL.md"), "utf8");
-  if (!coreText.includes("engine 约束激活（或宿主含 engine 能力）时不加载")) {
-    failures.push(
-      `mstar-harness-core/SKILL.md lost the mstar-engine-legacy load-condition note (engine-present hosts must not load the archive)`,
-    );
-  }
-  if (!legacyText.includes("engine 约束激活（或宿主含 engine 能力）时不加载")) {
-    failures.push(
-      `mstar-engine-legacy/SKILL.md lost the engine-absent-only load condition (engine 约束激活时不加载)`,
-    );
-  }
-}
 
 /* 2 + 3. Engine references must be advisory-only; callouts blockquoted. */
 let callouts = 0;

@@ -86,7 +86,7 @@ const fullSource: MstarEngineStatusPayload = {
     pushPolicy: 'push authorized',
     worktreeMode: 'feature-worktree',
     integrationWorktreePath: '/proj',
-    leases: [],
+    rowScopes: [],
     knowledge: null,
     direction: null,
     agentFlow: null,

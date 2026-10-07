@@ -14,11 +14,10 @@
  *   built by the engine's own producers over real `node:sqlite`.
  * - The chain: register (NO id — the NULL-creator contract) -> plan bind
  *   coordinator (sessionId=A, adopts; receipt reports A) -> plan prepare (A) ->
- *   plan-pm bind (A; the single omp session presents A for both roles) ->
- *   progress (A) -> lease verify (no sessionId — its schema declares none; the
- *   call stays untouched, no error). Per-role assertions come from the
- *   authority's own store: creator, coordinator session row, plan-pm session
- *   row and the execution lease holder all name the presenting session id.
+ *   start record -> progress (all as A) -> lease verify-integration (no
+ *   sessionId — its schema declares none; the call stays untouched, no error).
+ *   Assertions come from the authority's own store: creator, the sole active
+ *   coordinator session row, and the addressed plan's uncompleted state.
  *
  * Not exercised here: the omp host process itself (the extension's injection
  * unit tests own the host-side rules); this file proves the SERVER side of the
@@ -86,30 +85,6 @@ async function makeActiveWorkspace(label) {
   store.close();
   await initializeExecutionAuthority({ harnessDir: harness });
   return { root, harness };
-}
-
-/** The header block the engine's Assignment parser accepts. */
-function assignmentText(input) {
-  return [
-    `# Assignment — ${input.planId}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Body.",
-    "",
-  ].join("\n");
 }
 
 /* ------------------------------------------------------------------------ *
@@ -195,16 +170,15 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-t4");
-  const assignmentPath = join(sddDir, "assignment.md");
   writeText(planPath, `# ${PLAN_TITLE}\n\n**plan_id:** ${PLAN_ID}\n`);
-  mkdirSync(worktreePath, { recursive: true });
-  writeText(
-    assignmentPath,
-    assignmentText({ harness: fixture.harness, workflowId: WORKFLOW_ID, planId: PLAN_ID, planPath, worktreePath, branch: BRANCH, sddDir }),
-  );
-  const progressPath = join(fixture.root, "progress.json");
+  // A REAL checkout on the branch the registration names: prepare validates the
+  // actual checkout and branch.
+  execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
   const evidencePath = join(sddDir, "evidence.md");
   writeText(evidencePath, "# evidence\n");
+  const startPath = join(fixture.root, "progress-start.json");
+  writeText(startPath, `${JSON.stringify({ status: "InProgress", summary: "t4 omp identity start record", evidence_paths: [evidencePath] })}\n`);
+  const progressPath = join(fixture.root, "progress.json");
   writeText(progressPath, `${JSON.stringify({ status: "InReview", summary: "t4 omp identity regression", evidence_paths: [evidencePath] })}\n`);
 
   const server = startMcpServer(fixture);
@@ -219,7 +193,7 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     server.notify("notifications/initialized", {});
     const tools = await server.request("tools/list", {});
     const byName = new Map(tools.result.tools.map((tool) => [tool.name, tool]));
-    for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress", "mstar_lease_verify"]) {
+    for (const name of ["mstar_workflow_register", "mstar_plan_bind", "mstar_plan_prepare", "mstar_plan_progress", "mstar_lease_verify_integration"]) {
       assert.ok(byName.has(name), `tools/list advertises ${name}`);
     }
     // sessionId-capable schemas declare the parameter; the non-capable one does not.
@@ -230,9 +204,9 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
       );
     }
     assert.equal(
-      Object.hasOwn(byName.get("mstar_lease_verify").inputSchema.properties ?? {}, "sessionId"),
+      Object.hasOwn(byName.get("mstar_lease_verify_integration").inputSchema.properties ?? {}, "sessionId"),
       false,
-      "mstar_lease_verify declares no sessionId (non-capable tool)",
+      "mstar_lease_verify_integration declares no sessionId (non-capable tool)",
     );
 
     // --- register: NO sessionId anywhere on this call ------------------------
@@ -272,9 +246,11 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     const prePrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
     const prepared = await callTool(server, "mstar_plan_prepare", {
       workflow: WORKFLOW_ID,
-      coordinator: true,
       plan: PLAN_ID,
-      assignment: assignmentPath,
+      worktreePath,
+      workingBranch: BRANCH,
+      qaGate: "mandatory",
+      findingsCleanup: "allow-residual",
       expect: prePrepareToken,
       operation: "prepare-1",
       harness: fixture.harness,
@@ -283,22 +259,20 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     assert.equal(prepared.data.data.plan.id, PLAN_ID);
     assert.equal(prepared.data.data.coordination.prepared.prepared_by, NATIVE_ID);
 
-    // --- plan-pm bind: the SAME native id presenting the plan-pm seat --------
-    const postPrepareToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
-    const planBound = await callTool(server, "mstar_plan_bind", {
-      execution: true,
+    // --- progress: the SAME native coordinator session advances the row ------
+    // The ordinary start record first: prepare preserves row status.
+    const startToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
+    const started = await callTool(server, "mstar_plan_progress", {
       workflow: WORKFLOW_ID,
       plan: PLAN_ID,
-      expect: postPrepareToken,
-      operation: "bind-plan-pm",
+      file: startPath,
+      expect: startToken,
+      operation: "progress-start",
       harness: fixture.harness,
       sessionId: NATIVE_ID,
-    }, "plan bind plan-pm");
-    assert.equal(planBound.data.data.role, "plan-pm");
-    assert.equal(planBound.data.data.planId, PLAN_ID);
-    assert.equal(planBound.data.data.sessionId, NATIVE_ID, "the plan seat binds under the same native id");
+    }, "plan progress start");
+    assert.equal(started.data.data.plan.status, "InProgress");
 
-    // --- progress: the plan-pm session advances its own row ------------------
     const progressToken = await tokenOf(fixture.harness, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
     const progressed = await callTool(server, "mstar_plan_progress", {
       workflow: WORKFLOW_ID,
@@ -311,37 +285,32 @@ test("T4: stdio MCP chain — no-id register, injected binds, per-role identity,
     }, "plan progress");
     assert.equal(progressed.data.data.plan.status, "InReview");
 
-    // --- lease verify: schema declares no sessionId; call untouched ----------
-    const verified = await callTool(server, "mstar_lease_verify", {
+    // --- lease verify integration: schema declares no sessionId; untouched ----
+    const verified = await callTool(server, "mstar_lease_verify_integration", {
       workflow: WORKFLOW_ID,
-      plan: PLAN_ID,
       harness: fixture.harness,
-    }, "lease verify");
-    assert.equal(verified.data.lease.holder, NATIVE_ID, "the execution lease is held by the native session id");
+    }, "lease verify-integration");
+    assert.equal(verified.data.claimed, false, "the workflow holds no integration merge claim");
 
-    // --- the authority's own per-role truth ----------------------------------
+    // --- the authority's own coordinator truth -------------------------------
     const db = new DatabaseSync(join(fixture.harness, "store.db"), { readOnly: true });
     try {
       const coordinatorRow = db
-        .prepare("select session_id, plan_id, state from execution_sessions where workflow_id = ? and role = 'coordinator'")
-        .get(WORKFLOW_ID);
-      assert.ok(coordinatorRow !== undefined, "coordinator session row exists");
-      assert.equal(coordinatorRow.session_id, NATIVE_ID, "coordinator session row names the native id");
-      assert.equal(coordinatorRow.plan_id, null, "coordinator session row carries no plan scope");
-      assert.equal(coordinatorRow.state, "active");
-      const planRow = db
-        .prepare("select session_id, plan_id, state from execution_sessions where workflow_id = ? and role = 'plan-pm'")
-        .get(WORKFLOW_ID);
-      assert.ok(planRow !== undefined, "plan-pm session row exists");
-      assert.equal(planRow.session_id, NATIVE_ID, "plan-pm session row names the native id");
-      assert.equal(planRow.plan_id, PLAN_ID, "plan-pm session row carries the plan scope");
-      assert.equal(planRow.state, "active");
-      const lease = JSON.parse(
-        db.prepare("select lease_json from execution_leases where workflow_id = ? and plan_id = ?").get(WORKFLOW_ID, PLAN_ID).lease_json,
-      );
-      assert.equal(lease.holder_session_id, NATIVE_ID, "execution_lease holder session");
-      assert.equal(lease.holder_role, "plan-pm", "execution_lease holder role");
-      assert.equal(lease.holder, NATIVE_ID, "execution_lease holder (snapshot projection spelling)");
+        .prepare("select session_id, role, state from execution_sessions where workflow_id = ?")
+        .all(WORKFLOW_ID);
+      assert.equal(coordinatorRow.length, 1, "the workflow has exactly one session owner");
+      assert.equal(coordinatorRow[0].role, "coordinator");
+      assert.equal(coordinatorRow[0].session_id, NATIVE_ID, "coordinator session row names the native id");
+      assert.equal(coordinatorRow[0].state, "active");
+      const row = db
+        .prepare("select state_json, coordination_json from execution_plans where workflow_id = ? and plan_id = ?")
+        .get(WORKFLOW_ID, PLAN_ID);
+      const plan = JSON.parse(row.state_json);
+      const coordination = JSON.parse(row.coordination_json);
+      assert.equal(plan.status, "InReview");
+      assert.equal(coordination.prepared.prepared_by, NATIVE_ID);
+      assert.equal(coordination.progress.summary, "t4 omp identity regression");
+      assert.ok(coordination.completion === undefined, "the row is not completed by this chain");
     } finally {
       db.close();
     }

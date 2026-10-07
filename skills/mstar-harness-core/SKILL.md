@@ -55,8 +55,8 @@ Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/
 
 `Todo` → `InProgress` → `InReview` → `Done` | `Blocked`
 
-- **`Done`**：仅 `@project-manager` 或 `@qa-engineer`。
-- 实现类可设 **`InReview`**，不可设 **`Done`**。
+- Done sign-off belongs to project-manager or qualified QA evidence; the authoritative row write uses the sole primary coordinator's direct complete operation with QC/QA and declared-route proof. Leaf implementers never write Done.
+- The primary coordinator uses revisable prepare, progress and direct complete; no per-row PM identity/bind/claim, sealed Assignment or transfer protocol. Default cleanup is allow-residual. Ordinary metadata/defaults need no ceremonial prepare record.
 
 ACTIVE 状态字段权威在 store.db 的 root register / workflow / plan 行；`status.json` / snapshot 仅 pre-activation 或 engine-absent 回退，project register 无条件退役为迁移历史。字段与 issue severity/lifecycle → **`mstar-artifacts`**。
 
@@ -93,11 +93,11 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | Skill | 职责 |
 |-------|------|
 | `mstar-harness-core` | 本文件：入口、状态机、Task category、explore、索引、护栏 |
-| `mstar-use-cli` | CLI 契约（agent 面向）：任务→命令族索引、前置条件阶梯、两条协议序列、退出码 0 / 1 / 2 与稳定拒绝码读法；flags 一律以命令自身 `--help` 为准 |
+| `mstar-use-cli` | Intent-first command families, ordinary coordinator operations, three completion routes, CAS/receipts, exit/refusal codes; exact flags from source-built verb help |
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
-| `mstar-engine-legacy` | 条件契约档案（engine-absent fallback）：status v1→v2 字段历史、lease 协议全文、各宿主 N=3/N=1 重述、反递归全清单、Engine-check 样板；engine 激活时不加载 |
+| `mstar-engine-legacy` | Engine-absent safety/field-history archive; no recreated claim/bind/transfer fallback |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |

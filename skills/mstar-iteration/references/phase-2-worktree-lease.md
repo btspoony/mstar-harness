@@ -2,16 +2,7 @@
 
 > Loaded by `mstar-iteration` SKILL.md on the **execute / resume** route, and by the Phase 2+ command layer. **Read `mstar-harness-core` first.** Entry = §2.0 五道闸全过；continuous execution / push 纪律（§2.6）的 SSOT 仍在 `mstar-iteration` SKILL.md。
 
-Normative field names → field SSOT
-`mstar-artifacts/references/status-and-residuals.md`; the **full lease
-protocol prose** (single canonical copy) → `mstar-engine-legacy/references/lease-protocol.md`
-(engine-absent fallback). This reference is the **iteration-command execution
-checklist** — do not invent alternate lease field names; do not re-state the
-full protocol here.
-
-**Scoped primary route**（`/iteration-drive --assignment|--workflow/--plan|--resume`）: this file is the **whole-iteration** execution checklist. Both routes use public `mstar plan …` / `mstar workflow …` verbs, never handwritten state mutations. ACTIVE uses session reference + full scope execution token + operation id under an independently acquired identity; pre-activation uses session envelope + row revision → **`plan-scoped-pm.md`**. The plan session finishes with **handoff**, not `Done`.
-
-Normal scoped transition: PM/coordinator runs the intended public plan verb under its own identity and reads the applied/partial/replay receipt. Do not force a separate state-repair, rebind or token-copy step when the authority derives its projection and composes entailed bookkeeping. An unresolved foreign holder, ambiguous target or authorization gap is action-local: name the missing fact and continue independent ready work. The leaf receives only paths/scope, never session credentials.
+Field semantics → `mstar-artifacts/references/status-and-residuals.md`; public parameter shapes and recovery → `mstar-use-cli/references/plan-and-workflow.md`. The primary coordinator uses ordinary plan domain operations on both file and ACTIVE DB routes. Atomic writes, CAS and operation receipts belong inside those actions; no per-plan identity, claim or transfer step is required. Leaf executors receive only assigned paths/scope, never coordinator session references. This reference owns the iteration execution checklist, not another field or transport protocol.
 
 ## When it applies
 
@@ -20,15 +11,15 @@ command layer；`iteration-start` ends before this）. Defaults are **hard** unl
 explicitly waives via Assignment `Worktree mode: waived` (or equivalent user
 instruction), within the limited scope in § Waiver; main residency and the
 dedicated integration checkout remain mandatory. `Plan parallelism: serial` is **not** a waiver — it only forces
-serial cross-plan **implement** scheduling while the worktree + lease gates remain
-required.
+serial cross-plan **implement** scheduling while checkout isolation, atomic coordination
+and workflow-wide serial integration safety remain required.
 
-Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree + lease gate
+Phase 1 Review & Edit may edit uncommitted docs on the primary checkout under the Prepare policy (bounded exception; the main worktree never switches branch). The integration-worktree safety gate
 starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree checklist once at its end (`iteration-start` §6, which carries the `phase-1-lock` marker), but the gate those steps guard opens only when Phase 2's per-plan loop begins.
 
 **Phase scope**：本参考仅约束 **Phase 2**（含 serial integration merge 与「control root / integration worktree 禁止产品编辑 / 每 plan feature worktree」）。**Phase 5** PR merge-ready 修复同样 **不**直接在 integration checkout 上改——产品修复走独立 fix feature worktree，review 后 merge 回 integration worktree → **`phase-4-5-pr-delivery.md`** §5.0。
 
-**本 Phase 定义 per-plan 派发循环的完整流程**：前置条件检查、session todos、backlog 读取、integration 分支管理、per-plan dispatch 循环（分支→实现→QC→**QA gate**→Done→合并）、dispatch-first 约束。PM 读取本 Phase（含 §2.0–§2.5 与下方 lease 细则）即可执行迭代。
+This Phase owns the complete per-plan dispatch loop: entry checks, session todos, backlog, integration branch/checkout management, isolated implementation, QC, QA, real serial merge, direct Done and dispatch-first discipline. Read §2.0–§2.5 and the workflow merge-exclusion guidance below before iteration execution.
 
 **Findings cleanup（默认）**：Phase 2 Assignment 默认 **`Findings cleanup: allow-residual`**；open finding 先经 `mstar plan issue-add` 捕获为 store issue，再离 InReview，并披露 id / issue severity / 跟踪位置。`zero-residual` 为显式 opt-in；清理与披露权威 → **`mstar-artifacts`**「Findings cleanup modes」。project register 无条件退役为迁移历史。
 
@@ -39,10 +30,10 @@ starts at **Phase 2 entry** — Phase 1 did walk §2.3's integration-worktree ch
 1. ACTIVE `execution_plans` 至少一条 plan `status` ≠ `Done`，且 `execution_registry` 含该 iteration（经 `mstar status validate` / `mstar plan show` 读取）；仅 pre-activation / engine-absent 回退读取 snapshot 与根 `status.json`
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
-4. **Branch metadata gate**：当前权威 workflow `branch.base` / `branch.target` 已登记，且至少一条 active plan 有 `metadata.spec_integration_branch`；缺失处理见 §2.3。**缺失 → STOP**，不得默认 `main`/`master`。
-5. **Worktree + lease defaults**（waiver 见下方）：确认 control root（主 checkout，驻留于记录的 **`Main worktree branch`**）并建立独立 integration worktree。ACTIVE 状态、session、冻结执行输入与 lease 经公共动词读写 control `{HARNESS_DIR}/store.db`（`execution_leases` / `execution_integration_leases`）；仍存活的 authored plans / assignments / iteration package、SDD 与 append-only `notes.jsonl` 用绝对 control 路径。未 waive 时可写派发前须有效 claim。Assignment 须含绝对 feature **`Worktree path`** 与 control **`Plan Path`** / **`SDD dir`**。缺少 feature 中的 gitignored plans 不产生 waiver；`Plan parallelism: serial` 只限制调度，不豁免本闸。
+4. **Branch metadata gate:** current authoritative workflow `branch.base` / `branch.target` and at least one active plan's `metadata.spec_integration_branch` are registered; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master`.
+5. **Worktree and concurrent-write safety:** confirm the main checkout/control root and its recorded `Main worktree branch`; establish a separate integration checkout and distinct feature checkouts before writable dispatch. Record missing or corrected source branch/worktree through ordinary prepare. ACTIVE execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `Worktree path`, `Working branch`, control `Plan Path` and `SDD dir`. Shared coordination writes use the engine's same-host file lock or DB transaction/CAS; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
 
-> **Engine-check（lease verify / verify-integration）唯一规范体：** `mstar-artifacts` `SKILL.md`（Engine check lease 行；standalone 保证同文）。
+> **Engine-check pointer:** `mstar-artifacts` `SKILL.md` owns the worktree/isolation and `lease verify-integration` callout; these checks do not confer row authority.
 
 任一 false → **stop**。Phase 1 / Prepare 未完成 → 先完成 Phase 1 或 per-plan Prepare，再进入本 Phase。
 
@@ -58,15 +49,11 @@ SSOT = ACTIVE store.db 执行行 + `{PLAN_DIR}/` authored plans；pre-activation
 
 Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新；依据当前权威行与 plan 证据勾掉完成项，保留未决 gate 并追加下一批。todos 只是投影，不授权转换。
 
-**Scoped route**：todos 是 **plan-local 任务列表**（本 plan 的 task / gate），**不**追加 `phase-3-*` / `phase-4-*` / `phase-5-*` / `phase-6-*`；scoped finish = handoff → **`plan-scoped-pm.md`** §4–§5。
-
 ## 2.2 Read backlog
 
 1. 读 `mstar-artifacts`；ACTIVE 经 `mstar status validate` / `mstar plan show` 读取执行行与 DB 根 register，pre-activation 才读 snapshot / `status.json`
 2. 列出当前权威 `status` ∈ `{Todo, InProgress, InReview, Blocked}` 的 plan（优先级：`InProgress` → `InReview` → `Todo` → unblock `Blocked`）
 3. 读 workflow `branch.base` / `branch.target` 与 plan `metadata.spec_integration_branch` / `merge_target` / `primary_spec`
-
-**Scoped route**：backlog **就是 `bind` 返回的那一行**（`--workflow/--plan` 从 `row.coordination.prepared.assignment_path` 解析）——**禁止**按「第一个未完成 plan」或整迭代优先级列表选择。
 
 ## 2.3 Branch anchors + integration branch + integration worktree（Phase 2 入口）
 
@@ -109,7 +96,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
    `integration_worktree_path` 到 ACTIVE workflow 执行行（pre-activation：
    snapshot 顶层字段；形状以 help 为准）。主 worktree 由 Git 派生，不是该字段。
 6. 从 **control root** 解析协调面：
-   - ACTIVE authority: `<main-repo-root>/{HARNESS_DIR}/store.db`（root register、workflow / plan、session、冻结输入及两类 lease）
+   - ACTIVE authority: `<main-repo-root>/{HARNESS_DIR}/store.db` (root register, workflow/plan rows, coordinator sessions, registered inputs and workflow-wide merge exclusion)
    - authored plans: `<main-repo-root>/{PLAN_DIR}/`
    - authored iteration package: `<main-repo-root>/{ITERATION_DIR}/`
    - SDD tree: `<main-repo-root>/{HARNESS_DIR}/sdd/<plan-id>/`
@@ -138,7 +125,7 @@ Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agno
    anchor instead requires that pushed remote tip to equal the live integration
    HEAD, so it must not be executed before this step's push.
 
-ACTIVE 公共动词通过 `withExecutionTransaction` 在 SQLite 事务内重读当前状态与 lease，并检查执行令牌；仅 pre-activation 文件路由须在 claim / release / transfer / 状态转换前重读 control-root snapshot。
+The coordinator refreshes the authoritative control-root workflow view before a plan mutation or integration action. ACTIVE public verbs re-read state and merge exclusion in the DB transaction and check scope CAS; pre-activation domain writers re-read under their same-host file lock. No row claim/release/transfer step is introduced.
 
 **Do not** set `Worktree mode: waived` because a feature worktree lacks
 `plans/` under default gitignore — keep feature worktrees and pass absolute
@@ -150,28 +137,14 @@ control **`Plan Path`** / **`SDD dir`** in Assignments
 >
 > **`phase-1-lock` 恰好触发一次**：只在 **Phase 1 路线**、且在 checklist **step 7 的 branch push**（`git push -u` 新建的 `spec_integration_branch`；Phase 1 的写入目标均为 gitignored 本地工件，全局 `{SPECS_DIR}` 在 Phase 3 提升时写入）之后 —— 该 anchor 的就绪合取要求已 push 的 remote tip 等于 live integration HEAD，因此**不得**在 step 7 之前执行。此后任何**再次走过 §2.3 的路线**（Phase 2 entry 首次 execute 或 resume，包括 auto-continue 进入的第一次 Phase 2 entry）都**不**触发它：那时 binding 已 terminal，也**不**需要重新调用（精确的重复调用语义与拒绝码 → active host reference）。
 
-### Coordination transactions（ACTIVE）与 pre-activation 文件锁
+### Atomic coordination writes
 
-ACTIVE 的并发安全由 control `store.db` 的 SQLite 事务（`withExecutionTransaction`）+ scope execution-token CAS + `execution_leases` / `execution_integration_leases` 仲裁。所有状态写点只经公共动词；不以 snapshot 路径的 flock / lockdir 作为 ACTIVE 安全证明。
+The plan/workflow domain writers own the complete read-check-write transaction. File authority uses its same-host exclusive lock and atomic replacement; ACTIVE control DB authority uses transactions, scope CAS and operation receipts, never snapshot lockdirs as proof. All state writes use public domain verbs. Read-only validators do not authorize raw snapshot edits or replace a mutation.
 
-仅 **pre-activation / engine-absent** 文件路由使用 same-host exclusive lock 覆盖 read-check-replace-verify；engine file writers 自动获取 `.status-write.lockdir/`，engine-absent 档案协议 → `mstar-engine-legacy/references/lease-protocol.md`。文件锁不重开 scoped 手写状态通道。
+**Cross-plan parallel safety gate** (including waived): dependencies, independent write ownership and L1/L2 checkout isolation must hold. ACTIVE writers use the same control DB transaction/CAS authority; cross-host execution does not bypass that authority or automatically force serial scheduling merely because no shared file lock exists. Pre-activation writers require a shared same-host file lock; otherwise use `Plan parallelism: serial`. An explicit current-turn acceptance of file-route cross-host race is recorded only in append-only `notes.jsonl`, never dual-written into snapshot notes; waiver alone supplies no race authorization.
 
-| 状态动作 | 公共动词 |
-| --- | --- |
-| execution claim / resume | `mstar plan bind` |
-| progress / finding capture / closure | `mstar plan progress` / `mstar plan issue-add` / `mstar issue close`（或 `waive` / `duplicate` / `supersede`） |
-| plan finish（保留 lease） | `mstar plan handoff` |
-| ownership transfer | `mstar plan accept` / `return` |
-| integration + atomic completion | `mstar plan integration-start` → Git merge → `integration-accept` → `complete` |
-| crash recovery | `mstar plan reconcile` |
+Before writable dispatch, verify the actual source checkout/branch against ordinary row metadata and the leaf Assignment, not a row holder/session. Never steal another workflow's write or merge claim; direct completion releases only applicable exclusion for its verified attempt. Integration merges always remain serial.
 
-只读 `mstar lease verify` / `mstar worktree check` 不授权 raw 状态写入、force、takeover 或手工 lease 删除。传输与 scope → **`plan-scoped-pm.md`**；字段权威 → **`mstar-artifacts/references/status-and-residuals.md`**。
-
-**Cross-plan parallel hard gate**（包括 waived）：ACTIVE 经同一 control DB 的事务 / token 仲裁，且依赖、写所有权与 worktree 隔离成立、每个未 waive plan 持有效独立 lease，才可并行；跨 host 不以“无共享 flock”自动改 serial，也不得绕过 DB 仲裁。pre-activation 必须共享 same-host 文件锁，否则默认 **`Plan parallelism: serial`**；当前轮显式接受文件路由 race 时仅在 `notes.jsonl` 追加审计，不双写 snapshot notes。waiver 本身不是 race 授权。integration merge 始终串行。
-
-每次可写 implement 派发前，经所属 authority 读取并验证 lease holder + paths 与本会话相符；mismatch → **STOP**。
-
-> **Lease Engine-check:** canonical callout lives in `mstar-artifacts` `SKILL.md`（Engine-check lease 行）— this file carries the execution checklist only.
 
 <!-- host-hook: phase-2-entry -->
 > Execute the active host reference's `## Host hooks` declaration for `phase-2-entry`; this file defines no host action.
@@ -180,7 +153,7 @@ ACTIVE 的并发安全由 control `store.db` 的 SQLite 事务（`withExecutionT
 
 ## 2.4 Per-plan loop（直到全部 Done）
 
-**跨 plan 默认**（包括 waived）：依照上文 **Cross-plan parallel hard gate** 判定；ACTIVE 由 DB 事务 / token / lease 仲裁，pre-activation 才是共享文件锁或 serial / 显式 race 接受。**merge 始终串行**。
+Cross-plan ready work follows the **Cross-plan parallel safety gate** above, including under an explicit worktree waiver. Integration stays serial. No per-row execution lease/bind/claim qualification exists.
 
 ### Rescheduling checkpoint（主动调度检查点）
 
@@ -196,33 +169,33 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 | `before-wait` | 进入任何 wait **之前** |
 | `result-settled` | 结果落定后：子任务完成、review 返回，或消费已返回结果 |
 | `dependency-changed` | 依赖事实变化（例如已审 prerequisite 已进入 dependent 的 assigned base） |
-| `ownership-changed` | ownership 事实变化（lease claim / release / transfer、handoff / accept、作用域 holder 变化） |
-| `capacity-changed` | 容量事实变化（槽位因完成释放、primary 起停、可选 transport 可用性变化） |
+| `ownership-changed` | Assigned writable paths, source branches or checkout ownership change |
+| `capacity-changed` | Native leaf capacity changes as tasks start or settle |
 
 **决策步骤**（每次 checkpoint 按序执行）：
 
 1. **用户 steering 与真实 blocker 优先于**任何调度续行；已返回结果**只消费一次**并判定其 acceptance —— **禁止**把 job completion 当作 accepted work。
-2. **确定作用域**：iteration coordinator 同时考虑其**已准备的独立 plan** 与 plan 本地 task；scoped plan primary 只考虑**自己的 tasks**（`plan-scoped-pm.md`）。任一方都**不得**把自己提升为对方的权限。
-3. **排除不可派发项**：已派发 / 已有 owner / 已终结 / 未准备 / 契约已漂移 / 真依赖未满足。prerequisite 仅在**已审 / 已接受 commit 进入 dependent task 的 assigned base** 时才满足（`mstar-sdd` § Dependent-task readiness）。活动 Assignment 的 scope 与 `BASE_SHA` **不可变**；**仅未派发**工作可 re-split / 重排，且依赖 / 接口变化须在派发前写回。
-4. **对剩余有用工作套用约束**：当前用户 / plan 的 serial 策略、task 容量、plan-primary 容量、engine scope / revision / lease 校验、same-host 锁与 L1/L2 隔离（首段 §2.0 #5）。**成立的具体串行边**：共享文件 / session / ledger、缺集成接口；**不成立**：task 编号、无关的 QC / QA。
-5. **启动完整已授权 ready batch**：默认传输是**原生 background task** —— transport 被禁用 / 不可用**不**关闭 task 并发；已准备的独立 plan 可走条件性 primary transport。只有 coordinator 的 integration merge 串行。
+2. **Select work:** consider ready rows and their local tasks within the selected workflow. Only the primary coordinator changes row/workflow state.
+3. **Exclude unavailable work:** dispatched, already owned, terminal, contract-not-ready or genuinely dependent work. A prerequisite is ready only after its reviewed commit enters the dependent task's assigned base (`mstar-sdd` § Dependent-task readiness). Active leaf scope and `BASE_SHA` remain fixed; revise undispatched work before dispatch.
+4. **Apply constraints:** current user/plan serial policy, native leaf capacity, engine CAS, atomic coordination and L1/L2 isolation. Shared files/session/ledger or missing integration interfaces create serial edges; numbering and unrelated QC/QA do not.
+5. **Dispatch the full authorized ready batch:** use native leaf dispatch; no secondary primary PM transport. Only the coordinator's integration merge is serial.
 6. **没有有用且已授权动作 → native wait 一次**，并写下真实 wait reason：`dependency` / `ownership` / `capacity` / `user-blocked` / `no-ready-work`。
 
 **结果记录**：正常 PM transcript / ledger 的一行即可 —— checkpoint reason、考虑过的作用域、已派发 ID 或具体 wait / block reason。**禁止**：重复完成投递、tick 计数、「still waiting」报告、对**不变的空 ready 集合**反复自证或重跑同一推理、为保持忙碌而造工作、timer / 轮询循环。等待是合法结论 —— 同一组未变事实**只陈述一次**；只有新事实（显式用户消息、新的已接受结果、dependency / ownership / capacity 观察变化）才重新打开 checkpoint，「turn 结束」不是理由。
 
 **checkpoint 不放宽任何既有安全条件**：
 
-- 原生 background task 仍是默认 task 传输；额外 primary 是可选 plan 级工具，只受其自身配置 gate。
-- `ctx.isIdle()` 仅表示未在流式输出，**不**代表没有未落定的 task / bash / eval job 或 plan primary；native adaptive wait 与 completion delivery 仍由宿主控制，**禁止**自建轮询替代。
-- lease / revision / ownership 语义不变：**禁止**重复 owned / running / completed 工作、偷 lease、改活动 base；pane idle / age / 终端标签**不是** ownership 或完成依据（§ Execution lease · Hold, release, override）。
+- Native background leaf tasks remain the task transport.
+- Host idle status is not evidence that all tasks/jobs settled; native wait/completion delivery remains host-owned, never a polling loop.
+- Never duplicate owned/running/completed work or change an active assigned base. Checkout names, idle age and terminal labels confer no authority.
 - integration merge 入 `spec_integration_branch` 仍**串行**；跨 plan 并行仍受本节首段跨 plan 安全闸约束。
 - `execution_policy` 取值（如 `serial`）是 accepted-but-opaque：**禁止**描述为引擎强制的线性调度器；实际策略从当前用户 / plan 推导，并保留显式 serial 约束。
 
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
-1. **Claim / resume — execution lease**（§2.0 #5 未 waive）：按下方 **Execution / integration lease checklist** 校验 holder / paths；fresh claim 只经 `mstar plan bind`（ACTIVE：`--execution --workflow <id> --plan <id> --expect <plan-execution-token> --operation <id>`；pre-activation：Assignment / workflow-plan 地址）。第二个 fresh bind 拒 duplicate-holder；原会话只读 resume（ACTIVE：`--execution --resume-ref <wire>`；pre-activation：`--resume`），不重新 claim、不更改状态、不当作 recovery。外来 holder 或 orphan InProgress 不授权可写派发；恢复 → `mstar-artifacts`。
-2. **Plan start — feature worktree + branch**：创建/校验 dedicated feature worktree（默认 `../<repo>.worktrees/<plan-id>-<slug>`，相对于 Git top-level 的 realpath，`<repo>` 为仓库 basename）；Assignment 须含绝对 `Worktree path` + `Working branch`（与 lease 一致）。plan 内多可写并行轨 → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**
-3. **Implement → InReview**（产品编辑在 feature worktree；authored plans / iterations / SDD 经绝对 control 路径；执行状态经公共动词）：
+1. **Configure/source facts:** use `show` for the explicitly selected workflow/plan. Create or verify the feature checkout/branch and record missing or corrected facts with revisable `prepare`; QA defaults to mandatory, cleanup to allow-residual. No prepare record is required when defaults and recorded metadata suffice.
+2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
+3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
    - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按依赖与 ownership 派发 **独立 ready tasks 并行** 的 per-task 循环（**不是**一次派发 dev 做全部 tasks）：
      1. `mstar sdd workspace <plan-id>` → `{SDD_DIR}`
@@ -230,22 +203,14 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
      3. Dispatch **one** implementer subagent（`references/implementer-prompt.md`：brief 路径 + report 路径；**禁止**贴整份 plan）
      4. Implementer `DONE` → `mstar sdd review-package BASE HEAD` → task diff 文件
      5. Dispatch **one** task reviewer subagent（brief + report + diff + Global Constraints）
-     6. Fix loop 直至 review clean；append `{SDD_DIR}/progress.md`；经 `mstar plan progress` 更新权威行并更新 authored plan checkbox
-     7. 放行已满足依赖的 next task；不等待无依赖任务，PM 独占共享 progress，状态只经公共动词
-   - **两条路线**：每次 Completion Report 后的 row 更新只经 `mstar plan progress`（ACTIVE：session reference + 完整 plan token + operation id；pre-activation：session envelope + revision），并更新主 plan。只允许 `InProgress` / `InReview` / `Blocked` 子集；不授权 `Todo` / `Done` / lease 释放或字段移除，也不手写 snapshot / 根 register。
-4. **QC → QA gate**（plan 保持 **`InReview`**；**保留** `execution_lease`）：per-plan 审查链 → **`mstar-sdd`**（L1–L2）+ **`mstar-review-qc/references/review-responsibility-boundaries.md`**（L3 tri / inline 单席；raw reports in `{SDD_DIR}/review/`，durable summary in main plan/snapshot）+ **`QA gate`**（`mandatory` → `qa-engineer`；`pm-acceptance` → PM checklist）。**禁止**在 integration merge 成功前设 `Done` 或释放 / 移除 `execution_lease`。**两条路线的 handoff 前提**：QA 证据齐备后，plan owner（per-plan 会话席）提交 `mstar plan handoff`（ACTIVE：`--session-ref <plan-wire> --file <abs-json> --expect <plan-execution-token> --operation <id>`；pre-activation：`--session <plan-session> --file <abs-json> --expect <revision>`），row 保持 `InReview`、保留 lease。**整迭代路线**：此 submitted handoff 是进入 step 5 coordinator 序列的入场前提（`accept` 要求 `submitted`）；提交后 plan owner 席位即止，不执行 `accept` / `integration-*` / `complete`。**Scoped route**：`mstar plan handoff` 后 **STOP**（row 保持 `InReview`、保留 lease）——plan 会话终点，coordinator 在别处继续；`Done` 与 lease 释放不是 plan 会话的动作。
-5. **Plan complete — serial merge back**：两条路线均在 step 4 的 plan owner 提交 handoff（`submitted`）后，由 coordinator 执行以下公共动词序列；从 integration worktree 固定 merge attempt，merge 失败保持 `InReview` + lease，不标 `Done`。成功经 `mstar plan complete` 原子设置 Done、持久化工作分支 / worktree metadata，并处置两类 lease：ACTIVE 经 `applyCompletionFrame` 在同一原子 DB 事务内**释放**（release）execution lease 与 integration merge lease；UPDATE 保留 `status: released` tombstone、revision、owner epoch 与释放证据，execution lease 的 released 记录仍由公共 plan view 返回供审计读回；integration merge lease 的 tombstone 保留在 DB，但公共 workflow view 不再呈现有效 merge claim（返回 null，审计经 DB 直查）；pre-activation / engine-absent 文件协议才在动词内部移除 snapshot 中的 lease 字段。同轮打开 cleanup 资格。plan 会话不得执行此步骤。
-
-   **Coordinator 序列**。每一写点使用当前 scope 的 CAS：ACTIVE `--session-ref <coordinator-wire> --expect <完整执行令牌> --operation <id>`；pre-activation `--session <coordinator-session> --expect <revision>`。完整形状 → **`plan-scoped-pm.md`** §6。
-
-   1. `mstar plan accept …` — 所有权移交（`submitted → accepted`；**不是**合并验收，worktree/branch 不变）。
-   2. `mstar plan integration-start …` — 在干净、检出当前权威 `branch.integration` 的 integration checkout 上固定 `base_sha` + source pin，且**先于** Git；拒绝外来 merge lease。
-   3. **coordinator 显式执行唯一 Git 动作**（参数数组、字符串直传、不拼接 shell）：`git -C <integration-worktree-path> merge --no-ff --no-edit <pinned-source-sha>` — 无 squash / rebase / 按分支名合并；CLI 状态动词**从不**代跑 merge。
-   4. `mstar plan integration-accept …` → `mstar plan complete …` — 验证证据后**一次原子完成**：`status: Done`、保留 `metadata.working_branch` / `metadata.worktree_path` 与既有 track branches；ACTIVE 在同一 DB 事务内释放该行 execution lease **与** coordinator 的 integration merge lease，保留 released tombstone 与审计证据；pre-activation / engine-absent 文件协议则移除 snapshot 中的 `execution_lease` 与 `integration_merge_lease` 字段。
-
-   **Plan 会话不执行以上任何一步**（`accept` / `integration-*` / `complete` 对 plan session 被拒绝）。失败恢复**只用** `mstar plan reconcile …`（同一传输的 CAS）：回退到 `accepted` + 释放本次 merge lease（`retry-ready`）／已具备唯一合并证据则补记证据并原子完成（`completed`，**不重复 merge**）；`integrating` 且存在 `MERGE_HEAD`、冲突或脏树 → `coordination.integration-unresolved`，全部状态与 lease 保留；无法证明的图 → `coordination.integration-diverged`。**禁止**传调用方成功标志、**禁止**重复 merge。
+     6. Fix until task review is clean; append `{SDD_DIR}/progress.md`; update the authoritative row through `mstar plan progress` and the authored plan checkbox.
+     7. Release ready dependent tasks without waiting for unrelated tasks; PM alone writes shared progress, and state changes use public verbs.
+   - After each accepted Completion Report, the primary coordinator updates the row through `mstar plan progress` and the main plan. Status is `InProgress`, `InReview` or `Blocked`, never `Done`; paths remain within the resolved plan/SDD area. Leaves never write snapshots/root registers.
+4. **QC → QA gate:** keep the row InReview; run the SDD task reviews, then plan QC tri (inline single-seat exception) and mandatory QA or qualified PM acceptance. Raw reports live in `{SDD_DIR}/review/`, with durable summaries in the main plan. Capture/disclose findings under the effective cleanup configuration.
+5. **Direct completion after the real serial merge:** from the clean recorded integration checkout on the authoritative workflow's `branch.integration` (pre-activation: snapshot), record the actual base SHA and explicitly run `git -C <integration-worktree-path> merge --no-ff --no-edit <reviewed-source-sha>` once. Supply QC/QA/source-review evidence and `integration: {base_sha, result_sha}` to `mstar plan complete`. The engine verifies the actual checkout, merge/source/review ancestry and result reachability, re-witnesses Git at commit, then atomically writes Done/completion evidence and retains source ownership metadata. It releases only applicable write/merge exclusion. No pre-merge state record or ownership-transfer sequence is required.
+   - On merge conflict, retain InReview and resolve or explicitly abort Git in that same checkout; do not invent Done. After a completed merge, retry complete with the same actual SHAs, never repeat the merge because a response was lost. Exact operation replay does not re-run Git or rewrite timestamps. Missing scope facts use ordinary prepare; actual Git conflicts must be resolved, not suppressed by state edits.
 6. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
-7. **Next plan / parallel wave** 从步骤 1 继续（可并行推进其他已 claim 的 plan；merge 仍排队串行）
+7. **Next ready row/wave:** continue from step 1; rows may interleave, while all integration writes remain serial.
 
 全部 plan `Done` → **Phase transition gate**（见 `mstar-iteration` SKILL.md **Phase transition gates** 表）：
 
@@ -255,7 +220,7 @@ Phase 2 缺的不是新调度器，而是一个**具名的重新评估时刻** �
 
 ### Same-round plan cleanup（timing lane 1；merge 成功同轮）
 
-integration merge 成功且 plan 行 `Done`、execution lease 已释放（ACTIVE 保留 released tombstone；pre-activation / engine-absent 移除 snapshot 字段）的**同一轮**，即可回收该 plan/track 的 feature worktree + 已合并分支 —— **父迭代仍在运行不影响资格**：不存在「父须终结」的一刀切，这是 cleanup 的明确设计而非遗漏。命令与守卫契约本体（ownership、合并证据、refusals、apply 顺序）→ **`mstar-branch-worktree`**「Worktree / branch cleanup」（唯一 home；本节只放 call site）：
+After successful real integration and row Done, recover the owned merged feature/track checkout in the same round; an active parent does not make its Done child ineligible. No per-row execution lease is an admission requirement. Guarded ownership/merge/refusal/order semantics live only in `mstar-branch-worktree`'s cleanup section.
 
 ```text
 mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]
@@ -263,7 +228,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 
 - 先 dry-run 看 `verdict | kind | ref | reason`（merge 刚完成 → 该 Done 行 eligible）；`--apply` 才变更。lane 1 只清**本地面**（无 `--remote`；远端残留留给 Phase 6）。
 - 分支可能仍被该 Done-child worktree 检出 → apply 内部先移 worktree，再 re-probe / re-plan 删分支（**worktree 移除 ≠ 分支删除**；细则 → 契约本体）。
-- **lease 释放不在 cleanup 范围内**：coordinator 的 `mstar plan complete` 原子完成 Done 与两类 lease 处置（ACTIVE：同一 DB 事务内释放并保留 released tombstone；pre-activation / engine-absent：文件协议移除 snapshot 字段）；cleanup 不替 owner 释放，也不依赖 lease 行 / 字段消失判断归属（归属保留在行 metadata / track Assignments）。standalone plan 无 integration 时以 `branch.target` 为证据 base，且须先 terminal close。
+- Cleanup never releases exclusion or advances state; direct complete owns that transaction. Ownership remains in row source metadata and retained track Assignments, not presence/absence of historical lease fields. Standalone plans use `branch.target` as evidence base and require terminal close before physical cleanup.
 - **禁止**为让 cleanup 通过而推进/终结父迭代或改 snapshot 状态；受保护行保持 `refuse` 是正确行为，不是失败。
 
 ## 2.5 Dispatch-first（implement 派发约束）
@@ -277,7 +242,7 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 | 并行 | 独立 ready tasks 各自 fresh implementer + 隔离 worktree；单一 canonical per-plan SDD root 内分离 task artifact 路径，context/progress 仅 PM 串行写；leaf 直接消费不可变绝对路径，不调用共享 context helper；每 task 后一位 fresh reviewer；真实依赖与 merge 串行（`mstar-sdd`） |
 | Sticky（可选） | Assignment **`SDD implementer session: sticky`** + `implementer-session.json`；implementer **resume**，reviewer **fresh** — `mstar-sdd/references/sticky-implementer-session.md` |
 | 文件交接 | brief / report / diff / `progress.md` 在 `{SDD_DIR}`；dispatch prompt **只给路径**，不贴 plan 全文或 task 历史 |
-| Assignment 字段 | 每个 implement dispatch 须含 `Execution mode: sdd`、`SDD dir`；§2.0 #5 未 waive 时还须含绝对 `Worktree path` + verified `execution_lease`；**禁止**省略 `Execution mode` / `SDD dir` |
+| Assignment fields | Every implement dispatch includes `Execution mode: sdd`, absolute `SDD dir`, source Worktree path/Working branch and inherited control-root Plan Path. |
 | 大包 inline | **禁止**把 T1–Tn 或整份 plan 写进 **一个** `fullstack-dev` leaf Assignment 冒充 SDD |
 | 分支 diff | 全部 task 完成后 `mstar sdd review-package MERGE_BASE HEAD` → `{SDD_DIR}/review/` branch diff → plan QC tri（N=3） |
 
@@ -292,12 +257,9 @@ Iteration Phase 2 附加：
 
 - Each concurrently active plan uses a **distinct** absolute feature-worktree
   path and dedicated feature branch from `spec_integration_branch`.
-- `execution_lease.worktree_path` MUST differ from the main and integration
-  worktrees (integration path from ACTIVE workflow execution row;
-  pre-activation: snapshot). Never product-edit either coordination checkout.
-- Writable Assignment `Worktree path` MUST match the authoritative lease
-  before first implement dispatch (ACTIVE: execution lease row).
-- Product edits run from feature worktree; authored plans / iteration package /
+- Row `metadata.worktree_path` MUST differ from the main/control and registered integration checkouts (ACTIVE workflow view; pre-activation snapshot).
+- Record Worktree path and Working branch on the row through prepare when missing or corrected, and match them to actual checkout facts and writable leaf Assignments before dispatch.
+- Product edits run from the feature worktree; authored plans / iteration package /
   SDD use absolute control paths, and state uses public verbs against the control
   authority, never feature-cwd relative `.mstar/...`.
 - Assignment MUST include absolute feature **`Worktree path`** and absolute
@@ -305,17 +267,18 @@ Iteration Phase 2 附加：
 - Default **L1**: one writable track per plan. Within-plan multi-writable tracks
   still follow L2 `parallel-writable-pre-dispatch` (`mstar-branch-worktree`).
 
-## Execution / integration lease checklist
+## Concurrent-write exclusion
 
-- ACTIVE lease 权威为 `execution_leases` / `execution_integration_leases`；经公共 plan 动词 claim / progress / handoff / transfer / complete / release，不编辑 DB 或 snapshot。传输与 owner / coordinator 边界 → **`plan-scoped-pm.md`**。
-- 可写 dispatch 前校验 holder、feature worktree 与 working branch；外来 holder 或无有效 lease 的 orphan InProgress 不授权实现，按 **`mstar-artifacts`** 的 recovery 规则处理。
-- integration checkout 必须干净并检出记录的 integration 分支；仅 coordinator 按 §2.4 step 5 固定 attempt → 显式 Git merge → 验证 → 原子 complete；失败经 `mstar plan reconcile`，不重复 merge。
-- lease 可共存，但 merge lease 不授予 source plan 的执行所有权。audit notes 只 append `notes.jsonl`。
-- **pre-activation / engine-absent** 的完整文件 lease 协议（字段、锁、claim/release/override 与 integration）唯一正文 → **`mstar-engine-legacy/references/lease-protocol.md`**；本处不复述。
+Row state writes use coordinator transaction/CAS/receipts and validated source metadata, not a retained per-row execution lease. An InProgress row without a historical lease is not an orphan admission failure. Recovery concerns actual coordinator identity, source facts or transaction conflict.
 
 ## Multi-plan parallelism
 
-并行安全条件唯一见上文 **Cross-plan parallel hard gate**；integration merge 始终串行。每 plan 使用独立 feature worktree 与有效 lease（未 waive 时），依赖与共享写目标仍决定调度。
+The **Cross-plan parallel safety gate** above applies whether or not `Worktree mode: waived` is in effect. Feature checkouts/branches and write ownership remain distinct; waiver never silently authorizes lockless cross-host writes. Integration into `spec_integration_branch` stays serial.
+
+## Serial integration safety
+
+Workflow-wide merge exclusion (ACTIVE: `execution_integration_leases`; pre-activation: `integration_merge_lease`) protects actual concurrent integration writers; it never grants a new per-plan seat. The coordinator verifies the clean recorded integration checkout, performs one explicit merge at a time and supplies the real base/result to direct complete. Existing foreign claims are not stealable by age, idle status or labels. Complete releases the verified attempt's applicable merge claim atomically with Done. A failed/in-flight Git merge remains unresolved until Git is clean and its result is provable; never clear protection or repeat a successful merge to manufacture state.
+
 
 ## Waiver
 
@@ -325,11 +288,10 @@ waives **only**:
 - Per-plan feature worktree defaults. The dedicated integration coordination
   checkout remains required; the primary checkout keeps its recorded branch
   and remains the process-SSOT holder via absolute control-root paths.
-- Lease claim/hold/release defaults（ACTIVE：execution 表；pre-activation：snapshot 字段）—— **scoped route 不可豁免**：waiver 不解除公共动词前置；CLI 缺失 fail closed
 
 It does **not** waive the **cross-plan parallel safety gate** above. ACTIVE remains DB-arbitrated; pre-activation requires the documented shared file lock, serial scheduling, or explicit current-turn race acceptance + append-only `notes.jsonl` audit. **Prefer serial scheduling when waived**.
 
-`Plan parallelism: serial` does **not** waive the worktree or lease gates.
+Serial policy does not waive checkout isolation, coordinator transaction/CAS or real serial integration safety.
 
 Iteration commands MUST NOT infer waiver from missing worktrees or single-session
 starts. Explicit override this turn only.

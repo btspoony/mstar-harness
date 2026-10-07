@@ -69,9 +69,7 @@ const RICH_SNAPSHOT = v2Snapshot(RICH_WORKFLOW, {
       title: 'Plan A',
       file: 'plans/plan-a.md',
       status: 'InProgress',
-      execution_lease: {
-        holder: 'dsh-session-1',
-        claimed_at: '2026-08-08',
+      metadata: {
         worktree_path: '/worktrees/plan-a',
         working_branch: 'feature/plan-a',
       },
@@ -182,10 +180,10 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(text).toContain(`mstar engine status: v${PLUGIN_VERSION}`)
     expect(text).toContain('workflow v2.2.0 (iteration) running | plans: plan-a(InProgress)')
     expect(text).not.toContain('plan-b')
-    // Omitted (hard, D2): residuals, leases, direction, the iteration-gate
+    // Omitted (hard, D2): residuals, row scope, direction, the iteration-gate
     // line, harness dir and enforcement all leave this surface.
     expect(text).not.toContain('residuals')
-    expect(text).not.toContain('leases')
+    expect(text).not.toContain('row scope')
     expect(text).not.toContain('direction')
     expect(text).not.toContain('gate')
     expect(text).not.toContain('enforcement')
@@ -411,13 +409,13 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     expect(section!.text).toContain('enforcement: hard')
   })
 
-  it('(l) interpolation-hazard screening — hostile dynamic values ({{x}} in plan id / lease holder / iteration id / compass direction) render without throwing and keep the screened text', async () => {
+  it('(l) interpolation-hazard screening — hostile dynamic values ({{x}} in plan id / working branch / iteration id / compass direction) render without throwing and keep the screened text', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-system-prompt-hostile-'))
     const harnessDir = join(root, 'harness')
     await mkdir(harnessDir, { recursive: true })
     // Operator-controlled fields carrying COMPLETE `{{...}}` groups: the
     // workflow id (`{{iter}}`), the plan id (`{{plan}}`) and — fixture-only,
-    // never rendered by the slim digest — a lease holder + compass direction
+    // never rendered by the slim digest — a working branch + compass direction
     // prose.
     const HOSTILE_ROOT = v2Root([v2WorkflowEntry('{{iter}}', 'iteration')])
     const HOSTILE_SNAPSHOT = v2Snapshot('{{iter}}', {
@@ -428,7 +426,7 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
           title: 'Hostile',
           file: 'plans/hostile.md',
           status: 'InProgress',
-          execution_lease: { holder: '{{leaser}}', claimed_at: '2026-08-08', worktree_path: '/wt/{{plan}}', working_branch: 'feature/{{plan}}' },
+          metadata: { worktree_path: '/wt/{{plan}}', working_branch: 'feature/{{plan}}' },
         },
       ],
     })
@@ -471,9 +469,9 @@ describe('mstar:harness-rules global section + mstar:engine-status context ', ()
     // The screened text stays readable — the original content is retained.
     expect(context!.text).toContain('workflow { {iter} } (iteration) running')
     expect(context!.text).toContain('{ {plan} }(InProgress)')
-    // The omitted surfaces (leases / direction / iteration gate) never
+    // The omitted surfaces (row scope / direction / iteration gate) never
     // render — even their screened literals stay out.
-    expect(context!.text).not.toContain('leases:')
+    expect(context!.text).not.toContain('row scope:')
     expect(context!.text).not.toContain('direction:')
     expect(context!.text).not.toContain(': gate')
   })

@@ -69,10 +69,6 @@ permission:
     "mstar status validate *": allow
     "mstar-harness status validate": allow
     "mstar-harness status validate *": allow
-    "mstar lease verify": allow
-    "mstar lease verify *": allow
-    "mstar-harness lease verify": allow
-    "mstar-harness lease verify *": allow
     # Audit read-only checks (matches mstar-audit Hard Rule 2)
     # Deny mutating variants before the exact read-only allows
     "npm audit fix*": deny

@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { initializeStore } from "@mstar-harness/engine";
+import { initializeStore, readExecutionState } from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -67,7 +67,7 @@ async function harnessFixture(name: string): Promise<{ workspace: string; harnes
   const workspace = join(root, "ws");
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const handle = await initializeStore({ harnessDir: workspace });
+  const handle = await initializeStore({ harnessDir: harness });
   handle.close();
   return { workspace, harness };
 }
@@ -128,7 +128,7 @@ describe("mstar catalog discover", () => {
       version: number;
       entities: { relativePath: string; idAssigned: boolean }[];
       unknowns: { code: string }[];
-      retirementSections: { relativePath: string; startLine: number; endLine: number; preservedLines: number }[];
+      retirementSections: { rootKind: string; relativePath: string; startLine: number; endLine: number; preservedLines: number }[];
       conflicts: unknown[];
       links: unknown[];
     };
@@ -206,9 +206,11 @@ describe("mstar catalog import", () => {
     const clone = await populatedFixture("import-clone-");
     const clonePlan = join(clone.workspace, "plan.json");
     expect(runCli(["catalog", "discover", "--out", clonePlan], clone.workspace).exitCode).toBe(0);
+    const beforeDryRun = readFileSync(join(clone.harness, "store.db"));
     const dryRun = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION, "--dry-run"], clone.workspace);
     expect(dryRun.exitCode).toBe(0);
     expect((jsonOf(dryRun).data as { importable: boolean }).importable).toBe(true);
+    expect(readFileSync(join(clone.harness, "store.db"))).toEqual(beforeDryRun);
 
     const cloneImport = runCli(["catalog", "import", "--inputs", exportPath, ...IMPORT_OPERATION], clone.workspace);
     expect(cloneImport.exitCode).toBe(0);
@@ -221,6 +223,7 @@ describe("mstar catalog import", () => {
     // No workflow session, no root registration: import is catalog-only.
     expect(readdirSync(clone.harness)).not.toContain("workflows");
     expect(readdirSync(clone.harness)).not.toContain("status.json");
+    await expect(readExecutionState({ harnessDir: clone.harness })).rejects.toMatchObject({ code: "execution.not-active" });
   });
 
   test("a conflicting plan is refused and writes nothing", async () => {

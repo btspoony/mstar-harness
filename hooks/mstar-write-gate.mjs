@@ -4,43 +4,63 @@ import { createRequire } from "node:module";
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // hooks/src/mstar-write-gate.ts
-import { readFileSync as readFileSync2, readlinkSync, realpathSync, statSync as statSync2, writeSync } from "node:fs";
-import { basename, dirname, isAbsolute as isAbsolute4, join, relative as relative5, resolve } from "node:path";
+import { readFileSync as readFileSync2, readlinkSync, realpathSync, statSync as statSync3, writeSync } from "node:fs";
+import { basename as basename3, dirname as dirname11, isAbsolute as isAbsolute3, join as join6, relative as relative6, resolve as resolve5 } from "node:path";
 
 // packages/engine/dist/engine.js
 import { createRequire as createRequire2 } from "node:module";
-import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync3, openSync, readSync, statSync as statSync6, unlinkSync as unlinkSync5 } from "node:fs";
-import { createRequire as createRequire22 } from "node:module";
-import { join as join18, resolve as resolve13 } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { basename, dirname, join, resolve } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
+import { dirname as dirname3, join as join3, sep } from "node:path";
+import { readFileSync as readFileSync3, statSync } from "node:fs";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
+import { mkdirSync as mkdirSync2, rmdirSync, statSync as statSync2, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname5, join as join5, resolve as resolve4 } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
+import { basename as basename4, isAbsolute as isAbsolute5, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
+import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname6, isAbsolute as isAbsolute6, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { basename as basename5, dirname as dirname7, isAbsolute as isAbsolute7, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync12, realpathSync as realpathSync5 } from "node:fs";
+import { createHash as createHash6 } from "node:crypto";
 import {
-  existsSync as existsSync14,
-  lstatSync as lstatSync2,
+  copyFileSync,
+  existsSync as existsSync13,
+  lstatSync as lstatSync3,
   mkdirSync as mkdirSync6,
-  readFileSync as readFileSync12,
-  readdirSync as readdirSync8,
+  readFileSync as readFileSync13,
+  readdirSync as readdirSync9,
+  realpathSync as realpathSync6,
+  renameSync as renameSync2,
+  rmSync as rmSync2,
   statSync as statSync5,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync4
 } from "node:fs";
-import { basename as basename8, dirname as dirname9, isAbsolute as isAbsolute12, join as join17, relative as relative4, resolve as resolve12, sep as sep8 } from "node:path";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { basename as basename2, dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
-import { existsSync as existsSync9, mkdirSync as mkdirSync4, readdirSync as readdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync4, statSync as statSync4 } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { basename as basename5, dirname as dirname8, isAbsolute as isAbsolute8, join as join13, relative as relative3, resolve as resolve8 } from "node:path";
-import { dirname as dirname3, join as join3, resolve as resolvePath, sep } from "node:path";
-import { readFileSync as readFileSync3, statSync } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, relative, resolve as resolve3 } from "node:path";
-import { existsSync as existsSync7, readFileSync as readFileSync6, readdirSync as readdirSync3, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname7, isAbsolute as isAbsolute7, join as join9, resolve as resolve7, sep as sep5 } from "node:path";
-import { dirname as dirname5, isAbsolute as isAbsolute3, join as join5, resolve as resolve4 } from "node:path";
-import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
-import { basename as basename4, isAbsolute as isAbsolute6, join as join8, relative as relative2, resolve as resolve6, sep as sep4 } from "node:path";
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync13, realpathSync as realpathSync5 } from "node:fs";
-import { existsSync as existsSync17, statSync as statSync8 } from "node:fs";
-import { basename as basename11, dirname as dirname13, join as join21, relative as relative6, resolve as resolve15 } from "node:path";
+import { basename as basename9, dirname as dirname8, join as join18, relative as relative4, resolve as resolve13, sep as sep9 } from "node:path";
+import {
+  existsSync as existsSync14,
+  lstatSync as lstatSync4,
+  mkdirSync as mkdirSync7,
+  readFileSync as readFileSync14,
+  readdirSync as readdirSync10,
+  statSync as statSync6,
+  unlinkSync as unlinkSync5,
+  writeFileSync as writeFileSync5
+} from "node:fs";
+import { dirname as dirname9, isAbsolute as isAbsolute10, join as join19, relative as relative5, resolve as resolve14, sep as sep10 } from "node:path";
+import { createRequire as createRequire22 } from "node:module";
+import { closeSync, existsSync as existsSync15, fstatSync, lstatSync as lstatSync5, openSync, readSync, statSync as statSync7, unlinkSync as unlinkSync6 } from "node:fs";
+import { dirname as dirname10, join as join20, resolve as resolve15 } from "node:path";
+import { existsSync as existsSync17, statSync as statSync9 } from "node:fs";
+import { basename as basename13, dirname as dirname14, join as join23, relative as relative7, resolve as resolve17 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage3 } from "node:async_hooks";
 import { createHash as createHash14 } from "node:crypto";
 import { readFileSync as readFileSync20 } from "node:fs";
@@ -91,7 +111,6782 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
+var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require2 = /* @__PURE__ */ createRequire2(import.meta.url);
+function readJson(filePath) {
+  if (!existsSync(filePath))
+    return {};
+  const content = readFileSync(filePath, "utf8").trim();
+  if (!content)
+    return {};
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
+function writeJson(filePath, value) {
+  const parent = dirname(filePath);
+  mkdirSync(parent, { recursive: true });
+  const tmp = join(parent, `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}
+`, "utf8");
+    renameSync(tmp, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw error;
+  }
+}
+var SEVERITY_ORDER;
+var init_core = __esm(() => {
+  SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+});
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+function invalid(code, message) {
+  return { ok: false, severity: "high", code, message };
+}
+function validateBinding(value, what) {
+  if (!isPlainObject(value))
+    return [invalid("coordination.row.binding-shape", `${what} must be an object`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !["session_id", "session_file", "bound_at"].includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.binding-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!isNonEmptyString(value.session_id)) {
+    violations.push(invalid("coordination.row.binding-field", `${what}.session_id must be a non-empty string`));
+  }
+  if (!isNonEmptyString(value.session_file) || !isAbsolute(String(value.session_file))) {
+    violations.push(invalid("coordination.row.binding-field", `${what}.session_file must be an absolute path`));
+  }
+  if (!isNonEmptyString(value.bound_at)) {
+    violations.push(invalid("coordination.row.binding-field", `${what}.bound_at must be a timestamp`));
+  }
+  return violations;
+}
+function validateEvidenceRef(value, what) {
+  if (!isPlainObject(value))
+    return [invalid("coordination.row.evidence-shape", `${what} must be a hash-pinned reference`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !["path", "sha256"].includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.evidence-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!isNonEmptyString(value.path) || !isAbsolute(String(value.path))) {
+    violations.push(invalid("coordination.row.evidence-field", `${what}.path must be an absolute path`));
+  }
+  if (!isNonEmptyString(value.sha256) || !SHA256_HEX.test(String(value.sha256))) {
+    violations.push(invalid("coordination.row.evidence-field", `${what}.sha256 must be 64 lowercase hex`));
+  }
+  return violations;
+}
+function validatePlanProgress(value, what = "coordination.progress") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.row.progress-shape", `${what} must be an object`)];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !["status", "summary", "evidence_paths", "track_branches"].includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.row.progress-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (!PLAN_PROGRESS_STATUSES.includes(value.status)) {
+    violations.push(invalid("coordination.row.progress-field", `${what}.status must be one of ${PLAN_PROGRESS_STATUSES.join(", ")}`));
+  }
+  if (!isNonEmptyString(value.summary)) {
+    violations.push(invalid("coordination.row.progress-field", `${what}.summary must be a non-empty string`));
+  }
+  if (!Array.isArray(value.evidence_paths) || !value.evidence_paths.every(isNonEmptyString)) {
+    violations.push(invalid("coordination.row.progress-field", `${what}.evidence_paths must be an array of paths`));
+  }
+  if (value.track_branches !== undefined) {
+    if (!Array.isArray(value.track_branches) || !value.track_branches.every(isNonEmptyString)) {
+      violations.push(invalid("coordination.row.progress-field", `${what}.track_branches must be an array of branch names`));
+    }
+  }
+  return violations;
+}
+function validatePreparedCoordination(value, what = "coordination.prepared") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.row.prepared-shape", `${what} must be an object`)];
+  const allowed = ["qa_gate", "findings_cleanup", "prepared_by", "prepared_at"];
+  const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.prepared-field", `${what} has unexpected key: ${key}`));
+  if (value.qa_gate !== "mandatory" && value.qa_gate !== "pm-acceptance")
+    violations.push(invalid("coordination.row.prepared-field", `${what}.qa_gate is invalid`));
+  if (value.findings_cleanup !== "zero-residual" && value.findings_cleanup !== "allow-residual")
+    violations.push(invalid("coordination.row.prepared-field", `${what}.findings_cleanup is invalid`));
+  for (const key of ["prepared_by", "prepared_at"])
+    if (!isNonEmptyString(value[key]))
+      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
+  return violations;
+}
+function validateCompletionRecord(value, what, route) {
+  if (!isPlainObject(value))
+    return [invalid("coordination.row.completion-shape", `${what} must be an object`)];
+  const allowed = ["source_branch", "source_sha", "worktree_path", "review_base", "review_head", "qc", "qa", "integration", "completed_by", "completed_at"];
+  const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.completion-field", `${what} has unexpected key: ${key}`));
+  const reportOnly = route === "standalone-report-only";
+  if (!(reportOnly && value.source_branch === null) && !isNonEmptyString(value.source_branch)) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.source_branch must identify the recorded source branch`));
+  }
+  for (const key of ["completed_by", "completed_at"]) {
+    if (!isNonEmptyString(value[key]))
+      violations.push(invalid("coordination.row.completion-field", `${what}.${key} is required`));
+  }
+  for (const key of ["source_sha", "review_base", "review_head"]) {
+    const item = value[key];
+    if (!(reportOnly && item === null) && (typeof item !== "string" || !GIT_SHA.test(item))) {
+      violations.push(invalid("coordination.row.completion-field", `${what}.${key} must be a full Git object id${reportOnly ? " or null" : ""}`));
+    }
+  }
+  if (!(reportOnly && value.worktree_path === null) && (!isNonEmptyString(value.worktree_path) || !isAbsolute(value.worktree_path))) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.worktree_path must be an absolute source checkout${reportOnly ? " or null" : ""}`));
+  }
+  if (!isPlainObject(value.qc) || value.qc.decision !== "Approve" && value.qc.decision !== "Approve with residuals" || !Array.isArray(value.qc.reports) || value.qc.reports.length === 0) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.qc must record approved QC reports`));
+  } else {
+    for (const key of Object.keys(value.qc))
+      if (!["decision", "reports", "consolidated"].includes(key))
+        violations.push(invalid("coordination.row.completion-field", `${what}.qc has unexpected key: ${key}`));
+    for (const [index, report] of value.qc.reports.entries())
+      violations.push(...validateEvidenceRef(report, `${what}.qc.reports[${index}]`));
+    violations.push(...validateEvidenceRef(value.qc.consolidated, `${what}.qc.consolidated`));
+  }
+  if (!isPlainObject(value.qa) || value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance" || value.qa.decision !== "pass") {
+    violations.push(invalid("coordination.row.completion-field", `${what}.qa must record passing acceptance evidence`));
+  } else {
+    for (const key of Object.keys(value.qa))
+      if (!["gate", "decision", "report"].includes(key))
+        violations.push(invalid("coordination.row.completion-field", `${what}.qa has unexpected key: ${key}`));
+    violations.push(...validateEvidenceRef(value.qa.report, `${what}.qa.report`));
+  }
+  if (route !== "integration" && value.integration !== undefined) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.integration is only valid for integration delivery`));
+  }
+  if (route === "integration" && value.integration === undefined) {
+    violations.push(invalid("coordination.row.completion-field", `${what}.integration is required for verified integration delivery`));
+  }
+  if (value.integration !== undefined) {
+    if (!isPlainObject(value.integration)) {
+      violations.push(invalid("coordination.row.completion-field", `${what}.integration must be a verified merge record`));
+    } else {
+      const fields = ["target_branch", "worktree_path", "base_sha", "result_sha", "verified_at"];
+      for (const key of Object.keys(value.integration))
+        if (!fields.includes(key))
+          violations.push(invalid("coordination.row.completion-field", `${what}.integration has unexpected key: ${key}`));
+      for (const key of fields)
+        if (!isNonEmptyString(value.integration[key]))
+          violations.push(invalid("coordination.row.completion-field", `${what}.integration.${key} is required`));
+      for (const key of ["base_sha", "result_sha"])
+        if (typeof value.integration[key] !== "string" || !GIT_SHA.test(value.integration[key]))
+          violations.push(invalid("coordination.row.completion-field", `${what}.integration.${key} must be a full Git object id`));
+      if (typeof value.integration.worktree_path !== "string" || !isAbsolute(value.integration.worktree_path))
+        violations.push(invalid("coordination.row.completion-field", `${what}.integration.worktree_path must be absolute`));
+    }
+  }
+  return violations;
+}
+function validateRowCoordination(value, what = "coordination", route = "integration") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.row.shape", `${what} must be an object`)];
+  const allowed = ["revision", "prepared", "progress", "completion"];
+  const violations = Object.keys(value).filter((key) => !allowed.includes(key)).map((key) => invalid("coordination.row.field", `${what} has unexpected key: ${key}`));
+  if (!Number.isInteger(value.revision) || value.revision < 0)
+    violations.push(invalid("coordination.row.revision", `${what}.revision must be a non-negative integer`));
+  if (value.prepared !== undefined)
+    violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
+  if (value.progress !== undefined)
+    violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
+  if (value.completion !== undefined)
+    violations.push(...validateCompletionRecord(value.completion, `${what}.completion`, route));
+  return violations;
+}
+function validateCoordinationIdentityRecovery(value, what = "coordination.identity_recoveries[]") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.recovery.shape", `${what} must be an object`)];
+  const allowed = [
+    "operation_id",
+    "request_hash",
+    "workflow_id",
+    "prior_session_id",
+    "session_id",
+    "authorization_ref",
+    "reason",
+    "stopped_session_ids",
+    "attested_at",
+    "snapshot_version_before",
+    "compass_version",
+    "recovered_at"
+  ];
+  const violations = [];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.recovery.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  for (const key of [
+    "operation_id",
+    "workflow_id",
+    "prior_session_id",
+    "session_id",
+    "authorization_ref",
+    "reason",
+    "recovered_at"
+  ]) {
+    if (!isNonEmptyString(value[key])) {
+      violations.push(invalid("coordination.recovery.field", `${what}.${key} must be a non-empty string`));
+    }
+  }
+  if (typeof value.request_hash !== "string" || !SHA256_HEX.test(value.request_hash)) {
+    violations.push(invalid("coordination.recovery.hash", `${what}.request_hash must be a bare sha256 hex digest`));
+  }
+  for (const key of ["snapshot_version_before", "compass_version"]) {
+    if (typeof value[key] !== "string" || !HASH_RE.test(value[key])) {
+      violations.push(invalid("coordination.recovery.version", `${what}.${key} must be a "sha256:<64 hex>" version`));
+    }
+  }
+  if (value.attested_at !== undefined && (typeof value.attested_at !== "string" || !/^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?[Zz]$/.test(value.attested_at) || !Number.isFinite(Date.parse(value.attested_at)) || typeof value.recovered_at !== "string" || !Number.isFinite(Date.parse(value.recovered_at)) || Date.parse(value.attested_at) > Date.parse(value.recovered_at))) {
+    violations.push(invalid("coordination.recovery.attestation", `${what}.attested_at must be a UTC stop timestamp no later than recovered_at`));
+  }
+  const stopped = value.stopped_session_ids;
+  if (!Array.isArray(stopped) || stopped.length === 0) {
+    violations.push(invalid("coordination.recovery.stopped", `${what}.stopped_session_ids must be a non-empty array`));
+  } else if (stopped.some((entry) => !isNonEmptyString(entry))) {
+    violations.push(invalid("coordination.recovery.stopped", `${what}.stopped_session_ids entries must be non-empty strings`));
+  }
+  return violations;
+}
+function validateSnapshotCoordination(value, what = "coordination") {
+  if (!isPlainObject(value))
+    return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
+  const violations = [];
+  const allowed = ["coordinator", "identity_recoveries"];
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0) {
+    violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
+  }
+  if (value.coordinator === undefined) {
+    violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
+  } else {
+    violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
+  }
+  if (value.identity_recoveries !== undefined) {
+    if (!Array.isArray(value.identity_recoveries)) {
+      violations.push(invalid("coordination.snapshot.field", `${what}.identity_recoveries must be an array`));
+    } else {
+      value.identity_recoveries.forEach((entry, index) => {
+        violations.push(...validateCoordinationIdentityRecovery(entry, `${what}.identity_recoveries[${String(index)}]`));
+      });
+    }
+  }
+  return violations;
+}
+var COORDINATION_ERROR_CODES;
+var CoordinationError;
+var writeAuthorizations;
+var PLAN_PROGRESS_STATUSES;
+var SHA256_HEX;
+var GIT_SHA;
+var HASH_RE;
+var init_coordination_write = __esm(() => {
+  COORDINATION_ERROR_CODES = [
+    "coordination.harness-not-found",
+    "coordination.workflow-not-found",
+    "coordination.plan-not-found",
+    "coordination.scope-mismatch",
+    "coordination.path-mismatch",
+    "coordination.session-not-found",
+    "coordination.session-role",
+    "coordination.invalid-session-id",
+    "coordination.identity-missing",
+    "coordination.identity-mismatch",
+    "coordination.version-conflict",
+    "coordination.invalid-transition",
+    "coordination.prepare-status",
+    "coordination.progress-phase",
+    "coordination.progress-transition",
+    "coordination.plan-status",
+    "coordination.workflow-not-running",
+    "coordination.merge-lease-foreign",
+    "coordination.merge-lease-stopped-owner",
+    "coordination.findings-open",
+    "coordination.completion-frozen",
+    "coordination.invalid-input",
+    "coordination.forbidden-field",
+    "coordination.not-in-git",
+    "coordination.git-unavailable",
+    "coordination.git-proof",
+    "coordination.integration-unresolved",
+    "coordination.integration-diverged",
+    "coordination.local-store-required",
+    "coordination.direct-write-refused",
+    "coordination.scoped-writer-required",
+    "coordination.unknown-operation",
+    "coordination.store",
+    "coordination.prepare-amendment.stale",
+    "coordination.prepare-amendment.invalid-patch",
+    "coordination.prepare-amendment.not-prepare",
+    "coordination.prepare-amendment.execution-started",
+    "coordination.prepare-amendment.duplicate-plan",
+    "coordination.prepare-amendment.invalid-plan",
+    "coordination.prepare-amendment.compass-mismatch",
+    "coordination.prepare-amendment.invalid-worktree",
+    "coordination.identity-recovery.invalid-request",
+    "coordination.identity-recovery.stale",
+    "coordination.identity-recovery.not-prepare",
+    "coordination.identity-recovery.execution-started",
+    "coordination.identity-recovery.foreign-owner",
+    "coordination.identity-recovery.unauthorized",
+    "coordination.identity-recovery.operation-conflict",
+    "coordination.root-register-unwritable"
+  ];
+  CoordinationError = class CoordinationError2 extends Error {
+    code;
+    details;
+    constructor(code, message, details = {}) {
+      super(message);
+      this.name = "CoordinationError";
+      this.code = code;
+      this.details = details;
+    }
+  };
+  writeAuthorizations = new AsyncLocalStorage;
+  PLAN_PROGRESS_STATUSES = ["InProgress", "InReview", "Blocked"];
+  SHA256_HEX = /^[0-9a-f]{64}$/;
+  GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  HASH_RE = /^sha256:[0-9a-f]{64}$/;
+});
+var PLAN_OPERATION_SEMANTICS;
+var WORKFLOW_OPERATION_SEMANTICS;
+var init_recovery_intent = __esm(() => {
+  init_coordination_write();
+  PLAN_OPERATION_SEMANTICS = {
+    prepare: ["planId", "operation.kind", "operation.config"],
+    progress: ["planId", "operation.kind", "operation.progress"],
+    "residual-add": ["planId", "operation.kind", "operation.entries"],
+    "residual-close": [
+      "planId",
+      "operation.kind",
+      "operation.issueId",
+      "operation.disposition",
+      "operation.evidence",
+      "operation.expectedIssueRevision"
+    ],
+    complete: ["planId", "operation.kind", "operation.evidence", "operation.integration"]
+  };
+  WORKFLOW_OPERATION_SEMANTICS = {
+    phase: ["workflowId", "operation.kind", "operation.phase", "operation.compassPath"],
+    lifecycle: ["workflowId", "operation.kind", "operation.status", "operation.reason"],
+    "execution-policy": ["workflowId", "operation.kind", "operation.policy"],
+    "integration-worktree": ["workflowId", "operation.kind", "operation.path"],
+    delivery: ["workflowId", "operation.kind", "operation.delivery"]
+  };
+});
+function catalogRootDir(context, rootKind) {
+  if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
+    throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
+  }
+  const harness = dirname3(storeDbPath(context));
+  switch (rootKind) {
+    case "repository":
+      return dirname3(harness);
+    case "harness":
+      return harness;
+    case "plans":
+      return resolvePlanDir(harness);
+    case "iterations":
+      return resolveIterationDir(harness);
+    case "specs":
+      return resolveSpecsDir(harness, { create: false });
+    case "knowledge":
+      return resolveKnowledgeDir(harness);
+    case "projects":
+      return resolveProjectDir(harness, { harnessDir: harness });
+  }
+}
+var ENTITY_KINDS;
+var ROOT_KINDS;
+var DOCUMENT_KINDS;
+var LIFECYCLES;
+var RELATIONS;
+var CatalogError;
+var init_catalog = __esm(() => {
+  init_path();
+  init_store_db();
+  ENTITY_KINDS = {
+    project: true,
+    iteration: true,
+    plan: true,
+    document: true
+  };
+  ROOT_KINDS = {
+    repository: true,
+    harness: true,
+    plans: true,
+    iterations: true,
+    specs: true,
+    knowledge: true,
+    projects: true
+  };
+  DOCUMENT_KINDS = {
+    spec: true,
+    knowledge: true,
+    guide: true,
+    compass: true,
+    plan: true,
+    roadmap: true,
+    review: true,
+    other: true
+  };
+  LIFECYCLES = {
+    active: true,
+    archived: true,
+    superseded: true
+  };
+  RELATIONS = {
+    "belongs-to": true,
+    documents: true,
+    "spec-ref": true,
+    "knowledge-ref": true,
+    "derived-from": true,
+    supersedes: true
+  };
+  CatalogError = class CatalogError2 extends Error {
+    code;
+    constructor(code, message) {
+      super(`[${code}] ${message}`);
+      this.name = "CatalogError";
+      this.code = code;
+    }
+  };
+});
+function parseMstarc(text) {
+  let section = null;
+  const out = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith(";"))
+      continue;
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header !== null) {
+      section = header[1].trim();
+      continue;
+    }
+    if (section !== MSTARC_SECTION)
+      continue;
+    const eq = line.indexOf("=");
+    if (eq === -1)
+      continue;
+    const field = CONFIG_KEYS[line.slice(0, eq).trim()];
+    if (field === undefined)
+      continue;
+    const value = line.slice(eq + 1).trim();
+    if (value === "") {
+      if (field === "jevMode" || field === "jevTransport")
+        delete out[field];
+      continue;
+    }
+    if (field === "enforcement" && value !== "hard" && value !== "soft")
+      continue;
+    out[field] = value;
+  }
+  return out;
+}
+function isFile(file) {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+function findMstarc(startDir, boundary) {
+  let dir = resolve3(startDir);
+  const bound = resolve3(boundary);
+  for (;; ) {
+    if (!isAtOrBelow(dir, bound))
+      return null;
+    const candidate = join4(dir, MSTARC_FILE);
+    if (isFile(candidate))
+      return candidate;
+    if (dir === bound)
+      return null;
+    const parent = dirname4(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function loadMstarc(startDir, boundary) {
+  const file = findMstarc(startDir, boundary);
+  if (file === null)
+    return null;
+  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
+}
+function isAtOrBelow(dir, root) {
+  const rel = relative(root, dir);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
+}
+var MSTARC_FILE = ".mstarc";
+var MSTARC_SECTION = "config";
+var MSTARC_HARNESS_DIR_KEY = "harness_dir";
+var MSTARC_PLAN_DIR_KEY = "plan_dir";
+var MSTARC_SDD_DIR_KEY = "sdd_dir";
+var MSTARC_ITERATION_DIR_KEY = "iteration_dir";
+var MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
+var MSTARC_SPECS_DIR_KEY = "specs_dir";
+var MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
+var MSTARC_PROJECT_DIR_KEY = "project_dir";
+var MSTARC_ENFORCEMENT_KEY = "enforcement";
+var CONFIG_KEYS;
+var init_mstarc = __esm(() => {
+  CONFIG_KEYS = {
+    [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
+    [MSTARC_PLAN_DIR_KEY]: "planDir",
+    [MSTARC_SDD_DIR_KEY]: "sddDir",
+    [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
+    [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
+    [MSTARC_SPECS_DIR_KEY]: "specsDir",
+    [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
+    [MSTARC_PROJECT_DIR_KEY]: "projectDir",
+    [MSTARC_ENFORCEMENT_KEY]: "enforcement",
+    jev_mode: "jevMode",
+    jev_transport: "jevTransport"
+  };
+});
+var init_dist = () => {};
+function ok(value, message) {
+  assert(Boolean(value), false, true, "ok", "Expected value to be truthy", message);
+}
+function assert(bool, actual, expected, operator, defaultMessage, userMessage) {
+  if (!bool) {
+    throw userMessage instanceof Error ? userMessage : new AssertionError(userMessage || defaultMessage, actual, expected, operator, !userMessage);
+  }
+}
+var codesWarned;
+var AssertionError;
+var init_development = __esm(() => {
+  init_dist();
+  codesWarned = new Set;
+  AssertionError = class AssertionError2 extends Error {
+    name = "Assertion";
+    code = "ERR_ASSERTION";
+    constructor(message, actual, expected, operator, generated) {
+      super(message);
+      if (Error.captureStackTrace) {
+        Error.captureStackTrace(this, this.constructor);
+      }
+      this.actual = actual;
+      this.expected = expected;
+      this.generated = generated;
+      this.operator = operator;
+    }
+  };
+});
+function toString(value, options) {
+  const settings = options || emptyOptions;
+  const includeImageAlt = typeof settings.includeImageAlt === "boolean" ? settings.includeImageAlt : true;
+  const includeHtml = typeof settings.includeHtml === "boolean" ? settings.includeHtml : true;
+  return one(value, includeImageAlt, includeHtml);
+}
+function one(value, includeImageAlt, includeHtml) {
+  if (node(value)) {
+    if ("value" in value) {
+      return value.type === "html" && !includeHtml ? "" : value.value;
+    }
+    if (includeImageAlt && "alt" in value && value.alt) {
+      return value.alt;
+    }
+    if ("children" in value) {
+      return all(value.children, includeImageAlt, includeHtml);
+    }
+  }
+  if (Array.isArray(value)) {
+    return all(value, includeImageAlt, includeHtml);
+  }
+  return "";
+}
+function all(values, includeImageAlt, includeHtml) {
+  const result = [];
+  let index = -1;
+  while (++index < values.length) {
+    result[index] = one(values[index], includeImageAlt, includeHtml);
+  }
+  return result.join("");
+}
+function node(value) {
+  return Boolean(value && typeof value === "object");
+}
+var emptyOptions;
+var init_lib = __esm(() => {
+  emptyOptions = {};
+});
+var init_mdast_util_to_string = __esm(() => {
+  init_lib();
+});
+var characterEntities;
+var init_character_entities = __esm(() => {
+  characterEntities = {
+    AElig: "Æ",
+    AMP: "&",
+    Aacute: "Á",
+    Abreve: "Ă",
+    Acirc: "Â",
+    Acy: "А",
+    Afr: "\uD835\uDD04",
+    Agrave: "À",
+    Alpha: "Α",
+    Amacr: "Ā",
+    And: "⩓",
+    Aogon: "Ą",
+    Aopf: "\uD835\uDD38",
+    ApplyFunction: "⁡",
+    Aring: "Å",
+    Ascr: "\uD835\uDC9C",
+    Assign: "≔",
+    Atilde: "Ã",
+    Auml: "Ä",
+    Backslash: "∖",
+    Barv: "⫧",
+    Barwed: "⌆",
+    Bcy: "Б",
+    Because: "∵",
+    Bernoullis: "ℬ",
+    Beta: "Β",
+    Bfr: "\uD835\uDD05",
+    Bopf: "\uD835\uDD39",
+    Breve: "˘",
+    Bscr: "ℬ",
+    Bumpeq: "≎",
+    CHcy: "Ч",
+    COPY: "©",
+    Cacute: "Ć",
+    Cap: "⋒",
+    CapitalDifferentialD: "ⅅ",
+    Cayleys: "ℭ",
+    Ccaron: "Č",
+    Ccedil: "Ç",
+    Ccirc: "Ĉ",
+    Cconint: "∰",
+    Cdot: "Ċ",
+    Cedilla: "¸",
+    CenterDot: "·",
+    Cfr: "ℭ",
+    Chi: "Χ",
+    CircleDot: "⊙",
+    CircleMinus: "⊖",
+    CirclePlus: "⊕",
+    CircleTimes: "⊗",
+    ClockwiseContourIntegral: "∲",
+    CloseCurlyDoubleQuote: "”",
+    CloseCurlyQuote: "’",
+    Colon: "∷",
+    Colone: "⩴",
+    Congruent: "≡",
+    Conint: "∯",
+    ContourIntegral: "∮",
+    Copf: "ℂ",
+    Coproduct: "∐",
+    CounterClockwiseContourIntegral: "∳",
+    Cross: "⨯",
+    Cscr: "\uD835\uDC9E",
+    Cup: "⋓",
+    CupCap: "≍",
+    DD: "ⅅ",
+    DDotrahd: "⤑",
+    DJcy: "Ђ",
+    DScy: "Ѕ",
+    DZcy: "Џ",
+    Dagger: "‡",
+    Darr: "↡",
+    Dashv: "⫤",
+    Dcaron: "Ď",
+    Dcy: "Д",
+    Del: "∇",
+    Delta: "Δ",
+    Dfr: "\uD835\uDD07",
+    DiacriticalAcute: "´",
+    DiacriticalDot: "˙",
+    DiacriticalDoubleAcute: "˝",
+    DiacriticalGrave: "`",
+    DiacriticalTilde: "˜",
+    Diamond: "⋄",
+    DifferentialD: "ⅆ",
+    Dopf: "\uD835\uDD3B",
+    Dot: "¨",
+    DotDot: "⃜",
+    DotEqual: "≐",
+    DoubleContourIntegral: "∯",
+    DoubleDot: "¨",
+    DoubleDownArrow: "⇓",
+    DoubleLeftArrow: "⇐",
+    DoubleLeftRightArrow: "⇔",
+    DoubleLeftTee: "⫤",
+    DoubleLongLeftArrow: "⟸",
+    DoubleLongLeftRightArrow: "⟺",
+    DoubleLongRightArrow: "⟹",
+    DoubleRightArrow: "⇒",
+    DoubleRightTee: "⊨",
+    DoubleUpArrow: "⇑",
+    DoubleUpDownArrow: "⇕",
+    DoubleVerticalBar: "∥",
+    DownArrow: "↓",
+    DownArrowBar: "⤓",
+    DownArrowUpArrow: "⇵",
+    DownBreve: "̑",
+    DownLeftRightVector: "⥐",
+    DownLeftTeeVector: "⥞",
+    DownLeftVector: "↽",
+    DownLeftVectorBar: "⥖",
+    DownRightTeeVector: "⥟",
+    DownRightVector: "⇁",
+    DownRightVectorBar: "⥗",
+    DownTee: "⊤",
+    DownTeeArrow: "↧",
+    Downarrow: "⇓",
+    Dscr: "\uD835\uDC9F",
+    Dstrok: "Đ",
+    ENG: "Ŋ",
+    ETH: "Ð",
+    Eacute: "É",
+    Ecaron: "Ě",
+    Ecirc: "Ê",
+    Ecy: "Э",
+    Edot: "Ė",
+    Efr: "\uD835\uDD08",
+    Egrave: "È",
+    Element: "∈",
+    Emacr: "Ē",
+    EmptySmallSquare: "◻",
+    EmptyVerySmallSquare: "▫",
+    Eogon: "Ę",
+    Eopf: "\uD835\uDD3C",
+    Epsilon: "Ε",
+    Equal: "⩵",
+    EqualTilde: "≂",
+    Equilibrium: "⇌",
+    Escr: "ℰ",
+    Esim: "⩳",
+    Eta: "Η",
+    Euml: "Ë",
+    Exists: "∃",
+    ExponentialE: "ⅇ",
+    Fcy: "Ф",
+    Ffr: "\uD835\uDD09",
+    FilledSmallSquare: "◼",
+    FilledVerySmallSquare: "▪",
+    Fopf: "\uD835\uDD3D",
+    ForAll: "∀",
+    Fouriertrf: "ℱ",
+    Fscr: "ℱ",
+    GJcy: "Ѓ",
+    GT: ">",
+    Gamma: "Γ",
+    Gammad: "Ϝ",
+    Gbreve: "Ğ",
+    Gcedil: "Ģ",
+    Gcirc: "Ĝ",
+    Gcy: "Г",
+    Gdot: "Ġ",
+    Gfr: "\uD835\uDD0A",
+    Gg: "⋙",
+    Gopf: "\uD835\uDD3E",
+    GreaterEqual: "≥",
+    GreaterEqualLess: "⋛",
+    GreaterFullEqual: "≧",
+    GreaterGreater: "⪢",
+    GreaterLess: "≷",
+    GreaterSlantEqual: "⩾",
+    GreaterTilde: "≳",
+    Gscr: "\uD835\uDCA2",
+    Gt: "≫",
+    HARDcy: "Ъ",
+    Hacek: "ˇ",
+    Hat: "^",
+    Hcirc: "Ĥ",
+    Hfr: "ℌ",
+    HilbertSpace: "ℋ",
+    Hopf: "ℍ",
+    HorizontalLine: "─",
+    Hscr: "ℋ",
+    Hstrok: "Ħ",
+    HumpDownHump: "≎",
+    HumpEqual: "≏",
+    IEcy: "Е",
+    IJlig: "Ĳ",
+    IOcy: "Ё",
+    Iacute: "Í",
+    Icirc: "Î",
+    Icy: "И",
+    Idot: "İ",
+    Ifr: "ℑ",
+    Igrave: "Ì",
+    Im: "ℑ",
+    Imacr: "Ī",
+    ImaginaryI: "ⅈ",
+    Implies: "⇒",
+    Int: "∬",
+    Integral: "∫",
+    Intersection: "⋂",
+    InvisibleComma: "⁣",
+    InvisibleTimes: "⁢",
+    Iogon: "Į",
+    Iopf: "\uD835\uDD40",
+    Iota: "Ι",
+    Iscr: "ℐ",
+    Itilde: "Ĩ",
+    Iukcy: "І",
+    Iuml: "Ï",
+    Jcirc: "Ĵ",
+    Jcy: "Й",
+    Jfr: "\uD835\uDD0D",
+    Jopf: "\uD835\uDD41",
+    Jscr: "\uD835\uDCA5",
+    Jsercy: "Ј",
+    Jukcy: "Є",
+    KHcy: "Х",
+    KJcy: "Ќ",
+    Kappa: "Κ",
+    Kcedil: "Ķ",
+    Kcy: "К",
+    Kfr: "\uD835\uDD0E",
+    Kopf: "\uD835\uDD42",
+    Kscr: "\uD835\uDCA6",
+    LJcy: "Љ",
+    LT: "<",
+    Lacute: "Ĺ",
+    Lambda: "Λ",
+    Lang: "⟪",
+    Laplacetrf: "ℒ",
+    Larr: "↞",
+    Lcaron: "Ľ",
+    Lcedil: "Ļ",
+    Lcy: "Л",
+    LeftAngleBracket: "⟨",
+    LeftArrow: "←",
+    LeftArrowBar: "⇤",
+    LeftArrowRightArrow: "⇆",
+    LeftCeiling: "⌈",
+    LeftDoubleBracket: "⟦",
+    LeftDownTeeVector: "⥡",
+    LeftDownVector: "⇃",
+    LeftDownVectorBar: "⥙",
+    LeftFloor: "⌊",
+    LeftRightArrow: "↔",
+    LeftRightVector: "⥎",
+    LeftTee: "⊣",
+    LeftTeeArrow: "↤",
+    LeftTeeVector: "⥚",
+    LeftTriangle: "⊲",
+    LeftTriangleBar: "⧏",
+    LeftTriangleEqual: "⊴",
+    LeftUpDownVector: "⥑",
+    LeftUpTeeVector: "⥠",
+    LeftUpVector: "↿",
+    LeftUpVectorBar: "⥘",
+    LeftVector: "↼",
+    LeftVectorBar: "⥒",
+    Leftarrow: "⇐",
+    Leftrightarrow: "⇔",
+    LessEqualGreater: "⋚",
+    LessFullEqual: "≦",
+    LessGreater: "≶",
+    LessLess: "⪡",
+    LessSlantEqual: "⩽",
+    LessTilde: "≲",
+    Lfr: "\uD835\uDD0F",
+    Ll: "⋘",
+    Lleftarrow: "⇚",
+    Lmidot: "Ŀ",
+    LongLeftArrow: "⟵",
+    LongLeftRightArrow: "⟷",
+    LongRightArrow: "⟶",
+    Longleftarrow: "⟸",
+    Longleftrightarrow: "⟺",
+    Longrightarrow: "⟹",
+    Lopf: "\uD835\uDD43",
+    LowerLeftArrow: "↙",
+    LowerRightArrow: "↘",
+    Lscr: "ℒ",
+    Lsh: "↰",
+    Lstrok: "Ł",
+    Lt: "≪",
+    Map: "⤅",
+    Mcy: "М",
+    MediumSpace: " ",
+    Mellintrf: "ℳ",
+    Mfr: "\uD835\uDD10",
+    MinusPlus: "∓",
+    Mopf: "\uD835\uDD44",
+    Mscr: "ℳ",
+    Mu: "Μ",
+    NJcy: "Њ",
+    Nacute: "Ń",
+    Ncaron: "Ň",
+    Ncedil: "Ņ",
+    Ncy: "Н",
+    NegativeMediumSpace: "​",
+    NegativeThickSpace: "​",
+    NegativeThinSpace: "​",
+    NegativeVeryThinSpace: "​",
+    NestedGreaterGreater: "≫",
+    NestedLessLess: "≪",
+    NewLine: `
+`,
+    Nfr: "\uD835\uDD11",
+    NoBreak: "⁠",
+    NonBreakingSpace: " ",
+    Nopf: "ℕ",
+    Not: "⫬",
+    NotCongruent: "≢",
+    NotCupCap: "≭",
+    NotDoubleVerticalBar: "∦",
+    NotElement: "∉",
+    NotEqual: "≠",
+    NotEqualTilde: "≂̸",
+    NotExists: "∄",
+    NotGreater: "≯",
+    NotGreaterEqual: "≱",
+    NotGreaterFullEqual: "≧̸",
+    NotGreaterGreater: "≫̸",
+    NotGreaterLess: "≹",
+    NotGreaterSlantEqual: "⩾̸",
+    NotGreaterTilde: "≵",
+    NotHumpDownHump: "≎̸",
+    NotHumpEqual: "≏̸",
+    NotLeftTriangle: "⋪",
+    NotLeftTriangleBar: "⧏̸",
+    NotLeftTriangleEqual: "⋬",
+    NotLess: "≮",
+    NotLessEqual: "≰",
+    NotLessGreater: "≸",
+    NotLessLess: "≪̸",
+    NotLessSlantEqual: "⩽̸",
+    NotLessTilde: "≴",
+    NotNestedGreaterGreater: "⪢̸",
+    NotNestedLessLess: "⪡̸",
+    NotPrecedes: "⊀",
+    NotPrecedesEqual: "⪯̸",
+    NotPrecedesSlantEqual: "⋠",
+    NotReverseElement: "∌",
+    NotRightTriangle: "⋫",
+    NotRightTriangleBar: "⧐̸",
+    NotRightTriangleEqual: "⋭",
+    NotSquareSubset: "⊏̸",
+    NotSquareSubsetEqual: "⋢",
+    NotSquareSuperset: "⊐̸",
+    NotSquareSupersetEqual: "⋣",
+    NotSubset: "⊂⃒",
+    NotSubsetEqual: "⊈",
+    NotSucceeds: "⊁",
+    NotSucceedsEqual: "⪰̸",
+    NotSucceedsSlantEqual: "⋡",
+    NotSucceedsTilde: "≿̸",
+    NotSuperset: "⊃⃒",
+    NotSupersetEqual: "⊉",
+    NotTilde: "≁",
+    NotTildeEqual: "≄",
+    NotTildeFullEqual: "≇",
+    NotTildeTilde: "≉",
+    NotVerticalBar: "∤",
+    Nscr: "\uD835\uDCA9",
+    Ntilde: "Ñ",
+    Nu: "Ν",
+    OElig: "Œ",
+    Oacute: "Ó",
+    Ocirc: "Ô",
+    Ocy: "О",
+    Odblac: "Ő",
+    Ofr: "\uD835\uDD12",
+    Ograve: "Ò",
+    Omacr: "Ō",
+    Omega: "Ω",
+    Omicron: "Ο",
+    Oopf: "\uD835\uDD46",
+    OpenCurlyDoubleQuote: "“",
+    OpenCurlyQuote: "‘",
+    Or: "⩔",
+    Oscr: "\uD835\uDCAA",
+    Oslash: "Ø",
+    Otilde: "Õ",
+    Otimes: "⨷",
+    Ouml: "Ö",
+    OverBar: "‾",
+    OverBrace: "⏞",
+    OverBracket: "⎴",
+    OverParenthesis: "⏜",
+    PartialD: "∂",
+    Pcy: "П",
+    Pfr: "\uD835\uDD13",
+    Phi: "Φ",
+    Pi: "Π",
+    PlusMinus: "±",
+    Poincareplane: "ℌ",
+    Popf: "ℙ",
+    Pr: "⪻",
+    Precedes: "≺",
+    PrecedesEqual: "⪯",
+    PrecedesSlantEqual: "≼",
+    PrecedesTilde: "≾",
+    Prime: "″",
+    Product: "∏",
+    Proportion: "∷",
+    Proportional: "∝",
+    Pscr: "\uD835\uDCAB",
+    Psi: "Ψ",
+    QUOT: '"',
+    Qfr: "\uD835\uDD14",
+    Qopf: "ℚ",
+    Qscr: "\uD835\uDCAC",
+    RBarr: "⤐",
+    REG: "®",
+    Racute: "Ŕ",
+    Rang: "⟫",
+    Rarr: "↠",
+    Rarrtl: "⤖",
+    Rcaron: "Ř",
+    Rcedil: "Ŗ",
+    Rcy: "Р",
+    Re: "ℜ",
+    ReverseElement: "∋",
+    ReverseEquilibrium: "⇋",
+    ReverseUpEquilibrium: "⥯",
+    Rfr: "ℜ",
+    Rho: "Ρ",
+    RightAngleBracket: "⟩",
+    RightArrow: "→",
+    RightArrowBar: "⇥",
+    RightArrowLeftArrow: "⇄",
+    RightCeiling: "⌉",
+    RightDoubleBracket: "⟧",
+    RightDownTeeVector: "⥝",
+    RightDownVector: "⇂",
+    RightDownVectorBar: "⥕",
+    RightFloor: "⌋",
+    RightTee: "⊢",
+    RightTeeArrow: "↦",
+    RightTeeVector: "⥛",
+    RightTriangle: "⊳",
+    RightTriangleBar: "⧐",
+    RightTriangleEqual: "⊵",
+    RightUpDownVector: "⥏",
+    RightUpTeeVector: "⥜",
+    RightUpVector: "↾",
+    RightUpVectorBar: "⥔",
+    RightVector: "⇀",
+    RightVectorBar: "⥓",
+    Rightarrow: "⇒",
+    Ropf: "ℝ",
+    RoundImplies: "⥰",
+    Rrightarrow: "⇛",
+    Rscr: "ℛ",
+    Rsh: "↱",
+    RuleDelayed: "⧴",
+    SHCHcy: "Щ",
+    SHcy: "Ш",
+    SOFTcy: "Ь",
+    Sacute: "Ś",
+    Sc: "⪼",
+    Scaron: "Š",
+    Scedil: "Ş",
+    Scirc: "Ŝ",
+    Scy: "С",
+    Sfr: "\uD835\uDD16",
+    ShortDownArrow: "↓",
+    ShortLeftArrow: "←",
+    ShortRightArrow: "→",
+    ShortUpArrow: "↑",
+    Sigma: "Σ",
+    SmallCircle: "∘",
+    Sopf: "\uD835\uDD4A",
+    Sqrt: "√",
+    Square: "□",
+    SquareIntersection: "⊓",
+    SquareSubset: "⊏",
+    SquareSubsetEqual: "⊑",
+    SquareSuperset: "⊐",
+    SquareSupersetEqual: "⊒",
+    SquareUnion: "⊔",
+    Sscr: "\uD835\uDCAE",
+    Star: "⋆",
+    Sub: "⋐",
+    Subset: "⋐",
+    SubsetEqual: "⊆",
+    Succeeds: "≻",
+    SucceedsEqual: "⪰",
+    SucceedsSlantEqual: "≽",
+    SucceedsTilde: "≿",
+    SuchThat: "∋",
+    Sum: "∑",
+    Sup: "⋑",
+    Superset: "⊃",
+    SupersetEqual: "⊇",
+    Supset: "⋑",
+    THORN: "Þ",
+    TRADE: "™",
+    TSHcy: "Ћ",
+    TScy: "Ц",
+    Tab: "\t",
+    Tau: "Τ",
+    Tcaron: "Ť",
+    Tcedil: "Ţ",
+    Tcy: "Т",
+    Tfr: "\uD835\uDD17",
+    Therefore: "∴",
+    Theta: "Θ",
+    ThickSpace: "  ",
+    ThinSpace: " ",
+    Tilde: "∼",
+    TildeEqual: "≃",
+    TildeFullEqual: "≅",
+    TildeTilde: "≈",
+    Topf: "\uD835\uDD4B",
+    TripleDot: "⃛",
+    Tscr: "\uD835\uDCAF",
+    Tstrok: "Ŧ",
+    Uacute: "Ú",
+    Uarr: "↟",
+    Uarrocir: "⥉",
+    Ubrcy: "Ў",
+    Ubreve: "Ŭ",
+    Ucirc: "Û",
+    Ucy: "У",
+    Udblac: "Ű",
+    Ufr: "\uD835\uDD18",
+    Ugrave: "Ù",
+    Umacr: "Ū",
+    UnderBar: "_",
+    UnderBrace: "⏟",
+    UnderBracket: "⎵",
+    UnderParenthesis: "⏝",
+    Union: "⋃",
+    UnionPlus: "⊎",
+    Uogon: "Ų",
+    Uopf: "\uD835\uDD4C",
+    UpArrow: "↑",
+    UpArrowBar: "⤒",
+    UpArrowDownArrow: "⇅",
+    UpDownArrow: "↕",
+    UpEquilibrium: "⥮",
+    UpTee: "⊥",
+    UpTeeArrow: "↥",
+    Uparrow: "⇑",
+    Updownarrow: "⇕",
+    UpperLeftArrow: "↖",
+    UpperRightArrow: "↗",
+    Upsi: "ϒ",
+    Upsilon: "Υ",
+    Uring: "Ů",
+    Uscr: "\uD835\uDCB0",
+    Utilde: "Ũ",
+    Uuml: "Ü",
+    VDash: "⊫",
+    Vbar: "⫫",
+    Vcy: "В",
+    Vdash: "⊩",
+    Vdashl: "⫦",
+    Vee: "⋁",
+    Verbar: "‖",
+    Vert: "‖",
+    VerticalBar: "∣",
+    VerticalLine: "|",
+    VerticalSeparator: "❘",
+    VerticalTilde: "≀",
+    VeryThinSpace: " ",
+    Vfr: "\uD835\uDD19",
+    Vopf: "\uD835\uDD4D",
+    Vscr: "\uD835\uDCB1",
+    Vvdash: "⊪",
+    Wcirc: "Ŵ",
+    Wedge: "⋀",
+    Wfr: "\uD835\uDD1A",
+    Wopf: "\uD835\uDD4E",
+    Wscr: "\uD835\uDCB2",
+    Xfr: "\uD835\uDD1B",
+    Xi: "Ξ",
+    Xopf: "\uD835\uDD4F",
+    Xscr: "\uD835\uDCB3",
+    YAcy: "Я",
+    YIcy: "Ї",
+    YUcy: "Ю",
+    Yacute: "Ý",
+    Ycirc: "Ŷ",
+    Ycy: "Ы",
+    Yfr: "\uD835\uDD1C",
+    Yopf: "\uD835\uDD50",
+    Yscr: "\uD835\uDCB4",
+    Yuml: "Ÿ",
+    ZHcy: "Ж",
+    Zacute: "Ź",
+    Zcaron: "Ž",
+    Zcy: "З",
+    Zdot: "Ż",
+    ZeroWidthSpace: "​",
+    Zeta: "Ζ",
+    Zfr: "ℨ",
+    Zopf: "ℤ",
+    Zscr: "\uD835\uDCB5",
+    aacute: "á",
+    abreve: "ă",
+    ac: "∾",
+    acE: "∾̳",
+    acd: "∿",
+    acirc: "â",
+    acute: "´",
+    acy: "а",
+    aelig: "æ",
+    af: "⁡",
+    afr: "\uD835\uDD1E",
+    agrave: "à",
+    alefsym: "ℵ",
+    aleph: "ℵ",
+    alpha: "α",
+    amacr: "ā",
+    amalg: "⨿",
+    amp: "&",
+    and: "∧",
+    andand: "⩕",
+    andd: "⩜",
+    andslope: "⩘",
+    andv: "⩚",
+    ang: "∠",
+    ange: "⦤",
+    angle: "∠",
+    angmsd: "∡",
+    angmsdaa: "⦨",
+    angmsdab: "⦩",
+    angmsdac: "⦪",
+    angmsdad: "⦫",
+    angmsdae: "⦬",
+    angmsdaf: "⦭",
+    angmsdag: "⦮",
+    angmsdah: "⦯",
+    angrt: "∟",
+    angrtvb: "⊾",
+    angrtvbd: "⦝",
+    angsph: "∢",
+    angst: "Å",
+    angzarr: "⍼",
+    aogon: "ą",
+    aopf: "\uD835\uDD52",
+    ap: "≈",
+    apE: "⩰",
+    apacir: "⩯",
+    ape: "≊",
+    apid: "≋",
+    apos: "'",
+    approx: "≈",
+    approxeq: "≊",
+    aring: "å",
+    ascr: "\uD835\uDCB6",
+    ast: "*",
+    asymp: "≈",
+    asympeq: "≍",
+    atilde: "ã",
+    auml: "ä",
+    awconint: "∳",
+    awint: "⨑",
+    bNot: "⫭",
+    backcong: "≌",
+    backepsilon: "϶",
+    backprime: "‵",
+    backsim: "∽",
+    backsimeq: "⋍",
+    barvee: "⊽",
+    barwed: "⌅",
+    barwedge: "⌅",
+    bbrk: "⎵",
+    bbrktbrk: "⎶",
+    bcong: "≌",
+    bcy: "б",
+    bdquo: "„",
+    becaus: "∵",
+    because: "∵",
+    bemptyv: "⦰",
+    bepsi: "϶",
+    bernou: "ℬ",
+    beta: "β",
+    beth: "ℶ",
+    between: "≬",
+    bfr: "\uD835\uDD1F",
+    bigcap: "⋂",
+    bigcirc: "◯",
+    bigcup: "⋃",
+    bigodot: "⨀",
+    bigoplus: "⨁",
+    bigotimes: "⨂",
+    bigsqcup: "⨆",
+    bigstar: "★",
+    bigtriangledown: "▽",
+    bigtriangleup: "△",
+    biguplus: "⨄",
+    bigvee: "⋁",
+    bigwedge: "⋀",
+    bkarow: "⤍",
+    blacklozenge: "⧫",
+    blacksquare: "▪",
+    blacktriangle: "▴",
+    blacktriangledown: "▾",
+    blacktriangleleft: "◂",
+    blacktriangleright: "▸",
+    blank: "␣",
+    blk12: "▒",
+    blk14: "░",
+    blk34: "▓",
+    block: "█",
+    bne: "=⃥",
+    bnequiv: "≡⃥",
+    bnot: "⌐",
+    bopf: "\uD835\uDD53",
+    bot: "⊥",
+    bottom: "⊥",
+    bowtie: "⋈",
+    boxDL: "╗",
+    boxDR: "╔",
+    boxDl: "╖",
+    boxDr: "╓",
+    boxH: "═",
+    boxHD: "╦",
+    boxHU: "╩",
+    boxHd: "╤",
+    boxHu: "╧",
+    boxUL: "╝",
+    boxUR: "╚",
+    boxUl: "╜",
+    boxUr: "╙",
+    boxV: "║",
+    boxVH: "╬",
+    boxVL: "╣",
+    boxVR: "╠",
+    boxVh: "╫",
+    boxVl: "╢",
+    boxVr: "╟",
+    boxbox: "⧉",
+    boxdL: "╕",
+    boxdR: "╒",
+    boxdl: "┐",
+    boxdr: "┌",
+    boxh: "─",
+    boxhD: "╥",
+    boxhU: "╨",
+    boxhd: "┬",
+    boxhu: "┴",
+    boxminus: "⊟",
+    boxplus: "⊞",
+    boxtimes: "⊠",
+    boxuL: "╛",
+    boxuR: "╘",
+    boxul: "┘",
+    boxur: "└",
+    boxv: "│",
+    boxvH: "╪",
+    boxvL: "╡",
+    boxvR: "╞",
+    boxvh: "┼",
+    boxvl: "┤",
+    boxvr: "├",
+    bprime: "‵",
+    breve: "˘",
+    brvbar: "¦",
+    bscr: "\uD835\uDCB7",
+    bsemi: "⁏",
+    bsim: "∽",
+    bsime: "⋍",
+    bsol: "\\",
+    bsolb: "⧅",
+    bsolhsub: "⟈",
+    bull: "•",
+    bullet: "•",
+    bump: "≎",
+    bumpE: "⪮",
+    bumpe: "≏",
+    bumpeq: "≏",
+    cacute: "ć",
+    cap: "∩",
+    capand: "⩄",
+    capbrcup: "⩉",
+    capcap: "⩋",
+    capcup: "⩇",
+    capdot: "⩀",
+    caps: "∩︀",
+    caret: "⁁",
+    caron: "ˇ",
+    ccaps: "⩍",
+    ccaron: "č",
+    ccedil: "ç",
+    ccirc: "ĉ",
+    ccups: "⩌",
+    ccupssm: "⩐",
+    cdot: "ċ",
+    cedil: "¸",
+    cemptyv: "⦲",
+    cent: "¢",
+    centerdot: "·",
+    cfr: "\uD835\uDD20",
+    chcy: "ч",
+    check: "✓",
+    checkmark: "✓",
+    chi: "χ",
+    cir: "○",
+    cirE: "⧃",
+    circ: "ˆ",
+    circeq: "≗",
+    circlearrowleft: "↺",
+    circlearrowright: "↻",
+    circledR: "®",
+    circledS: "Ⓢ",
+    circledast: "⊛",
+    circledcirc: "⊚",
+    circleddash: "⊝",
+    cire: "≗",
+    cirfnint: "⨐",
+    cirmid: "⫯",
+    cirscir: "⧂",
+    clubs: "♣",
+    clubsuit: "♣",
+    colon: ":",
+    colone: "≔",
+    coloneq: "≔",
+    comma: ",",
+    commat: "@",
+    comp: "∁",
+    compfn: "∘",
+    complement: "∁",
+    complexes: "ℂ",
+    cong: "≅",
+    congdot: "⩭",
+    conint: "∮",
+    copf: "\uD835\uDD54",
+    coprod: "∐",
+    copy: "©",
+    copysr: "℗",
+    crarr: "↵",
+    cross: "✗",
+    cscr: "\uD835\uDCB8",
+    csub: "⫏",
+    csube: "⫑",
+    csup: "⫐",
+    csupe: "⫒",
+    ctdot: "⋯",
+    cudarrl: "⤸",
+    cudarrr: "⤵",
+    cuepr: "⋞",
+    cuesc: "⋟",
+    cularr: "↶",
+    cularrp: "⤽",
+    cup: "∪",
+    cupbrcap: "⩈",
+    cupcap: "⩆",
+    cupcup: "⩊",
+    cupdot: "⊍",
+    cupor: "⩅",
+    cups: "∪︀",
+    curarr: "↷",
+    curarrm: "⤼",
+    curlyeqprec: "⋞",
+    curlyeqsucc: "⋟",
+    curlyvee: "⋎",
+    curlywedge: "⋏",
+    curren: "¤",
+    curvearrowleft: "↶",
+    curvearrowright: "↷",
+    cuvee: "⋎",
+    cuwed: "⋏",
+    cwconint: "∲",
+    cwint: "∱",
+    cylcty: "⌭",
+    dArr: "⇓",
+    dHar: "⥥",
+    dagger: "†",
+    daleth: "ℸ",
+    darr: "↓",
+    dash: "‐",
+    dashv: "⊣",
+    dbkarow: "⤏",
+    dblac: "˝",
+    dcaron: "ď",
+    dcy: "д",
+    dd: "ⅆ",
+    ddagger: "‡",
+    ddarr: "⇊",
+    ddotseq: "⩷",
+    deg: "°",
+    delta: "δ",
+    demptyv: "⦱",
+    dfisht: "⥿",
+    dfr: "\uD835\uDD21",
+    dharl: "⇃",
+    dharr: "⇂",
+    diam: "⋄",
+    diamond: "⋄",
+    diamondsuit: "♦",
+    diams: "♦",
+    die: "¨",
+    digamma: "ϝ",
+    disin: "⋲",
+    div: "÷",
+    divide: "÷",
+    divideontimes: "⋇",
+    divonx: "⋇",
+    djcy: "ђ",
+    dlcorn: "⌞",
+    dlcrop: "⌍",
+    dollar: "$",
+    dopf: "\uD835\uDD55",
+    dot: "˙",
+    doteq: "≐",
+    doteqdot: "≑",
+    dotminus: "∸",
+    dotplus: "∔",
+    dotsquare: "⊡",
+    doublebarwedge: "⌆",
+    downarrow: "↓",
+    downdownarrows: "⇊",
+    downharpoonleft: "⇃",
+    downharpoonright: "⇂",
+    drbkarow: "⤐",
+    drcorn: "⌟",
+    drcrop: "⌌",
+    dscr: "\uD835\uDCB9",
+    dscy: "ѕ",
+    dsol: "⧶",
+    dstrok: "đ",
+    dtdot: "⋱",
+    dtri: "▿",
+    dtrif: "▾",
+    duarr: "⇵",
+    duhar: "⥯",
+    dwangle: "⦦",
+    dzcy: "џ",
+    dzigrarr: "⟿",
+    eDDot: "⩷",
+    eDot: "≑",
+    eacute: "é",
+    easter: "⩮",
+    ecaron: "ě",
+    ecir: "≖",
+    ecirc: "ê",
+    ecolon: "≕",
+    ecy: "э",
+    edot: "ė",
+    ee: "ⅇ",
+    efDot: "≒",
+    efr: "\uD835\uDD22",
+    eg: "⪚",
+    egrave: "è",
+    egs: "⪖",
+    egsdot: "⪘",
+    el: "⪙",
+    elinters: "⏧",
+    ell: "ℓ",
+    els: "⪕",
+    elsdot: "⪗",
+    emacr: "ē",
+    empty: "∅",
+    emptyset: "∅",
+    emptyv: "∅",
+    emsp13: " ",
+    emsp14: " ",
+    emsp: " ",
+    eng: "ŋ",
+    ensp: " ",
+    eogon: "ę",
+    eopf: "\uD835\uDD56",
+    epar: "⋕",
+    eparsl: "⧣",
+    eplus: "⩱",
+    epsi: "ε",
+    epsilon: "ε",
+    epsiv: "ϵ",
+    eqcirc: "≖",
+    eqcolon: "≕",
+    eqsim: "≂",
+    eqslantgtr: "⪖",
+    eqslantless: "⪕",
+    equals: "=",
+    equest: "≟",
+    equiv: "≡",
+    equivDD: "⩸",
+    eqvparsl: "⧥",
+    erDot: "≓",
+    erarr: "⥱",
+    escr: "ℯ",
+    esdot: "≐",
+    esim: "≂",
+    eta: "η",
+    eth: "ð",
+    euml: "ë",
+    euro: "€",
+    excl: "!",
+    exist: "∃",
+    expectation: "ℰ",
+    exponentiale: "ⅇ",
+    fallingdotseq: "≒",
+    fcy: "ф",
+    female: "♀",
+    ffilig: "ﬃ",
+    fflig: "ﬀ",
+    ffllig: "ﬄ",
+    ffr: "\uD835\uDD23",
+    filig: "ﬁ",
+    fjlig: "fj",
+    flat: "♭",
+    fllig: "ﬂ",
+    fltns: "▱",
+    fnof: "ƒ",
+    fopf: "\uD835\uDD57",
+    forall: "∀",
+    fork: "⋔",
+    forkv: "⫙",
+    fpartint: "⨍",
+    frac12: "½",
+    frac13: "⅓",
+    frac14: "¼",
+    frac15: "⅕",
+    frac16: "⅙",
+    frac18: "⅛",
+    frac23: "⅔",
+    frac25: "⅖",
+    frac34: "¾",
+    frac35: "⅗",
+    frac38: "⅜",
+    frac45: "⅘",
+    frac56: "⅚",
+    frac58: "⅝",
+    frac78: "⅞",
+    frasl: "⁄",
+    frown: "⌢",
+    fscr: "\uD835\uDCBB",
+    gE: "≧",
+    gEl: "⪌",
+    gacute: "ǵ",
+    gamma: "γ",
+    gammad: "ϝ",
+    gap: "⪆",
+    gbreve: "ğ",
+    gcirc: "ĝ",
+    gcy: "г",
+    gdot: "ġ",
+    ge: "≥",
+    gel: "⋛",
+    geq: "≥",
+    geqq: "≧",
+    geqslant: "⩾",
+    ges: "⩾",
+    gescc: "⪩",
+    gesdot: "⪀",
+    gesdoto: "⪂",
+    gesdotol: "⪄",
+    gesl: "⋛︀",
+    gesles: "⪔",
+    gfr: "\uD835\uDD24",
+    gg: "≫",
+    ggg: "⋙",
+    gimel: "ℷ",
+    gjcy: "ѓ",
+    gl: "≷",
+    glE: "⪒",
+    gla: "⪥",
+    glj: "⪤",
+    gnE: "≩",
+    gnap: "⪊",
+    gnapprox: "⪊",
+    gne: "⪈",
+    gneq: "⪈",
+    gneqq: "≩",
+    gnsim: "⋧",
+    gopf: "\uD835\uDD58",
+    grave: "`",
+    gscr: "ℊ",
+    gsim: "≳",
+    gsime: "⪎",
+    gsiml: "⪐",
+    gt: ">",
+    gtcc: "⪧",
+    gtcir: "⩺",
+    gtdot: "⋗",
+    gtlPar: "⦕",
+    gtquest: "⩼",
+    gtrapprox: "⪆",
+    gtrarr: "⥸",
+    gtrdot: "⋗",
+    gtreqless: "⋛",
+    gtreqqless: "⪌",
+    gtrless: "≷",
+    gtrsim: "≳",
+    gvertneqq: "≩︀",
+    gvnE: "≩︀",
+    hArr: "⇔",
+    hairsp: " ",
+    half: "½",
+    hamilt: "ℋ",
+    hardcy: "ъ",
+    harr: "↔",
+    harrcir: "⥈",
+    harrw: "↭",
+    hbar: "ℏ",
+    hcirc: "ĥ",
+    hearts: "♥",
+    heartsuit: "♥",
+    hellip: "…",
+    hercon: "⊹",
+    hfr: "\uD835\uDD25",
+    hksearow: "⤥",
+    hkswarow: "⤦",
+    hoarr: "⇿",
+    homtht: "∻",
+    hookleftarrow: "↩",
+    hookrightarrow: "↪",
+    hopf: "\uD835\uDD59",
+    horbar: "―",
+    hscr: "\uD835\uDCBD",
+    hslash: "ℏ",
+    hstrok: "ħ",
+    hybull: "⁃",
+    hyphen: "‐",
+    iacute: "í",
+    ic: "⁣",
+    icirc: "î",
+    icy: "и",
+    iecy: "е",
+    iexcl: "¡",
+    iff: "⇔",
+    ifr: "\uD835\uDD26",
+    igrave: "ì",
+    ii: "ⅈ",
+    iiiint: "⨌",
+    iiint: "∭",
+    iinfin: "⧜",
+    iiota: "℩",
+    ijlig: "ĳ",
+    imacr: "ī",
+    image: "ℑ",
+    imagline: "ℐ",
+    imagpart: "ℑ",
+    imath: "ı",
+    imof: "⊷",
+    imped: "Ƶ",
+    in: "∈",
+    incare: "℅",
+    infin: "∞",
+    infintie: "⧝",
+    inodot: "ı",
+    int: "∫",
+    intcal: "⊺",
+    integers: "ℤ",
+    intercal: "⊺",
+    intlarhk: "⨗",
+    intprod: "⨼",
+    iocy: "ё",
+    iogon: "į",
+    iopf: "\uD835\uDD5A",
+    iota: "ι",
+    iprod: "⨼",
+    iquest: "¿",
+    iscr: "\uD835\uDCBE",
+    isin: "∈",
+    isinE: "⋹",
+    isindot: "⋵",
+    isins: "⋴",
+    isinsv: "⋳",
+    isinv: "∈",
+    it: "⁢",
+    itilde: "ĩ",
+    iukcy: "і",
+    iuml: "ï",
+    jcirc: "ĵ",
+    jcy: "й",
+    jfr: "\uD835\uDD27",
+    jmath: "ȷ",
+    jopf: "\uD835\uDD5B",
+    jscr: "\uD835\uDCBF",
+    jsercy: "ј",
+    jukcy: "є",
+    kappa: "κ",
+    kappav: "ϰ",
+    kcedil: "ķ",
+    kcy: "к",
+    kfr: "\uD835\uDD28",
+    kgreen: "ĸ",
+    khcy: "х",
+    kjcy: "ќ",
+    kopf: "\uD835\uDD5C",
+    kscr: "\uD835\uDCC0",
+    lAarr: "⇚",
+    lArr: "⇐",
+    lAtail: "⤛",
+    lBarr: "⤎",
+    lE: "≦",
+    lEg: "⪋",
+    lHar: "⥢",
+    lacute: "ĺ",
+    laemptyv: "⦴",
+    lagran: "ℒ",
+    lambda: "λ",
+    lang: "⟨",
+    langd: "⦑",
+    langle: "⟨",
+    lap: "⪅",
+    laquo: "«",
+    larr: "←",
+    larrb: "⇤",
+    larrbfs: "⤟",
+    larrfs: "⤝",
+    larrhk: "↩",
+    larrlp: "↫",
+    larrpl: "⤹",
+    larrsim: "⥳",
+    larrtl: "↢",
+    lat: "⪫",
+    latail: "⤙",
+    late: "⪭",
+    lates: "⪭︀",
+    lbarr: "⤌",
+    lbbrk: "❲",
+    lbrace: "{",
+    lbrack: "[",
+    lbrke: "⦋",
+    lbrksld: "⦏",
+    lbrkslu: "⦍",
+    lcaron: "ľ",
+    lcedil: "ļ",
+    lceil: "⌈",
+    lcub: "{",
+    lcy: "л",
+    ldca: "⤶",
+    ldquo: "“",
+    ldquor: "„",
+    ldrdhar: "⥧",
+    ldrushar: "⥋",
+    ldsh: "↲",
+    le: "≤",
+    leftarrow: "←",
+    leftarrowtail: "↢",
+    leftharpoondown: "↽",
+    leftharpoonup: "↼",
+    leftleftarrows: "⇇",
+    leftrightarrow: "↔",
+    leftrightarrows: "⇆",
+    leftrightharpoons: "⇋",
+    leftrightsquigarrow: "↭",
+    leftthreetimes: "⋋",
+    leg: "⋚",
+    leq: "≤",
+    leqq: "≦",
+    leqslant: "⩽",
+    les: "⩽",
+    lescc: "⪨",
+    lesdot: "⩿",
+    lesdoto: "⪁",
+    lesdotor: "⪃",
+    lesg: "⋚︀",
+    lesges: "⪓",
+    lessapprox: "⪅",
+    lessdot: "⋖",
+    lesseqgtr: "⋚",
+    lesseqqgtr: "⪋",
+    lessgtr: "≶",
+    lesssim: "≲",
+    lfisht: "⥼",
+    lfloor: "⌊",
+    lfr: "\uD835\uDD29",
+    lg: "≶",
+    lgE: "⪑",
+    lhard: "↽",
+    lharu: "↼",
+    lharul: "⥪",
+    lhblk: "▄",
+    ljcy: "љ",
+    ll: "≪",
+    llarr: "⇇",
+    llcorner: "⌞",
+    llhard: "⥫",
+    lltri: "◺",
+    lmidot: "ŀ",
+    lmoust: "⎰",
+    lmoustache: "⎰",
+    lnE: "≨",
+    lnap: "⪉",
+    lnapprox: "⪉",
+    lne: "⪇",
+    lneq: "⪇",
+    lneqq: "≨",
+    lnsim: "⋦",
+    loang: "⟬",
+    loarr: "⇽",
+    lobrk: "⟦",
+    longleftarrow: "⟵",
+    longleftrightarrow: "⟷",
+    longmapsto: "⟼",
+    longrightarrow: "⟶",
+    looparrowleft: "↫",
+    looparrowright: "↬",
+    lopar: "⦅",
+    lopf: "\uD835\uDD5D",
+    loplus: "⨭",
+    lotimes: "⨴",
+    lowast: "∗",
+    lowbar: "_",
+    loz: "◊",
+    lozenge: "◊",
+    lozf: "⧫",
+    lpar: "(",
+    lparlt: "⦓",
+    lrarr: "⇆",
+    lrcorner: "⌟",
+    lrhar: "⇋",
+    lrhard: "⥭",
+    lrm: "‎",
+    lrtri: "⊿",
+    lsaquo: "‹",
+    lscr: "\uD835\uDCC1",
+    lsh: "↰",
+    lsim: "≲",
+    lsime: "⪍",
+    lsimg: "⪏",
+    lsqb: "[",
+    lsquo: "‘",
+    lsquor: "‚",
+    lstrok: "ł",
+    lt: "<",
+    ltcc: "⪦",
+    ltcir: "⩹",
+    ltdot: "⋖",
+    lthree: "⋋",
+    ltimes: "⋉",
+    ltlarr: "⥶",
+    ltquest: "⩻",
+    ltrPar: "⦖",
+    ltri: "◃",
+    ltrie: "⊴",
+    ltrif: "◂",
+    lurdshar: "⥊",
+    luruhar: "⥦",
+    lvertneqq: "≨︀",
+    lvnE: "≨︀",
+    mDDot: "∺",
+    macr: "¯",
+    male: "♂",
+    malt: "✠",
+    maltese: "✠",
+    map: "↦",
+    mapsto: "↦",
+    mapstodown: "↧",
+    mapstoleft: "↤",
+    mapstoup: "↥",
+    marker: "▮",
+    mcomma: "⨩",
+    mcy: "м",
+    mdash: "—",
+    measuredangle: "∡",
+    mfr: "\uD835\uDD2A",
+    mho: "℧",
+    micro: "µ",
+    mid: "∣",
+    midast: "*",
+    midcir: "⫰",
+    middot: "·",
+    minus: "−",
+    minusb: "⊟",
+    minusd: "∸",
+    minusdu: "⨪",
+    mlcp: "⫛",
+    mldr: "…",
+    mnplus: "∓",
+    models: "⊧",
+    mopf: "\uD835\uDD5E",
+    mp: "∓",
+    mscr: "\uD835\uDCC2",
+    mstpos: "∾",
+    mu: "μ",
+    multimap: "⊸",
+    mumap: "⊸",
+    nGg: "⋙̸",
+    nGt: "≫⃒",
+    nGtv: "≫̸",
+    nLeftarrow: "⇍",
+    nLeftrightarrow: "⇎",
+    nLl: "⋘̸",
+    nLt: "≪⃒",
+    nLtv: "≪̸",
+    nRightarrow: "⇏",
+    nVDash: "⊯",
+    nVdash: "⊮",
+    nabla: "∇",
+    nacute: "ń",
+    nang: "∠⃒",
+    nap: "≉",
+    napE: "⩰̸",
+    napid: "≋̸",
+    napos: "ŉ",
+    napprox: "≉",
+    natur: "♮",
+    natural: "♮",
+    naturals: "ℕ",
+    nbsp: " ",
+    nbump: "≎̸",
+    nbumpe: "≏̸",
+    ncap: "⩃",
+    ncaron: "ň",
+    ncedil: "ņ",
+    ncong: "≇",
+    ncongdot: "⩭̸",
+    ncup: "⩂",
+    ncy: "н",
+    ndash: "–",
+    ne: "≠",
+    neArr: "⇗",
+    nearhk: "⤤",
+    nearr: "↗",
+    nearrow: "↗",
+    nedot: "≐̸",
+    nequiv: "≢",
+    nesear: "⤨",
+    nesim: "≂̸",
+    nexist: "∄",
+    nexists: "∄",
+    nfr: "\uD835\uDD2B",
+    ngE: "≧̸",
+    nge: "≱",
+    ngeq: "≱",
+    ngeqq: "≧̸",
+    ngeqslant: "⩾̸",
+    nges: "⩾̸",
+    ngsim: "≵",
+    ngt: "≯",
+    ngtr: "≯",
+    nhArr: "⇎",
+    nharr: "↮",
+    nhpar: "⫲",
+    ni: "∋",
+    nis: "⋼",
+    nisd: "⋺",
+    niv: "∋",
+    njcy: "њ",
+    nlArr: "⇍",
+    nlE: "≦̸",
+    nlarr: "↚",
+    nldr: "‥",
+    nle: "≰",
+    nleftarrow: "↚",
+    nleftrightarrow: "↮",
+    nleq: "≰",
+    nleqq: "≦̸",
+    nleqslant: "⩽̸",
+    nles: "⩽̸",
+    nless: "≮",
+    nlsim: "≴",
+    nlt: "≮",
+    nltri: "⋪",
+    nltrie: "⋬",
+    nmid: "∤",
+    nopf: "\uD835\uDD5F",
+    not: "¬",
+    notin: "∉",
+    notinE: "⋹̸",
+    notindot: "⋵̸",
+    notinva: "∉",
+    notinvb: "⋷",
+    notinvc: "⋶",
+    notni: "∌",
+    notniva: "∌",
+    notnivb: "⋾",
+    notnivc: "⋽",
+    npar: "∦",
+    nparallel: "∦",
+    nparsl: "⫽⃥",
+    npart: "∂̸",
+    npolint: "⨔",
+    npr: "⊀",
+    nprcue: "⋠",
+    npre: "⪯̸",
+    nprec: "⊀",
+    npreceq: "⪯̸",
+    nrArr: "⇏",
+    nrarr: "↛",
+    nrarrc: "⤳̸",
+    nrarrw: "↝̸",
+    nrightarrow: "↛",
+    nrtri: "⋫",
+    nrtrie: "⋭",
+    nsc: "⊁",
+    nsccue: "⋡",
+    nsce: "⪰̸",
+    nscr: "\uD835\uDCC3",
+    nshortmid: "∤",
+    nshortparallel: "∦",
+    nsim: "≁",
+    nsime: "≄",
+    nsimeq: "≄",
+    nsmid: "∤",
+    nspar: "∦",
+    nsqsube: "⋢",
+    nsqsupe: "⋣",
+    nsub: "⊄",
+    nsubE: "⫅̸",
+    nsube: "⊈",
+    nsubset: "⊂⃒",
+    nsubseteq: "⊈",
+    nsubseteqq: "⫅̸",
+    nsucc: "⊁",
+    nsucceq: "⪰̸",
+    nsup: "⊅",
+    nsupE: "⫆̸",
+    nsupe: "⊉",
+    nsupset: "⊃⃒",
+    nsupseteq: "⊉",
+    nsupseteqq: "⫆̸",
+    ntgl: "≹",
+    ntilde: "ñ",
+    ntlg: "≸",
+    ntriangleleft: "⋪",
+    ntrianglelefteq: "⋬",
+    ntriangleright: "⋫",
+    ntrianglerighteq: "⋭",
+    nu: "ν",
+    num: "#",
+    numero: "№",
+    numsp: " ",
+    nvDash: "⊭",
+    nvHarr: "⤄",
+    nvap: "≍⃒",
+    nvdash: "⊬",
+    nvge: "≥⃒",
+    nvgt: ">⃒",
+    nvinfin: "⧞",
+    nvlArr: "⤂",
+    nvle: "≤⃒",
+    nvlt: "<⃒",
+    nvltrie: "⊴⃒",
+    nvrArr: "⤃",
+    nvrtrie: "⊵⃒",
+    nvsim: "∼⃒",
+    nwArr: "⇖",
+    nwarhk: "⤣",
+    nwarr: "↖",
+    nwarrow: "↖",
+    nwnear: "⤧",
+    oS: "Ⓢ",
+    oacute: "ó",
+    oast: "⊛",
+    ocir: "⊚",
+    ocirc: "ô",
+    ocy: "о",
+    odash: "⊝",
+    odblac: "ő",
+    odiv: "⨸",
+    odot: "⊙",
+    odsold: "⦼",
+    oelig: "œ",
+    ofcir: "⦿",
+    ofr: "\uD835\uDD2C",
+    ogon: "˛",
+    ograve: "ò",
+    ogt: "⧁",
+    ohbar: "⦵",
+    ohm: "Ω",
+    oint: "∮",
+    olarr: "↺",
+    olcir: "⦾",
+    olcross: "⦻",
+    oline: "‾",
+    olt: "⧀",
+    omacr: "ō",
+    omega: "ω",
+    omicron: "ο",
+    omid: "⦶",
+    ominus: "⊖",
+    oopf: "\uD835\uDD60",
+    opar: "⦷",
+    operp: "⦹",
+    oplus: "⊕",
+    or: "∨",
+    orarr: "↻",
+    ord: "⩝",
+    order: "ℴ",
+    orderof: "ℴ",
+    ordf: "ª",
+    ordm: "º",
+    origof: "⊶",
+    oror: "⩖",
+    orslope: "⩗",
+    orv: "⩛",
+    oscr: "ℴ",
+    oslash: "ø",
+    osol: "⊘",
+    otilde: "õ",
+    otimes: "⊗",
+    otimesas: "⨶",
+    ouml: "ö",
+    ovbar: "⌽",
+    par: "∥",
+    para: "¶",
+    parallel: "∥",
+    parsim: "⫳",
+    parsl: "⫽",
+    part: "∂",
+    pcy: "п",
+    percnt: "%",
+    period: ".",
+    permil: "‰",
+    perp: "⊥",
+    pertenk: "‱",
+    pfr: "\uD835\uDD2D",
+    phi: "φ",
+    phiv: "ϕ",
+    phmmat: "ℳ",
+    phone: "☎",
+    pi: "π",
+    pitchfork: "⋔",
+    piv: "ϖ",
+    planck: "ℏ",
+    planckh: "ℎ",
+    plankv: "ℏ",
+    plus: "+",
+    plusacir: "⨣",
+    plusb: "⊞",
+    pluscir: "⨢",
+    plusdo: "∔",
+    plusdu: "⨥",
+    pluse: "⩲",
+    plusmn: "±",
+    plussim: "⨦",
+    plustwo: "⨧",
+    pm: "±",
+    pointint: "⨕",
+    popf: "\uD835\uDD61",
+    pound: "£",
+    pr: "≺",
+    prE: "⪳",
+    prap: "⪷",
+    prcue: "≼",
+    pre: "⪯",
+    prec: "≺",
+    precapprox: "⪷",
+    preccurlyeq: "≼",
+    preceq: "⪯",
+    precnapprox: "⪹",
+    precneqq: "⪵",
+    precnsim: "⋨",
+    precsim: "≾",
+    prime: "′",
+    primes: "ℙ",
+    prnE: "⪵",
+    prnap: "⪹",
+    prnsim: "⋨",
+    prod: "∏",
+    profalar: "⌮",
+    profline: "⌒",
+    profsurf: "⌓",
+    prop: "∝",
+    propto: "∝",
+    prsim: "≾",
+    prurel: "⊰",
+    pscr: "\uD835\uDCC5",
+    psi: "ψ",
+    puncsp: " ",
+    qfr: "\uD835\uDD2E",
+    qint: "⨌",
+    qopf: "\uD835\uDD62",
+    qprime: "⁗",
+    qscr: "\uD835\uDCC6",
+    quaternions: "ℍ",
+    quatint: "⨖",
+    quest: "?",
+    questeq: "≟",
+    quot: '"',
+    rAarr: "⇛",
+    rArr: "⇒",
+    rAtail: "⤜",
+    rBarr: "⤏",
+    rHar: "⥤",
+    race: "∽̱",
+    racute: "ŕ",
+    radic: "√",
+    raemptyv: "⦳",
+    rang: "⟩",
+    rangd: "⦒",
+    range: "⦥",
+    rangle: "⟩",
+    raquo: "»",
+    rarr: "→",
+    rarrap: "⥵",
+    rarrb: "⇥",
+    rarrbfs: "⤠",
+    rarrc: "⤳",
+    rarrfs: "⤞",
+    rarrhk: "↪",
+    rarrlp: "↬",
+    rarrpl: "⥅",
+    rarrsim: "⥴",
+    rarrtl: "↣",
+    rarrw: "↝",
+    ratail: "⤚",
+    ratio: "∶",
+    rationals: "ℚ",
+    rbarr: "⤍",
+    rbbrk: "❳",
+    rbrace: "}",
+    rbrack: "]",
+    rbrke: "⦌",
+    rbrksld: "⦎",
+    rbrkslu: "⦐",
+    rcaron: "ř",
+    rcedil: "ŗ",
+    rceil: "⌉",
+    rcub: "}",
+    rcy: "р",
+    rdca: "⤷",
+    rdldhar: "⥩",
+    rdquo: "”",
+    rdquor: "”",
+    rdsh: "↳",
+    real: "ℜ",
+    realine: "ℛ",
+    realpart: "ℜ",
+    reals: "ℝ",
+    rect: "▭",
+    reg: "®",
+    rfisht: "⥽",
+    rfloor: "⌋",
+    rfr: "\uD835\uDD2F",
+    rhard: "⇁",
+    rharu: "⇀",
+    rharul: "⥬",
+    rho: "ρ",
+    rhov: "ϱ",
+    rightarrow: "→",
+    rightarrowtail: "↣",
+    rightharpoondown: "⇁",
+    rightharpoonup: "⇀",
+    rightleftarrows: "⇄",
+    rightleftharpoons: "⇌",
+    rightrightarrows: "⇉",
+    rightsquigarrow: "↝",
+    rightthreetimes: "⋌",
+    ring: "˚",
+    risingdotseq: "≓",
+    rlarr: "⇄",
+    rlhar: "⇌",
+    rlm: "‏",
+    rmoust: "⎱",
+    rmoustache: "⎱",
+    rnmid: "⫮",
+    roang: "⟭",
+    roarr: "⇾",
+    robrk: "⟧",
+    ropar: "⦆",
+    ropf: "\uD835\uDD63",
+    roplus: "⨮",
+    rotimes: "⨵",
+    rpar: ")",
+    rpargt: "⦔",
+    rppolint: "⨒",
+    rrarr: "⇉",
+    rsaquo: "›",
+    rscr: "\uD835\uDCC7",
+    rsh: "↱",
+    rsqb: "]",
+    rsquo: "’",
+    rsquor: "’",
+    rthree: "⋌",
+    rtimes: "⋊",
+    rtri: "▹",
+    rtrie: "⊵",
+    rtrif: "▸",
+    rtriltri: "⧎",
+    ruluhar: "⥨",
+    rx: "℞",
+    sacute: "ś",
+    sbquo: "‚",
+    sc: "≻",
+    scE: "⪴",
+    scap: "⪸",
+    scaron: "š",
+    sccue: "≽",
+    sce: "⪰",
+    scedil: "ş",
+    scirc: "ŝ",
+    scnE: "⪶",
+    scnap: "⪺",
+    scnsim: "⋩",
+    scpolint: "⨓",
+    scsim: "≿",
+    scy: "с",
+    sdot: "⋅",
+    sdotb: "⊡",
+    sdote: "⩦",
+    seArr: "⇘",
+    searhk: "⤥",
+    searr: "↘",
+    searrow: "↘",
+    sect: "§",
+    semi: ";",
+    seswar: "⤩",
+    setminus: "∖",
+    setmn: "∖",
+    sext: "✶",
+    sfr: "\uD835\uDD30",
+    sfrown: "⌢",
+    sharp: "♯",
+    shchcy: "щ",
+    shcy: "ш",
+    shortmid: "∣",
+    shortparallel: "∥",
+    shy: "­",
+    sigma: "σ",
+    sigmaf: "ς",
+    sigmav: "ς",
+    sim: "∼",
+    simdot: "⩪",
+    sime: "≃",
+    simeq: "≃",
+    simg: "⪞",
+    simgE: "⪠",
+    siml: "⪝",
+    simlE: "⪟",
+    simne: "≆",
+    simplus: "⨤",
+    simrarr: "⥲",
+    slarr: "←",
+    smallsetminus: "∖",
+    smashp: "⨳",
+    smeparsl: "⧤",
+    smid: "∣",
+    smile: "⌣",
+    smt: "⪪",
+    smte: "⪬",
+    smtes: "⪬︀",
+    softcy: "ь",
+    sol: "/",
+    solb: "⧄",
+    solbar: "⌿",
+    sopf: "\uD835\uDD64",
+    spades: "♠",
+    spadesuit: "♠",
+    spar: "∥",
+    sqcap: "⊓",
+    sqcaps: "⊓︀",
+    sqcup: "⊔",
+    sqcups: "⊔︀",
+    sqsub: "⊏",
+    sqsube: "⊑",
+    sqsubset: "⊏",
+    sqsubseteq: "⊑",
+    sqsup: "⊐",
+    sqsupe: "⊒",
+    sqsupset: "⊐",
+    sqsupseteq: "⊒",
+    squ: "□",
+    square: "□",
+    squarf: "▪",
+    squf: "▪",
+    srarr: "→",
+    sscr: "\uD835\uDCC8",
+    ssetmn: "∖",
+    ssmile: "⌣",
+    sstarf: "⋆",
+    star: "☆",
+    starf: "★",
+    straightepsilon: "ϵ",
+    straightphi: "ϕ",
+    strns: "¯",
+    sub: "⊂",
+    subE: "⫅",
+    subdot: "⪽",
+    sube: "⊆",
+    subedot: "⫃",
+    submult: "⫁",
+    subnE: "⫋",
+    subne: "⊊",
+    subplus: "⪿",
+    subrarr: "⥹",
+    subset: "⊂",
+    subseteq: "⊆",
+    subseteqq: "⫅",
+    subsetneq: "⊊",
+    subsetneqq: "⫋",
+    subsim: "⫇",
+    subsub: "⫕",
+    subsup: "⫓",
+    succ: "≻",
+    succapprox: "⪸",
+    succcurlyeq: "≽",
+    succeq: "⪰",
+    succnapprox: "⪺",
+    succneqq: "⪶",
+    succnsim: "⋩",
+    succsim: "≿",
+    sum: "∑",
+    sung: "♪",
+    sup1: "¹",
+    sup2: "²",
+    sup3: "³",
+    sup: "⊃",
+    supE: "⫆",
+    supdot: "⪾",
+    supdsub: "⫘",
+    supe: "⊇",
+    supedot: "⫄",
+    suphsol: "⟉",
+    suphsub: "⫗",
+    suplarr: "⥻",
+    supmult: "⫂",
+    supnE: "⫌",
+    supne: "⊋",
+    supplus: "⫀",
+    supset: "⊃",
+    supseteq: "⊇",
+    supseteqq: "⫆",
+    supsetneq: "⊋",
+    supsetneqq: "⫌",
+    supsim: "⫈",
+    supsub: "⫔",
+    supsup: "⫖",
+    swArr: "⇙",
+    swarhk: "⤦",
+    swarr: "↙",
+    swarrow: "↙",
+    swnwar: "⤪",
+    szlig: "ß",
+    target: "⌖",
+    tau: "τ",
+    tbrk: "⎴",
+    tcaron: "ť",
+    tcedil: "ţ",
+    tcy: "т",
+    tdot: "⃛",
+    telrec: "⌕",
+    tfr: "\uD835\uDD31",
+    there4: "∴",
+    therefore: "∴",
+    theta: "θ",
+    thetasym: "ϑ",
+    thetav: "ϑ",
+    thickapprox: "≈",
+    thicksim: "∼",
+    thinsp: " ",
+    thkap: "≈",
+    thksim: "∼",
+    thorn: "þ",
+    tilde: "˜",
+    times: "×",
+    timesb: "⊠",
+    timesbar: "⨱",
+    timesd: "⨰",
+    tint: "∭",
+    toea: "⤨",
+    top: "⊤",
+    topbot: "⌶",
+    topcir: "⫱",
+    topf: "\uD835\uDD65",
+    topfork: "⫚",
+    tosa: "⤩",
+    tprime: "‴",
+    trade: "™",
+    triangle: "▵",
+    triangledown: "▿",
+    triangleleft: "◃",
+    trianglelefteq: "⊴",
+    triangleq: "≜",
+    triangleright: "▹",
+    trianglerighteq: "⊵",
+    tridot: "◬",
+    trie: "≜",
+    triminus: "⨺",
+    triplus: "⨹",
+    trisb: "⧍",
+    tritime: "⨻",
+    trpezium: "⏢",
+    tscr: "\uD835\uDCC9",
+    tscy: "ц",
+    tshcy: "ћ",
+    tstrok: "ŧ",
+    twixt: "≬",
+    twoheadleftarrow: "↞",
+    twoheadrightarrow: "↠",
+    uArr: "⇑",
+    uHar: "⥣",
+    uacute: "ú",
+    uarr: "↑",
+    ubrcy: "ў",
+    ubreve: "ŭ",
+    ucirc: "û",
+    ucy: "у",
+    udarr: "⇅",
+    udblac: "ű",
+    udhar: "⥮",
+    ufisht: "⥾",
+    ufr: "\uD835\uDD32",
+    ugrave: "ù",
+    uharl: "↿",
+    uharr: "↾",
+    uhblk: "▀",
+    ulcorn: "⌜",
+    ulcorner: "⌜",
+    ulcrop: "⌏",
+    ultri: "◸",
+    umacr: "ū",
+    uml: "¨",
+    uogon: "ų",
+    uopf: "\uD835\uDD66",
+    uparrow: "↑",
+    updownarrow: "↕",
+    upharpoonleft: "↿",
+    upharpoonright: "↾",
+    uplus: "⊎",
+    upsi: "υ",
+    upsih: "ϒ",
+    upsilon: "υ",
+    upuparrows: "⇈",
+    urcorn: "⌝",
+    urcorner: "⌝",
+    urcrop: "⌎",
+    uring: "ů",
+    urtri: "◹",
+    uscr: "\uD835\uDCCA",
+    utdot: "⋰",
+    utilde: "ũ",
+    utri: "▵",
+    utrif: "▴",
+    uuarr: "⇈",
+    uuml: "ü",
+    uwangle: "⦧",
+    vArr: "⇕",
+    vBar: "⫨",
+    vBarv: "⫩",
+    vDash: "⊨",
+    vangrt: "⦜",
+    varepsilon: "ϵ",
+    varkappa: "ϰ",
+    varnothing: "∅",
+    varphi: "ϕ",
+    varpi: "ϖ",
+    varpropto: "∝",
+    varr: "↕",
+    varrho: "ϱ",
+    varsigma: "ς",
+    varsubsetneq: "⊊︀",
+    varsubsetneqq: "⫋︀",
+    varsupsetneq: "⊋︀",
+    varsupsetneqq: "⫌︀",
+    vartheta: "ϑ",
+    vartriangleleft: "⊲",
+    vartriangleright: "⊳",
+    vcy: "в",
+    vdash: "⊢",
+    vee: "∨",
+    veebar: "⊻",
+    veeeq: "≚",
+    vellip: "⋮",
+    verbar: "|",
+    vert: "|",
+    vfr: "\uD835\uDD33",
+    vltri: "⊲",
+    vnsub: "⊂⃒",
+    vnsup: "⊃⃒",
+    vopf: "\uD835\uDD67",
+    vprop: "∝",
+    vrtri: "⊳",
+    vscr: "\uD835\uDCCB",
+    vsubnE: "⫋︀",
+    vsubne: "⊊︀",
+    vsupnE: "⫌︀",
+    vsupne: "⊋︀",
+    vzigzag: "⦚",
+    wcirc: "ŵ",
+    wedbar: "⩟",
+    wedge: "∧",
+    wedgeq: "≙",
+    weierp: "℘",
+    wfr: "\uD835\uDD34",
+    wopf: "\uD835\uDD68",
+    wp: "℘",
+    wr: "≀",
+    wreath: "≀",
+    wscr: "\uD835\uDCCC",
+    xcap: "⋂",
+    xcirc: "◯",
+    xcup: "⋃",
+    xdtri: "▽",
+    xfr: "\uD835\uDD35",
+    xhArr: "⟺",
+    xharr: "⟷",
+    xi: "ξ",
+    xlArr: "⟸",
+    xlarr: "⟵",
+    xmap: "⟼",
+    xnis: "⋻",
+    xodot: "⨀",
+    xopf: "\uD835\uDD69",
+    xoplus: "⨁",
+    xotime: "⨂",
+    xrArr: "⟹",
+    xrarr: "⟶",
+    xscr: "\uD835\uDCCD",
+    xsqcup: "⨆",
+    xuplus: "⨄",
+    xutri: "△",
+    xvee: "⋁",
+    xwedge: "⋀",
+    yacute: "ý",
+    yacy: "я",
+    ycirc: "ŷ",
+    ycy: "ы",
+    yen: "¥",
+    yfr: "\uD835\uDD36",
+    yicy: "ї",
+    yopf: "\uD835\uDD6A",
+    yscr: "\uD835\uDCCE",
+    yucy: "ю",
+    yuml: "ÿ",
+    zacute: "ź",
+    zcaron: "ž",
+    zcy: "з",
+    zdot: "ż",
+    zeetrf: "ℨ",
+    zeta: "ζ",
+    zfr: "\uD835\uDD37",
+    zhcy: "ж",
+    zigrarr: "⇝",
+    zopf: "\uD835\uDD6B",
+    zscr: "\uD835\uDCCF",
+    zwj: "‍",
+    zwnj: "‌"
+  };
+});
+function decodeNamedCharacterReference(value) {
+  return own.call(characterEntities, value) ? characterEntities[value] : false;
+}
+var own;
+var init_decode_named_character_reference = __esm(() => {
+  init_character_entities();
+  own = {}.hasOwnProperty;
+});
+var codes;
+var init_codes = __esm(() => {
+  codes = {
+    carriageReturn: -5,
+    lineFeed: -4,
+    carriageReturnLineFeed: -3,
+    horizontalTab: -2,
+    virtualSpace: -1,
+    eof: null,
+    nul: 0,
+    soh: 1,
+    stx: 2,
+    etx: 3,
+    eot: 4,
+    enq: 5,
+    ack: 6,
+    bel: 7,
+    bs: 8,
+    ht: 9,
+    lf: 10,
+    vt: 11,
+    ff: 12,
+    cr: 13,
+    so: 14,
+    si: 15,
+    dle: 16,
+    dc1: 17,
+    dc2: 18,
+    dc3: 19,
+    dc4: 20,
+    nak: 21,
+    syn: 22,
+    etb: 23,
+    can: 24,
+    em: 25,
+    sub: 26,
+    esc: 27,
+    fs: 28,
+    gs: 29,
+    rs: 30,
+    us: 31,
+    space: 32,
+    exclamationMark: 33,
+    quotationMark: 34,
+    numberSign: 35,
+    dollarSign: 36,
+    percentSign: 37,
+    ampersand: 38,
+    apostrophe: 39,
+    leftParenthesis: 40,
+    rightParenthesis: 41,
+    asterisk: 42,
+    plusSign: 43,
+    comma: 44,
+    dash: 45,
+    dot: 46,
+    slash: 47,
+    digit0: 48,
+    digit1: 49,
+    digit2: 50,
+    digit3: 51,
+    digit4: 52,
+    digit5: 53,
+    digit6: 54,
+    digit7: 55,
+    digit8: 56,
+    digit9: 57,
+    colon: 58,
+    semicolon: 59,
+    lessThan: 60,
+    equalsTo: 61,
+    greaterThan: 62,
+    questionMark: 63,
+    atSign: 64,
+    uppercaseA: 65,
+    uppercaseB: 66,
+    uppercaseC: 67,
+    uppercaseD: 68,
+    uppercaseE: 69,
+    uppercaseF: 70,
+    uppercaseG: 71,
+    uppercaseH: 72,
+    uppercaseI: 73,
+    uppercaseJ: 74,
+    uppercaseK: 75,
+    uppercaseL: 76,
+    uppercaseM: 77,
+    uppercaseN: 78,
+    uppercaseO: 79,
+    uppercaseP: 80,
+    uppercaseQ: 81,
+    uppercaseR: 82,
+    uppercaseS: 83,
+    uppercaseT: 84,
+    uppercaseU: 85,
+    uppercaseV: 86,
+    uppercaseW: 87,
+    uppercaseX: 88,
+    uppercaseY: 89,
+    uppercaseZ: 90,
+    leftSquareBracket: 91,
+    backslash: 92,
+    rightSquareBracket: 93,
+    caret: 94,
+    underscore: 95,
+    graveAccent: 96,
+    lowercaseA: 97,
+    lowercaseB: 98,
+    lowercaseC: 99,
+    lowercaseD: 100,
+    lowercaseE: 101,
+    lowercaseF: 102,
+    lowercaseG: 103,
+    lowercaseH: 104,
+    lowercaseI: 105,
+    lowercaseJ: 106,
+    lowercaseK: 107,
+    lowercaseL: 108,
+    lowercaseM: 109,
+    lowercaseN: 110,
+    lowercaseO: 111,
+    lowercaseP: 112,
+    lowercaseQ: 113,
+    lowercaseR: 114,
+    lowercaseS: 115,
+    lowercaseT: 116,
+    lowercaseU: 117,
+    lowercaseV: 118,
+    lowercaseW: 119,
+    lowercaseX: 120,
+    lowercaseY: 121,
+    lowercaseZ: 122,
+    leftCurlyBrace: 123,
+    verticalBar: 124,
+    rightCurlyBrace: 125,
+    tilde: 126,
+    del: 127,
+    byteOrderMarker: 65279,
+    replacementCharacter: 65533
+  };
+});
+var constants;
+var init_constants = __esm(() => {
+  constants = {
+    attentionSideAfter: 2,
+    attentionSideBefore: 1,
+    atxHeadingOpeningFenceSizeMax: 6,
+    autolinkDomainSizeMax: 63,
+    autolinkSchemeSizeMax: 32,
+    cdataOpeningString: "CDATA[",
+    characterGroupPunctuation: 2,
+    characterGroupWhitespace: 1,
+    characterReferenceDecimalSizeMax: 7,
+    characterReferenceHexadecimalSizeMax: 6,
+    characterReferenceNamedSizeMax: 31,
+    codeFencedSequenceSizeMin: 3,
+    contentTypeContent: "content",
+    contentTypeDocument: "document",
+    contentTypeFlow: "flow",
+    contentTypeString: "string",
+    contentTypeText: "text",
+    hardBreakPrefixSizeMin: 2,
+    htmlBasic: 6,
+    htmlCdata: 5,
+    htmlComment: 2,
+    htmlComplete: 7,
+    htmlDeclaration: 4,
+    htmlInstruction: 3,
+    htmlRawSizeMax: 8,
+    htmlRaw: 1,
+    linkResourceDestinationBalanceMax: 32,
+    linkReferenceSizeMax: 999,
+    listItemValueSizeMax: 10,
+    numericBaseDecimal: 10,
+    numericBaseHexadecimal: 16,
+    tabSize: 4,
+    thematicBreakMarkerCountMin: 3,
+    v8MaxSafeChunkSize: 1e4
+  };
+});
+var types;
+var init_types = __esm(() => {
+  types = {
+    data: "data",
+    whitespace: "whitespace",
+    lineEnding: "lineEnding",
+    lineEndingBlank: "lineEndingBlank",
+    linePrefix: "linePrefix",
+    lineSuffix: "lineSuffix",
+    atxHeading: "atxHeading",
+    atxHeadingSequence: "atxHeadingSequence",
+    atxHeadingText: "atxHeadingText",
+    autolink: "autolink",
+    autolinkEmail: "autolinkEmail",
+    autolinkMarker: "autolinkMarker",
+    autolinkProtocol: "autolinkProtocol",
+    characterEscape: "characterEscape",
+    characterEscapeValue: "characterEscapeValue",
+    characterReference: "characterReference",
+    characterReferenceMarker: "characterReferenceMarker",
+    characterReferenceMarkerNumeric: "characterReferenceMarkerNumeric",
+    characterReferenceMarkerHexadecimal: "characterReferenceMarkerHexadecimal",
+    characterReferenceValue: "characterReferenceValue",
+    codeFenced: "codeFenced",
+    codeFencedFence: "codeFencedFence",
+    codeFencedFenceSequence: "codeFencedFenceSequence",
+    codeFencedFenceInfo: "codeFencedFenceInfo",
+    codeFencedFenceMeta: "codeFencedFenceMeta",
+    codeFlowValue: "codeFlowValue",
+    codeIndented: "codeIndented",
+    codeText: "codeText",
+    codeTextData: "codeTextData",
+    codeTextPadding: "codeTextPadding",
+    codeTextSequence: "codeTextSequence",
+    content: "content",
+    definition: "definition",
+    definitionDestination: "definitionDestination",
+    definitionDestinationLiteral: "definitionDestinationLiteral",
+    definitionDestinationLiteralMarker: "definitionDestinationLiteralMarker",
+    definitionDestinationRaw: "definitionDestinationRaw",
+    definitionDestinationString: "definitionDestinationString",
+    definitionLabel: "definitionLabel",
+    definitionLabelMarker: "definitionLabelMarker",
+    definitionLabelString: "definitionLabelString",
+    definitionMarker: "definitionMarker",
+    definitionTitle: "definitionTitle",
+    definitionTitleMarker: "definitionTitleMarker",
+    definitionTitleString: "definitionTitleString",
+    emphasis: "emphasis",
+    emphasisSequence: "emphasisSequence",
+    emphasisText: "emphasisText",
+    escapeMarker: "escapeMarker",
+    hardBreakEscape: "hardBreakEscape",
+    hardBreakTrailing: "hardBreakTrailing",
+    htmlFlow: "htmlFlow",
+    htmlFlowData: "htmlFlowData",
+    htmlText: "htmlText",
+    htmlTextData: "htmlTextData",
+    image: "image",
+    label: "label",
+    labelText: "labelText",
+    labelLink: "labelLink",
+    labelImage: "labelImage",
+    labelMarker: "labelMarker",
+    labelImageMarker: "labelImageMarker",
+    labelEnd: "labelEnd",
+    link: "link",
+    paragraph: "paragraph",
+    reference: "reference",
+    referenceMarker: "referenceMarker",
+    referenceString: "referenceString",
+    resource: "resource",
+    resourceDestination: "resourceDestination",
+    resourceDestinationLiteral: "resourceDestinationLiteral",
+    resourceDestinationLiteralMarker: "resourceDestinationLiteralMarker",
+    resourceDestinationRaw: "resourceDestinationRaw",
+    resourceDestinationString: "resourceDestinationString",
+    resourceMarker: "resourceMarker",
+    resourceTitle: "resourceTitle",
+    resourceTitleMarker: "resourceTitleMarker",
+    resourceTitleString: "resourceTitleString",
+    setextHeading: "setextHeading",
+    setextHeadingText: "setextHeadingText",
+    setextHeadingLine: "setextHeadingLine",
+    setextHeadingLineSequence: "setextHeadingLineSequence",
+    strong: "strong",
+    strongSequence: "strongSequence",
+    strongText: "strongText",
+    thematicBreak: "thematicBreak",
+    thematicBreakSequence: "thematicBreakSequence",
+    blockQuote: "blockQuote",
+    blockQuotePrefix: "blockQuotePrefix",
+    blockQuoteMarker: "blockQuoteMarker",
+    blockQuotePrefixWhitespace: "blockQuotePrefixWhitespace",
+    listOrdered: "listOrdered",
+    listUnordered: "listUnordered",
+    listItemIndent: "listItemIndent",
+    listItemMarker: "listItemMarker",
+    listItemPrefix: "listItemPrefix",
+    listItemPrefixWhitespace: "listItemPrefixWhitespace",
+    listItemValue: "listItemValue",
+    chunkDocument: "chunkDocument",
+    chunkContent: "chunkContent",
+    chunkFlow: "chunkFlow",
+    chunkText: "chunkText",
+    chunkString: "chunkString"
+  };
+});
+var values;
+var init_values = __esm(() => {
+  values = {
+    ht: "\t",
+    lf: `
+`,
+    cr: "\r",
+    space: " ",
+    exclamationMark: "!",
+    quotationMark: '"',
+    numberSign: "#",
+    dollarSign: "$",
+    percentSign: "%",
+    ampersand: "&",
+    apostrophe: "'",
+    leftParenthesis: "(",
+    rightParenthesis: ")",
+    asterisk: "*",
+    plusSign: "+",
+    comma: ",",
+    dash: "-",
+    dot: ".",
+    slash: "/",
+    digit0: "0",
+    digit1: "1",
+    digit2: "2",
+    digit3: "3",
+    digit4: "4",
+    digit5: "5",
+    digit6: "6",
+    digit7: "7",
+    digit8: "8",
+    digit9: "9",
+    colon: ":",
+    semicolon: ";",
+    lessThan: "<",
+    equalsTo: "=",
+    greaterThan: ">",
+    questionMark: "?",
+    atSign: "@",
+    uppercaseA: "A",
+    uppercaseB: "B",
+    uppercaseC: "C",
+    uppercaseD: "D",
+    uppercaseE: "E",
+    uppercaseF: "F",
+    uppercaseG: "G",
+    uppercaseH: "H",
+    uppercaseI: "I",
+    uppercaseJ: "J",
+    uppercaseK: "K",
+    uppercaseL: "L",
+    uppercaseM: "M",
+    uppercaseN: "N",
+    uppercaseO: "O",
+    uppercaseP: "P",
+    uppercaseQ: "Q",
+    uppercaseR: "R",
+    uppercaseS: "S",
+    uppercaseT: "T",
+    uppercaseU: "U",
+    uppercaseV: "V",
+    uppercaseW: "W",
+    uppercaseX: "X",
+    uppercaseY: "Y",
+    uppercaseZ: "Z",
+    leftSquareBracket: "[",
+    backslash: "\\",
+    rightSquareBracket: "]",
+    caret: "^",
+    underscore: "_",
+    graveAccent: "`",
+    lowercaseA: "a",
+    lowercaseB: "b",
+    lowercaseC: "c",
+    lowercaseD: "d",
+    lowercaseE: "e",
+    lowercaseF: "f",
+    lowercaseG: "g",
+    lowercaseH: "h",
+    lowercaseI: "i",
+    lowercaseJ: "j",
+    lowercaseK: "k",
+    lowercaseL: "l",
+    lowercaseM: "m",
+    lowercaseN: "n",
+    lowercaseO: "o",
+    lowercaseP: "p",
+    lowercaseQ: "q",
+    lowercaseR: "r",
+    lowercaseS: "s",
+    lowercaseT: "t",
+    lowercaseU: "u",
+    lowercaseV: "v",
+    lowercaseW: "w",
+    lowercaseX: "x",
+    lowercaseY: "y",
+    lowercaseZ: "z",
+    leftCurlyBrace: "{",
+    verticalBar: "|",
+    rightCurlyBrace: "}",
+    tilde: "~",
+    replacementCharacter: "�"
+  };
+});
+var init_default = __esm(() => {
+  init_codes();
+  init_constants();
+  init_types();
+  init_values();
+});
+function splice(list, start, remove, items) {
+  const end = list.length;
+  let chunkStart = 0;
+  let parameters;
+  if (start < 0) {
+    start = -start > end ? 0 : end + start;
+  } else {
+    start = start > end ? end : start;
+  }
+  remove = remove > 0 ? remove : 0;
+  if (items.length < constants.v8MaxSafeChunkSize) {
+    parameters = Array.from(items);
+    parameters.unshift(start, remove);
+    list.splice(...parameters);
+  } else {
+    if (remove)
+      list.splice(start, remove);
+    while (chunkStart < items.length) {
+      parameters = items.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize);
+      parameters.unshift(start, 0);
+      list.splice(...parameters);
+      chunkStart += constants.v8MaxSafeChunkSize;
+      start += constants.v8MaxSafeChunkSize;
+    }
+  }
+}
+function push(list, items) {
+  if (list.length > 0) {
+    splice(list, list.length, 0, items);
+    return list;
+  }
+  return items;
+}
+var init_dev = __esm(() => {
+  init_default();
+});
+function combineExtensions(extensions) {
+  const all2 = {};
+  let index = -1;
+  while (++index < extensions.length) {
+    syntaxExtension(all2, extensions[index]);
+  }
+  return all2;
+}
+function syntaxExtension(all2, extension) {
+  let hook;
+  for (hook in extension) {
+    const maybe = hasOwnProperty.call(all2, hook) ? all2[hook] : undefined;
+    const left = maybe || (all2[hook] = {});
+    const right = extension[hook];
+    let code;
+    if (right) {
+      for (code in right) {
+        if (!hasOwnProperty.call(left, code))
+          left[code] = [];
+        const value = right[code];
+        constructs(left[code], Array.isArray(value) ? value : value ? [value] : []);
+      }
+    }
+  }
+}
+function constructs(existing, list) {
+  let index = -1;
+  const before = [];
+  while (++index < list.length) {
+    (list[index].add === "after" ? existing : before).push(list[index]);
+  }
+  splice(existing, 0, 0, before);
+}
+var hasOwnProperty;
+var init_micromark_util_combine_extensions = __esm(() => {
+  init_dev();
+  hasOwnProperty = {}.hasOwnProperty;
+});
+function decodeNumericCharacterReference(value, base) {
+  const code = Number.parseInt(value, base);
+  if (code < codes.ht || code === codes.vt || code > codes.cr && code < codes.space || code > codes.tilde && code < 160 || code > 55295 && code < 57344 || code > 64975 && code < 65008 || (code & 65535) === 65535 || (code & 65535) === 65534 || code > 1114111) {
+    return values.replacementCharacter;
+  }
+  return String.fromCodePoint(code);
+}
+var init_dev2 = __esm(() => {
+  init_default();
+});
+function normalizeIdentifier(value) {
+  return value.replace(/[\t\n\r ]+/g, values.space).replace(/^ | $/g, "").toLowerCase().toUpperCase();
+}
+var init_dev3 = __esm(() => {
+  init_default();
+});
+function asciiControl(code) {
+  return code !== null && (code < codes.space || code === codes.del);
+}
+function markdownLineEnding(code) {
+  return code !== null && code < codes.horizontalTab;
+}
+function markdownLineEndingOrSpace(code) {
+  return code !== null && (code < codes.nul || code === codes.space);
+}
+function markdownSpace(code) {
+  return code === codes.horizontalTab || code === codes.virtualSpace || code === codes.space;
+}
+function regexCheck(regex) {
+  return check;
+  function check(code) {
+    return code !== null && code > -1 && regex.test(String.fromCharCode(code));
+  }
+}
+var asciiAlpha;
+var asciiAlphanumeric;
+var asciiAtext;
+var asciiDigit;
+var asciiHexDigit;
+var asciiPunctuation;
+var unicodePunctuation;
+var unicodeWhitespace;
+var init_dev4 = __esm(() => {
+  init_default();
+  asciiAlpha = regexCheck(/[A-Za-z]/);
+  asciiAlphanumeric = regexCheck(/[\dA-Za-z]/);
+  asciiAtext = regexCheck(/[#-'*+\--9=?A-Z^-~]/);
+  asciiDigit = regexCheck(/\d/);
+  asciiHexDigit = regexCheck(/[\dA-Fa-f]/);
+  asciiPunctuation = regexCheck(/[!-/:-@[-`{-~]/);
+  unicodePunctuation = regexCheck(/\p{P}|\p{S}/u);
+  unicodeWhitespace = regexCheck(/\s/);
+});
+function factorySpace(effects, ok2, type, max) {
+  const limit = max ? max - 1 : Number.POSITIVE_INFINITY;
+  let size = 0;
+  return start;
+  function start(code) {
+    if (markdownSpace(code)) {
+      effects.enter(type);
+      return prefix(code);
+    }
+    return ok2(code);
+  }
+  function prefix(code) {
+    if (markdownSpace(code) && size++ < limit) {
+      effects.consume(code);
+      return prefix;
+    }
+    effects.exit(type);
+    return ok2(code);
+  }
+}
+var init_dev5 = __esm(() => {
+  init_dev4();
+});
+function initializeContent(effects) {
+  const contentStart = effects.attempt(this.parser.constructs.contentInitial, afterContentStartConstruct, paragraphInitial);
+  let previous;
+  return contentStart;
+  function afterContentStartConstruct(code) {
+    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
+    if (code === codes.eof) {
+      effects.consume(code);
+      return;
+    }
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return factorySpace(effects, contentStart, types.linePrefix);
+  }
+  function paragraphInitial(code) {
+    ok(code !== codes.eof && !markdownLineEnding(code), "expected anything other than a line ending or EOF");
+    effects.enter(types.paragraph);
+    return lineStart(code);
+  }
+  function lineStart(code) {
+    const token = effects.enter(types.chunkText, {
+      contentType: constants.contentTypeText,
+      previous
+    });
+    if (previous) {
+      previous.next = token;
+    }
+    previous = token;
+    return data(code);
+  }
+  function data(code) {
+    if (code === codes.eof) {
+      effects.exit(types.chunkText);
+      effects.exit(types.paragraph);
+      effects.consume(code);
+      return;
+    }
+    if (markdownLineEnding(code)) {
+      effects.consume(code);
+      effects.exit(types.chunkText);
+      return lineStart;
+    }
+    effects.consume(code);
+    return data;
+  }
+}
+var content;
+var init_content = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  content = { tokenize: initializeContent };
+});
+function initializeDocument(effects) {
+  const self = this;
+  const stack = [];
+  let continued = 0;
+  let childFlow;
+  let childToken;
+  let lineStartOffset;
+  return start;
+  function start(code) {
+    if (continued < stack.length) {
+      const item = stack[continued];
+      self.containerState = item[1];
+      ok(item[0].continuation, "expected `continuation` to be defined on container construct");
+      return effects.attempt(item[0].continuation, documentContinue, checkNewContainers)(code);
+    }
+    return checkNewContainers(code);
+  }
+  function documentContinue(code) {
+    ok(self.containerState, "expected `containerState` to be defined after continuation");
+    continued++;
+    if (self.containerState._closeFlow) {
+      self.containerState._closeFlow = undefined;
+      if (childFlow) {
+        closeFlow();
+      }
+      const indexBeforeExits = self.events.length;
+      let indexBeforeFlow = indexBeforeExits;
+      let point;
+      while (indexBeforeFlow--) {
+        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
+          point = self.events[indexBeforeFlow][1].end;
+          break;
+        }
+      }
+      ok(point, "could not find previous flow chunk");
+      exitContainers(continued);
+      let index = indexBeforeExits;
+      while (index < self.events.length) {
+        self.events[index][1].end = { ...point };
+        index++;
+      }
+      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
+      self.events.length = index;
+      return checkNewContainers(code);
+    }
+    return start(code);
+  }
+  function checkNewContainers(code) {
+    if (continued === stack.length) {
+      if (!childFlow) {
+        return documentContinued(code);
+      }
+      if (childFlow.currentConstruct && childFlow.currentConstruct.concrete) {
+        return flowStart(code);
+      }
+      self.interrupt = Boolean(childFlow.currentConstruct && !childFlow._gfmTableDynamicInterruptHack);
+    }
+    self.containerState = {};
+    return effects.check(containerConstruct, thereIsANewContainer, thereIsNoNewContainer)(code);
+  }
+  function thereIsANewContainer(code) {
+    if (childFlow)
+      closeFlow();
+    exitContainers(continued);
+    return documentContinued(code);
+  }
+  function thereIsNoNewContainer(code) {
+    self.parser.lazy[self.now().line] = continued !== stack.length;
+    lineStartOffset = self.now().offset;
+    return flowStart(code);
+  }
+  function documentContinued(code) {
+    self.containerState = {};
+    return effects.attempt(containerConstruct, containerContinue, flowStart)(code);
+  }
+  function containerContinue(code) {
+    ok(self.currentConstruct, "expected `currentConstruct` to be defined on tokenizer");
+    ok(self.containerState, "expected `containerState` to be defined on tokenizer");
+    continued++;
+    stack.push([self.currentConstruct, self.containerState]);
+    return documentContinued(code);
+  }
+  function flowStart(code) {
+    if (code === codes.eof) {
+      if (childFlow)
+        closeFlow();
+      exitContainers(0);
+      effects.consume(code);
+      return;
+    }
+    childFlow = childFlow || self.parser.flow(self.now());
+    effects.enter(types.chunkFlow, {
+      _tokenizer: childFlow,
+      contentType: constants.contentTypeFlow,
+      previous: childToken
+    });
+    return flowContinue(code);
+  }
+  function flowContinue(code) {
+    if (code === codes.eof) {
+      writeToChild(effects.exit(types.chunkFlow), true);
+      exitContainers(0);
+      effects.consume(code);
+      return;
+    }
+    if (markdownLineEnding(code)) {
+      effects.consume(code);
+      writeToChild(effects.exit(types.chunkFlow));
+      continued = 0;
+      self.interrupt = undefined;
+      return start;
+    }
+    effects.consume(code);
+    return flowContinue;
+  }
+  function writeToChild(token, endOfFile) {
+    ok(childFlow, "expected `childFlow` to be defined when continuing");
+    const stream = self.sliceStream(token);
+    if (endOfFile)
+      stream.push(null);
+    token.previous = childToken;
+    if (childToken)
+      childToken.next = token;
+    childToken = token;
+    childFlow.defineSkip(token.start);
+    childFlow.write(stream);
+    if (self.parser.lazy[token.start.line]) {
+      let index = childFlow.events.length;
+      while (index--) {
+        if (childFlow.events[index][1].start.offset < lineStartOffset && (!childFlow.events[index][1].end || childFlow.events[index][1].end.offset > lineStartOffset)) {
+          return;
+        }
+      }
+      const indexBeforeExits = self.events.length;
+      let indexBeforeFlow = indexBeforeExits;
+      let seen;
+      let point;
+      while (indexBeforeFlow--) {
+        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
+          if (seen) {
+            point = self.events[indexBeforeFlow][1].end;
+            break;
+          }
+          seen = true;
+        }
+      }
+      ok(point, "could not find previous flow chunk");
+      exitContainers(continued);
+      index = indexBeforeExits;
+      while (index < self.events.length) {
+        self.events[index][1].end = { ...point };
+        index++;
+      }
+      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
+      self.events.length = index;
+    }
+  }
+  function exitContainers(size) {
+    let index = stack.length;
+    while (index-- > size) {
+      const entry = stack[index];
+      self.containerState = entry[1];
+      ok(entry[0].exit, "expected `exit` to be defined on container construct");
+      entry[0].exit.call(self, effects);
+    }
+    stack.length = size;
+  }
+  function closeFlow() {
+    ok(self.containerState, "expected `containerState` to be defined when closing flow");
+    ok(childFlow, "expected `childFlow` to be defined when closing it");
+    childFlow.write([codes.eof]);
+    childToken = undefined;
+    childFlow = undefined;
+    self.containerState._closeFlow = undefined;
+  }
+}
+function tokenizeContainer(effects, ok2, nok) {
+  ok(this.parser.constructs.disable.null, "expected `disable.null` to be populated");
+  return factorySpace(effects, effects.attempt(this.parser.constructs.document, ok2, nok), types.linePrefix, this.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize);
+}
+var document2;
+var containerConstruct;
+var init_document = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_dev();
+  init_default();
+  document2 = { tokenize: initializeDocument };
+  containerConstruct = { tokenize: tokenizeContainer };
+});
+function classifyCharacter(code) {
+  if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
+    return constants.characterGroupWhitespace;
+  }
+  if (unicodePunctuation(code)) {
+    return constants.characterGroupPunctuation;
+  }
+}
+var init_dev6 = __esm(() => {
+  init_dev4();
+  init_default();
+});
+function resolveAll(constructs2, events, context) {
+  const called = [];
+  let index = -1;
+  while (++index < constructs2.length) {
+    const resolve42 = constructs2[index].resolveAll;
+    if (resolve42 && !called.includes(resolve42)) {
+      events = resolve42(events, context);
+      called.push(resolve42);
+    }
+  }
+  return events;
+}
+function resolveAllAttention(events, context) {
+  let index = -1;
+  let open;
+  let group;
+  let text;
+  let openingSequence;
+  let closingSequence;
+  let use;
+  let nextEvents;
+  let offset;
+  while (++index < events.length) {
+    if (events[index][0] === "enter" && events[index][1].type === "attentionSequence" && events[index][1]._close) {
+      open = index;
+      while (open--) {
+        if (events[open][0] === "exit" && events[open][1].type === "attentionSequence" && events[open][1]._open && context.sliceSerialize(events[open][1]).charCodeAt(0) === context.sliceSerialize(events[index][1]).charCodeAt(0)) {
+          if ((events[open][1]._close || events[index][1]._open) && (events[index][1].end.offset - events[index][1].start.offset) % 3 && !((events[open][1].end.offset - events[open][1].start.offset + events[index][1].end.offset - events[index][1].start.offset) % 3)) {
+            continue;
+          }
+          use = events[open][1].end.offset - events[open][1].start.offset > 1 && events[index][1].end.offset - events[index][1].start.offset > 1 ? 2 : 1;
+          const start = { ...events[open][1].end };
+          const end = { ...events[index][1].start };
+          movePoint(start, -use);
+          movePoint(end, use);
+          openingSequence = {
+            type: use > 1 ? types.strongSequence : types.emphasisSequence,
+            start,
+            end: { ...events[open][1].end }
+          };
+          closingSequence = {
+            type: use > 1 ? types.strongSequence : types.emphasisSequence,
+            start: { ...events[index][1].start },
+            end
+          };
+          text = {
+            type: use > 1 ? types.strongText : types.emphasisText,
+            start: { ...events[open][1].end },
+            end: { ...events[index][1].start }
+          };
+          group = {
+            type: use > 1 ? types.strong : types.emphasis,
+            start: { ...openingSequence.start },
+            end: { ...closingSequence.end }
+          };
+          events[open][1].end = { ...openingSequence.start };
+          events[index][1].start = { ...closingSequence.end };
+          nextEvents = [];
+          if (events[open][1].end.offset - events[open][1].start.offset) {
+            nextEvents = push(nextEvents, [
+              ["enter", events[open][1], context],
+              ["exit", events[open][1], context]
+            ]);
+          }
+          nextEvents = push(nextEvents, [
+            ["enter", group, context],
+            ["enter", openingSequence, context],
+            ["exit", openingSequence, context],
+            ["enter", text, context]
+          ]);
+          ok(context.parser.constructs.insideSpan.null, "expected `insideSpan` to be populated");
+          nextEvents = push(nextEvents, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + 1, index), context));
+          nextEvents = push(nextEvents, [
+            ["exit", text, context],
+            ["enter", closingSequence, context],
+            ["exit", closingSequence, context],
+            ["exit", group, context]
+          ]);
+          if (events[index][1].end.offset - events[index][1].start.offset) {
+            offset = 2;
+            nextEvents = push(nextEvents, [
+              ["enter", events[index][1], context],
+              ["exit", events[index][1], context]
+            ]);
+          } else {
+            offset = 0;
+          }
+          splice(events, open - 1, index - open + 3, nextEvents);
+          index = open + nextEvents.length - offset - 2;
+          break;
+        }
+      }
+    }
+  }
+  index = -1;
+  while (++index < events.length) {
+    if (events[index][1].type === "attentionSequence") {
+      events[index][1].type = "data";
+    }
+  }
+  return events;
+}
+function tokenizeAttention(effects, ok2) {
+  const attentionMarkers = this.parser.constructs.attentionMarkers.null;
+  const previous = this.previous;
+  const before = classifyCharacter(previous);
+  let marker;
+  return start;
+  function start(code) {
+    ok(code === codes.asterisk || code === codes.underscore, "expected asterisk or underscore");
+    marker = code;
+    effects.enter("attentionSequence");
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === marker) {
+      effects.consume(code);
+      return inside;
+    }
+    const token = effects.exit("attentionSequence");
+    const after = classifyCharacter(code);
+    ok(attentionMarkers, "expected `attentionMarkers` to be populated");
+    const open = !after || after === constants.characterGroupPunctuation && before || attentionMarkers.includes(code);
+    const close = !before || before === constants.characterGroupPunctuation && after || attentionMarkers.includes(previous);
+    token._open = Boolean(marker === codes.asterisk ? open : open && (before || !close));
+    token._close = Boolean(marker === codes.asterisk ? close : close && (after || !open));
+    return ok2(code);
+  }
+}
+function movePoint(point, offset) {
+  point.column += offset;
+  point.offset += offset;
+  point._bufferIndex += offset;
+}
+var attention;
+var init_attention = __esm(() => {
+  init_development();
+  init_dev();
+  init_dev6();
+  init_default();
+  attention = {
+    name: "attention",
+    resolveAll: resolveAllAttention,
+    tokenize: tokenizeAttention
+  };
+});
+function tokenizeAutolink(effects, ok2, nok) {
+  let size = 0;
+  return start;
+  function start(code) {
+    ok(code === codes.lessThan, "expected `<`");
+    effects.enter(types.autolink);
+    effects.enter(types.autolinkMarker);
+    effects.consume(code);
+    effects.exit(types.autolinkMarker);
+    effects.enter(types.autolinkProtocol);
+    return open;
+  }
+  function open(code) {
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return schemeOrEmailAtext;
+    }
+    if (code === codes.atSign) {
+      return nok(code);
+    }
+    return emailAtext(code);
+  }
+  function schemeOrEmailAtext(code) {
+    if (code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) {
+      size = 1;
+      return schemeInsideOrEmailAtext(code);
+    }
+    return emailAtext(code);
+  }
+  function schemeInsideOrEmailAtext(code) {
+    if (code === codes.colon) {
+      effects.consume(code);
+      size = 0;
+      return urlInside;
+    }
+    if ((code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) && size++ < constants.autolinkSchemeSizeMax) {
+      effects.consume(code);
+      return schemeInsideOrEmailAtext;
+    }
+    size = 0;
+    return emailAtext(code);
+  }
+  function urlInside(code) {
+    if (code === codes.greaterThan) {
+      effects.exit(types.autolinkProtocol);
+      effects.enter(types.autolinkMarker);
+      effects.consume(code);
+      effects.exit(types.autolinkMarker);
+      effects.exit(types.autolink);
+      return ok2;
+    }
+    if (code === codes.eof || code === codes.space || code === codes.lessThan || asciiControl(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return urlInside;
+  }
+  function emailAtext(code) {
+    if (code === codes.atSign) {
+      effects.consume(code);
+      return emailAtSignOrDot;
+    }
+    if (asciiAtext(code)) {
+      effects.consume(code);
+      return emailAtext;
+    }
+    return nok(code);
+  }
+  function emailAtSignOrDot(code) {
+    return asciiAlphanumeric(code) ? emailLabel(code) : nok(code);
+  }
+  function emailLabel(code) {
+    if (code === codes.dot) {
+      effects.consume(code);
+      size = 0;
+      return emailAtSignOrDot;
+    }
+    if (code === codes.greaterThan) {
+      effects.exit(types.autolinkProtocol).type = types.autolinkEmail;
+      effects.enter(types.autolinkMarker);
+      effects.consume(code);
+      effects.exit(types.autolinkMarker);
+      effects.exit(types.autolink);
+      return ok2;
+    }
+    return emailValue(code);
+  }
+  function emailValue(code) {
+    if ((code === codes.dash || asciiAlphanumeric(code)) && size++ < constants.autolinkDomainSizeMax) {
+      const next = code === codes.dash ? emailValue : emailLabel;
+      effects.consume(code);
+      return next;
+    }
+    return nok(code);
+  }
+}
+var autolink;
+var init_autolink = __esm(() => {
+  init_development();
+  init_dev4();
+  init_default();
+  autolink = { name: "autolink", tokenize: tokenizeAutolink };
+});
+function tokenizeBlankLine(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
+  }
+  function after(code) {
+    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
+  }
+}
+var blankLine;
+var init_blank_line = __esm(() => {
+  init_dev5();
+  init_dev4();
+  init_default();
+  blankLine = { partial: true, tokenize: tokenizeBlankLine };
+});
+function tokenizeBlockQuoteStart(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (code === codes.greaterThan) {
+      const state = self.containerState;
+      ok(state, "expected `containerState` to be defined in container");
+      if (!state.open) {
+        effects.enter(types.blockQuote, { _container: true });
+        state.open = true;
+      }
+      effects.enter(types.blockQuotePrefix);
+      effects.enter(types.blockQuoteMarker);
+      effects.consume(code);
+      effects.exit(types.blockQuoteMarker);
+      return after;
+    }
+    return nok(code);
+  }
+  function after(code) {
+    if (markdownSpace(code)) {
+      effects.enter(types.blockQuotePrefixWhitespace);
+      effects.consume(code);
+      effects.exit(types.blockQuotePrefixWhitespace);
+      effects.exit(types.blockQuotePrefix);
+      return ok2;
+    }
+    effects.exit(types.blockQuotePrefix);
+    return ok2(code);
+  }
+}
+function tokenizeBlockQuoteContinuation(effects, ok2, nok) {
+  const self = this;
+  return contStart;
+  function contStart(code) {
+    if (markdownSpace(code)) {
+      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+      return factorySpace(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+    }
+    return contBefore(code);
+  }
+  function contBefore(code) {
+    return effects.attempt(blockQuote, ok2, nok)(code);
+  }
+}
+function exit(effects) {
+  effects.exit(types.blockQuote);
+}
+var blockQuote;
+var init_block_quote = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  blockQuote = {
+    continuation: { tokenize: tokenizeBlockQuoteContinuation },
+    exit,
+    name: "blockQuote",
+    tokenize: tokenizeBlockQuoteStart
+  };
+});
+function tokenizeCharacterEscape(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    ok(code === codes.backslash, "expected `\\`");
+    effects.enter(types.characterEscape);
+    effects.enter(types.escapeMarker);
+    effects.consume(code);
+    effects.exit(types.escapeMarker);
+    return inside;
+  }
+  function inside(code) {
+    if (asciiPunctuation(code)) {
+      effects.enter(types.characterEscapeValue);
+      effects.consume(code);
+      effects.exit(types.characterEscapeValue);
+      effects.exit(types.characterEscape);
+      return ok2;
+    }
+    return nok(code);
+  }
+}
+var characterEscape;
+var init_character_escape = __esm(() => {
+  init_development();
+  init_dev4();
+  init_default();
+  characterEscape = {
+    name: "characterEscape",
+    tokenize: tokenizeCharacterEscape
+  };
+});
+function tokenizeCharacterReference(effects, ok2, nok) {
+  const self = this;
+  let size = 0;
+  let max;
+  let test;
+  return start;
+  function start(code) {
+    ok(code === codes.ampersand, "expected `&`");
+    effects.enter(types.characterReference);
+    effects.enter(types.characterReferenceMarker);
+    effects.consume(code);
+    effects.exit(types.characterReferenceMarker);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.numberSign) {
+      effects.enter(types.characterReferenceMarkerNumeric);
+      effects.consume(code);
+      effects.exit(types.characterReferenceMarkerNumeric);
+      return numeric;
+    }
+    effects.enter(types.characterReferenceValue);
+    max = constants.characterReferenceNamedSizeMax;
+    test = asciiAlphanumeric;
+    return value(code);
+  }
+  function numeric(code) {
+    if (code === codes.uppercaseX || code === codes.lowercaseX) {
+      effects.enter(types.characterReferenceMarkerHexadecimal);
+      effects.consume(code);
+      effects.exit(types.characterReferenceMarkerHexadecimal);
+      effects.enter(types.characterReferenceValue);
+      max = constants.characterReferenceHexadecimalSizeMax;
+      test = asciiHexDigit;
+      return value;
+    }
+    effects.enter(types.characterReferenceValue);
+    max = constants.characterReferenceDecimalSizeMax;
+    test = asciiDigit;
+    return value(code);
+  }
+  function value(code) {
+    if (code === codes.semicolon && size) {
+      const token = effects.exit(types.characterReferenceValue);
+      if (test === asciiAlphanumeric && !decodeNamedCharacterReference(self.sliceSerialize(token))) {
+        return nok(code);
+      }
+      effects.enter(types.characterReferenceMarker);
+      effects.consume(code);
+      effects.exit(types.characterReferenceMarker);
+      effects.exit(types.characterReference);
+      return ok2;
+    }
+    if (test(code) && size++ < max) {
+      effects.consume(code);
+      return value;
+    }
+    return nok(code);
+  }
+}
+var characterReference;
+var init_character_reference = __esm(() => {
+  init_development();
+  init_decode_named_character_reference();
+  init_dev4();
+  init_default();
+  characterReference = {
+    name: "characterReference",
+    tokenize: tokenizeCharacterReference
+  };
+});
+function tokenizeCodeFenced(effects, ok2, nok) {
+  const self = this;
+  const closeStart = { partial: true, tokenize: tokenizeCloseStart };
+  let initialPrefix = 0;
+  let sizeOpen = 0;
+  let marker;
+  return start;
+  function start(code) {
+    return beforeSequenceOpen(code);
+  }
+  function beforeSequenceOpen(code) {
+    ok(code === codes.graveAccent || code === codes.tilde, "expected `` ` `` or `~`");
+    const tail = self.events[self.events.length - 1];
+    initialPrefix = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
+    marker = code;
+    effects.enter(types.codeFenced);
+    effects.enter(types.codeFencedFence);
+    effects.enter(types.codeFencedFenceSequence);
+    return sequenceOpen(code);
+  }
+  function sequenceOpen(code) {
+    if (code === marker) {
+      sizeOpen++;
+      effects.consume(code);
+      return sequenceOpen;
+    }
+    if (sizeOpen < constants.codeFencedSequenceSizeMin) {
+      return nok(code);
+    }
+    effects.exit(types.codeFencedFenceSequence);
+    return markdownSpace(code) ? factorySpace(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
+  }
+  function infoBefore(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.codeFencedFence);
+      return self.interrupt ? ok2(code) : effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
+    }
+    effects.enter(types.codeFencedFenceInfo);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return info(code);
+  }
+  function info(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.chunkString);
+      effects.exit(types.codeFencedFenceInfo);
+      return infoBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.exit(types.chunkString);
+      effects.exit(types.codeFencedFenceInfo);
+      return factorySpace(effects, metaBefore, types.whitespace)(code);
+    }
+    if (code === codes.graveAccent && code === marker) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return info;
+  }
+  function metaBefore(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return infoBefore(code);
+    }
+    effects.enter(types.codeFencedFenceMeta);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return meta(code);
+  }
+  function meta(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.chunkString);
+      effects.exit(types.codeFencedFenceMeta);
+      return infoBefore(code);
+    }
+    if (code === codes.graveAccent && code === marker) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return meta;
+  }
+  function atNonLazyBreak(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    return effects.attempt(closeStart, after, contentBefore)(code);
+  }
+  function contentBefore(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return contentStart;
+  }
+  function contentStart(code) {
+    return initialPrefix > 0 && markdownSpace(code) ? factorySpace(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
+  }
+  function beforeContentChunk(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
+    }
+    effects.enter(types.codeFlowValue);
+    return contentChunk(code);
+  }
+  function contentChunk(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.codeFlowValue);
+      return beforeContentChunk(code);
+    }
+    effects.consume(code);
+    return contentChunk;
+  }
+  function after(code) {
+    effects.exit(types.codeFenced);
+    return ok2(code);
+  }
+  function tokenizeCloseStart(effects2, ok3, nok2) {
+    let size = 0;
+    return startBefore;
+    function startBefore(code) {
+      ok(markdownLineEnding(code), "expected eol");
+      effects2.enter(types.lineEnding);
+      effects2.consume(code);
+      effects2.exit(types.lineEnding);
+      return start2;
+    }
+    function start2(code) {
+      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+      effects2.enter(types.codeFencedFence);
+      return markdownSpace(code) ? factorySpace(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
+    }
+    function beforeSequenceClose(code) {
+      if (code === marker) {
+        effects2.enter(types.codeFencedFenceSequence);
+        return sequenceClose(code);
+      }
+      return nok2(code);
+    }
+    function sequenceClose(code) {
+      if (code === marker) {
+        size++;
+        effects2.consume(code);
+        return sequenceClose;
+      }
+      if (size >= sizeOpen) {
+        effects2.exit(types.codeFencedFenceSequence);
+        return markdownSpace(code) ? factorySpace(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
+      }
+      return nok2(code);
+    }
+    function sequenceCloseAfter(code) {
+      if (code === codes.eof || markdownLineEnding(code)) {
+        effects2.exit(types.codeFencedFence);
+        return ok3(code);
+      }
+      return nok2(code);
+    }
+  }
+}
+function tokenizeNonLazyContinuation(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return lineStart;
+  }
+  function lineStart(code) {
+    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
+  }
+}
+var nonLazyContinuation;
+var codeFenced;
+var init_code_fenced = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  nonLazyContinuation = {
+    partial: true,
+    tokenize: tokenizeNonLazyContinuation
+  };
+  codeFenced = {
+    concrete: true,
+    name: "codeFenced",
+    tokenize: tokenizeCodeFenced
+  };
+});
+function tokenizeCodeIndented(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    ok(markdownSpace(code));
+    effects.enter(types.codeIndented);
+    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
+  }
+  function afterPrefix(code) {
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? atBreak(code) : nok(code);
+  }
+  function atBreak(code) {
+    if (code === codes.eof) {
+      return after(code);
+    }
+    if (markdownLineEnding(code)) {
+      return effects.attempt(furtherStart, atBreak, after)(code);
+    }
+    effects.enter(types.codeFlowValue);
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.codeFlowValue);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    return inside;
+  }
+  function after(code) {
+    effects.exit(types.codeIndented);
+    return ok2(code);
+  }
+}
+function tokenizeFurtherStart(effects, ok2, nok) {
+  const self = this;
+  return furtherStart2;
+  function furtherStart2(code) {
+    if (self.parser.lazy[self.now().line]) {
+      return nok(code);
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return furtherStart2;
+    }
+    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
+  }
+  function afterPrefix(code) {
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? ok2(code) : markdownLineEnding(code) ? furtherStart2(code) : nok(code);
+  }
+}
+var codeIndented;
+var furtherStart;
+var init_code_indented = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  codeIndented = {
+    name: "codeIndented",
+    tokenize: tokenizeCodeIndented
+  };
+  furtherStart = { partial: true, tokenize: tokenizeFurtherStart };
+});
+function resolveCodeText(events) {
+  let tailExitIndex = events.length - 4;
+  let headEnterIndex = 3;
+  let index;
+  let enter;
+  if ((events[headEnterIndex][1].type === types.lineEnding || events[headEnterIndex][1].type === "space") && (events[tailExitIndex][1].type === types.lineEnding || events[tailExitIndex][1].type === "space")) {
+    index = headEnterIndex;
+    while (++index < tailExitIndex) {
+      if (events[index][1].type === types.codeTextData) {
+        events[headEnterIndex][1].type = types.codeTextPadding;
+        events[tailExitIndex][1].type = types.codeTextPadding;
+        headEnterIndex += 2;
+        tailExitIndex -= 2;
+        break;
+      }
+    }
+  }
+  index = headEnterIndex - 1;
+  tailExitIndex++;
+  while (++index <= tailExitIndex) {
+    if (enter === undefined) {
+      if (index !== tailExitIndex && events[index][1].type !== types.lineEnding) {
+        enter = index;
+      }
+    } else if (index === tailExitIndex || events[index][1].type === types.lineEnding) {
+      events[enter][1].type = types.codeTextData;
+      if (index !== enter + 2) {
+        events[enter][1].end = events[index - 1][1].end;
+        events.splice(enter + 2, index - enter - 2);
+        tailExitIndex -= index - enter - 2;
+        index = enter + 2;
+      }
+      enter = undefined;
+    }
+  }
+  return events;
+}
+function previous(code) {
+  return code !== codes.graveAccent || this.events[this.events.length - 1][1].type === types.characterEscape;
+}
+function tokenizeCodeText(effects, ok2, nok) {
+  const self = this;
+  let sizeOpen = 0;
+  let size;
+  let token;
+  return start;
+  function start(code) {
+    ok(code === codes.graveAccent, "expected `` ` ``");
+    ok(previous.call(self, self.previous), "expected correct previous");
+    effects.enter(types.codeText);
+    effects.enter(types.codeTextSequence);
+    return sequenceOpen(code);
+  }
+  function sequenceOpen(code) {
+    if (code === codes.graveAccent) {
+      effects.consume(code);
+      sizeOpen++;
+      return sequenceOpen;
+    }
+    effects.exit(types.codeTextSequence);
+    return between(code);
+  }
+  function between(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.space) {
+      effects.enter("space");
+      effects.consume(code);
+      effects.exit("space");
+      return between;
+    }
+    if (code === codes.graveAccent) {
+      token = effects.enter(types.codeTextSequence);
+      size = 0;
+      return sequenceClose(code);
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return between;
+    }
+    effects.enter(types.codeTextData);
+    return data(code);
+  }
+  function data(code) {
+    if (code === codes.eof || code === codes.space || code === codes.graveAccent || markdownLineEnding(code)) {
+      effects.exit(types.codeTextData);
+      return between(code);
+    }
+    effects.consume(code);
+    return data;
+  }
+  function sequenceClose(code) {
+    if (code === codes.graveAccent) {
+      effects.consume(code);
+      size++;
+      return sequenceClose;
+    }
+    if (size === sizeOpen) {
+      effects.exit(types.codeTextSequence);
+      effects.exit(types.codeText);
+      return ok2(code);
+    }
+    token.type = types.codeTextData;
+    return data(code);
+  }
+}
+var codeText;
+var init_code_text = __esm(() => {
+  init_development();
+  init_dev4();
+  init_default();
+  codeText = {
+    name: "codeText",
+    previous,
+    resolve: resolveCodeText,
+    tokenize: tokenizeCodeText
+  };
+});
+
+class SpliceBuffer {
+  constructor(initial) {
+    this.left = initial ? [...initial] : [];
+    this.right = [];
+  }
+  get(index) {
+    if (index < 0 || index >= this.left.length + this.right.length) {
+      throw new RangeError("Cannot access index `" + index + "` in a splice buffer of size `" + (this.left.length + this.right.length) + "`");
+    }
+    if (index < this.left.length)
+      return this.left[index];
+    return this.right[this.right.length - index + this.left.length - 1];
+  }
+  get length() {
+    return this.left.length + this.right.length;
+  }
+  shift() {
+    this.setCursor(0);
+    return this.right.pop();
+  }
+  slice(start, end) {
+    const stop = end === null || end === undefined ? Number.POSITIVE_INFINITY : end;
+    if (stop < this.left.length) {
+      return this.left.slice(start, stop);
+    }
+    if (start > this.left.length) {
+      return this.right.slice(this.right.length - stop + this.left.length, this.right.length - start + this.left.length).reverse();
+    }
+    return this.left.slice(start).concat(this.right.slice(this.right.length - stop + this.left.length).reverse());
+  }
+  splice(start, deleteCount, items) {
+    const count = deleteCount || 0;
+    this.setCursor(Math.trunc(start));
+    const removed = this.right.splice(this.right.length - count, Number.POSITIVE_INFINITY);
+    if (items)
+      chunkedPush(this.left, items);
+    return removed.reverse();
+  }
+  pop() {
+    this.setCursor(Number.POSITIVE_INFINITY);
+    return this.left.pop();
+  }
+  push(item) {
+    this.setCursor(Number.POSITIVE_INFINITY);
+    this.left.push(item);
+  }
+  pushMany(items) {
+    this.setCursor(Number.POSITIVE_INFINITY);
+    chunkedPush(this.left, items);
+  }
+  unshift(item) {
+    this.setCursor(0);
+    this.right.push(item);
+  }
+  unshiftMany(items) {
+    this.setCursor(0);
+    chunkedPush(this.right, items.reverse());
+  }
+  setCursor(n) {
+    if (n === this.left.length || n > this.left.length && this.right.length === 0 || n < 0 && this.left.length === 0)
+      return;
+    if (n < this.left.length) {
+      const removed = this.left.splice(n, Number.POSITIVE_INFINITY);
+      chunkedPush(this.right, removed.reverse());
+    } else {
+      const removed = this.right.splice(this.left.length + this.right.length - n, Number.POSITIVE_INFINITY);
+      chunkedPush(this.left, removed.reverse());
+    }
+  }
+}
+function chunkedPush(list, right) {
+  let chunkStart = 0;
+  if (right.length < constants.v8MaxSafeChunkSize) {
+    list.push(...right);
+  } else {
+    while (chunkStart < right.length) {
+      list.push(...right.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize));
+      chunkStart += constants.v8MaxSafeChunkSize;
+    }
+  }
+}
+var init_splice_buffer = __esm(() => {
+  init_default();
+});
+function subtokenize(eventsArray) {
+  const jumps = {};
+  let index = -1;
+  let event;
+  let lineIndex;
+  let otherIndex;
+  let otherEvent;
+  let parameters;
+  let subevents;
+  let more;
+  const events = new SpliceBuffer(eventsArray);
+  while (++index < events.length) {
+    while (index in jumps) {
+      index = jumps[index];
+    }
+    event = events.get(index);
+    if (index && event[1].type === types.chunkFlow && events.get(index - 1)[1].type === types.listItemPrefix) {
+      ok(event[1]._tokenizer, "expected `_tokenizer` on subtokens");
+      subevents = event[1]._tokenizer.events;
+      otherIndex = 0;
+      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.lineEndingBlank) {
+        otherIndex += 2;
+      }
+      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.content) {
+        while (++otherIndex < subevents.length) {
+          if (subevents[otherIndex][1].type === types.content) {
+            break;
+          }
+          if (subevents[otherIndex][1].type === types.chunkText) {
+            subevents[otherIndex][1]._isInFirstContentOfListItem = true;
+            otherIndex++;
+          }
+        }
+      }
+    }
+    if (event[0] === "enter") {
+      if (event[1].contentType) {
+        Object.assign(jumps, subcontent(events, index));
+        index = jumps[index];
+        more = true;
+      }
+    } else if (event[1]._container) {
+      otherIndex = index;
+      lineIndex = undefined;
+      while (otherIndex--) {
+        otherEvent = events.get(otherIndex);
+        if (otherEvent[1].type === types.lineEnding || otherEvent[1].type === types.lineEndingBlank) {
+          if (otherEvent[0] === "enter") {
+            if (lineIndex) {
+              events.get(lineIndex)[1].type = types.lineEndingBlank;
+            }
+            otherEvent[1].type = types.lineEnding;
+            lineIndex = otherIndex;
+          }
+        } else if (otherEvent[1].type === types.linePrefix || otherEvent[1].type === types.listItemIndent) {} else {
+          break;
+        }
+      }
+      if (lineIndex) {
+        event[1].end = { ...events.get(lineIndex)[1].start };
+        parameters = events.slice(lineIndex, index);
+        parameters.unshift(event);
+        events.splice(lineIndex, index - lineIndex + 1, parameters);
+      }
+    }
+  }
+  splice(eventsArray, 0, Number.POSITIVE_INFINITY, events.slice(0));
+  return !more;
+}
+function subcontent(events, eventIndex) {
+  const token = events.get(eventIndex)[1];
+  const context = events.get(eventIndex)[2];
+  let startPosition = eventIndex - 1;
+  const startPositions = [];
+  ok(token.contentType, "expected `contentType` on subtokens");
+  let tokenizer = token._tokenizer;
+  if (!tokenizer) {
+    tokenizer = context.parser[token.contentType](token.start);
+    if (token._contentTypeTextTrailing) {
+      tokenizer._contentTypeTextTrailing = true;
+    }
+  }
+  const childEvents = tokenizer.events;
+  const jumps = [];
+  const gaps = {};
+  let stream;
+  let previous2;
+  let index = -1;
+  let current = token;
+  let adjust = 0;
+  let start = 0;
+  const breaks = [start];
+  while (current) {
+    while (events.get(++startPosition)[1] !== current) {}
+    ok(!previous2 || current.previous === previous2, "expected previous to match");
+    ok(!previous2 || previous2.next === current, "expected next to match");
+    startPositions.push(startPosition);
+    if (!current._tokenizer) {
+      stream = context.sliceStream(current);
+      if (!current.next) {
+        stream.push(codes.eof);
+      }
+      if (previous2) {
+        tokenizer.defineSkip(current.start);
+      }
+      if (current._isInFirstContentOfListItem) {
+        tokenizer._gfmTasklistFirstContentOfListItem = true;
+      }
+      tokenizer.write(stream);
+      if (current._isInFirstContentOfListItem) {
+        tokenizer._gfmTasklistFirstContentOfListItem = undefined;
+      }
+    }
+    previous2 = current;
+    current = current.next;
+  }
+  current = token;
+  while (++index < childEvents.length) {
+    if (childEvents[index][0] === "exit" && childEvents[index - 1][0] === "enter" && childEvents[index][1].type === childEvents[index - 1][1].type && childEvents[index][1].start.line !== childEvents[index][1].end.line) {
+      ok(current, "expected a current token");
+      start = index + 1;
+      breaks.push(start);
+      current._tokenizer = undefined;
+      current.previous = undefined;
+      current = current.next;
+    }
+  }
+  tokenizer.events = [];
+  if (current) {
+    current._tokenizer = undefined;
+    current.previous = undefined;
+    ok(!current.next, "expected no next token");
+  } else {
+    breaks.pop();
+  }
+  index = breaks.length;
+  while (index--) {
+    const slice = childEvents.slice(breaks[index], breaks[index + 1]);
+    const start2 = startPositions.pop();
+    ok(start2 !== undefined, "expected a start position when splicing");
+    jumps.push([start2, start2 + slice.length - 1]);
+    events.splice(start2, 2, slice);
+  }
+  jumps.reverse();
+  index = -1;
+  while (++index < jumps.length) {
+    gaps[adjust + jumps[index][0]] = adjust + jumps[index][1];
+    adjust += jumps[index][1] - jumps[index][0] - 1;
+  }
+  return gaps;
+}
+var init_dev7 = __esm(() => {
+  init_development();
+  init_dev();
+  init_default();
+  init_splice_buffer();
+});
+function resolveContent(events) {
+  subtokenize(events);
+  return events;
+}
+function tokenizeContent(effects, ok2) {
+  let previous2;
+  return chunkStart;
+  function chunkStart(code) {
+    ok(code !== codes.eof && !markdownLineEnding(code), "expected no eof or eol");
+    effects.enter(types.content);
+    previous2 = effects.enter(types.chunkContent, {
+      contentType: constants.contentTypeContent
+    });
+    return chunkInside(code);
+  }
+  function chunkInside(code) {
+    if (code === codes.eof) {
+      return contentEnd(code);
+    }
+    if (markdownLineEnding(code)) {
+      return effects.check(continuationConstruct, contentContinue, contentEnd)(code);
+    }
+    effects.consume(code);
+    return chunkInside;
+  }
+  function contentEnd(code) {
+    effects.exit(types.chunkContent);
+    effects.exit(types.content);
+    return ok2(code);
+  }
+  function contentContinue(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    effects.consume(code);
+    effects.exit(types.chunkContent);
+    ok(previous2, "expected previous token");
+    previous2.next = effects.enter(types.chunkContent, {
+      contentType: constants.contentTypeContent,
+      previous: previous2
+    });
+    previous2 = previous2.next;
+    return chunkInside;
+  }
+}
+function tokenizeContinuation(effects, ok2, nok) {
+  const self = this;
+  return startLookahead;
+  function startLookahead(code) {
+    ok(markdownLineEnding(code), "expected a line ending");
+    effects.exit(types.chunkContent);
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return factorySpace(effects, prefixed, types.linePrefix);
+  }
+  function prefixed(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return nok(code);
+    }
+    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+    const tail = self.events[self.events.length - 1];
+    if (!self.parser.constructs.disable.null.includes("codeIndented") && tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize) {
+      return ok2(code);
+    }
+    return effects.interrupt(self.parser.constructs.flow, nok, ok2)(code);
+  }
+}
+var content2;
+var continuationConstruct;
+var init_content2 = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_dev7();
+  init_default();
+  content2 = { resolve: resolveContent, tokenize: tokenizeContent };
+  continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
+});
+function factoryDestination(effects, ok2, nok, type, literalType, literalMarkerType, rawType, stringType, max) {
+  const limit = max || Number.POSITIVE_INFINITY;
+  let balance = 0;
+  return start;
+  function start(code) {
+    if (code === codes.lessThan) {
+      effects.enter(type);
+      effects.enter(literalType);
+      effects.enter(literalMarkerType);
+      effects.consume(code);
+      effects.exit(literalMarkerType);
+      return enclosedBefore;
+    }
+    if (code === codes.eof || code === codes.space || code === codes.rightParenthesis || asciiControl(code)) {
+      return nok(code);
+    }
+    effects.enter(type);
+    effects.enter(rawType);
+    effects.enter(stringType);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return raw(code);
+  }
+  function enclosedBefore(code) {
+    if (code === codes.greaterThan) {
+      effects.enter(literalMarkerType);
+      effects.consume(code);
+      effects.exit(literalMarkerType);
+      effects.exit(literalType);
+      effects.exit(type);
+      return ok2;
+    }
+    effects.enter(stringType);
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return enclosed(code);
+  }
+  function enclosed(code) {
+    if (code === codes.greaterThan) {
+      effects.exit(types.chunkString);
+      effects.exit(stringType);
+      return enclosedBefore(code);
+    }
+    if (code === codes.eof || code === codes.lessThan || markdownLineEnding(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return code === codes.backslash ? enclosedEscape : enclosed;
+  }
+  function enclosedEscape(code) {
+    if (code === codes.lessThan || code === codes.greaterThan || code === codes.backslash) {
+      effects.consume(code);
+      return enclosed;
+    }
+    return enclosed(code);
+  }
+  function raw(code) {
+    if (!balance && (code === codes.eof || code === codes.rightParenthesis || markdownLineEndingOrSpace(code))) {
+      effects.exit(types.chunkString);
+      effects.exit(stringType);
+      effects.exit(rawType);
+      effects.exit(type);
+      return ok2(code);
+    }
+    if (balance < limit && code === codes.leftParenthesis) {
+      effects.consume(code);
+      balance++;
+      return raw;
+    }
+    if (code === codes.rightParenthesis) {
+      effects.consume(code);
+      balance--;
+      return raw;
+    }
+    if (code === codes.eof || code === codes.space || code === codes.leftParenthesis || asciiControl(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return code === codes.backslash ? rawEscape : raw;
+  }
+  function rawEscape(code) {
+    if (code === codes.leftParenthesis || code === codes.rightParenthesis || code === codes.backslash) {
+      effects.consume(code);
+      return raw;
+    }
+    return raw(code);
+  }
+}
+var init_dev8 = __esm(() => {
+  init_dev4();
+  init_default();
+});
+function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
+  const self = this;
+  let size = 0;
+  let seen;
+  return start;
+  function start(code) {
+    ok(code === codes.leftSquareBracket, "expected `[`");
+    effects.enter(type);
+    effects.enter(markerType);
+    effects.consume(code);
+    effects.exit(markerType);
+    effects.enter(stringType);
+    return atBreak;
+  }
+  function atBreak(code) {
+    if (size > constants.linkReferenceSizeMax || code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket && !seen || code === codes.caret && !size && "_hiddenFootnoteSupport" in self.parser.constructs) {
+      return nok(code);
+    }
+    if (code === codes.rightSquareBracket) {
+      effects.exit(stringType);
+      effects.enter(markerType);
+      effects.consume(code);
+      effects.exit(markerType);
+      effects.exit(type);
+      return ok2;
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return atBreak;
+    }
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return labelInside(code);
+  }
+  function labelInside(code) {
+    if (code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket || markdownLineEnding(code) || size++ > constants.linkReferenceSizeMax) {
+      effects.exit(types.chunkString);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    if (!seen)
+      seen = !markdownSpace(code);
+    return code === codes.backslash ? labelEscape : labelInside;
+  }
+  function labelEscape(code) {
+    if (code === codes.leftSquareBracket || code === codes.backslash || code === codes.rightSquareBracket) {
+      effects.consume(code);
+      size++;
+      return labelInside;
+    }
+    return labelInside(code);
+  }
+}
+var init_dev9 = __esm(() => {
+  init_development();
+  init_dev4();
+  init_default();
+});
+function factoryTitle(effects, ok2, nok, type, markerType, stringType) {
+  let marker;
+  return start;
+  function start(code) {
+    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
+      effects.enter(type);
+      effects.enter(markerType);
+      effects.consume(code);
+      effects.exit(markerType);
+      marker = code === codes.leftParenthesis ? codes.rightParenthesis : code;
+      return begin;
+    }
+    return nok(code);
+  }
+  function begin(code) {
+    if (code === marker) {
+      effects.enter(markerType);
+      effects.consume(code);
+      effects.exit(markerType);
+      effects.exit(type);
+      return ok2;
+    }
+    effects.enter(stringType);
+    return atBreak(code);
+  }
+  function atBreak(code) {
+    if (code === marker) {
+      effects.exit(stringType);
+      return begin(marker);
+    }
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return factorySpace(effects, atBreak, types.linePrefix);
+    }
+    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === marker || code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.chunkString);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    return code === codes.backslash ? escape : inside;
+  }
+  function escape(code) {
+    if (code === marker || code === codes.backslash) {
+      effects.consume(code);
+      return inside;
+    }
+    return inside(code);
+  }
+}
+var init_dev10 = __esm(() => {
+  init_dev5();
+  init_dev4();
+  init_default();
+});
+function factoryWhitespace(effects, ok2) {
+  let seen;
+  return start;
+  function start(code) {
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      seen = true;
+      return start;
+    }
+    if (markdownSpace(code)) {
+      return factorySpace(effects, start, seen ? types.linePrefix : types.lineSuffix)(code);
+    }
+    return ok2(code);
+  }
+}
+var init_dev11 = __esm(() => {
+  init_dev5();
+  init_dev4();
+  init_default();
+});
+function tokenizeDefinition(effects, ok2, nok) {
+  const self = this;
+  let identifier;
+  return start;
+  function start(code) {
+    effects.enter(types.definition);
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.leftSquareBracket, "expected `[`");
+    return factoryLabel.call(self, effects, labelAfter, nok, types.definitionLabel, types.definitionLabelMarker, types.definitionLabelString)(code);
+  }
+  function labelAfter(code) {
+    identifier = normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1));
+    if (code === codes.colon) {
+      effects.enter(types.definitionMarker);
+      effects.consume(code);
+      effects.exit(types.definitionMarker);
+      return markerAfter;
+    }
+    return nok(code);
+  }
+  function markerAfter(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, destinationBefore)(code) : destinationBefore(code);
+  }
+  function destinationBefore(code) {
+    return factoryDestination(effects, destinationAfter, nok, types.definitionDestination, types.definitionDestinationLiteral, types.definitionDestinationLiteralMarker, types.definitionDestinationRaw, types.definitionDestinationString)(code);
+  }
+  function destinationAfter(code) {
+    return effects.attempt(titleBefore, after, after)(code);
+  }
+  function after(code) {
+    return markdownSpace(code) ? factorySpace(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
+  }
+  function afterWhitespace(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.definition);
+      self.parser.defined.push(identifier);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+}
+function tokenizeTitleBefore(effects, ok2, nok) {
+  return titleBefore2;
+  function titleBefore2(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
+  }
+  function beforeMarker(code) {
+    return factoryTitle(effects, titleAfter, nok, types.definitionTitle, types.definitionTitleMarker, types.definitionTitleString)(code);
+  }
+  function titleAfter(code) {
+    return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
+  }
+  function titleAfterOptionalWhitespace(code) {
+    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
+  }
+}
+var definition;
+var titleBefore;
+var init_definition = __esm(() => {
+  init_development();
+  init_dev8();
+  init_dev9();
+  init_dev5();
+  init_dev10();
+  init_dev11();
+  init_dev4();
+  init_dev3();
+  init_default();
+  definition = { name: "definition", tokenize: tokenizeDefinition };
+  titleBefore = { partial: true, tokenize: tokenizeTitleBefore };
+});
+function tokenizeHardBreakEscape(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    ok(code === codes.backslash, "expected `\\`");
+    effects.enter(types.hardBreakEscape);
+    effects.consume(code);
+    return after;
+  }
+  function after(code) {
+    if (markdownLineEnding(code)) {
+      effects.exit(types.hardBreakEscape);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+}
+var hardBreakEscape;
+var init_hard_break_escape = __esm(() => {
+  init_development();
+  init_dev4();
+  init_default();
+  hardBreakEscape = {
+    name: "hardBreakEscape",
+    tokenize: tokenizeHardBreakEscape
+  };
+});
+function resolveHeadingAtx(events, context) {
+  let contentEnd = events.length - 2;
+  let contentStart = 3;
+  let content3;
+  let text;
+  if (events[contentStart][1].type === types.whitespace) {
+    contentStart += 2;
+  }
+  if (contentEnd - 2 > contentStart && events[contentEnd][1].type === types.whitespace) {
+    contentEnd -= 2;
+  }
+  if (events[contentEnd][1].type === types.atxHeadingSequence && (contentStart === contentEnd - 1 || contentEnd - 4 > contentStart && events[contentEnd - 2][1].type === types.whitespace)) {
+    contentEnd -= contentStart + 1 === contentEnd ? 2 : 4;
+  }
+  if (contentEnd > contentStart) {
+    content3 = {
+      type: types.atxHeadingText,
+      start: events[contentStart][1].start,
+      end: events[contentEnd][1].end
+    };
+    text = {
+      type: types.chunkText,
+      start: events[contentStart][1].start,
+      end: events[contentEnd][1].end,
+      contentType: constants.contentTypeText
+    };
+    splice(events, contentStart, contentEnd - contentStart + 1, [
+      ["enter", content3, context],
+      ["enter", text, context],
+      ["exit", text, context],
+      ["exit", content3, context]
+    ]);
+  }
+  return events;
+}
+function tokenizeHeadingAtx(effects, ok2, nok) {
+  let size = 0;
+  return start;
+  function start(code) {
+    effects.enter(types.atxHeading);
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.numberSign, "expected `#`");
+    effects.enter(types.atxHeadingSequence);
+    return sequenceOpen(code);
+  }
+  function sequenceOpen(code) {
+    if (code === codes.numberSign && size++ < constants.atxHeadingOpeningFenceSizeMax) {
+      effects.consume(code);
+      return sequenceOpen;
+    }
+    if (code === codes.eof || markdownLineEndingOrSpace(code)) {
+      effects.exit(types.atxHeadingSequence);
+      return atBreak(code);
+    }
+    return nok(code);
+  }
+  function atBreak(code) {
+    if (code === codes.numberSign) {
+      effects.enter(types.atxHeadingSequence);
+      return sequenceFurther(code);
+    }
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.atxHeading);
+      return ok2(code);
+    }
+    if (markdownSpace(code)) {
+      return factorySpace(effects, atBreak, types.whitespace)(code);
+    }
+    effects.enter(types.atxHeadingText);
+    return data(code);
+  }
+  function sequenceFurther(code) {
+    if (code === codes.numberSign) {
+      effects.consume(code);
+      return sequenceFurther;
+    }
+    effects.exit(types.atxHeadingSequence);
+    return atBreak(code);
+  }
+  function data(code) {
+    if (code === codes.eof || code === codes.numberSign || markdownLineEndingOrSpace(code)) {
+      effects.exit(types.atxHeadingText);
+      return atBreak(code);
+    }
+    effects.consume(code);
+    return data;
+  }
+}
+var headingAtx;
+var init_heading_atx = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_dev();
+  init_default();
+  headingAtx = {
+    name: "headingAtx",
+    resolve: resolveHeadingAtx,
+    tokenize: tokenizeHeadingAtx
+  };
+});
+var htmlBlockNames;
+var htmlRawNames;
+var init_micromark_util_html_tag_name = __esm(() => {
+  htmlBlockNames = [
+    "address",
+    "article",
+    "aside",
+    "base",
+    "basefont",
+    "blockquote",
+    "body",
+    "caption",
+    "center",
+    "col",
+    "colgroup",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "frame",
+    "frameset",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hr",
+    "html",
+    "iframe",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "menu",
+    "menuitem",
+    "nav",
+    "noframes",
+    "ol",
+    "optgroup",
+    "option",
+    "p",
+    "param",
+    "search",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "title",
+    "tr",
+    "track",
+    "ul"
+  ];
+  htmlRawNames = ["pre", "script", "style", "textarea"];
+});
+function resolveToHtmlFlow(events) {
+  let index = events.length;
+  while (index--) {
+    if (events[index][0] === "enter" && events[index][1].type === types.htmlFlow) {
+      break;
+    }
+  }
+  if (index > 1 && events[index - 2][1].type === types.linePrefix) {
+    events[index][1].start = events[index - 2][1].start;
+    events[index + 1][1].start = events[index - 2][1].start;
+    events.splice(index - 2, 2);
+  }
+  return events;
+}
+function tokenizeHtmlFlow(effects, ok2, nok) {
+  const self = this;
+  let marker;
+  let closingTag;
+  let buffer;
+  let index;
+  let markerB;
+  return start;
+  function start(code) {
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.lessThan, "expected `<`");
+    effects.enter(types.htmlFlow);
+    effects.enter(types.htmlFlowData);
+    effects.consume(code);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.exclamationMark) {
+      effects.consume(code);
+      return declarationOpen;
+    }
+    if (code === codes.slash) {
+      effects.consume(code);
+      closingTag = true;
+      return tagCloseStart;
+    }
+    if (code === codes.questionMark) {
+      effects.consume(code);
+      marker = constants.htmlInstruction;
+      return self.interrupt ? ok2 : continuationDeclarationInside;
+    }
+    if (asciiAlpha(code)) {
+      ok(code !== null);
+      effects.consume(code);
+      buffer = String.fromCharCode(code);
+      return tagName;
+    }
+    return nok(code);
+  }
+  function declarationOpen(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      marker = constants.htmlComment;
+      return commentOpenInside;
+    }
+    if (code === codes.leftSquareBracket) {
+      effects.consume(code);
+      marker = constants.htmlCdata;
+      index = 0;
+      return cdataOpenInside;
+    }
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      marker = constants.htmlDeclaration;
+      return self.interrupt ? ok2 : continuationDeclarationInside;
+    }
+    return nok(code);
+  }
+  function commentOpenInside(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return self.interrupt ? ok2 : continuationDeclarationInside;
+    }
+    return nok(code);
+  }
+  function cdataOpenInside(code) {
+    const value = constants.cdataOpeningString;
+    if (code === value.charCodeAt(index++)) {
+      effects.consume(code);
+      if (index === value.length) {
+        return self.interrupt ? ok2 : continuation;
+      }
+      return cdataOpenInside;
+    }
+    return nok(code);
+  }
+  function tagCloseStart(code) {
+    if (asciiAlpha(code)) {
+      ok(code !== null);
+      effects.consume(code);
+      buffer = String.fromCharCode(code);
+      return tagName;
+    }
+    return nok(code);
+  }
+  function tagName(code) {
+    if (code === codes.eof || code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      const slash = code === codes.slash;
+      const name = buffer.toLowerCase();
+      if (!slash && !closingTag && htmlRawNames.includes(name)) {
+        marker = constants.htmlRaw;
+        return self.interrupt ? ok2(code) : continuation(code);
+      }
+      if (htmlBlockNames.includes(buffer.toLowerCase())) {
+        marker = constants.htmlBasic;
+        if (slash) {
+          effects.consume(code);
+          return basicSelfClosing;
+        }
+        return self.interrupt ? ok2(code) : continuation(code);
+      }
+      marker = constants.htmlComplete;
+      return self.interrupt && !self.parser.lazy[self.now().line] ? nok(code) : closingTag ? completeClosingTagAfter(code) : completeAttributeNameBefore(code);
+    }
+    if (code === codes.dash || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      buffer += String.fromCharCode(code);
+      return tagName;
+    }
+    return nok(code);
+  }
+  function basicSelfClosing(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      return self.interrupt ? ok2 : continuation;
+    }
+    return nok(code);
+  }
+  function completeClosingTagAfter(code) {
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeClosingTagAfter;
+    }
+    return completeEnd(code);
+  }
+  function completeAttributeNameBefore(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
+      return completeEnd;
+    }
+    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
+      effects.consume(code);
+      return completeAttributeName;
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAttributeNameBefore;
+    }
+    return completeEnd(code);
+  }
+  function completeAttributeName(code) {
+    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return completeAttributeName;
+    }
+    return completeAttributeNameAfter(code);
+  }
+  function completeAttributeNameAfter(code) {
+    if (code === codes.equalsTo) {
+      effects.consume(code);
+      return completeAttributeValueBefore;
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAttributeNameAfter;
+    }
+    return completeAttributeNameBefore(code);
+  }
+  function completeAttributeValueBefore(code) {
+    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
+      return nok(code);
+    }
+    if (code === codes.quotationMark || code === codes.apostrophe) {
+      effects.consume(code);
+      markerB = code;
+      return completeAttributeValueQuoted;
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAttributeValueBefore;
+    }
+    return completeAttributeValueUnquoted(code);
+  }
+  function completeAttributeValueQuoted(code) {
+    if (code === markerB) {
+      effects.consume(code);
+      markerB = null;
+      return completeAttributeValueQuotedAfter;
+    }
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return nok(code);
+    }
+    effects.consume(code);
+    return completeAttributeValueQuoted;
+  }
+  function completeAttributeValueUnquoted(code) {
+    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.slash || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent || markdownLineEndingOrSpace(code)) {
+      return completeAttributeNameAfter(code);
+    }
+    effects.consume(code);
+    return completeAttributeValueUnquoted;
+  }
+  function completeAttributeValueQuotedAfter(code) {
+    if (code === codes.slash || code === codes.greaterThan || markdownSpace(code)) {
+      return completeAttributeNameBefore(code);
+    }
+    return nok(code);
+  }
+  function completeEnd(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      return completeAfter;
+    }
+    return nok(code);
+  }
+  function completeAfter(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return continuation(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return completeAfter;
+    }
+    return nok(code);
+  }
+  function continuation(code) {
+    if (code === codes.dash && marker === constants.htmlComment) {
+      effects.consume(code);
+      return continuationCommentInside;
+    }
+    if (code === codes.lessThan && marker === constants.htmlRaw) {
+      effects.consume(code);
+      return continuationRawTagOpen;
+    }
+    if (code === codes.greaterThan && marker === constants.htmlDeclaration) {
+      effects.consume(code);
+      return continuationClose;
+    }
+    if (code === codes.questionMark && marker === constants.htmlInstruction) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    if (code === codes.rightSquareBracket && marker === constants.htmlCdata) {
+      effects.consume(code);
+      return continuationCdataInside;
+    }
+    if (markdownLineEnding(code) && (marker === constants.htmlBasic || marker === constants.htmlComplete)) {
+      effects.exit(types.htmlFlowData);
+      return effects.check(blankLineBefore, continuationAfter, continuationStart)(code);
+    }
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.htmlFlowData);
+      return continuationStart(code);
+    }
+    effects.consume(code);
+    return continuation;
+  }
+  function continuationStart(code) {
+    return effects.check(nonLazyContinuationStart, continuationStartNonLazy, continuationAfter)(code);
+  }
+  function continuationStartNonLazy(code) {
+    ok(markdownLineEnding(code));
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return continuationBefore;
+  }
+  function continuationBefore(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      return continuationStart(code);
+    }
+    effects.enter(types.htmlFlowData);
+    return continuation(code);
+  }
+  function continuationCommentInside(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    return continuation(code);
+  }
+  function continuationRawTagOpen(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
+      buffer = "";
+      return continuationRawEndTag;
+    }
+    return continuation(code);
+  }
+  function continuationRawEndTag(code) {
+    if (code === codes.greaterThan) {
+      const name = buffer.toLowerCase();
+      if (htmlRawNames.includes(name)) {
+        effects.consume(code);
+        return continuationClose;
+      }
+      return continuation(code);
+    }
+    if (asciiAlpha(code) && buffer.length < constants.htmlRawSizeMax) {
+      ok(code !== null);
+      effects.consume(code);
+      buffer += String.fromCharCode(code);
+      return continuationRawEndTag;
+    }
+    return continuation(code);
+  }
+  function continuationCdataInside(code) {
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    return continuation(code);
+  }
+  function continuationDeclarationInside(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      return continuationClose;
+    }
+    if (code === codes.dash && marker === constants.htmlComment) {
+      effects.consume(code);
+      return continuationDeclarationInside;
+    }
+    return continuation(code);
+  }
+  function continuationClose(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.htmlFlowData);
+      return continuationAfter(code);
+    }
+    effects.consume(code);
+    return continuationClose;
+  }
+  function continuationAfter(code) {
+    effects.exit(types.htmlFlow);
+    return ok2(code);
+  }
+}
+function tokenizeNonLazyContinuationStart(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    if (markdownLineEnding(code)) {
+      effects.enter(types.lineEnding);
+      effects.consume(code);
+      effects.exit(types.lineEnding);
+      return after;
+    }
+    return nok(code);
+  }
+  function after(code) {
+    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
+  }
+}
+function tokenizeBlankLineBefore(effects, ok2, nok) {
+  return start;
+  function start(code) {
+    ok(markdownLineEnding(code), "expected a line ending");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return effects.attempt(blankLine, ok2, nok);
+  }
+}
+var htmlFlow;
+var blankLineBefore;
+var nonLazyContinuationStart;
+var init_html_flow = __esm(() => {
+  init_development();
+  init_dev4();
+  init_micromark_util_html_tag_name();
+  init_default();
+  init_blank_line();
+  htmlFlow = {
+    concrete: true,
+    name: "htmlFlow",
+    resolveTo: resolveToHtmlFlow,
+    tokenize: tokenizeHtmlFlow
+  };
+  blankLineBefore = { partial: true, tokenize: tokenizeBlankLineBefore };
+  nonLazyContinuationStart = {
+    partial: true,
+    tokenize: tokenizeNonLazyContinuationStart
+  };
+});
+function tokenizeHtmlText(effects, ok2, nok) {
+  const self = this;
+  let marker;
+  let index;
+  let returnState;
+  return start;
+  function start(code) {
+    ok(code === codes.lessThan, "expected `<`");
+    effects.enter(types.htmlText);
+    effects.enter(types.htmlTextData);
+    effects.consume(code);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.exclamationMark) {
+      effects.consume(code);
+      return declarationOpen;
+    }
+    if (code === codes.slash) {
+      effects.consume(code);
+      return tagCloseStart;
+    }
+    if (code === codes.questionMark) {
+      effects.consume(code);
+      return instruction;
+    }
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return tagOpen;
+    }
+    return nok(code);
+  }
+  function declarationOpen(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentOpenInside;
+    }
+    if (code === codes.leftSquareBracket) {
+      effects.consume(code);
+      index = 0;
+      return cdataOpenInside;
+    }
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return declaration;
+    }
+    return nok(code);
+  }
+  function commentOpenInside(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentEnd;
+    }
+    return nok(code);
+  }
+  function comment(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentClose;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = comment;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return comment;
+  }
+  function commentClose(code) {
+    if (code === codes.dash) {
+      effects.consume(code);
+      return commentEnd;
+    }
+    return comment(code);
+  }
+  function commentEnd(code) {
+    return code === codes.greaterThan ? end(code) : code === codes.dash ? commentClose(code) : comment(code);
+  }
+  function cdataOpenInside(code) {
+    const value = constants.cdataOpeningString;
+    if (code === value.charCodeAt(index++)) {
+      effects.consume(code);
+      return index === value.length ? cdata : cdataOpenInside;
+    }
+    return nok(code);
+  }
+  function cdata(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return cdataClose;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = cdata;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return cdata;
+  }
+  function cdataClose(code) {
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return cdataEnd;
+    }
+    return cdata(code);
+  }
+  function cdataEnd(code) {
+    if (code === codes.greaterThan) {
+      return end(code);
+    }
+    if (code === codes.rightSquareBracket) {
+      effects.consume(code);
+      return cdataEnd;
+    }
+    return cdata(code);
+  }
+  function declaration(code) {
+    if (code === codes.eof || code === codes.greaterThan) {
+      return end(code);
+    }
+    if (markdownLineEnding(code)) {
+      returnState = declaration;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return declaration;
+  }
+  function instruction(code) {
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (code === codes.questionMark) {
+      effects.consume(code);
+      return instructionClose;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = instruction;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return instruction;
+  }
+  function instructionClose(code) {
+    return code === codes.greaterThan ? end(code) : instruction(code);
+  }
+  function tagCloseStart(code) {
+    if (asciiAlpha(code)) {
+      effects.consume(code);
+      return tagClose;
+    }
+    return nok(code);
+  }
+  function tagClose(code) {
+    if (code === codes.dash || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return tagClose;
+    }
+    return tagCloseBetween(code);
+  }
+  function tagCloseBetween(code) {
+    if (markdownLineEnding(code)) {
+      returnState = tagCloseBetween;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagCloseBetween;
+    }
+    return end(code);
+  }
+  function tagOpen(code) {
+    if (code === codes.dash || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return tagOpen;
+    }
+    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      return tagOpenBetween(code);
+    }
+    return nok(code);
+  }
+  function tagOpenBetween(code) {
+    if (code === codes.slash) {
+      effects.consume(code);
+      return end;
+    }
+    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
+      effects.consume(code);
+      return tagOpenAttributeName;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenBetween;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagOpenBetween;
+    }
+    return end(code);
+  }
+  function tagOpenAttributeName(code) {
+    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
+      effects.consume(code);
+      return tagOpenAttributeName;
+    }
+    return tagOpenAttributeNameAfter(code);
+  }
+  function tagOpenAttributeNameAfter(code) {
+    if (code === codes.equalsTo) {
+      effects.consume(code);
+      return tagOpenAttributeValueBefore;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenAttributeNameAfter;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagOpenAttributeNameAfter;
+    }
+    return tagOpenBetween(code);
+  }
+  function tagOpenAttributeValueBefore(code) {
+    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
+      return nok(code);
+    }
+    if (code === codes.quotationMark || code === codes.apostrophe) {
+      effects.consume(code);
+      marker = code;
+      return tagOpenAttributeValueQuoted;
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenAttributeValueBefore;
+      return lineEndingBefore(code);
+    }
+    if (markdownSpace(code)) {
+      effects.consume(code);
+      return tagOpenAttributeValueBefore;
+    }
+    effects.consume(code);
+    return tagOpenAttributeValueUnquoted;
+  }
+  function tagOpenAttributeValueQuoted(code) {
+    if (code === marker) {
+      effects.consume(code);
+      marker = undefined;
+      return tagOpenAttributeValueQuotedAfter;
+    }
+    if (code === codes.eof) {
+      return nok(code);
+    }
+    if (markdownLineEnding(code)) {
+      returnState = tagOpenAttributeValueQuoted;
+      return lineEndingBefore(code);
+    }
+    effects.consume(code);
+    return tagOpenAttributeValueQuoted;
+  }
+  function tagOpenAttributeValueUnquoted(code) {
+    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.lessThan || code === codes.equalsTo || code === codes.graveAccent) {
+      return nok(code);
+    }
+    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      return tagOpenBetween(code);
+    }
+    effects.consume(code);
+    return tagOpenAttributeValueUnquoted;
+  }
+  function tagOpenAttributeValueQuotedAfter(code) {
+    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
+      return tagOpenBetween(code);
+    }
+    return nok(code);
+  }
+  function end(code) {
+    if (code === codes.greaterThan) {
+      effects.consume(code);
+      effects.exit(types.htmlTextData);
+      effects.exit(types.htmlText);
+      return ok2;
+    }
+    return nok(code);
+  }
+  function lineEndingBefore(code) {
+    ok(returnState, "expected return state");
+    ok(markdownLineEnding(code), "expected eol");
+    effects.exit(types.htmlTextData);
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return lineEndingAfter;
+  }
+  function lineEndingAfter(code) {
+    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+    return markdownSpace(code) ? factorySpace(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
+  }
+  function lineEndingAfterPrefix(code) {
+    effects.enter(types.htmlTextData);
+    return returnState(code);
+  }
+}
+var htmlText;
+var init_html_text = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  htmlText = { name: "htmlText", tokenize: tokenizeHtmlText };
+});
+function resolveAllLabelEnd(events) {
+  let index = -1;
+  const newEvents = [];
+  while (++index < events.length) {
+    const token = events[index][1];
+    newEvents.push(events[index]);
+    if (token.type === types.labelImage || token.type === types.labelLink || token.type === types.labelEnd) {
+      const offset = token.type === types.labelImage ? 4 : 2;
+      token.type = types.data;
+      index += offset;
+    }
+  }
+  if (events.length !== newEvents.length) {
+    splice(events, 0, events.length, newEvents);
+  }
+  return events;
+}
+function resolveToLabelEnd(events, context) {
+  let index = events.length;
+  let offset = 0;
+  let token;
+  let open;
+  let close;
+  let media;
+  while (index--) {
+    token = events[index][1];
+    if (open) {
+      if (token.type === types.link || token.type === types.labelLink && token._inactive) {
+        break;
+      }
+      if (events[index][0] === "enter" && token.type === types.labelLink) {
+        token._inactive = true;
+      }
+    } else if (close) {
+      if (events[index][0] === "enter" && (token.type === types.labelImage || token.type === types.labelLink) && !token._balanced) {
+        open = index;
+        if (token.type !== types.labelLink) {
+          offset = 2;
+          break;
+        }
+      }
+    } else if (token.type === types.labelEnd) {
+      close = index;
+    }
+  }
+  ok(open !== undefined, "`open` is supposed to be found");
+  ok(close !== undefined, "`close` is supposed to be found");
+  const group = {
+    type: events[open][1].type === types.labelLink ? types.link : types.image,
+    start: { ...events[open][1].start },
+    end: { ...events[events.length - 1][1].end }
+  };
+  const label = {
+    type: types.label,
+    start: { ...events[open][1].start },
+    end: { ...events[close][1].end }
+  };
+  const text = {
+    type: types.labelText,
+    start: { ...events[open + offset + 2][1].end },
+    end: { ...events[close - 2][1].start }
+  };
+  media = [
+    ["enter", group, context],
+    ["enter", label, context]
+  ];
+  media = push(media, events.slice(open + 1, open + offset + 3));
+  media = push(media, [["enter", text, context]]);
+  ok(context.parser.constructs.insideSpan.null, "expected `insideSpan.null` to be populated");
+  media = push(media, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + offset + 4, close - 3), context));
+  media = push(media, [
+    ["exit", text, context],
+    events[close - 2],
+    events[close - 1],
+    ["exit", label, context]
+  ]);
+  media = push(media, events.slice(close + 1));
+  media = push(media, [["exit", group, context]]);
+  splice(events, open, events.length, media);
+  return events;
+}
+function tokenizeLabelEnd(effects, ok2, nok) {
+  const self = this;
+  let index = self.events.length;
+  let labelStart;
+  let defined;
+  while (index--) {
+    if ((self.events[index][1].type === types.labelImage || self.events[index][1].type === types.labelLink) && !self.events[index][1]._balanced) {
+      labelStart = self.events[index][1];
+      break;
+    }
+  }
+  return start;
+  function start(code) {
+    ok(code === codes.rightSquareBracket, "expected `]`");
+    if (!labelStart) {
+      return nok(code);
+    }
+    if (labelStart._inactive) {
+      return labelEndNok(code);
+    }
+    defined = self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize({ start: labelStart.end, end: self.now() })));
+    effects.enter(types.labelEnd);
+    effects.enter(types.labelMarker);
+    effects.consume(code);
+    effects.exit(types.labelMarker);
+    effects.exit(types.labelEnd);
+    return after;
+  }
+  function after(code) {
+    if (code === codes.leftParenthesis) {
+      return effects.attempt(resourceConstruct, labelEndOk, defined ? labelEndOk : labelEndNok)(code);
+    }
+    if (code === codes.leftSquareBracket) {
+      return effects.attempt(referenceFullConstruct, labelEndOk, defined ? referenceNotFull : labelEndNok)(code);
+    }
+    return defined ? labelEndOk(code) : labelEndNok(code);
+  }
+  function referenceNotFull(code) {
+    return effects.attempt(referenceCollapsedConstruct, labelEndOk, labelEndNok)(code);
+  }
+  function labelEndOk(code) {
+    return ok2(code);
+  }
+  function labelEndNok(code) {
+    labelStart._balanced = true;
+    return nok(code);
+  }
+}
+function tokenizeResource(effects, ok2, nok) {
+  return resourceStart;
+  function resourceStart(code) {
+    ok(code === codes.leftParenthesis, "expected left paren");
+    effects.enter(types.resource);
+    effects.enter(types.resourceMarker);
+    effects.consume(code);
+    effects.exit(types.resourceMarker);
+    return resourceBefore;
+  }
+  function resourceBefore(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceOpen)(code) : resourceOpen(code);
+  }
+  function resourceOpen(code) {
+    if (code === codes.rightParenthesis) {
+      return resourceEnd(code);
+    }
+    return factoryDestination(effects, resourceDestinationAfter, resourceDestinationMissing, types.resourceDestination, types.resourceDestinationLiteral, types.resourceDestinationLiteralMarker, types.resourceDestinationRaw, types.resourceDestinationString, constants.linkResourceDestinationBalanceMax)(code);
+  }
+  function resourceDestinationAfter(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceBetween)(code) : resourceEnd(code);
+  }
+  function resourceDestinationMissing(code) {
+    return nok(code);
+  }
+  function resourceBetween(code) {
+    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
+      return factoryTitle(effects, resourceTitleAfter, nok, types.resourceTitle, types.resourceTitleMarker, types.resourceTitleString)(code);
+    }
+    return resourceEnd(code);
+  }
+  function resourceTitleAfter(code) {
+    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceEnd)(code) : resourceEnd(code);
+  }
+  function resourceEnd(code) {
+    if (code === codes.rightParenthesis) {
+      effects.enter(types.resourceMarker);
+      effects.consume(code);
+      effects.exit(types.resourceMarker);
+      effects.exit(types.resource);
+      return ok2;
+    }
+    return nok(code);
+  }
+}
+function tokenizeReferenceFull(effects, ok2, nok) {
+  const self = this;
+  return referenceFull;
+  function referenceFull(code) {
+    ok(code === codes.leftSquareBracket, "expected left bracket");
+    return factoryLabel.call(self, effects, referenceFullAfter, referenceFullMissing, types.reference, types.referenceMarker, types.referenceString)(code);
+  }
+  function referenceFullAfter(code) {
+    return self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1))) ? ok2(code) : nok(code);
+  }
+  function referenceFullMissing(code) {
+    return nok(code);
+  }
+}
+function tokenizeReferenceCollapsed(effects, ok2, nok) {
+  return referenceCollapsedStart;
+  function referenceCollapsedStart(code) {
+    ok(code === codes.leftSquareBracket, "expected left bracket");
+    effects.enter(types.reference);
+    effects.enter(types.referenceMarker);
+    effects.consume(code);
+    effects.exit(types.referenceMarker);
+    return referenceCollapsedOpen;
+  }
+  function referenceCollapsedOpen(code) {
+    if (code === codes.rightSquareBracket) {
+      effects.enter(types.referenceMarker);
+      effects.consume(code);
+      effects.exit(types.referenceMarker);
+      effects.exit(types.reference);
+      return ok2;
+    }
+    return nok(code);
+  }
+}
+var labelEnd;
+var resourceConstruct;
+var referenceFullConstruct;
+var referenceCollapsedConstruct;
+var init_label_end = __esm(() => {
+  init_development();
+  init_dev8();
+  init_dev9();
+  init_dev10();
+  init_dev11();
+  init_dev4();
+  init_dev();
+  init_dev3();
+  init_default();
+  labelEnd = {
+    name: "labelEnd",
+    resolveAll: resolveAllLabelEnd,
+    resolveTo: resolveToLabelEnd,
+    tokenize: tokenizeLabelEnd
+  };
+  resourceConstruct = { tokenize: tokenizeResource };
+  referenceFullConstruct = { tokenize: tokenizeReferenceFull };
+  referenceCollapsedConstruct = { tokenize: tokenizeReferenceCollapsed };
+});
+function tokenizeLabelStartImage(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    ok(code === codes.exclamationMark, "expected `!`");
+    effects.enter(types.labelImage);
+    effects.enter(types.labelImageMarker);
+    effects.consume(code);
+    effects.exit(types.labelImageMarker);
+    return open;
+  }
+  function open(code) {
+    if (code === codes.leftSquareBracket) {
+      effects.enter(types.labelMarker);
+      effects.consume(code);
+      effects.exit(types.labelMarker);
+      effects.exit(types.labelImage);
+      return after;
+    }
+    return nok(code);
+  }
+  function after(code) {
+    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
+  }
+}
+var labelStartImage;
+var init_label_start_image = __esm(() => {
+  init_development();
+  init_default();
+  init_label_end();
+  labelStartImage = {
+    name: "labelStartImage",
+    resolveAll: labelEnd.resolveAll,
+    tokenize: tokenizeLabelStartImage
+  };
+});
+function tokenizeLabelStartLink(effects, ok2, nok) {
+  const self = this;
+  return start;
+  function start(code) {
+    ok(code === codes.leftSquareBracket, "expected `[`");
+    effects.enter(types.labelLink);
+    effects.enter(types.labelMarker);
+    effects.consume(code);
+    effects.exit(types.labelMarker);
+    effects.exit(types.labelLink);
+    return after;
+  }
+  function after(code) {
+    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
+  }
+}
+var labelStartLink;
+var init_label_start_link = __esm(() => {
+  init_development();
+  init_default();
+  init_label_end();
+  labelStartLink = {
+    name: "labelStartLink",
+    resolveAll: labelEnd.resolveAll,
+    tokenize: tokenizeLabelStartLink
+  };
+});
+function tokenizeLineEnding(effects, ok2) {
+  return start;
+  function start(code) {
+    ok(markdownLineEnding(code), "expected eol");
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    return factorySpace(effects, ok2, types.linePrefix);
+  }
+}
+var lineEnding;
+var init_line_ending = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  lineEnding = { name: "lineEnding", tokenize: tokenizeLineEnding };
+});
+function tokenizeThematicBreak(effects, ok2, nok) {
+  let size = 0;
+  let marker;
+  return start;
+  function start(code) {
+    effects.enter(types.thematicBreak);
+    return before(code);
+  }
+  function before(code) {
+    ok(code === codes.asterisk || code === codes.dash || code === codes.underscore, "expected `*`, `-`, or `_`");
+    marker = code;
+    return atBreak(code);
+  }
+  function atBreak(code) {
+    if (code === marker) {
+      effects.enter(types.thematicBreakSequence);
+      return sequence(code);
+    }
+    if (size >= constants.thematicBreakMarkerCountMin && (code === codes.eof || markdownLineEnding(code))) {
+      effects.exit(types.thematicBreak);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+  function sequence(code) {
+    if (code === marker) {
+      effects.consume(code);
+      size++;
+      return sequence;
+    }
+    effects.exit(types.thematicBreakSequence);
+    return markdownSpace(code) ? factorySpace(effects, atBreak, types.whitespace)(code) : atBreak(code);
+  }
+}
+var thematicBreak;
+var init_thematic_break = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  thematicBreak = {
+    name: "thematicBreak",
+    tokenize: tokenizeThematicBreak
+  };
+});
+function tokenizeListStart(effects, ok2, nok) {
+  const self = this;
+  const tail = self.events[self.events.length - 1];
+  let initialSize = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
+  let size = 0;
+  return start;
+  function start(code) {
+    ok(self.containerState, "expected state");
+    const kind = self.containerState.type || (code === codes.asterisk || code === codes.plusSign || code === codes.dash ? types.listUnordered : types.listOrdered);
+    if (kind === types.listUnordered ? !self.containerState.marker || code === self.containerState.marker : asciiDigit(code)) {
+      if (!self.containerState.type) {
+        self.containerState.type = kind;
+        effects.enter(kind, { _container: true });
+      }
+      if (kind === types.listUnordered) {
+        effects.enter(types.listItemPrefix);
+        return code === codes.asterisk || code === codes.dash ? effects.check(thematicBreak, nok, atMarker)(code) : atMarker(code);
+      }
+      if (!self.interrupt || code === codes.digit1) {
+        effects.enter(types.listItemPrefix);
+        effects.enter(types.listItemValue);
+        return inside(code);
+      }
+    }
+    return nok(code);
+  }
+  function inside(code) {
+    ok(self.containerState, "expected state");
+    if (asciiDigit(code) && ++size < constants.listItemValueSizeMax) {
+      effects.consume(code);
+      return inside;
+    }
+    if ((!self.interrupt || size < 2) && (self.containerState.marker ? code === self.containerState.marker : code === codes.rightParenthesis || code === codes.dot)) {
+      effects.exit(types.listItemValue);
+      return atMarker(code);
+    }
+    return nok(code);
+  }
+  function atMarker(code) {
+    ok(self.containerState, "expected state");
+    ok(code !== codes.eof, "eof (`null`) is not a marker");
+    effects.enter(types.listItemMarker);
+    effects.consume(code);
+    effects.exit(types.listItemMarker);
+    self.containerState.marker = self.containerState.marker || code;
+    return effects.check(blankLine, self.interrupt ? nok : onBlank, effects.attempt(listItemPrefixWhitespaceConstruct, endOfPrefix, otherPrefix));
+  }
+  function onBlank(code) {
+    ok(self.containerState, "expected state");
+    self.containerState.initialBlankLine = true;
+    initialSize++;
+    return endOfPrefix(code);
+  }
+  function otherPrefix(code) {
+    if (markdownSpace(code)) {
+      effects.enter(types.listItemPrefixWhitespace);
+      effects.consume(code);
+      effects.exit(types.listItemPrefixWhitespace);
+      return endOfPrefix;
+    }
+    return nok(code);
+  }
+  function endOfPrefix(code) {
+    ok(self.containerState, "expected state");
+    self.containerState.size = initialSize + self.sliceSerialize(effects.exit(types.listItemPrefix), true).length;
+    return ok2(code);
+  }
+}
+function tokenizeListContinuation(effects, ok2, nok) {
+  const self = this;
+  ok(self.containerState, "expected state");
+  self.containerState._closeFlow = undefined;
+  return effects.check(blankLine, onBlank, notBlank);
+  function onBlank(code) {
+    ok(self.containerState, "expected state");
+    ok(typeof self.containerState.size === "number", "expected size");
+    self.containerState.furtherBlankLines = self.containerState.furtherBlankLines || self.containerState.initialBlankLine;
+    return factorySpace(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
+  }
+  function notBlank(code) {
+    ok(self.containerState, "expected state");
+    if (self.containerState.furtherBlankLines || !markdownSpace(code)) {
+      self.containerState.furtherBlankLines = undefined;
+      self.containerState.initialBlankLine = undefined;
+      return notInCurrentItem(code);
+    }
+    self.containerState.furtherBlankLines = undefined;
+    self.containerState.initialBlankLine = undefined;
+    return effects.attempt(indentConstruct, ok2, notInCurrentItem)(code);
+  }
+  function notInCurrentItem(code) {
+    ok(self.containerState, "expected state");
+    self.containerState._closeFlow = true;
+    self.interrupt = undefined;
+    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+    return factorySpace(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
+  }
+}
+function tokenizeIndent(effects, ok2, nok) {
+  const self = this;
+  ok(self.containerState, "expected state");
+  ok(typeof self.containerState.size === "number", "expected size");
+  return factorySpace(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
+  function afterPrefix(code) {
+    ok(self.containerState, "expected state");
+    const tail = self.events[self.events.length - 1];
+    return tail && tail[1].type === types.listItemIndent && tail[2].sliceSerialize(tail[1], true).length === self.containerState.size ? ok2(code) : nok(code);
+  }
+}
+function tokenizeListEnd(effects) {
+  ok(this.containerState, "expected state");
+  ok(typeof this.containerState.type === "string", "expected type");
+  effects.exit(this.containerState.type);
+}
+function tokenizeListItemPrefixWhitespace(effects, ok2, nok) {
+  const self = this;
+  ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
+  return factorySpace(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
+  function afterPrefix(code) {
+    const tail = self.events[self.events.length - 1];
+    return !markdownSpace(code) && tail && tail[1].type === types.listItemPrefixWhitespace ? ok2(code) : nok(code);
+  }
+}
+var list;
+var listItemPrefixWhitespaceConstruct;
+var indentConstruct;
+var init_list = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  init_blank_line();
+  init_thematic_break();
+  list = {
+    continuation: { tokenize: tokenizeListContinuation },
+    exit: tokenizeListEnd,
+    name: "list",
+    tokenize: tokenizeListStart
+  };
+  listItemPrefixWhitespaceConstruct = {
+    partial: true,
+    tokenize: tokenizeListItemPrefixWhitespace
+  };
+  indentConstruct = { partial: true, tokenize: tokenizeIndent };
+});
+function resolveToSetextUnderline(events, context) {
+  let index = events.length;
+  let content3;
+  let text;
+  let definition2;
+  while (index--) {
+    if (events[index][0] === "enter") {
+      if (events[index][1].type === types.content) {
+        content3 = index;
+        break;
+      }
+      if (events[index][1].type === types.paragraph) {
+        text = index;
+      }
+    } else {
+      if (events[index][1].type === types.content) {
+        events.splice(index, 1);
+      }
+      if (!definition2 && events[index][1].type === types.definition) {
+        definition2 = index;
+      }
+    }
+  }
+  ok(text !== undefined, "expected a `text` index to be found");
+  ok(content3 !== undefined, "expected a `text` index to be found");
+  ok(events[content3][2] === context, "enter context should be same");
+  ok(events[events.length - 1][2] === context, "enter context should be same");
+  const heading = {
+    type: types.setextHeading,
+    start: { ...events[content3][1].start },
+    end: { ...events[events.length - 1][1].end }
+  };
+  events[text][1].type = types.setextHeadingText;
+  if (definition2) {
+    events.splice(text, 0, ["enter", heading, context]);
+    events.splice(definition2 + 1, 0, ["exit", events[content3][1], context]);
+    events[content3][1].end = { ...events[definition2][1].end };
+  } else {
+    events[content3][1] = heading;
+  }
+  events.push(["exit", heading, context]);
+  return events;
+}
+function tokenizeSetextUnderline(effects, ok2, nok) {
+  const self = this;
+  let marker;
+  return start;
+  function start(code) {
+    let index = self.events.length;
+    let paragraph;
+    ok(code === codes.dash || code === codes.equalsTo, "expected `=` or `-`");
+    while (index--) {
+      if (self.events[index][1].type !== types.lineEnding && self.events[index][1].type !== types.linePrefix && self.events[index][1].type !== types.content) {
+        paragraph = self.events[index][1].type === types.paragraph;
+        break;
+      }
+    }
+    if (!self.parser.lazy[self.now().line] && (self.interrupt || paragraph)) {
+      effects.enter(types.setextHeadingLine);
+      marker = code;
+      return before(code);
+    }
+    return nok(code);
+  }
+  function before(code) {
+    effects.enter(types.setextHeadingLineSequence);
+    return inside(code);
+  }
+  function inside(code) {
+    if (code === marker) {
+      effects.consume(code);
+      return inside;
+    }
+    effects.exit(types.setextHeadingLineSequence);
+    return markdownSpace(code) ? factorySpace(effects, after, types.lineSuffix)(code) : after(code);
+  }
+  function after(code) {
+    if (code === codes.eof || markdownLineEnding(code)) {
+      effects.exit(types.setextHeadingLine);
+      return ok2(code);
+    }
+    return nok(code);
+  }
+}
+var setextUnderline;
+var init_setext_underline = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  setextUnderline = {
+    name: "setextUnderline",
+    resolveTo: resolveToSetextUnderline,
+    tokenize: tokenizeSetextUnderline
+  };
+});
+var init_dev12 = __esm(() => {
+  init_attention();
+  init_autolink();
+  init_blank_line();
+  init_block_quote();
+  init_character_escape();
+  init_character_reference();
+  init_code_fenced();
+  init_code_indented();
+  init_code_text();
+  init_content2();
+  init_definition();
+  init_hard_break_escape();
+  init_heading_atx();
+  init_html_flow();
+  init_html_text();
+  init_label_end();
+  init_label_start_image();
+  init_label_start_link();
+  init_line_ending();
+  init_list();
+  init_setext_underline();
+  init_thematic_break();
+});
+function initializeFlow(effects) {
+  const self = this;
+  const initial = effects.attempt(blankLine, atBlankEnding, effects.attempt(this.parser.constructs.flowInitial, afterConstruct, factorySpace(effects, effects.attempt(this.parser.constructs.flow, afterConstruct, effects.attempt(content2, afterConstruct)), types.linePrefix)));
+  return initial;
+  function atBlankEnding(code) {
+    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
+    if (code === codes.eof) {
+      effects.consume(code);
+      return;
+    }
+    effects.enter(types.lineEndingBlank);
+    effects.consume(code);
+    effects.exit(types.lineEndingBlank);
+    self.currentConstruct = undefined;
+    return initial;
+  }
+  function afterConstruct(code) {
+    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
+    if (code === codes.eof) {
+      effects.consume(code);
+      return;
+    }
+    effects.enter(types.lineEnding);
+    effects.consume(code);
+    effects.exit(types.lineEnding);
+    self.currentConstruct = undefined;
+    return initial;
+  }
+}
+var flow;
+var init_flow = __esm(() => {
+  init_development();
+  init_dev12();
+  init_dev5();
+  init_dev4();
+  init_default();
+  flow = { tokenize: initializeFlow };
+});
+function initializeFactory(field) {
+  return {
+    resolveAll: createResolver(field === "text" ? resolveAllLineSuffixes : undefined),
+    tokenize: initializeText
+  };
+  function initializeText(effects) {
+    const self = this;
+    const constructs2 = this.parser.constructs[field];
+    const text2 = effects.attempt(constructs2, start, notText);
+    return start;
+    function start(code) {
+      return atBreak(code) ? text2(code) : notText(code);
+    }
+    function notText(code) {
+      if (code === codes.eof) {
+        effects.consume(code);
+        return;
+      }
+      effects.enter(types.data);
+      effects.consume(code);
+      return data;
+    }
+    function data(code) {
+      if (atBreak(code)) {
+        effects.exit(types.data);
+        return text2(code);
+      }
+      effects.consume(code);
+      return data;
+    }
+    function atBreak(code) {
+      if (code === codes.eof) {
+        return true;
+      }
+      const list2 = constructs2[code];
+      let index = -1;
+      if (list2) {
+        ok(Array.isArray(list2), "expected `disable.null` to be populated");
+        while (++index < list2.length) {
+          const item = list2[index];
+          if (!item.previous || item.previous.call(self, self.previous)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+  }
+}
+function createResolver(extraResolver) {
+  return resolveAllText;
+  function resolveAllText(events, context) {
+    let index = -1;
+    let enter;
+    while (++index <= events.length) {
+      if (enter === undefined) {
+        if (events[index] && events[index][1].type === types.data) {
+          enter = index;
+          index++;
+        }
+      } else if (!events[index] || events[index][1].type !== types.data) {
+        if (index !== enter + 2) {
+          events[enter][1].end = events[index - 1][1].end;
+          events.splice(enter + 2, index - enter - 2);
+          index = enter + 2;
+        }
+        enter = undefined;
+      }
+    }
+    return extraResolver ? extraResolver(events, context) : events;
+  }
+}
+function resolveAllLineSuffixes(events, context) {
+  let eventIndex = 0;
+  while (++eventIndex <= events.length) {
+    if ((eventIndex === events.length || events[eventIndex][1].type === types.lineEnding) && events[eventIndex - 1][1].type === types.data) {
+      const data = events[eventIndex - 1][1];
+      const chunks = context.sliceStream(data);
+      let index = chunks.length;
+      let bufferIndex = -1;
+      let size = 0;
+      let tabs;
+      while (index--) {
+        const chunk = chunks[index];
+        if (typeof chunk === "string") {
+          bufferIndex = chunk.length;
+          while (chunk.charCodeAt(bufferIndex - 1) === codes.space) {
+            size++;
+            bufferIndex--;
+          }
+          if (bufferIndex)
+            break;
+          bufferIndex = -1;
+        } else if (chunk === codes.horizontalTab) {
+          tabs = true;
+          size++;
+        } else if (chunk === codes.virtualSpace) {} else {
+          index++;
+          break;
+        }
+      }
+      if (context._contentTypeTextTrailing && eventIndex === events.length) {
+        size = 0;
+      }
+      if (size) {
+        const token = {
+          type: eventIndex === events.length || tabs || size < constants.hardBreakPrefixSizeMin ? types.lineSuffix : types.hardBreakTrailing,
+          start: {
+            _bufferIndex: index ? bufferIndex : data.start._bufferIndex + bufferIndex,
+            _index: data.start._index + index,
+            line: data.end.line,
+            column: data.end.column - size,
+            offset: data.end.offset - size
+          },
+          end: { ...data.end }
+        };
+        data.end = { ...token.start };
+        if (data.start.offset === data.end.offset) {
+          Object.assign(data, token);
+        } else {
+          events.splice(eventIndex, 0, ["enter", token, context], ["exit", token, context]);
+          eventIndex += 2;
+        }
+      }
+      eventIndex++;
+    }
+  }
+  return events;
+}
+var resolver;
+var string;
+var text;
+var init_text = __esm(() => {
+  init_development();
+  init_default();
+  resolver = { resolveAll: createResolver() };
+  string = initializeFactory("string");
+  text = initializeFactory("text");
+});
+var exports_constructs = {};
+__export(exports_constructs, {
+  attentionMarkers: () => attentionMarkers,
+  contentInitial: () => contentInitial,
+  disable: () => disable,
+  document: () => document3,
+  flow: () => flow2,
+  flowInitial: () => flowInitial,
+  insideSpan: () => insideSpan,
+  string: () => string2,
+  text: () => text2
+});
+var document3;
+var contentInitial;
+var flowInitial;
+var flow2;
+var string2;
+var text2;
+var insideSpan;
+var attentionMarkers;
+var disable;
+var init_constructs = __esm(() => {
+  init_dev12();
+  init_default();
+  init_text();
+  document3 = {
+    [codes.asterisk]: list,
+    [codes.plusSign]: list,
+    [codes.dash]: list,
+    [codes.digit0]: list,
+    [codes.digit1]: list,
+    [codes.digit2]: list,
+    [codes.digit3]: list,
+    [codes.digit4]: list,
+    [codes.digit5]: list,
+    [codes.digit6]: list,
+    [codes.digit7]: list,
+    [codes.digit8]: list,
+    [codes.digit9]: list,
+    [codes.greaterThan]: blockQuote
+  };
+  contentInitial = {
+    [codes.leftSquareBracket]: definition
+  };
+  flowInitial = {
+    [codes.horizontalTab]: codeIndented,
+    [codes.virtualSpace]: codeIndented,
+    [codes.space]: codeIndented
+  };
+  flow2 = {
+    [codes.numberSign]: headingAtx,
+    [codes.asterisk]: thematicBreak,
+    [codes.dash]: [setextUnderline, thematicBreak],
+    [codes.lessThan]: htmlFlow,
+    [codes.equalsTo]: setextUnderline,
+    [codes.underscore]: thematicBreak,
+    [codes.graveAccent]: codeFenced,
+    [codes.tilde]: codeFenced
+  };
+  string2 = {
+    [codes.ampersand]: characterReference,
+    [codes.backslash]: characterEscape
+  };
+  text2 = {
+    [codes.carriageReturn]: lineEnding,
+    [codes.lineFeed]: lineEnding,
+    [codes.carriageReturnLineFeed]: lineEnding,
+    [codes.exclamationMark]: labelStartImage,
+    [codes.ampersand]: characterReference,
+    [codes.asterisk]: attention,
+    [codes.lessThan]: [autolink, htmlText],
+    [codes.leftSquareBracket]: labelStartLink,
+    [codes.backslash]: [hardBreakEscape, characterEscape],
+    [codes.rightSquareBracket]: labelEnd,
+    [codes.underscore]: attention,
+    [codes.graveAccent]: codeText
+  };
+  insideSpan = { null: [attention, resolver] };
+  attentionMarkers = { null: [codes.asterisk, codes.underscore] };
+  disable = { null: [] };
+});
 var require_ms = __commonJS(function(exports, module) {
   var s = 1000;
   var m = s * 60;
@@ -709,6455 +7504,6 @@ var require_src = __commonJS(function(exports, module) {
     module.exports = require_node();
   }
 });
-var SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
-function readJson(filePath) {
-  if (!existsSync(filePath))
-    return {};
-  const content = readFileSync(filePath, "utf8").trim();
-  if (!content)
-    return {};
-  try {
-    return JSON.parse(content);
-  } catch (error) {
-    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
-  }
-}
-class CoordinationError extends Error {
-  code;
-  details;
-  constructor(code, message, details = {}) {
-    super(message);
-    this.name = "CoordinationError";
-    this.code = code;
-    this.details = details;
-  }
-}
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isNonEmptyString(value) {
-  return typeof value === "string" && value.trim() !== "";
-}
-var writeAuthorizations = new AsyncLocalStorage;
-var ASSIGNMENT_INTENT_FIELDS = [
-  "execution_scope",
-  "execute_as",
-  "delegation",
-  "control_harness_root",
-  "workflow_id",
-  "plan_id",
-  "plan_path",
-  "worktree_path",
-  "working_branch",
-  "sdd_dir",
-  "qa_gate",
-  "findings_cleanup",
-  "prepare_gate"
-];
-var HANDOFF_STATES = [
-  "submitted",
-  "accepted",
-  "returned",
-  "integrating",
-  "merged",
-  "completed"
-];
-var PLAN_PROGRESS_STATUSES = ["InProgress", "InReview", "Blocked"];
-var SHA256_HEX = /^[0-9a-f]{64}$/;
-var GIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-var HASH_RE = /^sha256:[0-9a-f]{64}$/;
-function invalid(code, message) {
-  return { ok: false, severity: "high", code, message };
-}
-function validateBinding(value, what) {
-  if (!isPlainObject(value))
-    return [invalid("coordination.row.binding-shape", `${what} must be an object`)];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !["session_id", "session_file", "bound_at"].includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.binding-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  if (!isNonEmptyString(value.session_id)) {
-    violations.push(invalid("coordination.row.binding-field", `${what}.session_id must be a non-empty string`));
-  }
-  if (!isNonEmptyString(value.session_file) || !isAbsolute(String(value.session_file))) {
-    violations.push(invalid("coordination.row.binding-field", `${what}.session_file must be an absolute path`));
-  }
-  if (!isNonEmptyString(value.bound_at)) {
-    violations.push(invalid("coordination.row.binding-field", `${what}.bound_at must be a timestamp`));
-  }
-  return violations;
-}
-function validateEvidenceRef(value, what) {
-  if (!isPlainObject(value))
-    return [invalid("coordination.row.evidence-shape", `${what} must be a hash-pinned reference`)];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !["path", "sha256"].includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.evidence-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  if (!isNonEmptyString(value.path) || !isAbsolute(String(value.path))) {
-    violations.push(invalid("coordination.row.evidence-field", `${what}.path must be an absolute path`));
-  }
-  if (!isNonEmptyString(value.sha256) || !SHA256_HEX.test(String(value.sha256))) {
-    violations.push(invalid("coordination.row.evidence-field", `${what}.sha256 must be 64 lowercase hex`));
-  }
-  return violations;
-}
-function validatePlanProgress(value, what = "coordination.progress") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.row.progress-shape", `${what} must be an object`)];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !["status", "summary", "evidence_paths", "track_branches"].includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.progress-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  if (!PLAN_PROGRESS_STATUSES.includes(value.status)) {
-    violations.push(invalid("coordination.row.progress-field", `${what}.status must be one of ${PLAN_PROGRESS_STATUSES.join(", ")}`));
-  }
-  if (!isNonEmptyString(value.summary)) {
-    violations.push(invalid("coordination.row.progress-field", `${what}.summary must be a non-empty string`));
-  }
-  if (!Array.isArray(value.evidence_paths) || !value.evidence_paths.every(isNonEmptyString)) {
-    violations.push(invalid("coordination.row.progress-field", `${what}.evidence_paths must be an array of paths`));
-  }
-  if (value.track_branches !== undefined) {
-    if (!Array.isArray(value.track_branches) || !value.track_branches.every(isNonEmptyString)) {
-      violations.push(invalid("coordination.row.progress-field", `${what}.track_branches must be an array of branch names`));
-    }
-  }
-  return violations;
-}
-function validatePlanHandoff(value, what = "coordination.handoff", route = "integration") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.row.handoff-shape", `${what} must be an object`)];
-  const allowed = [
-    "id",
-    "attempt",
-    "state",
-    "submitted_by",
-    "submitted_at",
-    "source_branch",
-    "source_sha",
-    "worktree_path",
-    "review_base",
-    "review_head",
-    "qc",
-    "qa",
-    "accepted_by",
-    "accepted_at",
-    "returned_at",
-    "return_reason",
-    "integration",
-    "completed_at"
-  ];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.handoff-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  const required = [
-    "id",
-    "attempt",
-    "state",
-    "submitted_by",
-    "submitted_at",
-    "source_branch",
-    "source_sha",
-    "worktree_path",
-    "review_base",
-    "review_head"
-  ];
-  for (const key of required) {
-    if (value[key] === undefined) {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} is required`));
-    }
-  }
-  if (!Number.isInteger(value.attempt) || value.attempt < 1) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.attempt must be a positive integer`));
-  }
-  if (!HANDOFF_STATES.includes(value.state)) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.state must be one of ${HANDOFF_STATES.join(", ")}`));
-  }
-  if (value.id !== undefined && !isNonEmptyString(value.id)) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.id must be a non-empty string`));
-  }
-  for (const key of ["source_sha", "review_base", "review_head"]) {
-    if (value[key] !== undefined && !GIT_SHA.test(String(value[key]))) {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a 40-hex git object id`));
-    }
-  }
-  for (const key of ["submitted_at", "accepted_at", "returned_at", "completed_at"]) {
-    if (value[key] !== undefined && !isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.${key} must be a timestamp`));
-    }
-  }
-  if (value.worktree_path !== undefined && (!isNonEmptyString(value.worktree_path) || !isAbsolute(String(value.worktree_path)))) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.worktree_path must be an absolute path`));
-  }
-  if (value.qc !== undefined) {
-    if (!isPlainObject(value.qc)) {
-      violations.push(invalid("coordination.row.handoff-shape", `${what}.qc must be an object`));
-    } else {
-      const qc = value.qc;
-      const qcExtra = Object.keys(qc).filter((key) => !["decision", "reports", "consolidated"].includes(key));
-      if (qcExtra.length > 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc has unexpected key(s): ${qcExtra.join(", ")}`));
-      }
-      if (!isNonEmptyString(qc.decision)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc.decision must be a non-empty string`));
-      }
-      if (!Array.isArray(qc.reports) || qc.reports.length === 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc.reports must be a non-empty array`));
-      } else {
-        qc.reports.forEach((ref, index) => {
-          violations.push(...validateEvidenceRef(ref, `${what}.qc.reports[${index}]`));
-        });
-      }
-      violations.push(...validateEvidenceRef(qc.consolidated, `${what}.qc.consolidated`));
-    }
-  }
-  if (value.qa !== undefined) {
-    if (!isPlainObject(value.qa)) {
-      violations.push(invalid("coordination.row.handoff-shape", `${what}.qa must be an object`));
-    } else {
-      const qa = value.qa;
-      const qaExtra = Object.keys(qa).filter((key) => !["gate", "decision", "report"].includes(key));
-      if (qaExtra.length > 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa has unexpected key(s): ${qaExtra.join(", ")}`));
-      }
-      if (!isNonEmptyString(qa.gate)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa.gate must be a non-empty string`));
-      }
-      if (!isNonEmptyString(qa.decision)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa.decision must be a non-empty string`));
-      }
-      violations.push(...validateEvidenceRef(qa.report, `${what}.qa.report`));
-    }
-  }
-  if (value.integration !== undefined) {
-    if (!isPlainObject(value.integration)) {
-      violations.push(invalid("coordination.row.handoff-shape", `${what}.integration must be an object`));
-    } else {
-      const integration = value.integration;
-      const integrationAllowed = [
-        "target_branch",
-        "worktree_path",
-        "base_sha",
-        "started_at",
-        "result_sha",
-        "verified_at"
-      ];
-      const integrationExtra = Object.keys(integration).filter((key) => !integrationAllowed.includes(key));
-      if (integrationExtra.length > 0) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.integration has unexpected key(s): ${integrationExtra.join(", ")}`));
-      }
-      for (const key of ["target_branch", "worktree_path", "base_sha", "started_at"]) {
-        if (!isNonEmptyString(integration[key])) {
-          violations.push(invalid("coordination.row.handoff-field", `${what}.integration.${key} is required`));
-        }
-      }
-      for (const key of ["base_sha", "result_sha"]) {
-        if (integration[key] !== undefined && !GIT_SHA.test(String(integration[key]))) {
-          violations.push(invalid("coordination.row.handoff-field", `${what}.integration.${key} must be a 40-hex git object id`));
-        }
-      }
-      if (integration.result_sha !== undefined && integration.verified_at === undefined) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.integration.result_sha requires verified_at`));
-      }
-    }
-  }
-  if ((value.state === "integrating" || value.state === "merged" || value.state === "completed") && value.integration === undefined) {
-    if ((route === "standalone-development" || route === "standalone-report-only") && value.state === "completed") {
-      if (value.completed_at === undefined) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.state completed requires completed_at for a standalone handoff`));
-      }
-      if (!isNonEmptyString(value.accepted_at)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.accepted_at is required for a standalone completed handoff`));
-      }
-      if (!isNonEmptyString(value.accepted_by)) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.accepted_by is required for a standalone completed handoff`));
-      }
-      if (value.qc === undefined) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qc is required for a standalone completed handoff`));
-      }
-      if (value.qa === undefined) {
-        violations.push(invalid("coordination.row.handoff-field", `${what}.qa is required for a standalone completed handoff`));
-      }
-    } else {
-      violations.push(invalid("coordination.row.handoff-field", `${what}.state ${String(value.state)} requires integration`));
-    }
-  }
-  return violations;
-}
-function validatePreparedCoordination(value, what = "coordination.prepared") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.row.prepared-shape", `${what} must be an object`)];
-  const allowed = [
-    "assignment_path",
-    "assignment_sha256",
-    "plan_sha256",
-    "qa_gate",
-    "findings_cleanup",
-    "assignment_intent",
-    "prepared_by",
-    "prepared_at"
-  ];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.prepared-field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  for (const key of allowed) {
-    if (key !== "assignment_intent" && !isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} is required`));
-    }
-  }
-  const intent = value.assignment_intent;
-  if (intent !== undefined) {
-    if (!isPlainObject(intent)) {
-      violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent must be an object`));
-    } else {
-      const missing = ASSIGNMENT_INTENT_FIELDS.filter((field) => !isNonEmptyString(intent[field]));
-      const unknown = Object.keys(intent).filter((key) => !ASSIGNMENT_INTENT_FIELDS.includes(key));
-      if (missing.length > 0) {
-        violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent is missing: ${missing.join(", ")}`));
-      }
-      if (unknown.length > 0) {
-        violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_intent has unexpected key(s): ${unknown.join(", ")}`));
-      }
-    }
-  }
-  if (value.assignment_path !== undefined && !isAbsolute(String(value.assignment_path))) {
-    violations.push(invalid("coordination.row.prepared-field", `${what}.assignment_path must be absolute`));
-  }
-  for (const key of ["assignment_sha256", "plan_sha256"]) {
-    if (value[key] !== undefined && !SHA256_HEX.test(String(value[key]))) {
-      violations.push(invalid("coordination.row.prepared-field", `${what}.${key} must be 64 lowercase hex`));
-    }
-  }
-  return violations;
-}
-function validateRowCoordination(value, what = "coordination", route = "integration") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.row.shape", `${what} must be an object`)];
-  const allowed = ["revision", "prepared", "session", "progress", "handoff"];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.row.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  if (!Number.isInteger(value.revision) || value.revision < 0) {
-    violations.push(invalid("coordination.row.revision", `${what}.revision must be a non-negative integer`));
-  }
-  if (value.prepared !== undefined)
-    violations.push(...validatePreparedCoordination(value.prepared, `${what}.prepared`));
-  if (value.session !== undefined)
-    violations.push(...validateBinding(value.session, `${what}.session`));
-  if (value.progress !== undefined)
-    violations.push(...validatePlanProgress(value.progress, `${what}.progress`));
-  if (value.handoff !== undefined)
-    violations.push(...validatePlanHandoff(value.handoff, `${what}.handoff`, route));
-  if (value.handoff !== undefined && value.session === undefined) {
-    violations.push(invalid("coordination.row.handoff-field", `${what}.handoff requires a bound plan session`));
-  }
-  return violations;
-}
-function validateCoordinationIdentityRecovery(value, what = "coordination.identity_recoveries[]") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.recovery.shape", `${what} must be an object`)];
-  const allowed = [
-    "operation_id",
-    "request_hash",
-    "workflow_id",
-    "prior_session_id",
-    "session_id",
-    "authorization_ref",
-    "reason",
-    "stopped_session_ids",
-    "snapshot_version_before",
-    "compass_version",
-    "recovered_at"
-  ];
-  const violations = [];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.recovery.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  for (const key of [
-    "operation_id",
-    "workflow_id",
-    "prior_session_id",
-    "session_id",
-    "authorization_ref",
-    "reason",
-    "recovered_at"
-  ]) {
-    if (!isNonEmptyString(value[key])) {
-      violations.push(invalid("coordination.recovery.field", `${what}.${key} must be a non-empty string`));
-    }
-  }
-  if (typeof value.request_hash !== "string" || !SHA256_HEX.test(value.request_hash)) {
-    violations.push(invalid("coordination.recovery.hash", `${what}.request_hash must be a bare sha256 hex digest`));
-  }
-  for (const key of ["snapshot_version_before", "compass_version"]) {
-    if (typeof value[key] !== "string" || !HASH_RE.test(value[key])) {
-      violations.push(invalid("coordination.recovery.version", `${what}.${key} must be a "sha256:<64 hex>" version`));
-    }
-  }
-  const stopped = value.stopped_session_ids;
-  if (!Array.isArray(stopped) || stopped.length === 0) {
-    violations.push(invalid("coordination.recovery.stopped", `${what}.stopped_session_ids must be a non-empty array`));
-  } else if (stopped.some((entry) => !isNonEmptyString(entry))) {
-    violations.push(invalid("coordination.recovery.stopped", `${what}.stopped_session_ids entries must be non-empty strings`));
-  }
-  return violations;
-}
-function validateSnapshotCoordination(value, what = "coordination") {
-  if (!isPlainObject(value))
-    return [invalid("coordination.snapshot.shape", `${what} must be an object`)];
-  const violations = [];
-  const allowed = ["coordinator", "identity_recoveries", "self_amendments"];
-  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (extra.length > 0) {
-    violations.push(invalid("coordination.snapshot.field", `${what} has unexpected key(s): ${extra.join(", ")}`));
-  }
-  if (value.coordinator === undefined) {
-    violations.push(invalid("coordination.snapshot.field", `${what}.coordinator is required`));
-  } else {
-    violations.push(...validateBinding(value.coordinator, `${what}.coordinator`));
-  }
-  if (value.identity_recoveries !== undefined) {
-    if (!Array.isArray(value.identity_recoveries)) {
-      violations.push(invalid("coordination.snapshot.field", `${what}.identity_recoveries must be an array`));
-    } else {
-      value.identity_recoveries.forEach((entry, index) => {
-        violations.push(...validateCoordinationIdentityRecovery(entry, `${what}.identity_recoveries[${String(index)}]`));
-      });
-    }
-  }
-  return violations;
-}
-var ROOT_KINDS = {
-  repository: true,
-  harness: true,
-  plans: true,
-  iterations: true,
-  specs: true,
-  knowledge: true,
-  projects: true
-};
-class CatalogError extends Error {
-  code;
-  constructor(code, message) {
-    super(`[${code}] ${message}`);
-    this.name = "CatalogError";
-    this.code = code;
-  }
-}
-function catalogRootDir(context, rootKind) {
-  if (!Object.hasOwn(ROOT_KINDS, rootKind)) {
-    throw new CatalogError("catalog.path-refused", `"${String(rootKind)}" is not a configured catalog root kind; expected one of ${Object.keys(ROOT_KINDS).join(", ")}`);
-  }
-  const start = resolvePath(context.harnessDir);
-  const harness = resolveProcessHarnessDir(start) ?? start;
-  switch (rootKind) {
-    case "repository":
-      return dirname3(harness);
-    case "harness":
-      return harness;
-    case "plans":
-      return resolvePlanDir(harness);
-    case "iterations":
-      return resolveIterationDir(harness);
-    case "specs":
-      return resolveSpecsDir(harness, { create: false });
-    case "knowledge":
-      return resolveKnowledgeDir(harness);
-    case "projects":
-      return resolveProjectDir(harness, { harnessDir: harness });
-  }
-}
-var MSTARC_FILE = ".mstarc";
-var MSTARC_SECTION = "config";
-var MSTARC_HARNESS_DIR_KEY = "harness_dir";
-var MSTARC_PLAN_DIR_KEY = "plan_dir";
-var MSTARC_SDD_DIR_KEY = "sdd_dir";
-var MSTARC_ITERATION_DIR_KEY = "iteration_dir";
-var MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir";
-var MSTARC_SPECS_DIR_KEY = "specs_dir";
-var MSTARC_WORKFLOW_DIR_KEY = "workflow_dir";
-var MSTARC_PROJECT_DIR_KEY = "project_dir";
-var MSTARC_ENFORCEMENT_KEY = "enforcement";
-var CONFIG_KEYS = {
-  [MSTARC_HARNESS_DIR_KEY]: "harnessDir",
-  [MSTARC_PLAN_DIR_KEY]: "planDir",
-  [MSTARC_SDD_DIR_KEY]: "sddDir",
-  [MSTARC_ITERATION_DIR_KEY]: "iterationDir",
-  [MSTARC_KNOWLEDGE_DIR_KEY]: "knowledgeDir",
-  [MSTARC_SPECS_DIR_KEY]: "specsDir",
-  [MSTARC_WORKFLOW_DIR_KEY]: "workflowDir",
-  [MSTARC_PROJECT_DIR_KEY]: "projectDir",
-  [MSTARC_ENFORCEMENT_KEY]: "enforcement",
-  jev_mode: "jevMode",
-  jev_transport: "jevTransport"
-};
-function parseMstarc(text) {
-  let section = null;
-  const out = {};
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line === "" || line.startsWith("#") || line.startsWith(";"))
-      continue;
-    const header = /^\[([^\]]+)\]$/.exec(line);
-    if (header !== null) {
-      section = header[1].trim();
-      continue;
-    }
-    if (section !== MSTARC_SECTION)
-      continue;
-    const eq = line.indexOf("=");
-    if (eq === -1)
-      continue;
-    const field = CONFIG_KEYS[line.slice(0, eq).trim()];
-    if (field === undefined)
-      continue;
-    const value = line.slice(eq + 1).trim();
-    if (value === "") {
-      if (field === "jevMode" || field === "jevTransport")
-        delete out[field];
-      continue;
-    }
-    if (field === "enforcement" && value !== "hard" && value !== "soft")
-      continue;
-    out[field] = value;
-  }
-  return out;
-}
-function isFile(file) {
-  try {
-    return statSync(file).isFile();
-  } catch {
-    return false;
-  }
-}
-function findMstarc(startDir, boundary) {
-  let dir = resolve3(startDir);
-  const bound = resolve3(boundary);
-  for (;; ) {
-    if (!isAtOrBelow(dir, bound))
-      return null;
-    const candidate = join4(dir, MSTARC_FILE);
-    if (isFile(candidate))
-      return candidate;
-    if (dir === bound)
-      return null;
-    const parent = dirname4(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
-  }
-}
-function loadMstarc(startDir, boundary) {
-  const file = findMstarc(startDir, boundary);
-  if (file === null)
-    return null;
-  return { file, dir: dirname4(file), config: parseMstarc(readFileSync3(file, "utf8")) };
-}
-function isAtOrBelow(dir, root) {
-  const rel = relative(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute2(rel);
-}
-var codesWarned = new Set;
-
-class AssertionError extends Error {
-  name = "Assertion";
-  code = "ERR_ASSERTION";
-  constructor(message, actual, expected, operator, generated) {
-    super(message);
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor);
-    }
-    this.actual = actual;
-    this.expected = expected;
-    this.generated = generated;
-    this.operator = operator;
-  }
-}
-function ok(value, message) {
-  assert(Boolean(value), false, true, "ok", "Expected value to be truthy", message);
-}
-function assert(bool, actual, expected, operator, defaultMessage, userMessage) {
-  if (!bool) {
-    throw userMessage instanceof Error ? userMessage : new AssertionError(userMessage || defaultMessage, actual, expected, operator, !userMessage);
-  }
-}
-var emptyOptions = {};
-function toString(value, options) {
-  const settings = options || emptyOptions;
-  const includeImageAlt = typeof settings.includeImageAlt === "boolean" ? settings.includeImageAlt : true;
-  const includeHtml = typeof settings.includeHtml === "boolean" ? settings.includeHtml : true;
-  return one(value, includeImageAlt, includeHtml);
-}
-function one(value, includeImageAlt, includeHtml) {
-  if (node(value)) {
-    if ("value" in value) {
-      return value.type === "html" && !includeHtml ? "" : value.value;
-    }
-    if (includeImageAlt && "alt" in value && value.alt) {
-      return value.alt;
-    }
-    if ("children" in value) {
-      return all(value.children, includeImageAlt, includeHtml);
-    }
-  }
-  if (Array.isArray(value)) {
-    return all(value, includeImageAlt, includeHtml);
-  }
-  return "";
-}
-function all(values, includeImageAlt, includeHtml) {
-  const result = [];
-  let index = -1;
-  while (++index < values.length) {
-    result[index] = one(values[index], includeImageAlt, includeHtml);
-  }
-  return result.join("");
-}
-function node(value) {
-  return Boolean(value && typeof value === "object");
-}
-var characterEntities = {
-  AElig: "Æ",
-  AMP: "&",
-  Aacute: "Á",
-  Abreve: "Ă",
-  Acirc: "Â",
-  Acy: "А",
-  Afr: "\uD835\uDD04",
-  Agrave: "À",
-  Alpha: "Α",
-  Amacr: "Ā",
-  And: "⩓",
-  Aogon: "Ą",
-  Aopf: "\uD835\uDD38",
-  ApplyFunction: "⁡",
-  Aring: "Å",
-  Ascr: "\uD835\uDC9C",
-  Assign: "≔",
-  Atilde: "Ã",
-  Auml: "Ä",
-  Backslash: "∖",
-  Barv: "⫧",
-  Barwed: "⌆",
-  Bcy: "Б",
-  Because: "∵",
-  Bernoullis: "ℬ",
-  Beta: "Β",
-  Bfr: "\uD835\uDD05",
-  Bopf: "\uD835\uDD39",
-  Breve: "˘",
-  Bscr: "ℬ",
-  Bumpeq: "≎",
-  CHcy: "Ч",
-  COPY: "©",
-  Cacute: "Ć",
-  Cap: "⋒",
-  CapitalDifferentialD: "ⅅ",
-  Cayleys: "ℭ",
-  Ccaron: "Č",
-  Ccedil: "Ç",
-  Ccirc: "Ĉ",
-  Cconint: "∰",
-  Cdot: "Ċ",
-  Cedilla: "¸",
-  CenterDot: "·",
-  Cfr: "ℭ",
-  Chi: "Χ",
-  CircleDot: "⊙",
-  CircleMinus: "⊖",
-  CirclePlus: "⊕",
-  CircleTimes: "⊗",
-  ClockwiseContourIntegral: "∲",
-  CloseCurlyDoubleQuote: "”",
-  CloseCurlyQuote: "’",
-  Colon: "∷",
-  Colone: "⩴",
-  Congruent: "≡",
-  Conint: "∯",
-  ContourIntegral: "∮",
-  Copf: "ℂ",
-  Coproduct: "∐",
-  CounterClockwiseContourIntegral: "∳",
-  Cross: "⨯",
-  Cscr: "\uD835\uDC9E",
-  Cup: "⋓",
-  CupCap: "≍",
-  DD: "ⅅ",
-  DDotrahd: "⤑",
-  DJcy: "Ђ",
-  DScy: "Ѕ",
-  DZcy: "Џ",
-  Dagger: "‡",
-  Darr: "↡",
-  Dashv: "⫤",
-  Dcaron: "Ď",
-  Dcy: "Д",
-  Del: "∇",
-  Delta: "Δ",
-  Dfr: "\uD835\uDD07",
-  DiacriticalAcute: "´",
-  DiacriticalDot: "˙",
-  DiacriticalDoubleAcute: "˝",
-  DiacriticalGrave: "`",
-  DiacriticalTilde: "˜",
-  Diamond: "⋄",
-  DifferentialD: "ⅆ",
-  Dopf: "\uD835\uDD3B",
-  Dot: "¨",
-  DotDot: "⃜",
-  DotEqual: "≐",
-  DoubleContourIntegral: "∯",
-  DoubleDot: "¨",
-  DoubleDownArrow: "⇓",
-  DoubleLeftArrow: "⇐",
-  DoubleLeftRightArrow: "⇔",
-  DoubleLeftTee: "⫤",
-  DoubleLongLeftArrow: "⟸",
-  DoubleLongLeftRightArrow: "⟺",
-  DoubleLongRightArrow: "⟹",
-  DoubleRightArrow: "⇒",
-  DoubleRightTee: "⊨",
-  DoubleUpArrow: "⇑",
-  DoubleUpDownArrow: "⇕",
-  DoubleVerticalBar: "∥",
-  DownArrow: "↓",
-  DownArrowBar: "⤓",
-  DownArrowUpArrow: "⇵",
-  DownBreve: "̑",
-  DownLeftRightVector: "⥐",
-  DownLeftTeeVector: "⥞",
-  DownLeftVector: "↽",
-  DownLeftVectorBar: "⥖",
-  DownRightTeeVector: "⥟",
-  DownRightVector: "⇁",
-  DownRightVectorBar: "⥗",
-  DownTee: "⊤",
-  DownTeeArrow: "↧",
-  Downarrow: "⇓",
-  Dscr: "\uD835\uDC9F",
-  Dstrok: "Đ",
-  ENG: "Ŋ",
-  ETH: "Ð",
-  Eacute: "É",
-  Ecaron: "Ě",
-  Ecirc: "Ê",
-  Ecy: "Э",
-  Edot: "Ė",
-  Efr: "\uD835\uDD08",
-  Egrave: "È",
-  Element: "∈",
-  Emacr: "Ē",
-  EmptySmallSquare: "◻",
-  EmptyVerySmallSquare: "▫",
-  Eogon: "Ę",
-  Eopf: "\uD835\uDD3C",
-  Epsilon: "Ε",
-  Equal: "⩵",
-  EqualTilde: "≂",
-  Equilibrium: "⇌",
-  Escr: "ℰ",
-  Esim: "⩳",
-  Eta: "Η",
-  Euml: "Ë",
-  Exists: "∃",
-  ExponentialE: "ⅇ",
-  Fcy: "Ф",
-  Ffr: "\uD835\uDD09",
-  FilledSmallSquare: "◼",
-  FilledVerySmallSquare: "▪",
-  Fopf: "\uD835\uDD3D",
-  ForAll: "∀",
-  Fouriertrf: "ℱ",
-  Fscr: "ℱ",
-  GJcy: "Ѓ",
-  GT: ">",
-  Gamma: "Γ",
-  Gammad: "Ϝ",
-  Gbreve: "Ğ",
-  Gcedil: "Ģ",
-  Gcirc: "Ĝ",
-  Gcy: "Г",
-  Gdot: "Ġ",
-  Gfr: "\uD835\uDD0A",
-  Gg: "⋙",
-  Gopf: "\uD835\uDD3E",
-  GreaterEqual: "≥",
-  GreaterEqualLess: "⋛",
-  GreaterFullEqual: "≧",
-  GreaterGreater: "⪢",
-  GreaterLess: "≷",
-  GreaterSlantEqual: "⩾",
-  GreaterTilde: "≳",
-  Gscr: "\uD835\uDCA2",
-  Gt: "≫",
-  HARDcy: "Ъ",
-  Hacek: "ˇ",
-  Hat: "^",
-  Hcirc: "Ĥ",
-  Hfr: "ℌ",
-  HilbertSpace: "ℋ",
-  Hopf: "ℍ",
-  HorizontalLine: "─",
-  Hscr: "ℋ",
-  Hstrok: "Ħ",
-  HumpDownHump: "≎",
-  HumpEqual: "≏",
-  IEcy: "Е",
-  IJlig: "Ĳ",
-  IOcy: "Ё",
-  Iacute: "Í",
-  Icirc: "Î",
-  Icy: "И",
-  Idot: "İ",
-  Ifr: "ℑ",
-  Igrave: "Ì",
-  Im: "ℑ",
-  Imacr: "Ī",
-  ImaginaryI: "ⅈ",
-  Implies: "⇒",
-  Int: "∬",
-  Integral: "∫",
-  Intersection: "⋂",
-  InvisibleComma: "⁣",
-  InvisibleTimes: "⁢",
-  Iogon: "Į",
-  Iopf: "\uD835\uDD40",
-  Iota: "Ι",
-  Iscr: "ℐ",
-  Itilde: "Ĩ",
-  Iukcy: "І",
-  Iuml: "Ï",
-  Jcirc: "Ĵ",
-  Jcy: "Й",
-  Jfr: "\uD835\uDD0D",
-  Jopf: "\uD835\uDD41",
-  Jscr: "\uD835\uDCA5",
-  Jsercy: "Ј",
-  Jukcy: "Є",
-  KHcy: "Х",
-  KJcy: "Ќ",
-  Kappa: "Κ",
-  Kcedil: "Ķ",
-  Kcy: "К",
-  Kfr: "\uD835\uDD0E",
-  Kopf: "\uD835\uDD42",
-  Kscr: "\uD835\uDCA6",
-  LJcy: "Љ",
-  LT: "<",
-  Lacute: "Ĺ",
-  Lambda: "Λ",
-  Lang: "⟪",
-  Laplacetrf: "ℒ",
-  Larr: "↞",
-  Lcaron: "Ľ",
-  Lcedil: "Ļ",
-  Lcy: "Л",
-  LeftAngleBracket: "⟨",
-  LeftArrow: "←",
-  LeftArrowBar: "⇤",
-  LeftArrowRightArrow: "⇆",
-  LeftCeiling: "⌈",
-  LeftDoubleBracket: "⟦",
-  LeftDownTeeVector: "⥡",
-  LeftDownVector: "⇃",
-  LeftDownVectorBar: "⥙",
-  LeftFloor: "⌊",
-  LeftRightArrow: "↔",
-  LeftRightVector: "⥎",
-  LeftTee: "⊣",
-  LeftTeeArrow: "↤",
-  LeftTeeVector: "⥚",
-  LeftTriangle: "⊲",
-  LeftTriangleBar: "⧏",
-  LeftTriangleEqual: "⊴",
-  LeftUpDownVector: "⥑",
-  LeftUpTeeVector: "⥠",
-  LeftUpVector: "↿",
-  LeftUpVectorBar: "⥘",
-  LeftVector: "↼",
-  LeftVectorBar: "⥒",
-  Leftarrow: "⇐",
-  Leftrightarrow: "⇔",
-  LessEqualGreater: "⋚",
-  LessFullEqual: "≦",
-  LessGreater: "≶",
-  LessLess: "⪡",
-  LessSlantEqual: "⩽",
-  LessTilde: "≲",
-  Lfr: "\uD835\uDD0F",
-  Ll: "⋘",
-  Lleftarrow: "⇚",
-  Lmidot: "Ŀ",
-  LongLeftArrow: "⟵",
-  LongLeftRightArrow: "⟷",
-  LongRightArrow: "⟶",
-  Longleftarrow: "⟸",
-  Longleftrightarrow: "⟺",
-  Longrightarrow: "⟹",
-  Lopf: "\uD835\uDD43",
-  LowerLeftArrow: "↙",
-  LowerRightArrow: "↘",
-  Lscr: "ℒ",
-  Lsh: "↰",
-  Lstrok: "Ł",
-  Lt: "≪",
-  Map: "⤅",
-  Mcy: "М",
-  MediumSpace: " ",
-  Mellintrf: "ℳ",
-  Mfr: "\uD835\uDD10",
-  MinusPlus: "∓",
-  Mopf: "\uD835\uDD44",
-  Mscr: "ℳ",
-  Mu: "Μ",
-  NJcy: "Њ",
-  Nacute: "Ń",
-  Ncaron: "Ň",
-  Ncedil: "Ņ",
-  Ncy: "Н",
-  NegativeMediumSpace: "​",
-  NegativeThickSpace: "​",
-  NegativeThinSpace: "​",
-  NegativeVeryThinSpace: "​",
-  NestedGreaterGreater: "≫",
-  NestedLessLess: "≪",
-  NewLine: `
-`,
-  Nfr: "\uD835\uDD11",
-  NoBreak: "⁠",
-  NonBreakingSpace: " ",
-  Nopf: "ℕ",
-  Not: "⫬",
-  NotCongruent: "≢",
-  NotCupCap: "≭",
-  NotDoubleVerticalBar: "∦",
-  NotElement: "∉",
-  NotEqual: "≠",
-  NotEqualTilde: "≂̸",
-  NotExists: "∄",
-  NotGreater: "≯",
-  NotGreaterEqual: "≱",
-  NotGreaterFullEqual: "≧̸",
-  NotGreaterGreater: "≫̸",
-  NotGreaterLess: "≹",
-  NotGreaterSlantEqual: "⩾̸",
-  NotGreaterTilde: "≵",
-  NotHumpDownHump: "≎̸",
-  NotHumpEqual: "≏̸",
-  NotLeftTriangle: "⋪",
-  NotLeftTriangleBar: "⧏̸",
-  NotLeftTriangleEqual: "⋬",
-  NotLess: "≮",
-  NotLessEqual: "≰",
-  NotLessGreater: "≸",
-  NotLessLess: "≪̸",
-  NotLessSlantEqual: "⩽̸",
-  NotLessTilde: "≴",
-  NotNestedGreaterGreater: "⪢̸",
-  NotNestedLessLess: "⪡̸",
-  NotPrecedes: "⊀",
-  NotPrecedesEqual: "⪯̸",
-  NotPrecedesSlantEqual: "⋠",
-  NotReverseElement: "∌",
-  NotRightTriangle: "⋫",
-  NotRightTriangleBar: "⧐̸",
-  NotRightTriangleEqual: "⋭",
-  NotSquareSubset: "⊏̸",
-  NotSquareSubsetEqual: "⋢",
-  NotSquareSuperset: "⊐̸",
-  NotSquareSupersetEqual: "⋣",
-  NotSubset: "⊂⃒",
-  NotSubsetEqual: "⊈",
-  NotSucceeds: "⊁",
-  NotSucceedsEqual: "⪰̸",
-  NotSucceedsSlantEqual: "⋡",
-  NotSucceedsTilde: "≿̸",
-  NotSuperset: "⊃⃒",
-  NotSupersetEqual: "⊉",
-  NotTilde: "≁",
-  NotTildeEqual: "≄",
-  NotTildeFullEqual: "≇",
-  NotTildeTilde: "≉",
-  NotVerticalBar: "∤",
-  Nscr: "\uD835\uDCA9",
-  Ntilde: "Ñ",
-  Nu: "Ν",
-  OElig: "Œ",
-  Oacute: "Ó",
-  Ocirc: "Ô",
-  Ocy: "О",
-  Odblac: "Ő",
-  Ofr: "\uD835\uDD12",
-  Ograve: "Ò",
-  Omacr: "Ō",
-  Omega: "Ω",
-  Omicron: "Ο",
-  Oopf: "\uD835\uDD46",
-  OpenCurlyDoubleQuote: "“",
-  OpenCurlyQuote: "‘",
-  Or: "⩔",
-  Oscr: "\uD835\uDCAA",
-  Oslash: "Ø",
-  Otilde: "Õ",
-  Otimes: "⨷",
-  Ouml: "Ö",
-  OverBar: "‾",
-  OverBrace: "⏞",
-  OverBracket: "⎴",
-  OverParenthesis: "⏜",
-  PartialD: "∂",
-  Pcy: "П",
-  Pfr: "\uD835\uDD13",
-  Phi: "Φ",
-  Pi: "Π",
-  PlusMinus: "±",
-  Poincareplane: "ℌ",
-  Popf: "ℙ",
-  Pr: "⪻",
-  Precedes: "≺",
-  PrecedesEqual: "⪯",
-  PrecedesSlantEqual: "≼",
-  PrecedesTilde: "≾",
-  Prime: "″",
-  Product: "∏",
-  Proportion: "∷",
-  Proportional: "∝",
-  Pscr: "\uD835\uDCAB",
-  Psi: "Ψ",
-  QUOT: '"',
-  Qfr: "\uD835\uDD14",
-  Qopf: "ℚ",
-  Qscr: "\uD835\uDCAC",
-  RBarr: "⤐",
-  REG: "®",
-  Racute: "Ŕ",
-  Rang: "⟫",
-  Rarr: "↠",
-  Rarrtl: "⤖",
-  Rcaron: "Ř",
-  Rcedil: "Ŗ",
-  Rcy: "Р",
-  Re: "ℜ",
-  ReverseElement: "∋",
-  ReverseEquilibrium: "⇋",
-  ReverseUpEquilibrium: "⥯",
-  Rfr: "ℜ",
-  Rho: "Ρ",
-  RightAngleBracket: "⟩",
-  RightArrow: "→",
-  RightArrowBar: "⇥",
-  RightArrowLeftArrow: "⇄",
-  RightCeiling: "⌉",
-  RightDoubleBracket: "⟧",
-  RightDownTeeVector: "⥝",
-  RightDownVector: "⇂",
-  RightDownVectorBar: "⥕",
-  RightFloor: "⌋",
-  RightTee: "⊢",
-  RightTeeArrow: "↦",
-  RightTeeVector: "⥛",
-  RightTriangle: "⊳",
-  RightTriangleBar: "⧐",
-  RightTriangleEqual: "⊵",
-  RightUpDownVector: "⥏",
-  RightUpTeeVector: "⥜",
-  RightUpVector: "↾",
-  RightUpVectorBar: "⥔",
-  RightVector: "⇀",
-  RightVectorBar: "⥓",
-  Rightarrow: "⇒",
-  Ropf: "ℝ",
-  RoundImplies: "⥰",
-  Rrightarrow: "⇛",
-  Rscr: "ℛ",
-  Rsh: "↱",
-  RuleDelayed: "⧴",
-  SHCHcy: "Щ",
-  SHcy: "Ш",
-  SOFTcy: "Ь",
-  Sacute: "Ś",
-  Sc: "⪼",
-  Scaron: "Š",
-  Scedil: "Ş",
-  Scirc: "Ŝ",
-  Scy: "С",
-  Sfr: "\uD835\uDD16",
-  ShortDownArrow: "↓",
-  ShortLeftArrow: "←",
-  ShortRightArrow: "→",
-  ShortUpArrow: "↑",
-  Sigma: "Σ",
-  SmallCircle: "∘",
-  Sopf: "\uD835\uDD4A",
-  Sqrt: "√",
-  Square: "□",
-  SquareIntersection: "⊓",
-  SquareSubset: "⊏",
-  SquareSubsetEqual: "⊑",
-  SquareSuperset: "⊐",
-  SquareSupersetEqual: "⊒",
-  SquareUnion: "⊔",
-  Sscr: "\uD835\uDCAE",
-  Star: "⋆",
-  Sub: "⋐",
-  Subset: "⋐",
-  SubsetEqual: "⊆",
-  Succeeds: "≻",
-  SucceedsEqual: "⪰",
-  SucceedsSlantEqual: "≽",
-  SucceedsTilde: "≿",
-  SuchThat: "∋",
-  Sum: "∑",
-  Sup: "⋑",
-  Superset: "⊃",
-  SupersetEqual: "⊇",
-  Supset: "⋑",
-  THORN: "Þ",
-  TRADE: "™",
-  TSHcy: "Ћ",
-  TScy: "Ц",
-  Tab: "\t",
-  Tau: "Τ",
-  Tcaron: "Ť",
-  Tcedil: "Ţ",
-  Tcy: "Т",
-  Tfr: "\uD835\uDD17",
-  Therefore: "∴",
-  Theta: "Θ",
-  ThickSpace: "  ",
-  ThinSpace: " ",
-  Tilde: "∼",
-  TildeEqual: "≃",
-  TildeFullEqual: "≅",
-  TildeTilde: "≈",
-  Topf: "\uD835\uDD4B",
-  TripleDot: "⃛",
-  Tscr: "\uD835\uDCAF",
-  Tstrok: "Ŧ",
-  Uacute: "Ú",
-  Uarr: "↟",
-  Uarrocir: "⥉",
-  Ubrcy: "Ў",
-  Ubreve: "Ŭ",
-  Ucirc: "Û",
-  Ucy: "У",
-  Udblac: "Ű",
-  Ufr: "\uD835\uDD18",
-  Ugrave: "Ù",
-  Umacr: "Ū",
-  UnderBar: "_",
-  UnderBrace: "⏟",
-  UnderBracket: "⎵",
-  UnderParenthesis: "⏝",
-  Union: "⋃",
-  UnionPlus: "⊎",
-  Uogon: "Ų",
-  Uopf: "\uD835\uDD4C",
-  UpArrow: "↑",
-  UpArrowBar: "⤒",
-  UpArrowDownArrow: "⇅",
-  UpDownArrow: "↕",
-  UpEquilibrium: "⥮",
-  UpTee: "⊥",
-  UpTeeArrow: "↥",
-  Uparrow: "⇑",
-  Updownarrow: "⇕",
-  UpperLeftArrow: "↖",
-  UpperRightArrow: "↗",
-  Upsi: "ϒ",
-  Upsilon: "Υ",
-  Uring: "Ů",
-  Uscr: "\uD835\uDCB0",
-  Utilde: "Ũ",
-  Uuml: "Ü",
-  VDash: "⊫",
-  Vbar: "⫫",
-  Vcy: "В",
-  Vdash: "⊩",
-  Vdashl: "⫦",
-  Vee: "⋁",
-  Verbar: "‖",
-  Vert: "‖",
-  VerticalBar: "∣",
-  VerticalLine: "|",
-  VerticalSeparator: "❘",
-  VerticalTilde: "≀",
-  VeryThinSpace: " ",
-  Vfr: "\uD835\uDD19",
-  Vopf: "\uD835\uDD4D",
-  Vscr: "\uD835\uDCB1",
-  Vvdash: "⊪",
-  Wcirc: "Ŵ",
-  Wedge: "⋀",
-  Wfr: "\uD835\uDD1A",
-  Wopf: "\uD835\uDD4E",
-  Wscr: "\uD835\uDCB2",
-  Xfr: "\uD835\uDD1B",
-  Xi: "Ξ",
-  Xopf: "\uD835\uDD4F",
-  Xscr: "\uD835\uDCB3",
-  YAcy: "Я",
-  YIcy: "Ї",
-  YUcy: "Ю",
-  Yacute: "Ý",
-  Ycirc: "Ŷ",
-  Ycy: "Ы",
-  Yfr: "\uD835\uDD1C",
-  Yopf: "\uD835\uDD50",
-  Yscr: "\uD835\uDCB4",
-  Yuml: "Ÿ",
-  ZHcy: "Ж",
-  Zacute: "Ź",
-  Zcaron: "Ž",
-  Zcy: "З",
-  Zdot: "Ż",
-  ZeroWidthSpace: "​",
-  Zeta: "Ζ",
-  Zfr: "ℨ",
-  Zopf: "ℤ",
-  Zscr: "\uD835\uDCB5",
-  aacute: "á",
-  abreve: "ă",
-  ac: "∾",
-  acE: "∾̳",
-  acd: "∿",
-  acirc: "â",
-  acute: "´",
-  acy: "а",
-  aelig: "æ",
-  af: "⁡",
-  afr: "\uD835\uDD1E",
-  agrave: "à",
-  alefsym: "ℵ",
-  aleph: "ℵ",
-  alpha: "α",
-  amacr: "ā",
-  amalg: "⨿",
-  amp: "&",
-  and: "∧",
-  andand: "⩕",
-  andd: "⩜",
-  andslope: "⩘",
-  andv: "⩚",
-  ang: "∠",
-  ange: "⦤",
-  angle: "∠",
-  angmsd: "∡",
-  angmsdaa: "⦨",
-  angmsdab: "⦩",
-  angmsdac: "⦪",
-  angmsdad: "⦫",
-  angmsdae: "⦬",
-  angmsdaf: "⦭",
-  angmsdag: "⦮",
-  angmsdah: "⦯",
-  angrt: "∟",
-  angrtvb: "⊾",
-  angrtvbd: "⦝",
-  angsph: "∢",
-  angst: "Å",
-  angzarr: "⍼",
-  aogon: "ą",
-  aopf: "\uD835\uDD52",
-  ap: "≈",
-  apE: "⩰",
-  apacir: "⩯",
-  ape: "≊",
-  apid: "≋",
-  apos: "'",
-  approx: "≈",
-  approxeq: "≊",
-  aring: "å",
-  ascr: "\uD835\uDCB6",
-  ast: "*",
-  asymp: "≈",
-  asympeq: "≍",
-  atilde: "ã",
-  auml: "ä",
-  awconint: "∳",
-  awint: "⨑",
-  bNot: "⫭",
-  backcong: "≌",
-  backepsilon: "϶",
-  backprime: "‵",
-  backsim: "∽",
-  backsimeq: "⋍",
-  barvee: "⊽",
-  barwed: "⌅",
-  barwedge: "⌅",
-  bbrk: "⎵",
-  bbrktbrk: "⎶",
-  bcong: "≌",
-  bcy: "б",
-  bdquo: "„",
-  becaus: "∵",
-  because: "∵",
-  bemptyv: "⦰",
-  bepsi: "϶",
-  bernou: "ℬ",
-  beta: "β",
-  beth: "ℶ",
-  between: "≬",
-  bfr: "\uD835\uDD1F",
-  bigcap: "⋂",
-  bigcirc: "◯",
-  bigcup: "⋃",
-  bigodot: "⨀",
-  bigoplus: "⨁",
-  bigotimes: "⨂",
-  bigsqcup: "⨆",
-  bigstar: "★",
-  bigtriangledown: "▽",
-  bigtriangleup: "△",
-  biguplus: "⨄",
-  bigvee: "⋁",
-  bigwedge: "⋀",
-  bkarow: "⤍",
-  blacklozenge: "⧫",
-  blacksquare: "▪",
-  blacktriangle: "▴",
-  blacktriangledown: "▾",
-  blacktriangleleft: "◂",
-  blacktriangleright: "▸",
-  blank: "␣",
-  blk12: "▒",
-  blk14: "░",
-  blk34: "▓",
-  block: "█",
-  bne: "=⃥",
-  bnequiv: "≡⃥",
-  bnot: "⌐",
-  bopf: "\uD835\uDD53",
-  bot: "⊥",
-  bottom: "⊥",
-  bowtie: "⋈",
-  boxDL: "╗",
-  boxDR: "╔",
-  boxDl: "╖",
-  boxDr: "╓",
-  boxH: "═",
-  boxHD: "╦",
-  boxHU: "╩",
-  boxHd: "╤",
-  boxHu: "╧",
-  boxUL: "╝",
-  boxUR: "╚",
-  boxUl: "╜",
-  boxUr: "╙",
-  boxV: "║",
-  boxVH: "╬",
-  boxVL: "╣",
-  boxVR: "╠",
-  boxVh: "╫",
-  boxVl: "╢",
-  boxVr: "╟",
-  boxbox: "⧉",
-  boxdL: "╕",
-  boxdR: "╒",
-  boxdl: "┐",
-  boxdr: "┌",
-  boxh: "─",
-  boxhD: "╥",
-  boxhU: "╨",
-  boxhd: "┬",
-  boxhu: "┴",
-  boxminus: "⊟",
-  boxplus: "⊞",
-  boxtimes: "⊠",
-  boxuL: "╛",
-  boxuR: "╘",
-  boxul: "┘",
-  boxur: "└",
-  boxv: "│",
-  boxvH: "╪",
-  boxvL: "╡",
-  boxvR: "╞",
-  boxvh: "┼",
-  boxvl: "┤",
-  boxvr: "├",
-  bprime: "‵",
-  breve: "˘",
-  brvbar: "¦",
-  bscr: "\uD835\uDCB7",
-  bsemi: "⁏",
-  bsim: "∽",
-  bsime: "⋍",
-  bsol: "\\",
-  bsolb: "⧅",
-  bsolhsub: "⟈",
-  bull: "•",
-  bullet: "•",
-  bump: "≎",
-  bumpE: "⪮",
-  bumpe: "≏",
-  bumpeq: "≏",
-  cacute: "ć",
-  cap: "∩",
-  capand: "⩄",
-  capbrcup: "⩉",
-  capcap: "⩋",
-  capcup: "⩇",
-  capdot: "⩀",
-  caps: "∩︀",
-  caret: "⁁",
-  caron: "ˇ",
-  ccaps: "⩍",
-  ccaron: "č",
-  ccedil: "ç",
-  ccirc: "ĉ",
-  ccups: "⩌",
-  ccupssm: "⩐",
-  cdot: "ċ",
-  cedil: "¸",
-  cemptyv: "⦲",
-  cent: "¢",
-  centerdot: "·",
-  cfr: "\uD835\uDD20",
-  chcy: "ч",
-  check: "✓",
-  checkmark: "✓",
-  chi: "χ",
-  cir: "○",
-  cirE: "⧃",
-  circ: "ˆ",
-  circeq: "≗",
-  circlearrowleft: "↺",
-  circlearrowright: "↻",
-  circledR: "®",
-  circledS: "Ⓢ",
-  circledast: "⊛",
-  circledcirc: "⊚",
-  circleddash: "⊝",
-  cire: "≗",
-  cirfnint: "⨐",
-  cirmid: "⫯",
-  cirscir: "⧂",
-  clubs: "♣",
-  clubsuit: "♣",
-  colon: ":",
-  colone: "≔",
-  coloneq: "≔",
-  comma: ",",
-  commat: "@",
-  comp: "∁",
-  compfn: "∘",
-  complement: "∁",
-  complexes: "ℂ",
-  cong: "≅",
-  congdot: "⩭",
-  conint: "∮",
-  copf: "\uD835\uDD54",
-  coprod: "∐",
-  copy: "©",
-  copysr: "℗",
-  crarr: "↵",
-  cross: "✗",
-  cscr: "\uD835\uDCB8",
-  csub: "⫏",
-  csube: "⫑",
-  csup: "⫐",
-  csupe: "⫒",
-  ctdot: "⋯",
-  cudarrl: "⤸",
-  cudarrr: "⤵",
-  cuepr: "⋞",
-  cuesc: "⋟",
-  cularr: "↶",
-  cularrp: "⤽",
-  cup: "∪",
-  cupbrcap: "⩈",
-  cupcap: "⩆",
-  cupcup: "⩊",
-  cupdot: "⊍",
-  cupor: "⩅",
-  cups: "∪︀",
-  curarr: "↷",
-  curarrm: "⤼",
-  curlyeqprec: "⋞",
-  curlyeqsucc: "⋟",
-  curlyvee: "⋎",
-  curlywedge: "⋏",
-  curren: "¤",
-  curvearrowleft: "↶",
-  curvearrowright: "↷",
-  cuvee: "⋎",
-  cuwed: "⋏",
-  cwconint: "∲",
-  cwint: "∱",
-  cylcty: "⌭",
-  dArr: "⇓",
-  dHar: "⥥",
-  dagger: "†",
-  daleth: "ℸ",
-  darr: "↓",
-  dash: "‐",
-  dashv: "⊣",
-  dbkarow: "⤏",
-  dblac: "˝",
-  dcaron: "ď",
-  dcy: "д",
-  dd: "ⅆ",
-  ddagger: "‡",
-  ddarr: "⇊",
-  ddotseq: "⩷",
-  deg: "°",
-  delta: "δ",
-  demptyv: "⦱",
-  dfisht: "⥿",
-  dfr: "\uD835\uDD21",
-  dharl: "⇃",
-  dharr: "⇂",
-  diam: "⋄",
-  diamond: "⋄",
-  diamondsuit: "♦",
-  diams: "♦",
-  die: "¨",
-  digamma: "ϝ",
-  disin: "⋲",
-  div: "÷",
-  divide: "÷",
-  divideontimes: "⋇",
-  divonx: "⋇",
-  djcy: "ђ",
-  dlcorn: "⌞",
-  dlcrop: "⌍",
-  dollar: "$",
-  dopf: "\uD835\uDD55",
-  dot: "˙",
-  doteq: "≐",
-  doteqdot: "≑",
-  dotminus: "∸",
-  dotplus: "∔",
-  dotsquare: "⊡",
-  doublebarwedge: "⌆",
-  downarrow: "↓",
-  downdownarrows: "⇊",
-  downharpoonleft: "⇃",
-  downharpoonright: "⇂",
-  drbkarow: "⤐",
-  drcorn: "⌟",
-  drcrop: "⌌",
-  dscr: "\uD835\uDCB9",
-  dscy: "ѕ",
-  dsol: "⧶",
-  dstrok: "đ",
-  dtdot: "⋱",
-  dtri: "▿",
-  dtrif: "▾",
-  duarr: "⇵",
-  duhar: "⥯",
-  dwangle: "⦦",
-  dzcy: "џ",
-  dzigrarr: "⟿",
-  eDDot: "⩷",
-  eDot: "≑",
-  eacute: "é",
-  easter: "⩮",
-  ecaron: "ě",
-  ecir: "≖",
-  ecirc: "ê",
-  ecolon: "≕",
-  ecy: "э",
-  edot: "ė",
-  ee: "ⅇ",
-  efDot: "≒",
-  efr: "\uD835\uDD22",
-  eg: "⪚",
-  egrave: "è",
-  egs: "⪖",
-  egsdot: "⪘",
-  el: "⪙",
-  elinters: "⏧",
-  ell: "ℓ",
-  els: "⪕",
-  elsdot: "⪗",
-  emacr: "ē",
-  empty: "∅",
-  emptyset: "∅",
-  emptyv: "∅",
-  emsp13: " ",
-  emsp14: " ",
-  emsp: " ",
-  eng: "ŋ",
-  ensp: " ",
-  eogon: "ę",
-  eopf: "\uD835\uDD56",
-  epar: "⋕",
-  eparsl: "⧣",
-  eplus: "⩱",
-  epsi: "ε",
-  epsilon: "ε",
-  epsiv: "ϵ",
-  eqcirc: "≖",
-  eqcolon: "≕",
-  eqsim: "≂",
-  eqslantgtr: "⪖",
-  eqslantless: "⪕",
-  equals: "=",
-  equest: "≟",
-  equiv: "≡",
-  equivDD: "⩸",
-  eqvparsl: "⧥",
-  erDot: "≓",
-  erarr: "⥱",
-  escr: "ℯ",
-  esdot: "≐",
-  esim: "≂",
-  eta: "η",
-  eth: "ð",
-  euml: "ë",
-  euro: "€",
-  excl: "!",
-  exist: "∃",
-  expectation: "ℰ",
-  exponentiale: "ⅇ",
-  fallingdotseq: "≒",
-  fcy: "ф",
-  female: "♀",
-  ffilig: "ﬃ",
-  fflig: "ﬀ",
-  ffllig: "ﬄ",
-  ffr: "\uD835\uDD23",
-  filig: "ﬁ",
-  fjlig: "fj",
-  flat: "♭",
-  fllig: "ﬂ",
-  fltns: "▱",
-  fnof: "ƒ",
-  fopf: "\uD835\uDD57",
-  forall: "∀",
-  fork: "⋔",
-  forkv: "⫙",
-  fpartint: "⨍",
-  frac12: "½",
-  frac13: "⅓",
-  frac14: "¼",
-  frac15: "⅕",
-  frac16: "⅙",
-  frac18: "⅛",
-  frac23: "⅔",
-  frac25: "⅖",
-  frac34: "¾",
-  frac35: "⅗",
-  frac38: "⅜",
-  frac45: "⅘",
-  frac56: "⅚",
-  frac58: "⅝",
-  frac78: "⅞",
-  frasl: "⁄",
-  frown: "⌢",
-  fscr: "\uD835\uDCBB",
-  gE: "≧",
-  gEl: "⪌",
-  gacute: "ǵ",
-  gamma: "γ",
-  gammad: "ϝ",
-  gap: "⪆",
-  gbreve: "ğ",
-  gcirc: "ĝ",
-  gcy: "г",
-  gdot: "ġ",
-  ge: "≥",
-  gel: "⋛",
-  geq: "≥",
-  geqq: "≧",
-  geqslant: "⩾",
-  ges: "⩾",
-  gescc: "⪩",
-  gesdot: "⪀",
-  gesdoto: "⪂",
-  gesdotol: "⪄",
-  gesl: "⋛︀",
-  gesles: "⪔",
-  gfr: "\uD835\uDD24",
-  gg: "≫",
-  ggg: "⋙",
-  gimel: "ℷ",
-  gjcy: "ѓ",
-  gl: "≷",
-  glE: "⪒",
-  gla: "⪥",
-  glj: "⪤",
-  gnE: "≩",
-  gnap: "⪊",
-  gnapprox: "⪊",
-  gne: "⪈",
-  gneq: "⪈",
-  gneqq: "≩",
-  gnsim: "⋧",
-  gopf: "\uD835\uDD58",
-  grave: "`",
-  gscr: "ℊ",
-  gsim: "≳",
-  gsime: "⪎",
-  gsiml: "⪐",
-  gt: ">",
-  gtcc: "⪧",
-  gtcir: "⩺",
-  gtdot: "⋗",
-  gtlPar: "⦕",
-  gtquest: "⩼",
-  gtrapprox: "⪆",
-  gtrarr: "⥸",
-  gtrdot: "⋗",
-  gtreqless: "⋛",
-  gtreqqless: "⪌",
-  gtrless: "≷",
-  gtrsim: "≳",
-  gvertneqq: "≩︀",
-  gvnE: "≩︀",
-  hArr: "⇔",
-  hairsp: " ",
-  half: "½",
-  hamilt: "ℋ",
-  hardcy: "ъ",
-  harr: "↔",
-  harrcir: "⥈",
-  harrw: "↭",
-  hbar: "ℏ",
-  hcirc: "ĥ",
-  hearts: "♥",
-  heartsuit: "♥",
-  hellip: "…",
-  hercon: "⊹",
-  hfr: "\uD835\uDD25",
-  hksearow: "⤥",
-  hkswarow: "⤦",
-  hoarr: "⇿",
-  homtht: "∻",
-  hookleftarrow: "↩",
-  hookrightarrow: "↪",
-  hopf: "\uD835\uDD59",
-  horbar: "―",
-  hscr: "\uD835\uDCBD",
-  hslash: "ℏ",
-  hstrok: "ħ",
-  hybull: "⁃",
-  hyphen: "‐",
-  iacute: "í",
-  ic: "⁣",
-  icirc: "î",
-  icy: "и",
-  iecy: "е",
-  iexcl: "¡",
-  iff: "⇔",
-  ifr: "\uD835\uDD26",
-  igrave: "ì",
-  ii: "ⅈ",
-  iiiint: "⨌",
-  iiint: "∭",
-  iinfin: "⧜",
-  iiota: "℩",
-  ijlig: "ĳ",
-  imacr: "ī",
-  image: "ℑ",
-  imagline: "ℐ",
-  imagpart: "ℑ",
-  imath: "ı",
-  imof: "⊷",
-  imped: "Ƶ",
-  in: "∈",
-  incare: "℅",
-  infin: "∞",
-  infintie: "⧝",
-  inodot: "ı",
-  int: "∫",
-  intcal: "⊺",
-  integers: "ℤ",
-  intercal: "⊺",
-  intlarhk: "⨗",
-  intprod: "⨼",
-  iocy: "ё",
-  iogon: "į",
-  iopf: "\uD835\uDD5A",
-  iota: "ι",
-  iprod: "⨼",
-  iquest: "¿",
-  iscr: "\uD835\uDCBE",
-  isin: "∈",
-  isinE: "⋹",
-  isindot: "⋵",
-  isins: "⋴",
-  isinsv: "⋳",
-  isinv: "∈",
-  it: "⁢",
-  itilde: "ĩ",
-  iukcy: "і",
-  iuml: "ï",
-  jcirc: "ĵ",
-  jcy: "й",
-  jfr: "\uD835\uDD27",
-  jmath: "ȷ",
-  jopf: "\uD835\uDD5B",
-  jscr: "\uD835\uDCBF",
-  jsercy: "ј",
-  jukcy: "є",
-  kappa: "κ",
-  kappav: "ϰ",
-  kcedil: "ķ",
-  kcy: "к",
-  kfr: "\uD835\uDD28",
-  kgreen: "ĸ",
-  khcy: "х",
-  kjcy: "ќ",
-  kopf: "\uD835\uDD5C",
-  kscr: "\uD835\uDCC0",
-  lAarr: "⇚",
-  lArr: "⇐",
-  lAtail: "⤛",
-  lBarr: "⤎",
-  lE: "≦",
-  lEg: "⪋",
-  lHar: "⥢",
-  lacute: "ĺ",
-  laemptyv: "⦴",
-  lagran: "ℒ",
-  lambda: "λ",
-  lang: "⟨",
-  langd: "⦑",
-  langle: "⟨",
-  lap: "⪅",
-  laquo: "«",
-  larr: "←",
-  larrb: "⇤",
-  larrbfs: "⤟",
-  larrfs: "⤝",
-  larrhk: "↩",
-  larrlp: "↫",
-  larrpl: "⤹",
-  larrsim: "⥳",
-  larrtl: "↢",
-  lat: "⪫",
-  latail: "⤙",
-  late: "⪭",
-  lates: "⪭︀",
-  lbarr: "⤌",
-  lbbrk: "❲",
-  lbrace: "{",
-  lbrack: "[",
-  lbrke: "⦋",
-  lbrksld: "⦏",
-  lbrkslu: "⦍",
-  lcaron: "ľ",
-  lcedil: "ļ",
-  lceil: "⌈",
-  lcub: "{",
-  lcy: "л",
-  ldca: "⤶",
-  ldquo: "“",
-  ldquor: "„",
-  ldrdhar: "⥧",
-  ldrushar: "⥋",
-  ldsh: "↲",
-  le: "≤",
-  leftarrow: "←",
-  leftarrowtail: "↢",
-  leftharpoondown: "↽",
-  leftharpoonup: "↼",
-  leftleftarrows: "⇇",
-  leftrightarrow: "↔",
-  leftrightarrows: "⇆",
-  leftrightharpoons: "⇋",
-  leftrightsquigarrow: "↭",
-  leftthreetimes: "⋋",
-  leg: "⋚",
-  leq: "≤",
-  leqq: "≦",
-  leqslant: "⩽",
-  les: "⩽",
-  lescc: "⪨",
-  lesdot: "⩿",
-  lesdoto: "⪁",
-  lesdotor: "⪃",
-  lesg: "⋚︀",
-  lesges: "⪓",
-  lessapprox: "⪅",
-  lessdot: "⋖",
-  lesseqgtr: "⋚",
-  lesseqqgtr: "⪋",
-  lessgtr: "≶",
-  lesssim: "≲",
-  lfisht: "⥼",
-  lfloor: "⌊",
-  lfr: "\uD835\uDD29",
-  lg: "≶",
-  lgE: "⪑",
-  lhard: "↽",
-  lharu: "↼",
-  lharul: "⥪",
-  lhblk: "▄",
-  ljcy: "љ",
-  ll: "≪",
-  llarr: "⇇",
-  llcorner: "⌞",
-  llhard: "⥫",
-  lltri: "◺",
-  lmidot: "ŀ",
-  lmoust: "⎰",
-  lmoustache: "⎰",
-  lnE: "≨",
-  lnap: "⪉",
-  lnapprox: "⪉",
-  lne: "⪇",
-  lneq: "⪇",
-  lneqq: "≨",
-  lnsim: "⋦",
-  loang: "⟬",
-  loarr: "⇽",
-  lobrk: "⟦",
-  longleftarrow: "⟵",
-  longleftrightarrow: "⟷",
-  longmapsto: "⟼",
-  longrightarrow: "⟶",
-  looparrowleft: "↫",
-  looparrowright: "↬",
-  lopar: "⦅",
-  lopf: "\uD835\uDD5D",
-  loplus: "⨭",
-  lotimes: "⨴",
-  lowast: "∗",
-  lowbar: "_",
-  loz: "◊",
-  lozenge: "◊",
-  lozf: "⧫",
-  lpar: "(",
-  lparlt: "⦓",
-  lrarr: "⇆",
-  lrcorner: "⌟",
-  lrhar: "⇋",
-  lrhard: "⥭",
-  lrm: "‎",
-  lrtri: "⊿",
-  lsaquo: "‹",
-  lscr: "\uD835\uDCC1",
-  lsh: "↰",
-  lsim: "≲",
-  lsime: "⪍",
-  lsimg: "⪏",
-  lsqb: "[",
-  lsquo: "‘",
-  lsquor: "‚",
-  lstrok: "ł",
-  lt: "<",
-  ltcc: "⪦",
-  ltcir: "⩹",
-  ltdot: "⋖",
-  lthree: "⋋",
-  ltimes: "⋉",
-  ltlarr: "⥶",
-  ltquest: "⩻",
-  ltrPar: "⦖",
-  ltri: "◃",
-  ltrie: "⊴",
-  ltrif: "◂",
-  lurdshar: "⥊",
-  luruhar: "⥦",
-  lvertneqq: "≨︀",
-  lvnE: "≨︀",
-  mDDot: "∺",
-  macr: "¯",
-  male: "♂",
-  malt: "✠",
-  maltese: "✠",
-  map: "↦",
-  mapsto: "↦",
-  mapstodown: "↧",
-  mapstoleft: "↤",
-  mapstoup: "↥",
-  marker: "▮",
-  mcomma: "⨩",
-  mcy: "м",
-  mdash: "—",
-  measuredangle: "∡",
-  mfr: "\uD835\uDD2A",
-  mho: "℧",
-  micro: "µ",
-  mid: "∣",
-  midast: "*",
-  midcir: "⫰",
-  middot: "·",
-  minus: "−",
-  minusb: "⊟",
-  minusd: "∸",
-  minusdu: "⨪",
-  mlcp: "⫛",
-  mldr: "…",
-  mnplus: "∓",
-  models: "⊧",
-  mopf: "\uD835\uDD5E",
-  mp: "∓",
-  mscr: "\uD835\uDCC2",
-  mstpos: "∾",
-  mu: "μ",
-  multimap: "⊸",
-  mumap: "⊸",
-  nGg: "⋙̸",
-  nGt: "≫⃒",
-  nGtv: "≫̸",
-  nLeftarrow: "⇍",
-  nLeftrightarrow: "⇎",
-  nLl: "⋘̸",
-  nLt: "≪⃒",
-  nLtv: "≪̸",
-  nRightarrow: "⇏",
-  nVDash: "⊯",
-  nVdash: "⊮",
-  nabla: "∇",
-  nacute: "ń",
-  nang: "∠⃒",
-  nap: "≉",
-  napE: "⩰̸",
-  napid: "≋̸",
-  napos: "ŉ",
-  napprox: "≉",
-  natur: "♮",
-  natural: "♮",
-  naturals: "ℕ",
-  nbsp: " ",
-  nbump: "≎̸",
-  nbumpe: "≏̸",
-  ncap: "⩃",
-  ncaron: "ň",
-  ncedil: "ņ",
-  ncong: "≇",
-  ncongdot: "⩭̸",
-  ncup: "⩂",
-  ncy: "н",
-  ndash: "–",
-  ne: "≠",
-  neArr: "⇗",
-  nearhk: "⤤",
-  nearr: "↗",
-  nearrow: "↗",
-  nedot: "≐̸",
-  nequiv: "≢",
-  nesear: "⤨",
-  nesim: "≂̸",
-  nexist: "∄",
-  nexists: "∄",
-  nfr: "\uD835\uDD2B",
-  ngE: "≧̸",
-  nge: "≱",
-  ngeq: "≱",
-  ngeqq: "≧̸",
-  ngeqslant: "⩾̸",
-  nges: "⩾̸",
-  ngsim: "≵",
-  ngt: "≯",
-  ngtr: "≯",
-  nhArr: "⇎",
-  nharr: "↮",
-  nhpar: "⫲",
-  ni: "∋",
-  nis: "⋼",
-  nisd: "⋺",
-  niv: "∋",
-  njcy: "њ",
-  nlArr: "⇍",
-  nlE: "≦̸",
-  nlarr: "↚",
-  nldr: "‥",
-  nle: "≰",
-  nleftarrow: "↚",
-  nleftrightarrow: "↮",
-  nleq: "≰",
-  nleqq: "≦̸",
-  nleqslant: "⩽̸",
-  nles: "⩽̸",
-  nless: "≮",
-  nlsim: "≴",
-  nlt: "≮",
-  nltri: "⋪",
-  nltrie: "⋬",
-  nmid: "∤",
-  nopf: "\uD835\uDD5F",
-  not: "¬",
-  notin: "∉",
-  notinE: "⋹̸",
-  notindot: "⋵̸",
-  notinva: "∉",
-  notinvb: "⋷",
-  notinvc: "⋶",
-  notni: "∌",
-  notniva: "∌",
-  notnivb: "⋾",
-  notnivc: "⋽",
-  npar: "∦",
-  nparallel: "∦",
-  nparsl: "⫽⃥",
-  npart: "∂̸",
-  npolint: "⨔",
-  npr: "⊀",
-  nprcue: "⋠",
-  npre: "⪯̸",
-  nprec: "⊀",
-  npreceq: "⪯̸",
-  nrArr: "⇏",
-  nrarr: "↛",
-  nrarrc: "⤳̸",
-  nrarrw: "↝̸",
-  nrightarrow: "↛",
-  nrtri: "⋫",
-  nrtrie: "⋭",
-  nsc: "⊁",
-  nsccue: "⋡",
-  nsce: "⪰̸",
-  nscr: "\uD835\uDCC3",
-  nshortmid: "∤",
-  nshortparallel: "∦",
-  nsim: "≁",
-  nsime: "≄",
-  nsimeq: "≄",
-  nsmid: "∤",
-  nspar: "∦",
-  nsqsube: "⋢",
-  nsqsupe: "⋣",
-  nsub: "⊄",
-  nsubE: "⫅̸",
-  nsube: "⊈",
-  nsubset: "⊂⃒",
-  nsubseteq: "⊈",
-  nsubseteqq: "⫅̸",
-  nsucc: "⊁",
-  nsucceq: "⪰̸",
-  nsup: "⊅",
-  nsupE: "⫆̸",
-  nsupe: "⊉",
-  nsupset: "⊃⃒",
-  nsupseteq: "⊉",
-  nsupseteqq: "⫆̸",
-  ntgl: "≹",
-  ntilde: "ñ",
-  ntlg: "≸",
-  ntriangleleft: "⋪",
-  ntrianglelefteq: "⋬",
-  ntriangleright: "⋫",
-  ntrianglerighteq: "⋭",
-  nu: "ν",
-  num: "#",
-  numero: "№",
-  numsp: " ",
-  nvDash: "⊭",
-  nvHarr: "⤄",
-  nvap: "≍⃒",
-  nvdash: "⊬",
-  nvge: "≥⃒",
-  nvgt: ">⃒",
-  nvinfin: "⧞",
-  nvlArr: "⤂",
-  nvle: "≤⃒",
-  nvlt: "<⃒",
-  nvltrie: "⊴⃒",
-  nvrArr: "⤃",
-  nvrtrie: "⊵⃒",
-  nvsim: "∼⃒",
-  nwArr: "⇖",
-  nwarhk: "⤣",
-  nwarr: "↖",
-  nwarrow: "↖",
-  nwnear: "⤧",
-  oS: "Ⓢ",
-  oacute: "ó",
-  oast: "⊛",
-  ocir: "⊚",
-  ocirc: "ô",
-  ocy: "о",
-  odash: "⊝",
-  odblac: "ő",
-  odiv: "⨸",
-  odot: "⊙",
-  odsold: "⦼",
-  oelig: "œ",
-  ofcir: "⦿",
-  ofr: "\uD835\uDD2C",
-  ogon: "˛",
-  ograve: "ò",
-  ogt: "⧁",
-  ohbar: "⦵",
-  ohm: "Ω",
-  oint: "∮",
-  olarr: "↺",
-  olcir: "⦾",
-  olcross: "⦻",
-  oline: "‾",
-  olt: "⧀",
-  omacr: "ō",
-  omega: "ω",
-  omicron: "ο",
-  omid: "⦶",
-  ominus: "⊖",
-  oopf: "\uD835\uDD60",
-  opar: "⦷",
-  operp: "⦹",
-  oplus: "⊕",
-  or: "∨",
-  orarr: "↻",
-  ord: "⩝",
-  order: "ℴ",
-  orderof: "ℴ",
-  ordf: "ª",
-  ordm: "º",
-  origof: "⊶",
-  oror: "⩖",
-  orslope: "⩗",
-  orv: "⩛",
-  oscr: "ℴ",
-  oslash: "ø",
-  osol: "⊘",
-  otilde: "õ",
-  otimes: "⊗",
-  otimesas: "⨶",
-  ouml: "ö",
-  ovbar: "⌽",
-  par: "∥",
-  para: "¶",
-  parallel: "∥",
-  parsim: "⫳",
-  parsl: "⫽",
-  part: "∂",
-  pcy: "п",
-  percnt: "%",
-  period: ".",
-  permil: "‰",
-  perp: "⊥",
-  pertenk: "‱",
-  pfr: "\uD835\uDD2D",
-  phi: "φ",
-  phiv: "ϕ",
-  phmmat: "ℳ",
-  phone: "☎",
-  pi: "π",
-  pitchfork: "⋔",
-  piv: "ϖ",
-  planck: "ℏ",
-  planckh: "ℎ",
-  plankv: "ℏ",
-  plus: "+",
-  plusacir: "⨣",
-  plusb: "⊞",
-  pluscir: "⨢",
-  plusdo: "∔",
-  plusdu: "⨥",
-  pluse: "⩲",
-  plusmn: "±",
-  plussim: "⨦",
-  plustwo: "⨧",
-  pm: "±",
-  pointint: "⨕",
-  popf: "\uD835\uDD61",
-  pound: "£",
-  pr: "≺",
-  prE: "⪳",
-  prap: "⪷",
-  prcue: "≼",
-  pre: "⪯",
-  prec: "≺",
-  precapprox: "⪷",
-  preccurlyeq: "≼",
-  preceq: "⪯",
-  precnapprox: "⪹",
-  precneqq: "⪵",
-  precnsim: "⋨",
-  precsim: "≾",
-  prime: "′",
-  primes: "ℙ",
-  prnE: "⪵",
-  prnap: "⪹",
-  prnsim: "⋨",
-  prod: "∏",
-  profalar: "⌮",
-  profline: "⌒",
-  profsurf: "⌓",
-  prop: "∝",
-  propto: "∝",
-  prsim: "≾",
-  prurel: "⊰",
-  pscr: "\uD835\uDCC5",
-  psi: "ψ",
-  puncsp: " ",
-  qfr: "\uD835\uDD2E",
-  qint: "⨌",
-  qopf: "\uD835\uDD62",
-  qprime: "⁗",
-  qscr: "\uD835\uDCC6",
-  quaternions: "ℍ",
-  quatint: "⨖",
-  quest: "?",
-  questeq: "≟",
-  quot: '"',
-  rAarr: "⇛",
-  rArr: "⇒",
-  rAtail: "⤜",
-  rBarr: "⤏",
-  rHar: "⥤",
-  race: "∽̱",
-  racute: "ŕ",
-  radic: "√",
-  raemptyv: "⦳",
-  rang: "⟩",
-  rangd: "⦒",
-  range: "⦥",
-  rangle: "⟩",
-  raquo: "»",
-  rarr: "→",
-  rarrap: "⥵",
-  rarrb: "⇥",
-  rarrbfs: "⤠",
-  rarrc: "⤳",
-  rarrfs: "⤞",
-  rarrhk: "↪",
-  rarrlp: "↬",
-  rarrpl: "⥅",
-  rarrsim: "⥴",
-  rarrtl: "↣",
-  rarrw: "↝",
-  ratail: "⤚",
-  ratio: "∶",
-  rationals: "ℚ",
-  rbarr: "⤍",
-  rbbrk: "❳",
-  rbrace: "}",
-  rbrack: "]",
-  rbrke: "⦌",
-  rbrksld: "⦎",
-  rbrkslu: "⦐",
-  rcaron: "ř",
-  rcedil: "ŗ",
-  rceil: "⌉",
-  rcub: "}",
-  rcy: "р",
-  rdca: "⤷",
-  rdldhar: "⥩",
-  rdquo: "”",
-  rdquor: "”",
-  rdsh: "↳",
-  real: "ℜ",
-  realine: "ℛ",
-  realpart: "ℜ",
-  reals: "ℝ",
-  rect: "▭",
-  reg: "®",
-  rfisht: "⥽",
-  rfloor: "⌋",
-  rfr: "\uD835\uDD2F",
-  rhard: "⇁",
-  rharu: "⇀",
-  rharul: "⥬",
-  rho: "ρ",
-  rhov: "ϱ",
-  rightarrow: "→",
-  rightarrowtail: "↣",
-  rightharpoondown: "⇁",
-  rightharpoonup: "⇀",
-  rightleftarrows: "⇄",
-  rightleftharpoons: "⇌",
-  rightrightarrows: "⇉",
-  rightsquigarrow: "↝",
-  rightthreetimes: "⋌",
-  ring: "˚",
-  risingdotseq: "≓",
-  rlarr: "⇄",
-  rlhar: "⇌",
-  rlm: "‏",
-  rmoust: "⎱",
-  rmoustache: "⎱",
-  rnmid: "⫮",
-  roang: "⟭",
-  roarr: "⇾",
-  robrk: "⟧",
-  ropar: "⦆",
-  ropf: "\uD835\uDD63",
-  roplus: "⨮",
-  rotimes: "⨵",
-  rpar: ")",
-  rpargt: "⦔",
-  rppolint: "⨒",
-  rrarr: "⇉",
-  rsaquo: "›",
-  rscr: "\uD835\uDCC7",
-  rsh: "↱",
-  rsqb: "]",
-  rsquo: "’",
-  rsquor: "’",
-  rthree: "⋌",
-  rtimes: "⋊",
-  rtri: "▹",
-  rtrie: "⊵",
-  rtrif: "▸",
-  rtriltri: "⧎",
-  ruluhar: "⥨",
-  rx: "℞",
-  sacute: "ś",
-  sbquo: "‚",
-  sc: "≻",
-  scE: "⪴",
-  scap: "⪸",
-  scaron: "š",
-  sccue: "≽",
-  sce: "⪰",
-  scedil: "ş",
-  scirc: "ŝ",
-  scnE: "⪶",
-  scnap: "⪺",
-  scnsim: "⋩",
-  scpolint: "⨓",
-  scsim: "≿",
-  scy: "с",
-  sdot: "⋅",
-  sdotb: "⊡",
-  sdote: "⩦",
-  seArr: "⇘",
-  searhk: "⤥",
-  searr: "↘",
-  searrow: "↘",
-  sect: "§",
-  semi: ";",
-  seswar: "⤩",
-  setminus: "∖",
-  setmn: "∖",
-  sext: "✶",
-  sfr: "\uD835\uDD30",
-  sfrown: "⌢",
-  sharp: "♯",
-  shchcy: "щ",
-  shcy: "ш",
-  shortmid: "∣",
-  shortparallel: "∥",
-  shy: "­",
-  sigma: "σ",
-  sigmaf: "ς",
-  sigmav: "ς",
-  sim: "∼",
-  simdot: "⩪",
-  sime: "≃",
-  simeq: "≃",
-  simg: "⪞",
-  simgE: "⪠",
-  siml: "⪝",
-  simlE: "⪟",
-  simne: "≆",
-  simplus: "⨤",
-  simrarr: "⥲",
-  slarr: "←",
-  smallsetminus: "∖",
-  smashp: "⨳",
-  smeparsl: "⧤",
-  smid: "∣",
-  smile: "⌣",
-  smt: "⪪",
-  smte: "⪬",
-  smtes: "⪬︀",
-  softcy: "ь",
-  sol: "/",
-  solb: "⧄",
-  solbar: "⌿",
-  sopf: "\uD835\uDD64",
-  spades: "♠",
-  spadesuit: "♠",
-  spar: "∥",
-  sqcap: "⊓",
-  sqcaps: "⊓︀",
-  sqcup: "⊔",
-  sqcups: "⊔︀",
-  sqsub: "⊏",
-  sqsube: "⊑",
-  sqsubset: "⊏",
-  sqsubseteq: "⊑",
-  sqsup: "⊐",
-  sqsupe: "⊒",
-  sqsupset: "⊐",
-  sqsupseteq: "⊒",
-  squ: "□",
-  square: "□",
-  squarf: "▪",
-  squf: "▪",
-  srarr: "→",
-  sscr: "\uD835\uDCC8",
-  ssetmn: "∖",
-  ssmile: "⌣",
-  sstarf: "⋆",
-  star: "☆",
-  starf: "★",
-  straightepsilon: "ϵ",
-  straightphi: "ϕ",
-  strns: "¯",
-  sub: "⊂",
-  subE: "⫅",
-  subdot: "⪽",
-  sube: "⊆",
-  subedot: "⫃",
-  submult: "⫁",
-  subnE: "⫋",
-  subne: "⊊",
-  subplus: "⪿",
-  subrarr: "⥹",
-  subset: "⊂",
-  subseteq: "⊆",
-  subseteqq: "⫅",
-  subsetneq: "⊊",
-  subsetneqq: "⫋",
-  subsim: "⫇",
-  subsub: "⫕",
-  subsup: "⫓",
-  succ: "≻",
-  succapprox: "⪸",
-  succcurlyeq: "≽",
-  succeq: "⪰",
-  succnapprox: "⪺",
-  succneqq: "⪶",
-  succnsim: "⋩",
-  succsim: "≿",
-  sum: "∑",
-  sung: "♪",
-  sup1: "¹",
-  sup2: "²",
-  sup3: "³",
-  sup: "⊃",
-  supE: "⫆",
-  supdot: "⪾",
-  supdsub: "⫘",
-  supe: "⊇",
-  supedot: "⫄",
-  suphsol: "⟉",
-  suphsub: "⫗",
-  suplarr: "⥻",
-  supmult: "⫂",
-  supnE: "⫌",
-  supne: "⊋",
-  supplus: "⫀",
-  supset: "⊃",
-  supseteq: "⊇",
-  supseteqq: "⫆",
-  supsetneq: "⊋",
-  supsetneqq: "⫌",
-  supsim: "⫈",
-  supsub: "⫔",
-  supsup: "⫖",
-  swArr: "⇙",
-  swarhk: "⤦",
-  swarr: "↙",
-  swarrow: "↙",
-  swnwar: "⤪",
-  szlig: "ß",
-  target: "⌖",
-  tau: "τ",
-  tbrk: "⎴",
-  tcaron: "ť",
-  tcedil: "ţ",
-  tcy: "т",
-  tdot: "⃛",
-  telrec: "⌕",
-  tfr: "\uD835\uDD31",
-  there4: "∴",
-  therefore: "∴",
-  theta: "θ",
-  thetasym: "ϑ",
-  thetav: "ϑ",
-  thickapprox: "≈",
-  thicksim: "∼",
-  thinsp: " ",
-  thkap: "≈",
-  thksim: "∼",
-  thorn: "þ",
-  tilde: "˜",
-  times: "×",
-  timesb: "⊠",
-  timesbar: "⨱",
-  timesd: "⨰",
-  tint: "∭",
-  toea: "⤨",
-  top: "⊤",
-  topbot: "⌶",
-  topcir: "⫱",
-  topf: "\uD835\uDD65",
-  topfork: "⫚",
-  tosa: "⤩",
-  tprime: "‴",
-  trade: "™",
-  triangle: "▵",
-  triangledown: "▿",
-  triangleleft: "◃",
-  trianglelefteq: "⊴",
-  triangleq: "≜",
-  triangleright: "▹",
-  trianglerighteq: "⊵",
-  tridot: "◬",
-  trie: "≜",
-  triminus: "⨺",
-  triplus: "⨹",
-  trisb: "⧍",
-  tritime: "⨻",
-  trpezium: "⏢",
-  tscr: "\uD835\uDCC9",
-  tscy: "ц",
-  tshcy: "ћ",
-  tstrok: "ŧ",
-  twixt: "≬",
-  twoheadleftarrow: "↞",
-  twoheadrightarrow: "↠",
-  uArr: "⇑",
-  uHar: "⥣",
-  uacute: "ú",
-  uarr: "↑",
-  ubrcy: "ў",
-  ubreve: "ŭ",
-  ucirc: "û",
-  ucy: "у",
-  udarr: "⇅",
-  udblac: "ű",
-  udhar: "⥮",
-  ufisht: "⥾",
-  ufr: "\uD835\uDD32",
-  ugrave: "ù",
-  uharl: "↿",
-  uharr: "↾",
-  uhblk: "▀",
-  ulcorn: "⌜",
-  ulcorner: "⌜",
-  ulcrop: "⌏",
-  ultri: "◸",
-  umacr: "ū",
-  uml: "¨",
-  uogon: "ų",
-  uopf: "\uD835\uDD66",
-  uparrow: "↑",
-  updownarrow: "↕",
-  upharpoonleft: "↿",
-  upharpoonright: "↾",
-  uplus: "⊎",
-  upsi: "υ",
-  upsih: "ϒ",
-  upsilon: "υ",
-  upuparrows: "⇈",
-  urcorn: "⌝",
-  urcorner: "⌝",
-  urcrop: "⌎",
-  uring: "ů",
-  urtri: "◹",
-  uscr: "\uD835\uDCCA",
-  utdot: "⋰",
-  utilde: "ũ",
-  utri: "▵",
-  utrif: "▴",
-  uuarr: "⇈",
-  uuml: "ü",
-  uwangle: "⦧",
-  vArr: "⇕",
-  vBar: "⫨",
-  vBarv: "⫩",
-  vDash: "⊨",
-  vangrt: "⦜",
-  varepsilon: "ϵ",
-  varkappa: "ϰ",
-  varnothing: "∅",
-  varphi: "ϕ",
-  varpi: "ϖ",
-  varpropto: "∝",
-  varr: "↕",
-  varrho: "ϱ",
-  varsigma: "ς",
-  varsubsetneq: "⊊︀",
-  varsubsetneqq: "⫋︀",
-  varsupsetneq: "⊋︀",
-  varsupsetneqq: "⫌︀",
-  vartheta: "ϑ",
-  vartriangleleft: "⊲",
-  vartriangleright: "⊳",
-  vcy: "в",
-  vdash: "⊢",
-  vee: "∨",
-  veebar: "⊻",
-  veeeq: "≚",
-  vellip: "⋮",
-  verbar: "|",
-  vert: "|",
-  vfr: "\uD835\uDD33",
-  vltri: "⊲",
-  vnsub: "⊂⃒",
-  vnsup: "⊃⃒",
-  vopf: "\uD835\uDD67",
-  vprop: "∝",
-  vrtri: "⊳",
-  vscr: "\uD835\uDCCB",
-  vsubnE: "⫋︀",
-  vsubne: "⊊︀",
-  vsupnE: "⫌︀",
-  vsupne: "⊋︀",
-  vzigzag: "⦚",
-  wcirc: "ŵ",
-  wedbar: "⩟",
-  wedge: "∧",
-  wedgeq: "≙",
-  weierp: "℘",
-  wfr: "\uD835\uDD34",
-  wopf: "\uD835\uDD68",
-  wp: "℘",
-  wr: "≀",
-  wreath: "≀",
-  wscr: "\uD835\uDCCC",
-  xcap: "⋂",
-  xcirc: "◯",
-  xcup: "⋃",
-  xdtri: "▽",
-  xfr: "\uD835\uDD35",
-  xhArr: "⟺",
-  xharr: "⟷",
-  xi: "ξ",
-  xlArr: "⟸",
-  xlarr: "⟵",
-  xmap: "⟼",
-  xnis: "⋻",
-  xodot: "⨀",
-  xopf: "\uD835\uDD69",
-  xoplus: "⨁",
-  xotime: "⨂",
-  xrArr: "⟹",
-  xrarr: "⟶",
-  xscr: "\uD835\uDCCD",
-  xsqcup: "⨆",
-  xuplus: "⨄",
-  xutri: "△",
-  xvee: "⋁",
-  xwedge: "⋀",
-  yacute: "ý",
-  yacy: "я",
-  ycirc: "ŷ",
-  ycy: "ы",
-  yen: "¥",
-  yfr: "\uD835\uDD36",
-  yicy: "ї",
-  yopf: "\uD835\uDD6A",
-  yscr: "\uD835\uDCCE",
-  yucy: "ю",
-  yuml: "ÿ",
-  zacute: "ź",
-  zcaron: "ž",
-  zcy: "з",
-  zdot: "ż",
-  zeetrf: "ℨ",
-  zeta: "ζ",
-  zfr: "\uD835\uDD37",
-  zhcy: "ж",
-  zigrarr: "⇝",
-  zopf: "\uD835\uDD6B",
-  zscr: "\uD835\uDCCF",
-  zwj: "‍",
-  zwnj: "‌"
-};
-var own = {}.hasOwnProperty;
-function decodeNamedCharacterReference(value) {
-  return own.call(characterEntities, value) ? characterEntities[value] : false;
-}
-var codes = {
-  carriageReturn: -5,
-  lineFeed: -4,
-  carriageReturnLineFeed: -3,
-  horizontalTab: -2,
-  virtualSpace: -1,
-  eof: null,
-  nul: 0,
-  soh: 1,
-  stx: 2,
-  etx: 3,
-  eot: 4,
-  enq: 5,
-  ack: 6,
-  bel: 7,
-  bs: 8,
-  ht: 9,
-  lf: 10,
-  vt: 11,
-  ff: 12,
-  cr: 13,
-  so: 14,
-  si: 15,
-  dle: 16,
-  dc1: 17,
-  dc2: 18,
-  dc3: 19,
-  dc4: 20,
-  nak: 21,
-  syn: 22,
-  etb: 23,
-  can: 24,
-  em: 25,
-  sub: 26,
-  esc: 27,
-  fs: 28,
-  gs: 29,
-  rs: 30,
-  us: 31,
-  space: 32,
-  exclamationMark: 33,
-  quotationMark: 34,
-  numberSign: 35,
-  dollarSign: 36,
-  percentSign: 37,
-  ampersand: 38,
-  apostrophe: 39,
-  leftParenthesis: 40,
-  rightParenthesis: 41,
-  asterisk: 42,
-  plusSign: 43,
-  comma: 44,
-  dash: 45,
-  dot: 46,
-  slash: 47,
-  digit0: 48,
-  digit1: 49,
-  digit2: 50,
-  digit3: 51,
-  digit4: 52,
-  digit5: 53,
-  digit6: 54,
-  digit7: 55,
-  digit8: 56,
-  digit9: 57,
-  colon: 58,
-  semicolon: 59,
-  lessThan: 60,
-  equalsTo: 61,
-  greaterThan: 62,
-  questionMark: 63,
-  atSign: 64,
-  uppercaseA: 65,
-  uppercaseB: 66,
-  uppercaseC: 67,
-  uppercaseD: 68,
-  uppercaseE: 69,
-  uppercaseF: 70,
-  uppercaseG: 71,
-  uppercaseH: 72,
-  uppercaseI: 73,
-  uppercaseJ: 74,
-  uppercaseK: 75,
-  uppercaseL: 76,
-  uppercaseM: 77,
-  uppercaseN: 78,
-  uppercaseO: 79,
-  uppercaseP: 80,
-  uppercaseQ: 81,
-  uppercaseR: 82,
-  uppercaseS: 83,
-  uppercaseT: 84,
-  uppercaseU: 85,
-  uppercaseV: 86,
-  uppercaseW: 87,
-  uppercaseX: 88,
-  uppercaseY: 89,
-  uppercaseZ: 90,
-  leftSquareBracket: 91,
-  backslash: 92,
-  rightSquareBracket: 93,
-  caret: 94,
-  underscore: 95,
-  graveAccent: 96,
-  lowercaseA: 97,
-  lowercaseB: 98,
-  lowercaseC: 99,
-  lowercaseD: 100,
-  lowercaseE: 101,
-  lowercaseF: 102,
-  lowercaseG: 103,
-  lowercaseH: 104,
-  lowercaseI: 105,
-  lowercaseJ: 106,
-  lowercaseK: 107,
-  lowercaseL: 108,
-  lowercaseM: 109,
-  lowercaseN: 110,
-  lowercaseO: 111,
-  lowercaseP: 112,
-  lowercaseQ: 113,
-  lowercaseR: 114,
-  lowercaseS: 115,
-  lowercaseT: 116,
-  lowercaseU: 117,
-  lowercaseV: 118,
-  lowercaseW: 119,
-  lowercaseX: 120,
-  lowercaseY: 121,
-  lowercaseZ: 122,
-  leftCurlyBrace: 123,
-  verticalBar: 124,
-  rightCurlyBrace: 125,
-  tilde: 126,
-  del: 127,
-  byteOrderMarker: 65279,
-  replacementCharacter: 65533
-};
-var constants = {
-  attentionSideAfter: 2,
-  attentionSideBefore: 1,
-  atxHeadingOpeningFenceSizeMax: 6,
-  autolinkDomainSizeMax: 63,
-  autolinkSchemeSizeMax: 32,
-  cdataOpeningString: "CDATA[",
-  characterGroupPunctuation: 2,
-  characterGroupWhitespace: 1,
-  characterReferenceDecimalSizeMax: 7,
-  characterReferenceHexadecimalSizeMax: 6,
-  characterReferenceNamedSizeMax: 31,
-  codeFencedSequenceSizeMin: 3,
-  contentTypeContent: "content",
-  contentTypeDocument: "document",
-  contentTypeFlow: "flow",
-  contentTypeString: "string",
-  contentTypeText: "text",
-  hardBreakPrefixSizeMin: 2,
-  htmlBasic: 6,
-  htmlCdata: 5,
-  htmlComment: 2,
-  htmlComplete: 7,
-  htmlDeclaration: 4,
-  htmlInstruction: 3,
-  htmlRawSizeMax: 8,
-  htmlRaw: 1,
-  linkResourceDestinationBalanceMax: 32,
-  linkReferenceSizeMax: 999,
-  listItemValueSizeMax: 10,
-  numericBaseDecimal: 10,
-  numericBaseHexadecimal: 16,
-  tabSize: 4,
-  thematicBreakMarkerCountMin: 3,
-  v8MaxSafeChunkSize: 1e4
-};
-var types = {
-  data: "data",
-  whitespace: "whitespace",
-  lineEnding: "lineEnding",
-  lineEndingBlank: "lineEndingBlank",
-  linePrefix: "linePrefix",
-  lineSuffix: "lineSuffix",
-  atxHeading: "atxHeading",
-  atxHeadingSequence: "atxHeadingSequence",
-  atxHeadingText: "atxHeadingText",
-  autolink: "autolink",
-  autolinkEmail: "autolinkEmail",
-  autolinkMarker: "autolinkMarker",
-  autolinkProtocol: "autolinkProtocol",
-  characterEscape: "characterEscape",
-  characterEscapeValue: "characterEscapeValue",
-  characterReference: "characterReference",
-  characterReferenceMarker: "characterReferenceMarker",
-  characterReferenceMarkerNumeric: "characterReferenceMarkerNumeric",
-  characterReferenceMarkerHexadecimal: "characterReferenceMarkerHexadecimal",
-  characterReferenceValue: "characterReferenceValue",
-  codeFenced: "codeFenced",
-  codeFencedFence: "codeFencedFence",
-  codeFencedFenceSequence: "codeFencedFenceSequence",
-  codeFencedFenceInfo: "codeFencedFenceInfo",
-  codeFencedFenceMeta: "codeFencedFenceMeta",
-  codeFlowValue: "codeFlowValue",
-  codeIndented: "codeIndented",
-  codeText: "codeText",
-  codeTextData: "codeTextData",
-  codeTextPadding: "codeTextPadding",
-  codeTextSequence: "codeTextSequence",
-  content: "content",
-  definition: "definition",
-  definitionDestination: "definitionDestination",
-  definitionDestinationLiteral: "definitionDestinationLiteral",
-  definitionDestinationLiteralMarker: "definitionDestinationLiteralMarker",
-  definitionDestinationRaw: "definitionDestinationRaw",
-  definitionDestinationString: "definitionDestinationString",
-  definitionLabel: "definitionLabel",
-  definitionLabelMarker: "definitionLabelMarker",
-  definitionLabelString: "definitionLabelString",
-  definitionMarker: "definitionMarker",
-  definitionTitle: "definitionTitle",
-  definitionTitleMarker: "definitionTitleMarker",
-  definitionTitleString: "definitionTitleString",
-  emphasis: "emphasis",
-  emphasisSequence: "emphasisSequence",
-  emphasisText: "emphasisText",
-  escapeMarker: "escapeMarker",
-  hardBreakEscape: "hardBreakEscape",
-  hardBreakTrailing: "hardBreakTrailing",
-  htmlFlow: "htmlFlow",
-  htmlFlowData: "htmlFlowData",
-  htmlText: "htmlText",
-  htmlTextData: "htmlTextData",
-  image: "image",
-  label: "label",
-  labelText: "labelText",
-  labelLink: "labelLink",
-  labelImage: "labelImage",
-  labelMarker: "labelMarker",
-  labelImageMarker: "labelImageMarker",
-  labelEnd: "labelEnd",
-  link: "link",
-  paragraph: "paragraph",
-  reference: "reference",
-  referenceMarker: "referenceMarker",
-  referenceString: "referenceString",
-  resource: "resource",
-  resourceDestination: "resourceDestination",
-  resourceDestinationLiteral: "resourceDestinationLiteral",
-  resourceDestinationLiteralMarker: "resourceDestinationLiteralMarker",
-  resourceDestinationRaw: "resourceDestinationRaw",
-  resourceDestinationString: "resourceDestinationString",
-  resourceMarker: "resourceMarker",
-  resourceTitle: "resourceTitle",
-  resourceTitleMarker: "resourceTitleMarker",
-  resourceTitleString: "resourceTitleString",
-  setextHeading: "setextHeading",
-  setextHeadingText: "setextHeadingText",
-  setextHeadingLine: "setextHeadingLine",
-  setextHeadingLineSequence: "setextHeadingLineSequence",
-  strong: "strong",
-  strongSequence: "strongSequence",
-  strongText: "strongText",
-  thematicBreak: "thematicBreak",
-  thematicBreakSequence: "thematicBreakSequence",
-  blockQuote: "blockQuote",
-  blockQuotePrefix: "blockQuotePrefix",
-  blockQuoteMarker: "blockQuoteMarker",
-  blockQuotePrefixWhitespace: "blockQuotePrefixWhitespace",
-  listOrdered: "listOrdered",
-  listUnordered: "listUnordered",
-  listItemIndent: "listItemIndent",
-  listItemMarker: "listItemMarker",
-  listItemPrefix: "listItemPrefix",
-  listItemPrefixWhitespace: "listItemPrefixWhitespace",
-  listItemValue: "listItemValue",
-  chunkDocument: "chunkDocument",
-  chunkContent: "chunkContent",
-  chunkFlow: "chunkFlow",
-  chunkText: "chunkText",
-  chunkString: "chunkString"
-};
-var values = {
-  ht: "\t",
-  lf: `
-`,
-  cr: "\r",
-  space: " ",
-  exclamationMark: "!",
-  quotationMark: '"',
-  numberSign: "#",
-  dollarSign: "$",
-  percentSign: "%",
-  ampersand: "&",
-  apostrophe: "'",
-  leftParenthesis: "(",
-  rightParenthesis: ")",
-  asterisk: "*",
-  plusSign: "+",
-  comma: ",",
-  dash: "-",
-  dot: ".",
-  slash: "/",
-  digit0: "0",
-  digit1: "1",
-  digit2: "2",
-  digit3: "3",
-  digit4: "4",
-  digit5: "5",
-  digit6: "6",
-  digit7: "7",
-  digit8: "8",
-  digit9: "9",
-  colon: ":",
-  semicolon: ";",
-  lessThan: "<",
-  equalsTo: "=",
-  greaterThan: ">",
-  questionMark: "?",
-  atSign: "@",
-  uppercaseA: "A",
-  uppercaseB: "B",
-  uppercaseC: "C",
-  uppercaseD: "D",
-  uppercaseE: "E",
-  uppercaseF: "F",
-  uppercaseG: "G",
-  uppercaseH: "H",
-  uppercaseI: "I",
-  uppercaseJ: "J",
-  uppercaseK: "K",
-  uppercaseL: "L",
-  uppercaseM: "M",
-  uppercaseN: "N",
-  uppercaseO: "O",
-  uppercaseP: "P",
-  uppercaseQ: "Q",
-  uppercaseR: "R",
-  uppercaseS: "S",
-  uppercaseT: "T",
-  uppercaseU: "U",
-  uppercaseV: "V",
-  uppercaseW: "W",
-  uppercaseX: "X",
-  uppercaseY: "Y",
-  uppercaseZ: "Z",
-  leftSquareBracket: "[",
-  backslash: "\\",
-  rightSquareBracket: "]",
-  caret: "^",
-  underscore: "_",
-  graveAccent: "`",
-  lowercaseA: "a",
-  lowercaseB: "b",
-  lowercaseC: "c",
-  lowercaseD: "d",
-  lowercaseE: "e",
-  lowercaseF: "f",
-  lowercaseG: "g",
-  lowercaseH: "h",
-  lowercaseI: "i",
-  lowercaseJ: "j",
-  lowercaseK: "k",
-  lowercaseL: "l",
-  lowercaseM: "m",
-  lowercaseN: "n",
-  lowercaseO: "o",
-  lowercaseP: "p",
-  lowercaseQ: "q",
-  lowercaseR: "r",
-  lowercaseS: "s",
-  lowercaseT: "t",
-  lowercaseU: "u",
-  lowercaseV: "v",
-  lowercaseW: "w",
-  lowercaseX: "x",
-  lowercaseY: "y",
-  lowercaseZ: "z",
-  leftCurlyBrace: "{",
-  verticalBar: "|",
-  rightCurlyBrace: "}",
-  tilde: "~",
-  replacementCharacter: "�"
-};
-function splice(list, start, remove, items) {
-  const end = list.length;
-  let chunkStart = 0;
-  let parameters;
-  if (start < 0) {
-    start = -start > end ? 0 : end + start;
-  } else {
-    start = start > end ? end : start;
-  }
-  remove = remove > 0 ? remove : 0;
-  if (items.length < constants.v8MaxSafeChunkSize) {
-    parameters = Array.from(items);
-    parameters.unshift(start, remove);
-    list.splice(...parameters);
-  } else {
-    if (remove)
-      list.splice(start, remove);
-    while (chunkStart < items.length) {
-      parameters = items.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize);
-      parameters.unshift(start, 0);
-      list.splice(...parameters);
-      chunkStart += constants.v8MaxSafeChunkSize;
-      start += constants.v8MaxSafeChunkSize;
-    }
-  }
-}
-function push(list, items) {
-  if (list.length > 0) {
-    splice(list, list.length, 0, items);
-    return list;
-  }
-  return items;
-}
-var hasOwnProperty = {}.hasOwnProperty;
-function combineExtensions(extensions) {
-  const all2 = {};
-  let index = -1;
-  while (++index < extensions.length) {
-    syntaxExtension(all2, extensions[index]);
-  }
-  return all2;
-}
-function syntaxExtension(all2, extension) {
-  let hook;
-  for (hook in extension) {
-    const maybe = hasOwnProperty.call(all2, hook) ? all2[hook] : undefined;
-    const left = maybe || (all2[hook] = {});
-    const right = extension[hook];
-    let code;
-    if (right) {
-      for (code in right) {
-        if (!hasOwnProperty.call(left, code))
-          left[code] = [];
-        const value = right[code];
-        constructs(left[code], Array.isArray(value) ? value : value ? [value] : []);
-      }
-    }
-  }
-}
-function constructs(existing, list) {
-  let index = -1;
-  const before = [];
-  while (++index < list.length) {
-    (list[index].add === "after" ? existing : before).push(list[index]);
-  }
-  splice(existing, 0, 0, before);
-}
-function decodeNumericCharacterReference(value, base) {
-  const code = Number.parseInt(value, base);
-  if (code < codes.ht || code === codes.vt || code > codes.cr && code < codes.space || code > codes.tilde && code < 160 || code > 55295 && code < 57344 || code > 64975 && code < 65008 || (code & 65535) === 65535 || (code & 65535) === 65534 || code > 1114111) {
-    return values.replacementCharacter;
-  }
-  return String.fromCodePoint(code);
-}
-function normalizeIdentifier(value) {
-  return value.replace(/[\t\n\r ]+/g, values.space).replace(/^ | $/g, "").toLowerCase().toUpperCase();
-}
-var asciiAlpha = regexCheck(/[A-Za-z]/);
-var asciiAlphanumeric = regexCheck(/[\dA-Za-z]/);
-var asciiAtext = regexCheck(/[#-'*+\--9=?A-Z^-~]/);
-function asciiControl(code) {
-  return code !== null && (code < codes.space || code === codes.del);
-}
-var asciiDigit = regexCheck(/\d/);
-var asciiHexDigit = regexCheck(/[\dA-Fa-f]/);
-var asciiPunctuation = regexCheck(/[!-/:-@[-`{-~]/);
-function markdownLineEnding(code) {
-  return code !== null && code < codes.horizontalTab;
-}
-function markdownLineEndingOrSpace(code) {
-  return code !== null && (code < codes.nul || code === codes.space);
-}
-function markdownSpace(code) {
-  return code === codes.horizontalTab || code === codes.virtualSpace || code === codes.space;
-}
-var unicodePunctuation = regexCheck(/\p{P}|\p{S}/u);
-var unicodeWhitespace = regexCheck(/\s/);
-function regexCheck(regex) {
-  return check;
-  function check(code) {
-    return code !== null && code > -1 && regex.test(String.fromCharCode(code));
-  }
-}
-function factorySpace(effects, ok2, type, max) {
-  const limit = max ? max - 1 : Number.POSITIVE_INFINITY;
-  let size = 0;
-  return start;
-  function start(code) {
-    if (markdownSpace(code)) {
-      effects.enter(type);
-      return prefix(code);
-    }
-    return ok2(code);
-  }
-  function prefix(code) {
-    if (markdownSpace(code) && size++ < limit) {
-      effects.consume(code);
-      return prefix;
-    }
-    effects.exit(type);
-    return ok2(code);
-  }
-}
-var content = { tokenize: initializeContent };
-function initializeContent(effects) {
-  const contentStart = effects.attempt(this.parser.constructs.contentInitial, afterContentStartConstruct, paragraphInitial);
-  let previous;
-  return contentStart;
-  function afterContentStartConstruct(code) {
-    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
-    if (code === codes.eof) {
-      effects.consume(code);
-      return;
-    }
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return factorySpace(effects, contentStart, types.linePrefix);
-  }
-  function paragraphInitial(code) {
-    ok(code !== codes.eof && !markdownLineEnding(code), "expected anything other than a line ending or EOF");
-    effects.enter(types.paragraph);
-    return lineStart(code);
-  }
-  function lineStart(code) {
-    const token = effects.enter(types.chunkText, {
-      contentType: constants.contentTypeText,
-      previous
-    });
-    if (previous) {
-      previous.next = token;
-    }
-    previous = token;
-    return data(code);
-  }
-  function data(code) {
-    if (code === codes.eof) {
-      effects.exit(types.chunkText);
-      effects.exit(types.paragraph);
-      effects.consume(code);
-      return;
-    }
-    if (markdownLineEnding(code)) {
-      effects.consume(code);
-      effects.exit(types.chunkText);
-      return lineStart;
-    }
-    effects.consume(code);
-    return data;
-  }
-}
-var document2 = { tokenize: initializeDocument };
-var containerConstruct = { tokenize: tokenizeContainer };
-function initializeDocument(effects) {
-  const self = this;
-  const stack = [];
-  let continued = 0;
-  let childFlow;
-  let childToken;
-  let lineStartOffset;
-  return start;
-  function start(code) {
-    if (continued < stack.length) {
-      const item = stack[continued];
-      self.containerState = item[1];
-      ok(item[0].continuation, "expected `continuation` to be defined on container construct");
-      return effects.attempt(item[0].continuation, documentContinue, checkNewContainers)(code);
-    }
-    return checkNewContainers(code);
-  }
-  function documentContinue(code) {
-    ok(self.containerState, "expected `containerState` to be defined after continuation");
-    continued++;
-    if (self.containerState._closeFlow) {
-      self.containerState._closeFlow = undefined;
-      if (childFlow) {
-        closeFlow();
-      }
-      const indexBeforeExits = self.events.length;
-      let indexBeforeFlow = indexBeforeExits;
-      let point;
-      while (indexBeforeFlow--) {
-        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
-          point = self.events[indexBeforeFlow][1].end;
-          break;
-        }
-      }
-      ok(point, "could not find previous flow chunk");
-      exitContainers(continued);
-      let index = indexBeforeExits;
-      while (index < self.events.length) {
-        self.events[index][1].end = { ...point };
-        index++;
-      }
-      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
-      self.events.length = index;
-      return checkNewContainers(code);
-    }
-    return start(code);
-  }
-  function checkNewContainers(code) {
-    if (continued === stack.length) {
-      if (!childFlow) {
-        return documentContinued(code);
-      }
-      if (childFlow.currentConstruct && childFlow.currentConstruct.concrete) {
-        return flowStart(code);
-      }
-      self.interrupt = Boolean(childFlow.currentConstruct && !childFlow._gfmTableDynamicInterruptHack);
-    }
-    self.containerState = {};
-    return effects.check(containerConstruct, thereIsANewContainer, thereIsNoNewContainer)(code);
-  }
-  function thereIsANewContainer(code) {
-    if (childFlow)
-      closeFlow();
-    exitContainers(continued);
-    return documentContinued(code);
-  }
-  function thereIsNoNewContainer(code) {
-    self.parser.lazy[self.now().line] = continued !== stack.length;
-    lineStartOffset = self.now().offset;
-    return flowStart(code);
-  }
-  function documentContinued(code) {
-    self.containerState = {};
-    return effects.attempt(containerConstruct, containerContinue, flowStart)(code);
-  }
-  function containerContinue(code) {
-    ok(self.currentConstruct, "expected `currentConstruct` to be defined on tokenizer");
-    ok(self.containerState, "expected `containerState` to be defined on tokenizer");
-    continued++;
-    stack.push([self.currentConstruct, self.containerState]);
-    return documentContinued(code);
-  }
-  function flowStart(code) {
-    if (code === codes.eof) {
-      if (childFlow)
-        closeFlow();
-      exitContainers(0);
-      effects.consume(code);
-      return;
-    }
-    childFlow = childFlow || self.parser.flow(self.now());
-    effects.enter(types.chunkFlow, {
-      _tokenizer: childFlow,
-      contentType: constants.contentTypeFlow,
-      previous: childToken
-    });
-    return flowContinue(code);
-  }
-  function flowContinue(code) {
-    if (code === codes.eof) {
-      writeToChild(effects.exit(types.chunkFlow), true);
-      exitContainers(0);
-      effects.consume(code);
-      return;
-    }
-    if (markdownLineEnding(code)) {
-      effects.consume(code);
-      writeToChild(effects.exit(types.chunkFlow));
-      continued = 0;
-      self.interrupt = undefined;
-      return start;
-    }
-    effects.consume(code);
-    return flowContinue;
-  }
-  function writeToChild(token, endOfFile) {
-    ok(childFlow, "expected `childFlow` to be defined when continuing");
-    const stream = self.sliceStream(token);
-    if (endOfFile)
-      stream.push(null);
-    token.previous = childToken;
-    if (childToken)
-      childToken.next = token;
-    childToken = token;
-    childFlow.defineSkip(token.start);
-    childFlow.write(stream);
-    if (self.parser.lazy[token.start.line]) {
-      let index = childFlow.events.length;
-      while (index--) {
-        if (childFlow.events[index][1].start.offset < lineStartOffset && (!childFlow.events[index][1].end || childFlow.events[index][1].end.offset > lineStartOffset)) {
-          return;
-        }
-      }
-      const indexBeforeExits = self.events.length;
-      let indexBeforeFlow = indexBeforeExits;
-      let seen;
-      let point;
-      while (indexBeforeFlow--) {
-        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
-          if (seen) {
-            point = self.events[indexBeforeFlow][1].end;
-            break;
-          }
-          seen = true;
-        }
-      }
-      ok(point, "could not find previous flow chunk");
-      exitContainers(continued);
-      index = indexBeforeExits;
-      while (index < self.events.length) {
-        self.events[index][1].end = { ...point };
-        index++;
-      }
-      splice(self.events, indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
-      self.events.length = index;
-    }
-  }
-  function exitContainers(size) {
-    let index = stack.length;
-    while (index-- > size) {
-      const entry = stack[index];
-      self.containerState = entry[1];
-      ok(entry[0].exit, "expected `exit` to be defined on container construct");
-      entry[0].exit.call(self, effects);
-    }
-    stack.length = size;
-  }
-  function closeFlow() {
-    ok(self.containerState, "expected `containerState` to be defined when closing flow");
-    ok(childFlow, "expected `childFlow` to be defined when closing it");
-    childFlow.write([codes.eof]);
-    childToken = undefined;
-    childFlow = undefined;
-    self.containerState._closeFlow = undefined;
-  }
-}
-function tokenizeContainer(effects, ok2, nok) {
-  ok(this.parser.constructs.disable.null, "expected `disable.null` to be populated");
-  return factorySpace(effects, effects.attempt(this.parser.constructs.document, ok2, nok), types.linePrefix, this.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize);
-}
-function classifyCharacter(code) {
-  if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-    return constants.characterGroupWhitespace;
-  }
-  if (unicodePunctuation(code)) {
-    return constants.characterGroupPunctuation;
-  }
-}
-function resolveAll(constructs2, events, context) {
-  const called = [];
-  let index = -1;
-  while (++index < constructs2.length) {
-    const resolve42 = constructs2[index].resolveAll;
-    if (resolve42 && !called.includes(resolve42)) {
-      events = resolve42(events, context);
-      called.push(resolve42);
-    }
-  }
-  return events;
-}
-var attention = {
-  name: "attention",
-  resolveAll: resolveAllAttention,
-  tokenize: tokenizeAttention
-};
-function resolveAllAttention(events, context) {
-  let index = -1;
-  let open;
-  let group;
-  let text;
-  let openingSequence;
-  let closingSequence;
-  let use;
-  let nextEvents;
-  let offset;
-  while (++index < events.length) {
-    if (events[index][0] === "enter" && events[index][1].type === "attentionSequence" && events[index][1]._close) {
-      open = index;
-      while (open--) {
-        if (events[open][0] === "exit" && events[open][1].type === "attentionSequence" && events[open][1]._open && context.sliceSerialize(events[open][1]).charCodeAt(0) === context.sliceSerialize(events[index][1]).charCodeAt(0)) {
-          if ((events[open][1]._close || events[index][1]._open) && (events[index][1].end.offset - events[index][1].start.offset) % 3 && !((events[open][1].end.offset - events[open][1].start.offset + events[index][1].end.offset - events[index][1].start.offset) % 3)) {
-            continue;
-          }
-          use = events[open][1].end.offset - events[open][1].start.offset > 1 && events[index][1].end.offset - events[index][1].start.offset > 1 ? 2 : 1;
-          const start = { ...events[open][1].end };
-          const end = { ...events[index][1].start };
-          movePoint(start, -use);
-          movePoint(end, use);
-          openingSequence = {
-            type: use > 1 ? types.strongSequence : types.emphasisSequence,
-            start,
-            end: { ...events[open][1].end }
-          };
-          closingSequence = {
-            type: use > 1 ? types.strongSequence : types.emphasisSequence,
-            start: { ...events[index][1].start },
-            end
-          };
-          text = {
-            type: use > 1 ? types.strongText : types.emphasisText,
-            start: { ...events[open][1].end },
-            end: { ...events[index][1].start }
-          };
-          group = {
-            type: use > 1 ? types.strong : types.emphasis,
-            start: { ...openingSequence.start },
-            end: { ...closingSequence.end }
-          };
-          events[open][1].end = { ...openingSequence.start };
-          events[index][1].start = { ...closingSequence.end };
-          nextEvents = [];
-          if (events[open][1].end.offset - events[open][1].start.offset) {
-            nextEvents = push(nextEvents, [
-              ["enter", events[open][1], context],
-              ["exit", events[open][1], context]
-            ]);
-          }
-          nextEvents = push(nextEvents, [
-            ["enter", group, context],
-            ["enter", openingSequence, context],
-            ["exit", openingSequence, context],
-            ["enter", text, context]
-          ]);
-          ok(context.parser.constructs.insideSpan.null, "expected `insideSpan` to be populated");
-          nextEvents = push(nextEvents, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + 1, index), context));
-          nextEvents = push(nextEvents, [
-            ["exit", text, context],
-            ["enter", closingSequence, context],
-            ["exit", closingSequence, context],
-            ["exit", group, context]
-          ]);
-          if (events[index][1].end.offset - events[index][1].start.offset) {
-            offset = 2;
-            nextEvents = push(nextEvents, [
-              ["enter", events[index][1], context],
-              ["exit", events[index][1], context]
-            ]);
-          } else {
-            offset = 0;
-          }
-          splice(events, open - 1, index - open + 3, nextEvents);
-          index = open + nextEvents.length - offset - 2;
-          break;
-        }
-      }
-    }
-  }
-  index = -1;
-  while (++index < events.length) {
-    if (events[index][1].type === "attentionSequence") {
-      events[index][1].type = "data";
-    }
-  }
-  return events;
-}
-function tokenizeAttention(effects, ok2) {
-  const attentionMarkers = this.parser.constructs.attentionMarkers.null;
-  const previous = this.previous;
-  const before = classifyCharacter(previous);
-  let marker;
-  return start;
-  function start(code) {
-    ok(code === codes.asterisk || code === codes.underscore, "expected asterisk or underscore");
-    marker = code;
-    effects.enter("attentionSequence");
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === marker) {
-      effects.consume(code);
-      return inside;
-    }
-    const token = effects.exit("attentionSequence");
-    const after = classifyCharacter(code);
-    ok(attentionMarkers, "expected `attentionMarkers` to be populated");
-    const open = !after || after === constants.characterGroupPunctuation && before || attentionMarkers.includes(code);
-    const close = !before || before === constants.characterGroupPunctuation && after || attentionMarkers.includes(previous);
-    token._open = Boolean(marker === codes.asterisk ? open : open && (before || !close));
-    token._close = Boolean(marker === codes.asterisk ? close : close && (after || !open));
-    return ok2(code);
-  }
-}
-function movePoint(point, offset) {
-  point.column += offset;
-  point.offset += offset;
-  point._bufferIndex += offset;
-}
-var autolink = { name: "autolink", tokenize: tokenizeAutolink };
-function tokenizeAutolink(effects, ok2, nok) {
-  let size = 0;
-  return start;
-  function start(code) {
-    ok(code === codes.lessThan, "expected `<`");
-    effects.enter(types.autolink);
-    effects.enter(types.autolinkMarker);
-    effects.consume(code);
-    effects.exit(types.autolinkMarker);
-    effects.enter(types.autolinkProtocol);
-    return open;
-  }
-  function open(code) {
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return schemeOrEmailAtext;
-    }
-    if (code === codes.atSign) {
-      return nok(code);
-    }
-    return emailAtext(code);
-  }
-  function schemeOrEmailAtext(code) {
-    if (code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) {
-      size = 1;
-      return schemeInsideOrEmailAtext(code);
-    }
-    return emailAtext(code);
-  }
-  function schemeInsideOrEmailAtext(code) {
-    if (code === codes.colon) {
-      effects.consume(code);
-      size = 0;
-      return urlInside;
-    }
-    if ((code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) && size++ < constants.autolinkSchemeSizeMax) {
-      effects.consume(code);
-      return schemeInsideOrEmailAtext;
-    }
-    size = 0;
-    return emailAtext(code);
-  }
-  function urlInside(code) {
-    if (code === codes.greaterThan) {
-      effects.exit(types.autolinkProtocol);
-      effects.enter(types.autolinkMarker);
-      effects.consume(code);
-      effects.exit(types.autolinkMarker);
-      effects.exit(types.autolink);
-      return ok2;
-    }
-    if (code === codes.eof || code === codes.space || code === codes.lessThan || asciiControl(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return urlInside;
-  }
-  function emailAtext(code) {
-    if (code === codes.atSign) {
-      effects.consume(code);
-      return emailAtSignOrDot;
-    }
-    if (asciiAtext(code)) {
-      effects.consume(code);
-      return emailAtext;
-    }
-    return nok(code);
-  }
-  function emailAtSignOrDot(code) {
-    return asciiAlphanumeric(code) ? emailLabel(code) : nok(code);
-  }
-  function emailLabel(code) {
-    if (code === codes.dot) {
-      effects.consume(code);
-      size = 0;
-      return emailAtSignOrDot;
-    }
-    if (code === codes.greaterThan) {
-      effects.exit(types.autolinkProtocol).type = types.autolinkEmail;
-      effects.enter(types.autolinkMarker);
-      effects.consume(code);
-      effects.exit(types.autolinkMarker);
-      effects.exit(types.autolink);
-      return ok2;
-    }
-    return emailValue(code);
-  }
-  function emailValue(code) {
-    if ((code === codes.dash || asciiAlphanumeric(code)) && size++ < constants.autolinkDomainSizeMax) {
-      const next = code === codes.dash ? emailValue : emailLabel;
-      effects.consume(code);
-      return next;
-    }
-    return nok(code);
-  }
-}
-var blankLine = { partial: true, tokenize: tokenizeBlankLine };
-function tokenizeBlankLine(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
-  }
-  function after(code) {
-    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
-  }
-}
-var blockQuote = {
-  continuation: { tokenize: tokenizeBlockQuoteContinuation },
-  exit,
-  name: "blockQuote",
-  tokenize: tokenizeBlockQuoteStart
-};
-function tokenizeBlockQuoteStart(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (code === codes.greaterThan) {
-      const state = self.containerState;
-      ok(state, "expected `containerState` to be defined in container");
-      if (!state.open) {
-        effects.enter(types.blockQuote, { _container: true });
-        state.open = true;
-      }
-      effects.enter(types.blockQuotePrefix);
-      effects.enter(types.blockQuoteMarker);
-      effects.consume(code);
-      effects.exit(types.blockQuoteMarker);
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    if (markdownSpace(code)) {
-      effects.enter(types.blockQuotePrefixWhitespace);
-      effects.consume(code);
-      effects.exit(types.blockQuotePrefixWhitespace);
-      effects.exit(types.blockQuotePrefix);
-      return ok2;
-    }
-    effects.exit(types.blockQuotePrefix);
-    return ok2(code);
-  }
-}
-function tokenizeBlockQuoteContinuation(effects, ok2, nok) {
-  const self = this;
-  return contStart;
-  function contStart(code) {
-    if (markdownSpace(code)) {
-      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      return factorySpace(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
-    }
-    return contBefore(code);
-  }
-  function contBefore(code) {
-    return effects.attempt(blockQuote, ok2, nok)(code);
-  }
-}
-function exit(effects) {
-  effects.exit(types.blockQuote);
-}
-var characterEscape = {
-  name: "characterEscape",
-  tokenize: tokenizeCharacterEscape
-};
-function tokenizeCharacterEscape(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(code === codes.backslash, "expected `\\`");
-    effects.enter(types.characterEscape);
-    effects.enter(types.escapeMarker);
-    effects.consume(code);
-    effects.exit(types.escapeMarker);
-    return inside;
-  }
-  function inside(code) {
-    if (asciiPunctuation(code)) {
-      effects.enter(types.characterEscapeValue);
-      effects.consume(code);
-      effects.exit(types.characterEscapeValue);
-      effects.exit(types.characterEscape);
-      return ok2;
-    }
-    return nok(code);
-  }
-}
-var characterReference = {
-  name: "characterReference",
-  tokenize: tokenizeCharacterReference
-};
-function tokenizeCharacterReference(effects, ok2, nok) {
-  const self = this;
-  let size = 0;
-  let max;
-  let test;
-  return start;
-  function start(code) {
-    ok(code === codes.ampersand, "expected `&`");
-    effects.enter(types.characterReference);
-    effects.enter(types.characterReferenceMarker);
-    effects.consume(code);
-    effects.exit(types.characterReferenceMarker);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.numberSign) {
-      effects.enter(types.characterReferenceMarkerNumeric);
-      effects.consume(code);
-      effects.exit(types.characterReferenceMarkerNumeric);
-      return numeric;
-    }
-    effects.enter(types.characterReferenceValue);
-    max = constants.characterReferenceNamedSizeMax;
-    test = asciiAlphanumeric;
-    return value(code);
-  }
-  function numeric(code) {
-    if (code === codes.uppercaseX || code === codes.lowercaseX) {
-      effects.enter(types.characterReferenceMarkerHexadecimal);
-      effects.consume(code);
-      effects.exit(types.characterReferenceMarkerHexadecimal);
-      effects.enter(types.characterReferenceValue);
-      max = constants.characterReferenceHexadecimalSizeMax;
-      test = asciiHexDigit;
-      return value;
-    }
-    effects.enter(types.characterReferenceValue);
-    max = constants.characterReferenceDecimalSizeMax;
-    test = asciiDigit;
-    return value(code);
-  }
-  function value(code) {
-    if (code === codes.semicolon && size) {
-      const token = effects.exit(types.characterReferenceValue);
-      if (test === asciiAlphanumeric && !decodeNamedCharacterReference(self.sliceSerialize(token))) {
-        return nok(code);
-      }
-      effects.enter(types.characterReferenceMarker);
-      effects.consume(code);
-      effects.exit(types.characterReferenceMarker);
-      effects.exit(types.characterReference);
-      return ok2;
-    }
-    if (test(code) && size++ < max) {
-      effects.consume(code);
-      return value;
-    }
-    return nok(code);
-  }
-}
-var nonLazyContinuation = {
-  partial: true,
-  tokenize: tokenizeNonLazyContinuation
-};
-var codeFenced = {
-  concrete: true,
-  name: "codeFenced",
-  tokenize: tokenizeCodeFenced
-};
-function tokenizeCodeFenced(effects, ok2, nok) {
-  const self = this;
-  const closeStart = { partial: true, tokenize: tokenizeCloseStart };
-  let initialPrefix = 0;
-  let sizeOpen = 0;
-  let marker;
-  return start;
-  function start(code) {
-    return beforeSequenceOpen(code);
-  }
-  function beforeSequenceOpen(code) {
-    ok(code === codes.graveAccent || code === codes.tilde, "expected `` ` `` or `~`");
-    const tail = self.events[self.events.length - 1];
-    initialPrefix = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
-    marker = code;
-    effects.enter(types.codeFenced);
-    effects.enter(types.codeFencedFence);
-    effects.enter(types.codeFencedFenceSequence);
-    return sequenceOpen(code);
-  }
-  function sequenceOpen(code) {
-    if (code === marker) {
-      sizeOpen++;
-      effects.consume(code);
-      return sequenceOpen;
-    }
-    if (sizeOpen < constants.codeFencedSequenceSizeMin) {
-      return nok(code);
-    }
-    effects.exit(types.codeFencedFenceSequence);
-    return markdownSpace(code) ? factorySpace(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
-  }
-  function infoBefore(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.codeFencedFence);
-      return self.interrupt ? ok2(code) : effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
-    }
-    effects.enter(types.codeFencedFenceInfo);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return info(code);
-  }
-  function info(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.chunkString);
-      effects.exit(types.codeFencedFenceInfo);
-      return infoBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.exit(types.chunkString);
-      effects.exit(types.codeFencedFenceInfo);
-      return factorySpace(effects, metaBefore, types.whitespace)(code);
-    }
-    if (code === codes.graveAccent && code === marker) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return info;
-  }
-  function metaBefore(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return infoBefore(code);
-    }
-    effects.enter(types.codeFencedFenceMeta);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return meta(code);
-  }
-  function meta(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.chunkString);
-      effects.exit(types.codeFencedFenceMeta);
-      return infoBefore(code);
-    }
-    if (code === codes.graveAccent && code === marker) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return meta;
-  }
-  function atNonLazyBreak(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    return effects.attempt(closeStart, after, contentBefore)(code);
-  }
-  function contentBefore(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return contentStart;
-  }
-  function contentStart(code) {
-    return initialPrefix > 0 && markdownSpace(code) ? factorySpace(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
-  }
-  function beforeContentChunk(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
-    }
-    effects.enter(types.codeFlowValue);
-    return contentChunk(code);
-  }
-  function contentChunk(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.codeFlowValue);
-      return beforeContentChunk(code);
-    }
-    effects.consume(code);
-    return contentChunk;
-  }
-  function after(code) {
-    effects.exit(types.codeFenced);
-    return ok2(code);
-  }
-  function tokenizeCloseStart(effects2, ok3, nok2) {
-    let size = 0;
-    return startBefore;
-    function startBefore(code) {
-      ok(markdownLineEnding(code), "expected eol");
-      effects2.enter(types.lineEnding);
-      effects2.consume(code);
-      effects2.exit(types.lineEnding);
-      return start2;
-    }
-    function start2(code) {
-      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      effects2.enter(types.codeFencedFence);
-      return markdownSpace(code) ? factorySpace(effects2, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
-    }
-    function beforeSequenceClose(code) {
-      if (code === marker) {
-        effects2.enter(types.codeFencedFenceSequence);
-        return sequenceClose(code);
-      }
-      return nok2(code);
-    }
-    function sequenceClose(code) {
-      if (code === marker) {
-        size++;
-        effects2.consume(code);
-        return sequenceClose;
-      }
-      if (size >= sizeOpen) {
-        effects2.exit(types.codeFencedFenceSequence);
-        return markdownSpace(code) ? factorySpace(effects2, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
-      }
-      return nok2(code);
-    }
-    function sequenceCloseAfter(code) {
-      if (code === codes.eof || markdownLineEnding(code)) {
-        effects2.exit(types.codeFencedFence);
-        return ok3(code);
-      }
-      return nok2(code);
-    }
-  }
-}
-function tokenizeNonLazyContinuation(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return lineStart;
-  }
-  function lineStart(code) {
-    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
-  }
-}
-var codeIndented = {
-  name: "codeIndented",
-  tokenize: tokenizeCodeIndented
-};
-var furtherStart = { partial: true, tokenize: tokenizeFurtherStart };
-function tokenizeCodeIndented(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    ok(markdownSpace(code));
-    effects.enter(types.codeIndented);
-    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
-  }
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? atBreak(code) : nok(code);
-  }
-  function atBreak(code) {
-    if (code === codes.eof) {
-      return after(code);
-    }
-    if (markdownLineEnding(code)) {
-      return effects.attempt(furtherStart, atBreak, after)(code);
-    }
-    effects.enter(types.codeFlowValue);
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.codeFlowValue);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    return inside;
-  }
-  function after(code) {
-    effects.exit(types.codeIndented);
-    return ok2(code);
-  }
-}
-function tokenizeFurtherStart(effects, ok2, nok) {
-  const self = this;
-  return furtherStart2;
-  function furtherStart2(code) {
-    if (self.parser.lazy[self.now().line]) {
-      return nok(code);
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return furtherStart2;
-    }
-    return factorySpace(effects, afterPrefix, types.linePrefix, constants.tabSize + 1)(code);
-  }
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize ? ok2(code) : markdownLineEnding(code) ? furtherStart2(code) : nok(code);
-  }
-}
-var codeText = {
-  name: "codeText",
-  previous,
-  resolve: resolveCodeText,
-  tokenize: tokenizeCodeText
-};
-function resolveCodeText(events) {
-  let tailExitIndex = events.length - 4;
-  let headEnterIndex = 3;
-  let index;
-  let enter;
-  if ((events[headEnterIndex][1].type === types.lineEnding || events[headEnterIndex][1].type === "space") && (events[tailExitIndex][1].type === types.lineEnding || events[tailExitIndex][1].type === "space")) {
-    index = headEnterIndex;
-    while (++index < tailExitIndex) {
-      if (events[index][1].type === types.codeTextData) {
-        events[headEnterIndex][1].type = types.codeTextPadding;
-        events[tailExitIndex][1].type = types.codeTextPadding;
-        headEnterIndex += 2;
-        tailExitIndex -= 2;
-        break;
-      }
-    }
-  }
-  index = headEnterIndex - 1;
-  tailExitIndex++;
-  while (++index <= tailExitIndex) {
-    if (enter === undefined) {
-      if (index !== tailExitIndex && events[index][1].type !== types.lineEnding) {
-        enter = index;
-      }
-    } else if (index === tailExitIndex || events[index][1].type === types.lineEnding) {
-      events[enter][1].type = types.codeTextData;
-      if (index !== enter + 2) {
-        events[enter][1].end = events[index - 1][1].end;
-        events.splice(enter + 2, index - enter - 2);
-        tailExitIndex -= index - enter - 2;
-        index = enter + 2;
-      }
-      enter = undefined;
-    }
-  }
-  return events;
-}
-function previous(code) {
-  return code !== codes.graveAccent || this.events[this.events.length - 1][1].type === types.characterEscape;
-}
-function tokenizeCodeText(effects, ok2, nok) {
-  const self = this;
-  let sizeOpen = 0;
-  let size;
-  let token;
-  return start;
-  function start(code) {
-    ok(code === codes.graveAccent, "expected `` ` ``");
-    ok(previous.call(self, self.previous), "expected correct previous");
-    effects.enter(types.codeText);
-    effects.enter(types.codeTextSequence);
-    return sequenceOpen(code);
-  }
-  function sequenceOpen(code) {
-    if (code === codes.graveAccent) {
-      effects.consume(code);
-      sizeOpen++;
-      return sequenceOpen;
-    }
-    effects.exit(types.codeTextSequence);
-    return between(code);
-  }
-  function between(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.space) {
-      effects.enter("space");
-      effects.consume(code);
-      effects.exit("space");
-      return between;
-    }
-    if (code === codes.graveAccent) {
-      token = effects.enter(types.codeTextSequence);
-      size = 0;
-      return sequenceClose(code);
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return between;
-    }
-    effects.enter(types.codeTextData);
-    return data(code);
-  }
-  function data(code) {
-    if (code === codes.eof || code === codes.space || code === codes.graveAccent || markdownLineEnding(code)) {
-      effects.exit(types.codeTextData);
-      return between(code);
-    }
-    effects.consume(code);
-    return data;
-  }
-  function sequenceClose(code) {
-    if (code === codes.graveAccent) {
-      effects.consume(code);
-      size++;
-      return sequenceClose;
-    }
-    if (size === sizeOpen) {
-      effects.exit(types.codeTextSequence);
-      effects.exit(types.codeText);
-      return ok2(code);
-    }
-    token.type = types.codeTextData;
-    return data(code);
-  }
-}
-
-class SpliceBuffer {
-  constructor(initial) {
-    this.left = initial ? [...initial] : [];
-    this.right = [];
-  }
-  get(index) {
-    if (index < 0 || index >= this.left.length + this.right.length) {
-      throw new RangeError("Cannot access index `" + index + "` in a splice buffer of size `" + (this.left.length + this.right.length) + "`");
-    }
-    if (index < this.left.length)
-      return this.left[index];
-    return this.right[this.right.length - index + this.left.length - 1];
-  }
-  get length() {
-    return this.left.length + this.right.length;
-  }
-  shift() {
-    this.setCursor(0);
-    return this.right.pop();
-  }
-  slice(start, end) {
-    const stop = end === null || end === undefined ? Number.POSITIVE_INFINITY : end;
-    if (stop < this.left.length) {
-      return this.left.slice(start, stop);
-    }
-    if (start > this.left.length) {
-      return this.right.slice(this.right.length - stop + this.left.length, this.right.length - start + this.left.length).reverse();
-    }
-    return this.left.slice(start).concat(this.right.slice(this.right.length - stop + this.left.length).reverse());
-  }
-  splice(start, deleteCount, items) {
-    const count = deleteCount || 0;
-    this.setCursor(Math.trunc(start));
-    const removed = this.right.splice(this.right.length - count, Number.POSITIVE_INFINITY);
-    if (items)
-      chunkedPush(this.left, items);
-    return removed.reverse();
-  }
-  pop() {
-    this.setCursor(Number.POSITIVE_INFINITY);
-    return this.left.pop();
-  }
-  push(item) {
-    this.setCursor(Number.POSITIVE_INFINITY);
-    this.left.push(item);
-  }
-  pushMany(items) {
-    this.setCursor(Number.POSITIVE_INFINITY);
-    chunkedPush(this.left, items);
-  }
-  unshift(item) {
-    this.setCursor(0);
-    this.right.push(item);
-  }
-  unshiftMany(items) {
-    this.setCursor(0);
-    chunkedPush(this.right, items.reverse());
-  }
-  setCursor(n) {
-    if (n === this.left.length || n > this.left.length && this.right.length === 0 || n < 0 && this.left.length === 0)
-      return;
-    if (n < this.left.length) {
-      const removed = this.left.splice(n, Number.POSITIVE_INFINITY);
-      chunkedPush(this.right, removed.reverse());
-    } else {
-      const removed = this.right.splice(this.left.length + this.right.length - n, Number.POSITIVE_INFINITY);
-      chunkedPush(this.left, removed.reverse());
-    }
-  }
-}
-function chunkedPush(list, right) {
-  let chunkStart = 0;
-  if (right.length < constants.v8MaxSafeChunkSize) {
-    list.push(...right);
-  } else {
-    while (chunkStart < right.length) {
-      list.push(...right.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize));
-      chunkStart += constants.v8MaxSafeChunkSize;
-    }
-  }
-}
-function subtokenize(eventsArray) {
-  const jumps = {};
-  let index = -1;
-  let event;
-  let lineIndex;
-  let otherIndex;
-  let otherEvent;
-  let parameters;
-  let subevents;
-  let more;
-  const events = new SpliceBuffer(eventsArray);
-  while (++index < events.length) {
-    while (index in jumps) {
-      index = jumps[index];
-    }
-    event = events.get(index);
-    if (index && event[1].type === types.chunkFlow && events.get(index - 1)[1].type === types.listItemPrefix) {
-      ok(event[1]._tokenizer, "expected `_tokenizer` on subtokens");
-      subevents = event[1]._tokenizer.events;
-      otherIndex = 0;
-      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.lineEndingBlank) {
-        otherIndex += 2;
-      }
-      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.content) {
-        while (++otherIndex < subevents.length) {
-          if (subevents[otherIndex][1].type === types.content) {
-            break;
-          }
-          if (subevents[otherIndex][1].type === types.chunkText) {
-            subevents[otherIndex][1]._isInFirstContentOfListItem = true;
-            otherIndex++;
-          }
-        }
-      }
-    }
-    if (event[0] === "enter") {
-      if (event[1].contentType) {
-        Object.assign(jumps, subcontent(events, index));
-        index = jumps[index];
-        more = true;
-      }
-    } else if (event[1]._container) {
-      otherIndex = index;
-      lineIndex = undefined;
-      while (otherIndex--) {
-        otherEvent = events.get(otherIndex);
-        if (otherEvent[1].type === types.lineEnding || otherEvent[1].type === types.lineEndingBlank) {
-          if (otherEvent[0] === "enter") {
-            if (lineIndex) {
-              events.get(lineIndex)[1].type = types.lineEndingBlank;
-            }
-            otherEvent[1].type = types.lineEnding;
-            lineIndex = otherIndex;
-          }
-        } else if (otherEvent[1].type === types.linePrefix || otherEvent[1].type === types.listItemIndent) {} else {
-          break;
-        }
-      }
-      if (lineIndex) {
-        event[1].end = { ...events.get(lineIndex)[1].start };
-        parameters = events.slice(lineIndex, index);
-        parameters.unshift(event);
-        events.splice(lineIndex, index - lineIndex + 1, parameters);
-      }
-    }
-  }
-  splice(eventsArray, 0, Number.POSITIVE_INFINITY, events.slice(0));
-  return !more;
-}
-function subcontent(events, eventIndex) {
-  const token = events.get(eventIndex)[1];
-  const context = events.get(eventIndex)[2];
-  let startPosition = eventIndex - 1;
-  const startPositions = [];
-  ok(token.contentType, "expected `contentType` on subtokens");
-  let tokenizer = token._tokenizer;
-  if (!tokenizer) {
-    tokenizer = context.parser[token.contentType](token.start);
-    if (token._contentTypeTextTrailing) {
-      tokenizer._contentTypeTextTrailing = true;
-    }
-  }
-  const childEvents = tokenizer.events;
-  const jumps = [];
-  const gaps = {};
-  let stream;
-  let previous2;
-  let index = -1;
-  let current = token;
-  let adjust = 0;
-  let start = 0;
-  const breaks = [start];
-  while (current) {
-    while (events.get(++startPosition)[1] !== current) {}
-    ok(!previous2 || current.previous === previous2, "expected previous to match");
-    ok(!previous2 || previous2.next === current, "expected next to match");
-    startPositions.push(startPosition);
-    if (!current._tokenizer) {
-      stream = context.sliceStream(current);
-      if (!current.next) {
-        stream.push(codes.eof);
-      }
-      if (previous2) {
-        tokenizer.defineSkip(current.start);
-      }
-      if (current._isInFirstContentOfListItem) {
-        tokenizer._gfmTasklistFirstContentOfListItem = true;
-      }
-      tokenizer.write(stream);
-      if (current._isInFirstContentOfListItem) {
-        tokenizer._gfmTasklistFirstContentOfListItem = undefined;
-      }
-    }
-    previous2 = current;
-    current = current.next;
-  }
-  current = token;
-  while (++index < childEvents.length) {
-    if (childEvents[index][0] === "exit" && childEvents[index - 1][0] === "enter" && childEvents[index][1].type === childEvents[index - 1][1].type && childEvents[index][1].start.line !== childEvents[index][1].end.line) {
-      ok(current, "expected a current token");
-      start = index + 1;
-      breaks.push(start);
-      current._tokenizer = undefined;
-      current.previous = undefined;
-      current = current.next;
-    }
-  }
-  tokenizer.events = [];
-  if (current) {
-    current._tokenizer = undefined;
-    current.previous = undefined;
-    ok(!current.next, "expected no next token");
-  } else {
-    breaks.pop();
-  }
-  index = breaks.length;
-  while (index--) {
-    const slice = childEvents.slice(breaks[index], breaks[index + 1]);
-    const start2 = startPositions.pop();
-    ok(start2 !== undefined, "expected a start position when splicing");
-    jumps.push([start2, start2 + slice.length - 1]);
-    events.splice(start2, 2, slice);
-  }
-  jumps.reverse();
-  index = -1;
-  while (++index < jumps.length) {
-    gaps[adjust + jumps[index][0]] = adjust + jumps[index][1];
-    adjust += jumps[index][1] - jumps[index][0] - 1;
-  }
-  return gaps;
-}
-var content2 = { resolve: resolveContent, tokenize: tokenizeContent };
-var continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
-function resolveContent(events) {
-  subtokenize(events);
-  return events;
-}
-function tokenizeContent(effects, ok2) {
-  let previous2;
-  return chunkStart;
-  function chunkStart(code) {
-    ok(code !== codes.eof && !markdownLineEnding(code), "expected no eof or eol");
-    effects.enter(types.content);
-    previous2 = effects.enter(types.chunkContent, {
-      contentType: constants.contentTypeContent
-    });
-    return chunkInside(code);
-  }
-  function chunkInside(code) {
-    if (code === codes.eof) {
-      return contentEnd(code);
-    }
-    if (markdownLineEnding(code)) {
-      return effects.check(continuationConstruct, contentContinue, contentEnd)(code);
-    }
-    effects.consume(code);
-    return chunkInside;
-  }
-  function contentEnd(code) {
-    effects.exit(types.chunkContent);
-    effects.exit(types.content);
-    return ok2(code);
-  }
-  function contentContinue(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    effects.consume(code);
-    effects.exit(types.chunkContent);
-    ok(previous2, "expected previous token");
-    previous2.next = effects.enter(types.chunkContent, {
-      contentType: constants.contentTypeContent,
-      previous: previous2
-    });
-    previous2 = previous2.next;
-    return chunkInside;
-  }
-}
-function tokenizeContinuation(effects, ok2, nok) {
-  const self = this;
-  return startLookahead;
-  function startLookahead(code) {
-    ok(markdownLineEnding(code), "expected a line ending");
-    effects.exit(types.chunkContent);
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return factorySpace(effects, prefixed, types.linePrefix);
-  }
-  function prefixed(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return nok(code);
-    }
-    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    const tail = self.events[self.events.length - 1];
-    if (!self.parser.constructs.disable.null.includes("codeIndented") && tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize) {
-      return ok2(code);
-    }
-    return effects.interrupt(self.parser.constructs.flow, nok, ok2)(code);
-  }
-}
-function factoryDestination(effects, ok2, nok, type, literalType, literalMarkerType, rawType, stringType, max) {
-  const limit = max || Number.POSITIVE_INFINITY;
-  let balance = 0;
-  return start;
-  function start(code) {
-    if (code === codes.lessThan) {
-      effects.enter(type);
-      effects.enter(literalType);
-      effects.enter(literalMarkerType);
-      effects.consume(code);
-      effects.exit(literalMarkerType);
-      return enclosedBefore;
-    }
-    if (code === codes.eof || code === codes.space || code === codes.rightParenthesis || asciiControl(code)) {
-      return nok(code);
-    }
-    effects.enter(type);
-    effects.enter(rawType);
-    effects.enter(stringType);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return raw(code);
-  }
-  function enclosedBefore(code) {
-    if (code === codes.greaterThan) {
-      effects.enter(literalMarkerType);
-      effects.consume(code);
-      effects.exit(literalMarkerType);
-      effects.exit(literalType);
-      effects.exit(type);
-      return ok2;
-    }
-    effects.enter(stringType);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return enclosed(code);
-  }
-  function enclosed(code) {
-    if (code === codes.greaterThan) {
-      effects.exit(types.chunkString);
-      effects.exit(stringType);
-      return enclosedBefore(code);
-    }
-    if (code === codes.eof || code === codes.lessThan || markdownLineEnding(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return code === codes.backslash ? enclosedEscape : enclosed;
-  }
-  function enclosedEscape(code) {
-    if (code === codes.lessThan || code === codes.greaterThan || code === codes.backslash) {
-      effects.consume(code);
-      return enclosed;
-    }
-    return enclosed(code);
-  }
-  function raw(code) {
-    if (!balance && (code === codes.eof || code === codes.rightParenthesis || markdownLineEndingOrSpace(code))) {
-      effects.exit(types.chunkString);
-      effects.exit(stringType);
-      effects.exit(rawType);
-      effects.exit(type);
-      return ok2(code);
-    }
-    if (balance < limit && code === codes.leftParenthesis) {
-      effects.consume(code);
-      balance++;
-      return raw;
-    }
-    if (code === codes.rightParenthesis) {
-      effects.consume(code);
-      balance--;
-      return raw;
-    }
-    if (code === codes.eof || code === codes.space || code === codes.leftParenthesis || asciiControl(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return code === codes.backslash ? rawEscape : raw;
-  }
-  function rawEscape(code) {
-    if (code === codes.leftParenthesis || code === codes.rightParenthesis || code === codes.backslash) {
-      effects.consume(code);
-      return raw;
-    }
-    return raw(code);
-  }
-}
-function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
-  const self = this;
-  let size = 0;
-  let seen;
-  return start;
-  function start(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    effects.enter(type);
-    effects.enter(markerType);
-    effects.consume(code);
-    effects.exit(markerType);
-    effects.enter(stringType);
-    return atBreak;
-  }
-  function atBreak(code) {
-    if (size > constants.linkReferenceSizeMax || code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket && !seen || code === codes.caret && !size && "_hiddenFootnoteSupport" in self.parser.constructs) {
-      return nok(code);
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.exit(stringType);
-      effects.enter(markerType);
-      effects.consume(code);
-      effects.exit(markerType);
-      effects.exit(type);
-      return ok2;
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return atBreak;
-    }
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return labelInside(code);
-  }
-  function labelInside(code) {
-    if (code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket || markdownLineEnding(code) || size++ > constants.linkReferenceSizeMax) {
-      effects.exit(types.chunkString);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    if (!seen)
-      seen = !markdownSpace(code);
-    return code === codes.backslash ? labelEscape : labelInside;
-  }
-  function labelEscape(code) {
-    if (code === codes.leftSquareBracket || code === codes.backslash || code === codes.rightSquareBracket) {
-      effects.consume(code);
-      size++;
-      return labelInside;
-    }
-    return labelInside(code);
-  }
-}
-function factoryTitle(effects, ok2, nok, type, markerType, stringType) {
-  let marker;
-  return start;
-  function start(code) {
-    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
-      effects.enter(type);
-      effects.enter(markerType);
-      effects.consume(code);
-      effects.exit(markerType);
-      marker = code === codes.leftParenthesis ? codes.rightParenthesis : code;
-      return begin;
-    }
-    return nok(code);
-  }
-  function begin(code) {
-    if (code === marker) {
-      effects.enter(markerType);
-      effects.consume(code);
-      effects.exit(markerType);
-      effects.exit(type);
-      return ok2;
-    }
-    effects.enter(stringType);
-    return atBreak(code);
-  }
-  function atBreak(code) {
-    if (code === marker) {
-      effects.exit(stringType);
-      return begin(marker);
-    }
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return factorySpace(effects, atBreak, types.linePrefix);
-    }
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === marker || code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.chunkString);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    return code === codes.backslash ? escape : inside;
-  }
-  function escape(code) {
-    if (code === marker || code === codes.backslash) {
-      effects.consume(code);
-      return inside;
-    }
-    return inside(code);
-  }
-}
-function factoryWhitespace(effects, ok2) {
-  let seen;
-  return start;
-  function start(code) {
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      seen = true;
-      return start;
-    }
-    if (markdownSpace(code)) {
-      return factorySpace(effects, start, seen ? types.linePrefix : types.lineSuffix)(code);
-    }
-    return ok2(code);
-  }
-}
-var definition = { name: "definition", tokenize: tokenizeDefinition };
-var titleBefore = { partial: true, tokenize: tokenizeTitleBefore };
-function tokenizeDefinition(effects, ok2, nok) {
-  const self = this;
-  let identifier;
-  return start;
-  function start(code) {
-    effects.enter(types.definition);
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    return factoryLabel.call(self, effects, labelAfter, nok, types.definitionLabel, types.definitionLabelMarker, types.definitionLabelString)(code);
-  }
-  function labelAfter(code) {
-    identifier = normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1));
-    if (code === codes.colon) {
-      effects.enter(types.definitionMarker);
-      effects.consume(code);
-      effects.exit(types.definitionMarker);
-      return markerAfter;
-    }
-    return nok(code);
-  }
-  function markerAfter(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, destinationBefore)(code) : destinationBefore(code);
-  }
-  function destinationBefore(code) {
-    return factoryDestination(effects, destinationAfter, nok, types.definitionDestination, types.definitionDestinationLiteral, types.definitionDestinationLiteralMarker, types.definitionDestinationRaw, types.definitionDestinationString)(code);
-  }
-  function destinationAfter(code) {
-    return effects.attempt(titleBefore, after, after)(code);
-  }
-  function after(code) {
-    return markdownSpace(code) ? factorySpace(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
-  }
-  function afterWhitespace(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.definition);
-      self.parser.defined.push(identifier);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-}
-function tokenizeTitleBefore(effects, ok2, nok) {
-  return titleBefore2;
-  function titleBefore2(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
-  }
-  function beforeMarker(code) {
-    return factoryTitle(effects, titleAfter, nok, types.definitionTitle, types.definitionTitleMarker, types.definitionTitleString)(code);
-  }
-  function titleAfter(code) {
-    return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
-  }
-  function titleAfterOptionalWhitespace(code) {
-    return code === codes.eof || markdownLineEnding(code) ? ok2(code) : nok(code);
-  }
-}
-var hardBreakEscape = {
-  name: "hardBreakEscape",
-  tokenize: tokenizeHardBreakEscape
-};
-function tokenizeHardBreakEscape(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(code === codes.backslash, "expected `\\`");
-    effects.enter(types.hardBreakEscape);
-    effects.consume(code);
-    return after;
-  }
-  function after(code) {
-    if (markdownLineEnding(code)) {
-      effects.exit(types.hardBreakEscape);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-}
-var headingAtx = {
-  name: "headingAtx",
-  resolve: resolveHeadingAtx,
-  tokenize: tokenizeHeadingAtx
-};
-function resolveHeadingAtx(events, context) {
-  let contentEnd = events.length - 2;
-  let contentStart = 3;
-  let content3;
-  let text;
-  if (events[contentStart][1].type === types.whitespace) {
-    contentStart += 2;
-  }
-  if (contentEnd - 2 > contentStart && events[contentEnd][1].type === types.whitespace) {
-    contentEnd -= 2;
-  }
-  if (events[contentEnd][1].type === types.atxHeadingSequence && (contentStart === contentEnd - 1 || contentEnd - 4 > contentStart && events[contentEnd - 2][1].type === types.whitespace)) {
-    contentEnd -= contentStart + 1 === contentEnd ? 2 : 4;
-  }
-  if (contentEnd > contentStart) {
-    content3 = {
-      type: types.atxHeadingText,
-      start: events[contentStart][1].start,
-      end: events[contentEnd][1].end
-    };
-    text = {
-      type: types.chunkText,
-      start: events[contentStart][1].start,
-      end: events[contentEnd][1].end,
-      contentType: constants.contentTypeText
-    };
-    splice(events, contentStart, contentEnd - contentStart + 1, [
-      ["enter", content3, context],
-      ["enter", text, context],
-      ["exit", text, context],
-      ["exit", content3, context]
-    ]);
-  }
-  return events;
-}
-function tokenizeHeadingAtx(effects, ok2, nok) {
-  let size = 0;
-  return start;
-  function start(code) {
-    effects.enter(types.atxHeading);
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.numberSign, "expected `#`");
-    effects.enter(types.atxHeadingSequence);
-    return sequenceOpen(code);
-  }
-  function sequenceOpen(code) {
-    if (code === codes.numberSign && size++ < constants.atxHeadingOpeningFenceSizeMax) {
-      effects.consume(code);
-      return sequenceOpen;
-    }
-    if (code === codes.eof || markdownLineEndingOrSpace(code)) {
-      effects.exit(types.atxHeadingSequence);
-      return atBreak(code);
-    }
-    return nok(code);
-  }
-  function atBreak(code) {
-    if (code === codes.numberSign) {
-      effects.enter(types.atxHeadingSequence);
-      return sequenceFurther(code);
-    }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.atxHeading);
-      return ok2(code);
-    }
-    if (markdownSpace(code)) {
-      return factorySpace(effects, atBreak, types.whitespace)(code);
-    }
-    effects.enter(types.atxHeadingText);
-    return data(code);
-  }
-  function sequenceFurther(code) {
-    if (code === codes.numberSign) {
-      effects.consume(code);
-      return sequenceFurther;
-    }
-    effects.exit(types.atxHeadingSequence);
-    return atBreak(code);
-  }
-  function data(code) {
-    if (code === codes.eof || code === codes.numberSign || markdownLineEndingOrSpace(code)) {
-      effects.exit(types.atxHeadingText);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    return data;
-  }
-}
-var htmlBlockNames = [
-  "address",
-  "article",
-  "aside",
-  "base",
-  "basefont",
-  "blockquote",
-  "body",
-  "caption",
-  "center",
-  "col",
-  "colgroup",
-  "dd",
-  "details",
-  "dialog",
-  "dir",
-  "div",
-  "dl",
-  "dt",
-  "fieldset",
-  "figcaption",
-  "figure",
-  "footer",
-  "form",
-  "frame",
-  "frameset",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "head",
-  "header",
-  "hr",
-  "html",
-  "iframe",
-  "legend",
-  "li",
-  "link",
-  "main",
-  "menu",
-  "menuitem",
-  "nav",
-  "noframes",
-  "ol",
-  "optgroup",
-  "option",
-  "p",
-  "param",
-  "search",
-  "section",
-  "summary",
-  "table",
-  "tbody",
-  "td",
-  "tfoot",
-  "th",
-  "thead",
-  "title",
-  "tr",
-  "track",
-  "ul"
-];
-var htmlRawNames = ["pre", "script", "style", "textarea"];
-var htmlFlow = {
-  concrete: true,
-  name: "htmlFlow",
-  resolveTo: resolveToHtmlFlow,
-  tokenize: tokenizeHtmlFlow
-};
-var blankLineBefore = { partial: true, tokenize: tokenizeBlankLineBefore };
-var nonLazyContinuationStart = {
-  partial: true,
-  tokenize: tokenizeNonLazyContinuationStart
-};
-function resolveToHtmlFlow(events) {
-  let index = events.length;
-  while (index--) {
-    if (events[index][0] === "enter" && events[index][1].type === types.htmlFlow) {
-      break;
-    }
-  }
-  if (index > 1 && events[index - 2][1].type === types.linePrefix) {
-    events[index][1].start = events[index - 2][1].start;
-    events[index + 1][1].start = events[index - 2][1].start;
-    events.splice(index - 2, 2);
-  }
-  return events;
-}
-function tokenizeHtmlFlow(effects, ok2, nok) {
-  const self = this;
-  let marker;
-  let closingTag;
-  let buffer;
-  let index;
-  let markerB;
-  return start;
-  function start(code) {
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.lessThan, "expected `<`");
-    effects.enter(types.htmlFlow);
-    effects.enter(types.htmlFlowData);
-    effects.consume(code);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.exclamationMark) {
-      effects.consume(code);
-      return declarationOpen;
-    }
-    if (code === codes.slash) {
-      effects.consume(code);
-      closingTag = true;
-      return tagCloseStart;
-    }
-    if (code === codes.questionMark) {
-      effects.consume(code);
-      marker = constants.htmlInstruction;
-      return self.interrupt ? ok2 : continuationDeclarationInside;
-    }
-    if (asciiAlpha(code)) {
-      ok(code !== null);
-      effects.consume(code);
-      buffer = String.fromCharCode(code);
-      return tagName;
-    }
-    return nok(code);
-  }
-  function declarationOpen(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      marker = constants.htmlComment;
-      return commentOpenInside;
-    }
-    if (code === codes.leftSquareBracket) {
-      effects.consume(code);
-      marker = constants.htmlCdata;
-      index = 0;
-      return cdataOpenInside;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      marker = constants.htmlDeclaration;
-      return self.interrupt ? ok2 : continuationDeclarationInside;
-    }
-    return nok(code);
-  }
-  function commentOpenInside(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return self.interrupt ? ok2 : continuationDeclarationInside;
-    }
-    return nok(code);
-  }
-  function cdataOpenInside(code) {
-    const value = constants.cdataOpeningString;
-    if (code === value.charCodeAt(index++)) {
-      effects.consume(code);
-      if (index === value.length) {
-        return self.interrupt ? ok2 : continuation;
-      }
-      return cdataOpenInside;
-    }
-    return nok(code);
-  }
-  function tagCloseStart(code) {
-    if (asciiAlpha(code)) {
-      ok(code !== null);
-      effects.consume(code);
-      buffer = String.fromCharCode(code);
-      return tagName;
-    }
-    return nok(code);
-  }
-  function tagName(code) {
-    if (code === codes.eof || code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      const slash = code === codes.slash;
-      const name = buffer.toLowerCase();
-      if (!slash && !closingTag && htmlRawNames.includes(name)) {
-        marker = constants.htmlRaw;
-        return self.interrupt ? ok2(code) : continuation(code);
-      }
-      if (htmlBlockNames.includes(buffer.toLowerCase())) {
-        marker = constants.htmlBasic;
-        if (slash) {
-          effects.consume(code);
-          return basicSelfClosing;
-        }
-        return self.interrupt ? ok2(code) : continuation(code);
-      }
-      marker = constants.htmlComplete;
-      return self.interrupt && !self.parser.lazy[self.now().line] ? nok(code) : closingTag ? completeClosingTagAfter(code) : completeAttributeNameBefore(code);
-    }
-    if (code === codes.dash || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      buffer += String.fromCharCode(code);
-      return tagName;
-    }
-    return nok(code);
-  }
-  function basicSelfClosing(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      return self.interrupt ? ok2 : continuation;
-    }
-    return nok(code);
-  }
-  function completeClosingTagAfter(code) {
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeClosingTagAfter;
-    }
-    return completeEnd(code);
-  }
-  function completeAttributeNameBefore(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      return completeEnd;
-    }
-    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
-      effects.consume(code);
-      return completeAttributeName;
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAttributeNameBefore;
-    }
-    return completeEnd(code);
-  }
-  function completeAttributeName(code) {
-    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return completeAttributeName;
-    }
-    return completeAttributeNameAfter(code);
-  }
-  function completeAttributeNameAfter(code) {
-    if (code === codes.equalsTo) {
-      effects.consume(code);
-      return completeAttributeValueBefore;
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAttributeNameAfter;
-    }
-    return completeAttributeNameBefore(code);
-  }
-  function completeAttributeValueBefore(code) {
-    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
-      return nok(code);
-    }
-    if (code === codes.quotationMark || code === codes.apostrophe) {
-      effects.consume(code);
-      markerB = code;
-      return completeAttributeValueQuoted;
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAttributeValueBefore;
-    }
-    return completeAttributeValueUnquoted(code);
-  }
-  function completeAttributeValueQuoted(code) {
-    if (code === markerB) {
-      effects.consume(code);
-      markerB = null;
-      return completeAttributeValueQuotedAfter;
-    }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return completeAttributeValueQuoted;
-  }
-  function completeAttributeValueUnquoted(code) {
-    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.slash || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent || markdownLineEndingOrSpace(code)) {
-      return completeAttributeNameAfter(code);
-    }
-    effects.consume(code);
-    return completeAttributeValueUnquoted;
-  }
-  function completeAttributeValueQuotedAfter(code) {
-    if (code === codes.slash || code === codes.greaterThan || markdownSpace(code)) {
-      return completeAttributeNameBefore(code);
-    }
-    return nok(code);
-  }
-  function completeEnd(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      return completeAfter;
-    }
-    return nok(code);
-  }
-  function completeAfter(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return continuation(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAfter;
-    }
-    return nok(code);
-  }
-  function continuation(code) {
-    if (code === codes.dash && marker === constants.htmlComment) {
-      effects.consume(code);
-      return continuationCommentInside;
-    }
-    if (code === codes.lessThan && marker === constants.htmlRaw) {
-      effects.consume(code);
-      return continuationRawTagOpen;
-    }
-    if (code === codes.greaterThan && marker === constants.htmlDeclaration) {
-      effects.consume(code);
-      return continuationClose;
-    }
-    if (code === codes.questionMark && marker === constants.htmlInstruction) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    if (code === codes.rightSquareBracket && marker === constants.htmlCdata) {
-      effects.consume(code);
-      return continuationCdataInside;
-    }
-    if (markdownLineEnding(code) && (marker === constants.htmlBasic || marker === constants.htmlComplete)) {
-      effects.exit(types.htmlFlowData);
-      return effects.check(blankLineBefore, continuationAfter, continuationStart)(code);
-    }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.htmlFlowData);
-      return continuationStart(code);
-    }
-    effects.consume(code);
-    return continuation;
-  }
-  function continuationStart(code) {
-    return effects.check(nonLazyContinuationStart, continuationStartNonLazy, continuationAfter)(code);
-  }
-  function continuationStartNonLazy(code) {
-    ok(markdownLineEnding(code));
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return continuationBefore;
-  }
-  function continuationBefore(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return continuationStart(code);
-    }
-    effects.enter(types.htmlFlowData);
-    return continuation(code);
-  }
-  function continuationCommentInside(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    return continuation(code);
-  }
-  function continuationRawTagOpen(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      buffer = "";
-      return continuationRawEndTag;
-    }
-    return continuation(code);
-  }
-  function continuationRawEndTag(code) {
-    if (code === codes.greaterThan) {
-      const name = buffer.toLowerCase();
-      if (htmlRawNames.includes(name)) {
-        effects.consume(code);
-        return continuationClose;
-      }
-      return continuation(code);
-    }
-    if (asciiAlpha(code) && buffer.length < constants.htmlRawSizeMax) {
-      ok(code !== null);
-      effects.consume(code);
-      buffer += String.fromCharCode(code);
-      return continuationRawEndTag;
-    }
-    return continuation(code);
-  }
-  function continuationCdataInside(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    return continuation(code);
-  }
-  function continuationDeclarationInside(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      return continuationClose;
-    }
-    if (code === codes.dash && marker === constants.htmlComment) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    return continuation(code);
-  }
-  function continuationClose(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.htmlFlowData);
-      return continuationAfter(code);
-    }
-    effects.consume(code);
-    return continuationClose;
-  }
-  function continuationAfter(code) {
-    effects.exit(types.htmlFlow);
-    return ok2(code);
-  }
-}
-function tokenizeNonLazyContinuationStart(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
-  }
-}
-function tokenizeBlankLineBefore(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(markdownLineEnding(code), "expected a line ending");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return effects.attempt(blankLine, ok2, nok);
-  }
-}
-var htmlText = { name: "htmlText", tokenize: tokenizeHtmlText };
-function tokenizeHtmlText(effects, ok2, nok) {
-  const self = this;
-  let marker;
-  let index;
-  let returnState;
-  return start;
-  function start(code) {
-    ok(code === codes.lessThan, "expected `<`");
-    effects.enter(types.htmlText);
-    effects.enter(types.htmlTextData);
-    effects.consume(code);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.exclamationMark) {
-      effects.consume(code);
-      return declarationOpen;
-    }
-    if (code === codes.slash) {
-      effects.consume(code);
-      return tagCloseStart;
-    }
-    if (code === codes.questionMark) {
-      effects.consume(code);
-      return instruction;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return tagOpen;
-    }
-    return nok(code);
-  }
-  function declarationOpen(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentOpenInside;
-    }
-    if (code === codes.leftSquareBracket) {
-      effects.consume(code);
-      index = 0;
-      return cdataOpenInside;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return declaration;
-    }
-    return nok(code);
-  }
-  function commentOpenInside(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentEnd;
-    }
-    return nok(code);
-  }
-  function comment(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentClose;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = comment;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return comment;
-  }
-  function commentClose(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentEnd;
-    }
-    return comment(code);
-  }
-  function commentEnd(code) {
-    return code === codes.greaterThan ? end(code) : code === codes.dash ? commentClose(code) : comment(code);
-  }
-  function cdataOpenInside(code) {
-    const value = constants.cdataOpeningString;
-    if (code === value.charCodeAt(index++)) {
-      effects.consume(code);
-      return index === value.length ? cdata : cdataOpenInside;
-    }
-    return nok(code);
-  }
-  function cdata(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return cdataClose;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = cdata;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return cdata;
-  }
-  function cdataClose(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return cdataEnd;
-    }
-    return cdata(code);
-  }
-  function cdataEnd(code) {
-    if (code === codes.greaterThan) {
-      return end(code);
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return cdataEnd;
-    }
-    return cdata(code);
-  }
-  function declaration(code) {
-    if (code === codes.eof || code === codes.greaterThan) {
-      return end(code);
-    }
-    if (markdownLineEnding(code)) {
-      returnState = declaration;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return declaration;
-  }
-  function instruction(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.questionMark) {
-      effects.consume(code);
-      return instructionClose;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = instruction;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return instruction;
-  }
-  function instructionClose(code) {
-    return code === codes.greaterThan ? end(code) : instruction(code);
-  }
-  function tagCloseStart(code) {
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return tagClose;
-    }
-    return nok(code);
-  }
-  function tagClose(code) {
-    if (code === codes.dash || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return tagClose;
-    }
-    return tagCloseBetween(code);
-  }
-  function tagCloseBetween(code) {
-    if (markdownLineEnding(code)) {
-      returnState = tagCloseBetween;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagCloseBetween;
-    }
-    return end(code);
-  }
-  function tagOpen(code) {
-    if (code === codes.dash || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return tagOpen;
-    }
-    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      return tagOpenBetween(code);
-    }
-    return nok(code);
-  }
-  function tagOpenBetween(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      return end;
-    }
-    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
-      effects.consume(code);
-      return tagOpenAttributeName;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenBetween;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagOpenBetween;
-    }
-    return end(code);
-  }
-  function tagOpenAttributeName(code) {
-    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return tagOpenAttributeName;
-    }
-    return tagOpenAttributeNameAfter(code);
-  }
-  function tagOpenAttributeNameAfter(code) {
-    if (code === codes.equalsTo) {
-      effects.consume(code);
-      return tagOpenAttributeValueBefore;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenAttributeNameAfter;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagOpenAttributeNameAfter;
-    }
-    return tagOpenBetween(code);
-  }
-  function tagOpenAttributeValueBefore(code) {
-    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
-      return nok(code);
-    }
-    if (code === codes.quotationMark || code === codes.apostrophe) {
-      effects.consume(code);
-      marker = code;
-      return tagOpenAttributeValueQuoted;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenAttributeValueBefore;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagOpenAttributeValueBefore;
-    }
-    effects.consume(code);
-    return tagOpenAttributeValueUnquoted;
-  }
-  function tagOpenAttributeValueQuoted(code) {
-    if (code === marker) {
-      effects.consume(code);
-      marker = undefined;
-      return tagOpenAttributeValueQuotedAfter;
-    }
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenAttributeValueQuoted;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return tagOpenAttributeValueQuoted;
-  }
-  function tagOpenAttributeValueUnquoted(code) {
-    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.lessThan || code === codes.equalsTo || code === codes.graveAccent) {
-      return nok(code);
-    }
-    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      return tagOpenBetween(code);
-    }
-    effects.consume(code);
-    return tagOpenAttributeValueUnquoted;
-  }
-  function tagOpenAttributeValueQuotedAfter(code) {
-    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      return tagOpenBetween(code);
-    }
-    return nok(code);
-  }
-  function end(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      effects.exit(types.htmlTextData);
-      effects.exit(types.htmlText);
-      return ok2;
-    }
-    return nok(code);
-  }
-  function lineEndingBefore(code) {
-    ok(returnState, "expected return state");
-    ok(markdownLineEnding(code), "expected eol");
-    effects.exit(types.htmlTextData);
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return lineEndingAfter;
-  }
-  function lineEndingAfter(code) {
-    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return markdownSpace(code) ? factorySpace(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
-  }
-  function lineEndingAfterPrefix(code) {
-    effects.enter(types.htmlTextData);
-    return returnState(code);
-  }
-}
-var labelEnd = {
-  name: "labelEnd",
-  resolveAll: resolveAllLabelEnd,
-  resolveTo: resolveToLabelEnd,
-  tokenize: tokenizeLabelEnd
-};
-var resourceConstruct = { tokenize: tokenizeResource };
-var referenceFullConstruct = { tokenize: tokenizeReferenceFull };
-var referenceCollapsedConstruct = { tokenize: tokenizeReferenceCollapsed };
-function resolveAllLabelEnd(events) {
-  let index = -1;
-  const newEvents = [];
-  while (++index < events.length) {
-    const token = events[index][1];
-    newEvents.push(events[index]);
-    if (token.type === types.labelImage || token.type === types.labelLink || token.type === types.labelEnd) {
-      const offset = token.type === types.labelImage ? 4 : 2;
-      token.type = types.data;
-      index += offset;
-    }
-  }
-  if (events.length !== newEvents.length) {
-    splice(events, 0, events.length, newEvents);
-  }
-  return events;
-}
-function resolveToLabelEnd(events, context) {
-  let index = events.length;
-  let offset = 0;
-  let token;
-  let open;
-  let close;
-  let media;
-  while (index--) {
-    token = events[index][1];
-    if (open) {
-      if (token.type === types.link || token.type === types.labelLink && token._inactive) {
-        break;
-      }
-      if (events[index][0] === "enter" && token.type === types.labelLink) {
-        token._inactive = true;
-      }
-    } else if (close) {
-      if (events[index][0] === "enter" && (token.type === types.labelImage || token.type === types.labelLink) && !token._balanced) {
-        open = index;
-        if (token.type !== types.labelLink) {
-          offset = 2;
-          break;
-        }
-      }
-    } else if (token.type === types.labelEnd) {
-      close = index;
-    }
-  }
-  ok(open !== undefined, "`open` is supposed to be found");
-  ok(close !== undefined, "`close` is supposed to be found");
-  const group = {
-    type: events[open][1].type === types.labelLink ? types.link : types.image,
-    start: { ...events[open][1].start },
-    end: { ...events[events.length - 1][1].end }
-  };
-  const label = {
-    type: types.label,
-    start: { ...events[open][1].start },
-    end: { ...events[close][1].end }
-  };
-  const text = {
-    type: types.labelText,
-    start: { ...events[open + offset + 2][1].end },
-    end: { ...events[close - 2][1].start }
-  };
-  media = [
-    ["enter", group, context],
-    ["enter", label, context]
-  ];
-  media = push(media, events.slice(open + 1, open + offset + 3));
-  media = push(media, [["enter", text, context]]);
-  ok(context.parser.constructs.insideSpan.null, "expected `insideSpan.null` to be populated");
-  media = push(media, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + offset + 4, close - 3), context));
-  media = push(media, [
-    ["exit", text, context],
-    events[close - 2],
-    events[close - 1],
-    ["exit", label, context]
-  ]);
-  media = push(media, events.slice(close + 1));
-  media = push(media, [["exit", group, context]]);
-  splice(events, open, events.length, media);
-  return events;
-}
-function tokenizeLabelEnd(effects, ok2, nok) {
-  const self = this;
-  let index = self.events.length;
-  let labelStart;
-  let defined;
-  while (index--) {
-    if ((self.events[index][1].type === types.labelImage || self.events[index][1].type === types.labelLink) && !self.events[index][1]._balanced) {
-      labelStart = self.events[index][1];
-      break;
-    }
-  }
-  return start;
-  function start(code) {
-    ok(code === codes.rightSquareBracket, "expected `]`");
-    if (!labelStart) {
-      return nok(code);
-    }
-    if (labelStart._inactive) {
-      return labelEndNok(code);
-    }
-    defined = self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize({ start: labelStart.end, end: self.now() })));
-    effects.enter(types.labelEnd);
-    effects.enter(types.labelMarker);
-    effects.consume(code);
-    effects.exit(types.labelMarker);
-    effects.exit(types.labelEnd);
-    return after;
-  }
-  function after(code) {
-    if (code === codes.leftParenthesis) {
-      return effects.attempt(resourceConstruct, labelEndOk, defined ? labelEndOk : labelEndNok)(code);
-    }
-    if (code === codes.leftSquareBracket) {
-      return effects.attempt(referenceFullConstruct, labelEndOk, defined ? referenceNotFull : labelEndNok)(code);
-    }
-    return defined ? labelEndOk(code) : labelEndNok(code);
-  }
-  function referenceNotFull(code) {
-    return effects.attempt(referenceCollapsedConstruct, labelEndOk, labelEndNok)(code);
-  }
-  function labelEndOk(code) {
-    return ok2(code);
-  }
-  function labelEndNok(code) {
-    labelStart._balanced = true;
-    return nok(code);
-  }
-}
-function tokenizeResource(effects, ok2, nok) {
-  return resourceStart;
-  function resourceStart(code) {
-    ok(code === codes.leftParenthesis, "expected left paren");
-    effects.enter(types.resource);
-    effects.enter(types.resourceMarker);
-    effects.consume(code);
-    effects.exit(types.resourceMarker);
-    return resourceBefore;
-  }
-  function resourceBefore(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceOpen)(code) : resourceOpen(code);
-  }
-  function resourceOpen(code) {
-    if (code === codes.rightParenthesis) {
-      return resourceEnd(code);
-    }
-    return factoryDestination(effects, resourceDestinationAfter, resourceDestinationMissing, types.resourceDestination, types.resourceDestinationLiteral, types.resourceDestinationLiteralMarker, types.resourceDestinationRaw, types.resourceDestinationString, constants.linkResourceDestinationBalanceMax)(code);
-  }
-  function resourceDestinationAfter(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceBetween)(code) : resourceEnd(code);
-  }
-  function resourceDestinationMissing(code) {
-    return nok(code);
-  }
-  function resourceBetween(code) {
-    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
-      return factoryTitle(effects, resourceTitleAfter, nok, types.resourceTitle, types.resourceTitleMarker, types.resourceTitleString)(code);
-    }
-    return resourceEnd(code);
-  }
-  function resourceTitleAfter(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceEnd)(code) : resourceEnd(code);
-  }
-  function resourceEnd(code) {
-    if (code === codes.rightParenthesis) {
-      effects.enter(types.resourceMarker);
-      effects.consume(code);
-      effects.exit(types.resourceMarker);
-      effects.exit(types.resource);
-      return ok2;
-    }
-    return nok(code);
-  }
-}
-function tokenizeReferenceFull(effects, ok2, nok) {
-  const self = this;
-  return referenceFull;
-  function referenceFull(code) {
-    ok(code === codes.leftSquareBracket, "expected left bracket");
-    return factoryLabel.call(self, effects, referenceFullAfter, referenceFullMissing, types.reference, types.referenceMarker, types.referenceString)(code);
-  }
-  function referenceFullAfter(code) {
-    return self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1))) ? ok2(code) : nok(code);
-  }
-  function referenceFullMissing(code) {
-    return nok(code);
-  }
-}
-function tokenizeReferenceCollapsed(effects, ok2, nok) {
-  return referenceCollapsedStart;
-  function referenceCollapsedStart(code) {
-    ok(code === codes.leftSquareBracket, "expected left bracket");
-    effects.enter(types.reference);
-    effects.enter(types.referenceMarker);
-    effects.consume(code);
-    effects.exit(types.referenceMarker);
-    return referenceCollapsedOpen;
-  }
-  function referenceCollapsedOpen(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.enter(types.referenceMarker);
-      effects.consume(code);
-      effects.exit(types.referenceMarker);
-      effects.exit(types.reference);
-      return ok2;
-    }
-    return nok(code);
-  }
-}
-var labelStartImage = {
-  name: "labelStartImage",
-  resolveAll: labelEnd.resolveAll,
-  tokenize: tokenizeLabelStartImage
-};
-function tokenizeLabelStartImage(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    ok(code === codes.exclamationMark, "expected `!`");
-    effects.enter(types.labelImage);
-    effects.enter(types.labelImageMarker);
-    effects.consume(code);
-    effects.exit(types.labelImageMarker);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.leftSquareBracket) {
-      effects.enter(types.labelMarker);
-      effects.consume(code);
-      effects.exit(types.labelMarker);
-      effects.exit(types.labelImage);
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
-  }
-}
-var labelStartLink = {
-  name: "labelStartLink",
-  resolveAll: labelEnd.resolveAll,
-  tokenize: tokenizeLabelStartLink
-};
-function tokenizeLabelStartLink(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    effects.enter(types.labelLink);
-    effects.enter(types.labelMarker);
-    effects.consume(code);
-    effects.exit(types.labelMarker);
-    effects.exit(types.labelLink);
-    return after;
-  }
-  function after(code) {
-    return code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs ? nok(code) : ok2(code);
-  }
-}
-var lineEnding = { name: "lineEnding", tokenize: tokenizeLineEnding };
-function tokenizeLineEnding(effects, ok2) {
-  return start;
-  function start(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return factorySpace(effects, ok2, types.linePrefix);
-  }
-}
-var thematicBreak = {
-  name: "thematicBreak",
-  tokenize: tokenizeThematicBreak
-};
-function tokenizeThematicBreak(effects, ok2, nok) {
-  let size = 0;
-  let marker;
-  return start;
-  function start(code) {
-    effects.enter(types.thematicBreak);
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.asterisk || code === codes.dash || code === codes.underscore, "expected `*`, `-`, or `_`");
-    marker = code;
-    return atBreak(code);
-  }
-  function atBreak(code) {
-    if (code === marker) {
-      effects.enter(types.thematicBreakSequence);
-      return sequence(code);
-    }
-    if (size >= constants.thematicBreakMarkerCountMin && (code === codes.eof || markdownLineEnding(code))) {
-      effects.exit(types.thematicBreak);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-  function sequence(code) {
-    if (code === marker) {
-      effects.consume(code);
-      size++;
-      return sequence;
-    }
-    effects.exit(types.thematicBreakSequence);
-    return markdownSpace(code) ? factorySpace(effects, atBreak, types.whitespace)(code) : atBreak(code);
-  }
-}
-var list = {
-  continuation: { tokenize: tokenizeListContinuation },
-  exit: tokenizeListEnd,
-  name: "list",
-  tokenize: tokenizeListStart
-};
-var listItemPrefixWhitespaceConstruct = {
-  partial: true,
-  tokenize: tokenizeListItemPrefixWhitespace
-};
-var indentConstruct = { partial: true, tokenize: tokenizeIndent };
-function tokenizeListStart(effects, ok2, nok) {
-  const self = this;
-  const tail = self.events[self.events.length - 1];
-  let initialSize = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
-  let size = 0;
-  return start;
-  function start(code) {
-    ok(self.containerState, "expected state");
-    const kind = self.containerState.type || (code === codes.asterisk || code === codes.plusSign || code === codes.dash ? types.listUnordered : types.listOrdered);
-    if (kind === types.listUnordered ? !self.containerState.marker || code === self.containerState.marker : asciiDigit(code)) {
-      if (!self.containerState.type) {
-        self.containerState.type = kind;
-        effects.enter(kind, { _container: true });
-      }
-      if (kind === types.listUnordered) {
-        effects.enter(types.listItemPrefix);
-        return code === codes.asterisk || code === codes.dash ? effects.check(thematicBreak, nok, atMarker)(code) : atMarker(code);
-      }
-      if (!self.interrupt || code === codes.digit1) {
-        effects.enter(types.listItemPrefix);
-        effects.enter(types.listItemValue);
-        return inside(code);
-      }
-    }
-    return nok(code);
-  }
-  function inside(code) {
-    ok(self.containerState, "expected state");
-    if (asciiDigit(code) && ++size < constants.listItemValueSizeMax) {
-      effects.consume(code);
-      return inside;
-    }
-    if ((!self.interrupt || size < 2) && (self.containerState.marker ? code === self.containerState.marker : code === codes.rightParenthesis || code === codes.dot)) {
-      effects.exit(types.listItemValue);
-      return atMarker(code);
-    }
-    return nok(code);
-  }
-  function atMarker(code) {
-    ok(self.containerState, "expected state");
-    ok(code !== codes.eof, "eof (`null`) is not a marker");
-    effects.enter(types.listItemMarker);
-    effects.consume(code);
-    effects.exit(types.listItemMarker);
-    self.containerState.marker = self.containerState.marker || code;
-    return effects.check(blankLine, self.interrupt ? nok : onBlank, effects.attempt(listItemPrefixWhitespaceConstruct, endOfPrefix, otherPrefix));
-  }
-  function onBlank(code) {
-    ok(self.containerState, "expected state");
-    self.containerState.initialBlankLine = true;
-    initialSize++;
-    return endOfPrefix(code);
-  }
-  function otherPrefix(code) {
-    if (markdownSpace(code)) {
-      effects.enter(types.listItemPrefixWhitespace);
-      effects.consume(code);
-      effects.exit(types.listItemPrefixWhitespace);
-      return endOfPrefix;
-    }
-    return nok(code);
-  }
-  function endOfPrefix(code) {
-    ok(self.containerState, "expected state");
-    self.containerState.size = initialSize + self.sliceSerialize(effects.exit(types.listItemPrefix), true).length;
-    return ok2(code);
-  }
-}
-function tokenizeListContinuation(effects, ok2, nok) {
-  const self = this;
-  ok(self.containerState, "expected state");
-  self.containerState._closeFlow = undefined;
-  return effects.check(blankLine, onBlank, notBlank);
-  function onBlank(code) {
-    ok(self.containerState, "expected state");
-    ok(typeof self.containerState.size === "number", "expected size");
-    self.containerState.furtherBlankLines = self.containerState.furtherBlankLines || self.containerState.initialBlankLine;
-    return factorySpace(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
-  }
-  function notBlank(code) {
-    ok(self.containerState, "expected state");
-    if (self.containerState.furtherBlankLines || !markdownSpace(code)) {
-      self.containerState.furtherBlankLines = undefined;
-      self.containerState.initialBlankLine = undefined;
-      return notInCurrentItem(code);
-    }
-    self.containerState.furtherBlankLines = undefined;
-    self.containerState.initialBlankLine = undefined;
-    return effects.attempt(indentConstruct, ok2, notInCurrentItem)(code);
-  }
-  function notInCurrentItem(code) {
-    ok(self.containerState, "expected state");
-    self.containerState._closeFlow = true;
-    self.interrupt = undefined;
-    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return factorySpace(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
-  }
-}
-function tokenizeIndent(effects, ok2, nok) {
-  const self = this;
-  ok(self.containerState, "expected state");
-  ok(typeof self.containerState.size === "number", "expected size");
-  return factorySpace(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
-  function afterPrefix(code) {
-    ok(self.containerState, "expected state");
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === types.listItemIndent && tail[2].sliceSerialize(tail[1], true).length === self.containerState.size ? ok2(code) : nok(code);
-  }
-}
-function tokenizeListEnd(effects) {
-  ok(this.containerState, "expected state");
-  ok(typeof this.containerState.type === "string", "expected type");
-  effects.exit(this.containerState.type);
-}
-function tokenizeListItemPrefixWhitespace(effects, ok2, nok) {
-  const self = this;
-  ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-  return factorySpace(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return !markdownSpace(code) && tail && tail[1].type === types.listItemPrefixWhitespace ? ok2(code) : nok(code);
-  }
-}
-var setextUnderline = {
-  name: "setextUnderline",
-  resolveTo: resolveToSetextUnderline,
-  tokenize: tokenizeSetextUnderline
-};
-function resolveToSetextUnderline(events, context) {
-  let index = events.length;
-  let content3;
-  let text;
-  let definition2;
-  while (index--) {
-    if (events[index][0] === "enter") {
-      if (events[index][1].type === types.content) {
-        content3 = index;
-        break;
-      }
-      if (events[index][1].type === types.paragraph) {
-        text = index;
-      }
-    } else {
-      if (events[index][1].type === types.content) {
-        events.splice(index, 1);
-      }
-      if (!definition2 && events[index][1].type === types.definition) {
-        definition2 = index;
-      }
-    }
-  }
-  ok(text !== undefined, "expected a `text` index to be found");
-  ok(content3 !== undefined, "expected a `text` index to be found");
-  ok(events[content3][2] === context, "enter context should be same");
-  ok(events[events.length - 1][2] === context, "enter context should be same");
-  const heading = {
-    type: types.setextHeading,
-    start: { ...events[content3][1].start },
-    end: { ...events[events.length - 1][1].end }
-  };
-  events[text][1].type = types.setextHeadingText;
-  if (definition2) {
-    events.splice(text, 0, ["enter", heading, context]);
-    events.splice(definition2 + 1, 0, ["exit", events[content3][1], context]);
-    events[content3][1].end = { ...events[definition2][1].end };
-  } else {
-    events[content3][1] = heading;
-  }
-  events.push(["exit", heading, context]);
-  return events;
-}
-function tokenizeSetextUnderline(effects, ok2, nok) {
-  const self = this;
-  let marker;
-  return start;
-  function start(code) {
-    let index = self.events.length;
-    let paragraph;
-    ok(code === codes.dash || code === codes.equalsTo, "expected `=` or `-`");
-    while (index--) {
-      if (self.events[index][1].type !== types.lineEnding && self.events[index][1].type !== types.linePrefix && self.events[index][1].type !== types.content) {
-        paragraph = self.events[index][1].type === types.paragraph;
-        break;
-      }
-    }
-    if (!self.parser.lazy[self.now().line] && (self.interrupt || paragraph)) {
-      effects.enter(types.setextHeadingLine);
-      marker = code;
-      return before(code);
-    }
-    return nok(code);
-  }
-  function before(code) {
-    effects.enter(types.setextHeadingLineSequence);
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === marker) {
-      effects.consume(code);
-      return inside;
-    }
-    effects.exit(types.setextHeadingLineSequence);
-    return markdownSpace(code) ? factorySpace(effects, after, types.lineSuffix)(code) : after(code);
-  }
-  function after(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.setextHeadingLine);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-}
-var flow = { tokenize: initializeFlow };
-function initializeFlow(effects) {
-  const self = this;
-  const initial = effects.attempt(blankLine, atBlankEnding, effects.attempt(this.parser.constructs.flowInitial, afterConstruct, factorySpace(effects, effects.attempt(this.parser.constructs.flow, afterConstruct, effects.attempt(content2, afterConstruct)), types.linePrefix)));
-  return initial;
-  function atBlankEnding(code) {
-    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
-    if (code === codes.eof) {
-      effects.consume(code);
-      return;
-    }
-    effects.enter(types.lineEndingBlank);
-    effects.consume(code);
-    effects.exit(types.lineEndingBlank);
-    self.currentConstruct = undefined;
-    return initial;
-  }
-  function afterConstruct(code) {
-    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
-    if (code === codes.eof) {
-      effects.consume(code);
-      return;
-    }
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    self.currentConstruct = undefined;
-    return initial;
-  }
-}
-var resolver = { resolveAll: createResolver() };
-var string = initializeFactory("string");
-var text = initializeFactory("text");
-function initializeFactory(field) {
-  return {
-    resolveAll: createResolver(field === "text" ? resolveAllLineSuffixes : undefined),
-    tokenize: initializeText
-  };
-  function initializeText(effects) {
-    const self = this;
-    const constructs2 = this.parser.constructs[field];
-    const text2 = effects.attempt(constructs2, start, notText);
-    return start;
-    function start(code) {
-      return atBreak(code) ? text2(code) : notText(code);
-    }
-    function notText(code) {
-      if (code === codes.eof) {
-        effects.consume(code);
-        return;
-      }
-      effects.enter(types.data);
-      effects.consume(code);
-      return data;
-    }
-    function data(code) {
-      if (atBreak(code)) {
-        effects.exit(types.data);
-        return text2(code);
-      }
-      effects.consume(code);
-      return data;
-    }
-    function atBreak(code) {
-      if (code === codes.eof) {
-        return true;
-      }
-      const list2 = constructs2[code];
-      let index = -1;
-      if (list2) {
-        ok(Array.isArray(list2), "expected `disable.null` to be populated");
-        while (++index < list2.length) {
-          const item = list2[index];
-          if (!item.previous || item.previous.call(self, self.previous)) {
-            return true;
-          }
-        }
-      }
-      return false;
-    }
-  }
-}
-function createResolver(extraResolver) {
-  return resolveAllText;
-  function resolveAllText(events, context) {
-    let index = -1;
-    let enter;
-    while (++index <= events.length) {
-      if (enter === undefined) {
-        if (events[index] && events[index][1].type === types.data) {
-          enter = index;
-          index++;
-        }
-      } else if (!events[index] || events[index][1].type !== types.data) {
-        if (index !== enter + 2) {
-          events[enter][1].end = events[index - 1][1].end;
-          events.splice(enter + 2, index - enter - 2);
-          index = enter + 2;
-        }
-        enter = undefined;
-      }
-    }
-    return extraResolver ? extraResolver(events, context) : events;
-  }
-}
-function resolveAllLineSuffixes(events, context) {
-  let eventIndex = 0;
-  while (++eventIndex <= events.length) {
-    if ((eventIndex === events.length || events[eventIndex][1].type === types.lineEnding) && events[eventIndex - 1][1].type === types.data) {
-      const data = events[eventIndex - 1][1];
-      const chunks = context.sliceStream(data);
-      let index = chunks.length;
-      let bufferIndex = -1;
-      let size = 0;
-      let tabs;
-      while (index--) {
-        const chunk = chunks[index];
-        if (typeof chunk === "string") {
-          bufferIndex = chunk.length;
-          while (chunk.charCodeAt(bufferIndex - 1) === codes.space) {
-            size++;
-            bufferIndex--;
-          }
-          if (bufferIndex)
-            break;
-          bufferIndex = -1;
-        } else if (chunk === codes.horizontalTab) {
-          tabs = true;
-          size++;
-        } else if (chunk === codes.virtualSpace) {} else {
-          index++;
-          break;
-        }
-      }
-      if (context._contentTypeTextTrailing && eventIndex === events.length) {
-        size = 0;
-      }
-      if (size) {
-        const token = {
-          type: eventIndex === events.length || tabs || size < constants.hardBreakPrefixSizeMin ? types.lineSuffix : types.hardBreakTrailing,
-          start: {
-            _bufferIndex: index ? bufferIndex : data.start._bufferIndex + bufferIndex,
-            _index: data.start._index + index,
-            line: data.end.line,
-            column: data.end.column - size,
-            offset: data.end.offset - size
-          },
-          end: { ...data.end }
-        };
-        data.end = { ...token.start };
-        if (data.start.offset === data.end.offset) {
-          Object.assign(data, token);
-        } else {
-          events.splice(eventIndex, 0, ["enter", token, context], ["exit", token, context]);
-          eventIndex += 2;
-        }
-      }
-      eventIndex++;
-    }
-  }
-  return events;
-}
-var exports_constructs = {};
-__export(exports_constructs, {
-  attentionMarkers: () => attentionMarkers,
-  contentInitial: () => contentInitial,
-  disable: () => disable,
-  document: () => document3,
-  flow: () => flow2,
-  flowInitial: () => flowInitial,
-  insideSpan: () => insideSpan,
-  string: () => string2,
-  text: () => text2
-});
-var document3 = {
-  [codes.asterisk]: list,
-  [codes.plusSign]: list,
-  [codes.dash]: list,
-  [codes.digit0]: list,
-  [codes.digit1]: list,
-  [codes.digit2]: list,
-  [codes.digit3]: list,
-  [codes.digit4]: list,
-  [codes.digit5]: list,
-  [codes.digit6]: list,
-  [codes.digit7]: list,
-  [codes.digit8]: list,
-  [codes.digit9]: list,
-  [codes.greaterThan]: blockQuote
-};
-var contentInitial = {
-  [codes.leftSquareBracket]: definition
-};
-var flowInitial = {
-  [codes.horizontalTab]: codeIndented,
-  [codes.virtualSpace]: codeIndented,
-  [codes.space]: codeIndented
-};
-var flow2 = {
-  [codes.numberSign]: headingAtx,
-  [codes.asterisk]: thematicBreak,
-  [codes.dash]: [setextUnderline, thematicBreak],
-  [codes.lessThan]: htmlFlow,
-  [codes.equalsTo]: setextUnderline,
-  [codes.underscore]: thematicBreak,
-  [codes.graveAccent]: codeFenced,
-  [codes.tilde]: codeFenced
-};
-var string2 = {
-  [codes.ampersand]: characterReference,
-  [codes.backslash]: characterEscape
-};
-var text2 = {
-  [codes.carriageReturn]: lineEnding,
-  [codes.lineFeed]: lineEnding,
-  [codes.carriageReturnLineFeed]: lineEnding,
-  [codes.exclamationMark]: labelStartImage,
-  [codes.ampersand]: characterReference,
-  [codes.asterisk]: attention,
-  [codes.lessThan]: [autolink, htmlText],
-  [codes.leftSquareBracket]: labelStartLink,
-  [codes.backslash]: [hardBreakEscape, characterEscape],
-  [codes.rightSquareBracket]: labelEnd,
-  [codes.underscore]: attention,
-  [codes.graveAccent]: codeText
-};
-var insideSpan = { null: [attention, resolver] };
-var attentionMarkers = { null: [codes.asterisk, codes.underscore] };
-var disable = { null: [] };
-var import_debug = __toESM(require_src(), 1);
-var debug = import_debug.default("micromark");
 function createTokenizer(parser, initialize, from) {
   let point = {
     _bufferIndex: -1,
@@ -7470,6 +7816,16 @@ function serializeChunks(chunks, expandTabs) {
   }
   return result.join("");
 }
+var import_debug;
+var debug;
+var init_create_tokenizer = __esm(() => {
+  init_development();
+  init_dev4();
+  init_dev();
+  init_default();
+  import_debug = __toESM(require_src(), 1);
+  debug = import_debug.default("micromark");
+});
 function parse(options) {
   const settings = options || {};
   const constructs2 = combineExtensions([exports_constructs, ...settings.extensions || []]);
@@ -7491,11 +7847,22 @@ function parse(options) {
     }
   }
 }
+var init_parse = __esm(() => {
+  init_micromark_util_combine_extensions();
+  init_content();
+  init_document();
+  init_flow();
+  init_text();
+  init_constructs();
+  init_create_tokenizer();
+});
 function postprocess(events) {
   while (!subtokenize(events)) {}
   return events;
 }
-var search = /[\0\t\n\r]/g;
+var init_postprocess = __esm(() => {
+  init_dev7();
+});
 function preprocess() {
   let column = 1;
   let buffer = "";
@@ -7575,7 +7942,16 @@ function preprocess() {
     return chunks;
   }
 }
-var characterEscapeOrReference = /\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
+var search;
+var init_preprocess = __esm(() => {
+  init_default();
+  search = /[\0\t\n\r]/g;
+});
+var init_dev13 = __esm(() => {
+  init_parse();
+  init_postprocess();
+  init_preprocess();
+});
 function decodeString(value) {
   return value.replace(characterEscapeOrReference, decode);
 }
@@ -7591,6 +7967,13 @@ function decode($0, $1, $2) {
   }
   return decodeNamedCharacterReference($2) || $0;
 }
+var characterEscapeOrReference;
+var init_dev14 = __esm(() => {
+  init_decode_named_character_reference();
+  init_dev2();
+  init_default();
+  characterEscapeOrReference = /\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
+});
 function stringifyPosition(value) {
   if (!value || typeof value !== "object") {
     return "";
@@ -7615,7 +7998,7 @@ function position(pos) {
 function index(value) {
   return value && typeof value === "number" ? value : 1;
 }
-var own2 = {}.hasOwnProperty;
+var init_unist_util_stringify_position = () => {};
 function fromMarkdown(value, encoding, options) {
   if (encoding && typeof encoding === "object") {
     options = encoding;
@@ -8316,6 +8699,22 @@ function defaultOnError(left, right) {
     throw new Error("Cannot close document, a token (`" + right.type + "`, " + stringifyPosition({ start: right.start, end: right.end }) + ") is still open");
   }
 }
+var own2;
+var init_lib2 = __esm(() => {
+  init_development();
+  init_mdast_util_to_string();
+  init_dev13();
+  init_dev2();
+  init_dev14();
+  init_dev3();
+  init_default();
+  init_decode_named_character_reference();
+  init_unist_util_stringify_position();
+  own2 = {}.hasOwnProperty;
+});
+var init_dev15 = __esm(() => {
+  init_lib2();
+});
 function ccount(value, character) {
   const source = String(value);
   if (typeof character !== "string") {
@@ -8335,21 +8734,6 @@ function escapeStringRegexp(string3) {
   }
   return string3.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&").replace(/-/g, "\\x2d");
 }
-var convert = function(test) {
-  if (test === null || test === undefined) {
-    return ok2;
-  }
-  if (typeof test === "function") {
-    return castFactory(test);
-  }
-  if (typeof test === "object") {
-    return Array.isArray(test) ? anyFactory(test) : propertiesFactory(test);
-  }
-  if (typeof test === "string") {
-    return typeFactory(test);
-  }
-  throw new Error("Expected function, string, or object as test");
-};
 function anyFactory(tests) {
   const checks = [];
   let index2 = -1;
@@ -8397,13 +8781,25 @@ function ok2() {
 function looksLikeANode(value) {
   return value !== null && typeof value === "object" && "type" in value;
 }
+var convert = function(test) {
+  if (test === null || test === undefined) {
+    return ok2;
+  }
+  if (typeof test === "function") {
+    return castFactory(test);
+  }
+  if (typeof test === "object") {
+    return Array.isArray(test) ? anyFactory(test) : propertiesFactory(test);
+  }
+  if (typeof test === "string") {
+    return typeFactory(test);
+  }
+  throw new Error("Expected function, string, or object as test");
+};
+var init_unist_util_is = () => {};
 function color(d) {
   return "\x1B[33m" + d + "\x1B[39m";
 }
-var empty = [];
-var CONTINUE = true;
-var EXIT = false;
-var SKIP = "skip";
 function visitParents(tree, test, visitor, reverse) {
   let check;
   if (typeof test === "function" && typeof visitor !== "function") {
@@ -8463,6 +8859,17 @@ function toResult(value) {
   }
   return value === null || value === undefined ? empty : [value];
 }
+var empty;
+var CONTINUE = true;
+var EXIT = false;
+var SKIP = "skip";
+var init_lib3 = __esm(() => {
+  init_unist_util_is();
+  empty = [];
+});
+var init_unist_util_visit_parents = __esm(() => {
+  init_lib3();
+});
 function findAndReplace(tree, list2, options) {
   const settings = options || {};
   const ignored = convert(settings.ignore || []);
@@ -8562,6 +8969,13 @@ function toFunction(replace) {
     return replace;
   };
 }
+var init_lib4 = __esm(() => {
+  init_unist_util_visit_parents();
+  init_unist_util_is();
+});
+var init_mdast_util_find_and_replace = __esm(() => {
+  init_lib4();
+});
 function gfmAutolinkLiteralFromMarkdown() {
   return {
     transforms: [transformGfmAutolinkLiterals],
@@ -8673,7 +9087,14 @@ function previous2(match, email) {
   const code = match.input.charCodeAt(match.index - 1);
   return (match.index === 0 || unicodeWhitespace(code) || unicodePunctuation(code)) && (!email || code !== 47);
 }
-footnoteReference.peek = footnoteReferencePeek;
+var init_lib5 = __esm(() => {
+  init_development();
+  init_dev4();
+  init_mdast_util_find_and_replace();
+});
+var init_mdast_util_gfm_autolink_literal = __esm(() => {
+  init_lib5();
+});
 function enterFootnoteCallString() {
   this.buffer();
 }
@@ -8736,7 +9157,14 @@ function gfmFootnoteFromMarkdown() {
     }
   };
 }
-handleDelete.peek = peekDelete;
+var init_lib6 = __esm(() => {
+  init_development();
+  init_dev3();
+  footnoteReference.peek = footnoteReferencePeek;
+});
+var init_mdast_util_gfm_footnote = __esm(() => {
+  init_lib6();
+});
 function gfmStrikethroughFromMarkdown() {
   return {
     canContainEols: ["delete"],
@@ -8766,6 +9194,12 @@ function handleDelete(node2, _, state, info) {
 function peekDelete() {
   return "~";
 }
+var init_lib7 = __esm(() => {
+  handleDelete.peek = peekDelete;
+});
+var init_mdast_util_gfm_strikethrough = __esm(() => {
+  init_lib7();
+});
 function gfmTableFromMarkdown() {
   return {
     enter: {
@@ -8821,6 +9255,12 @@ function exitCodeText(token) {
 function replace($0, $1) {
   return $1 === "|" ? $1 : $0;
 }
+var init_lib8 = __esm(() => {
+  init_development();
+});
+var init_mdast_util_gfm_table = __esm(() => {
+  init_lib8();
+});
 function gfmTaskListItemFromMarkdown() {
   return {
     exit: {
@@ -8866,6 +9306,12 @@ function exitParagraphWithTaskListItem(token) {
   }
   this.exit(token);
 }
+var init_lib9 = __esm(() => {
+  init_development();
+});
+var init_mdast_util_gfm_task_list_item = __esm(() => {
+  init_lib9();
+});
 function gfmFromMarkdown() {
   return [
     gfmAutolinkLiteralFromMarkdown(),
@@ -8875,50 +9321,19 @@ function gfmFromMarkdown() {
     gfmTaskListItemFromMarkdown()
   ];
 }
-var wwwPrefix = { tokenize: tokenizeWwwPrefix, partial: true };
-var domain = { tokenize: tokenizeDomain, partial: true };
-var path = { tokenize: tokenizePath, partial: true };
-var trail = { tokenize: tokenizeTrail, partial: true };
-var emailDomainDotTrail = {
-  tokenize: tokenizeEmailDomainDotTrail,
-  partial: true
-};
-var wwwAutolink = {
-  name: "wwwAutolink",
-  tokenize: tokenizeWwwAutolink,
-  previous: previousWww
-};
-var protocolAutolink = {
-  name: "protocolAutolink",
-  tokenize: tokenizeProtocolAutolink,
-  previous: previousProtocol
-};
-var emailAutolink = {
-  name: "emailAutolink",
-  tokenize: tokenizeEmailAutolink,
-  previous: previousEmail
-};
-var text3 = {};
+var init_lib10 = __esm(() => {
+  init_mdast_util_gfm_autolink_literal();
+  init_mdast_util_gfm_footnote();
+  init_mdast_util_gfm_strikethrough();
+  init_mdast_util_gfm_table();
+  init_mdast_util_gfm_task_list_item();
+});
+var init_mdast_util_gfm = __esm(() => {
+  init_lib10();
+});
 function gfmAutolinkLiteral() {
   return { text: text3 };
 }
-var code = codes.digit0;
-while (code < codes.leftCurlyBrace) {
-  text3[code] = emailAutolink;
-  code++;
-  if (code === codes.colon)
-    code = codes.uppercaseA;
-  else if (code === codes.leftSquareBracket)
-    code = codes.lowercaseA;
-}
-text3[codes.plusSign] = emailAutolink;
-text3[codes.dash] = emailAutolink;
-text3[codes.dot] = emailAutolink;
-text3[codes.underscore] = emailAutolink;
-text3[codes.uppercaseH] = [emailAutolink, protocolAutolink];
-text3[codes.lowercaseH] = [emailAutolink, protocolAutolink];
-text3[codes.uppercaseW] = [emailAutolink, wwwAutolink];
-text3[codes.lowercaseW] = [emailAutolink, wwwAutolink];
 function tokenizeEmailAutolink(effects, ok3, nok) {
   const self = this;
   let dot;
@@ -9199,7 +9614,64 @@ function previousUnbalanced(events) {
   }
   return result;
 }
-var indent = { tokenize: tokenizeIndent2, partial: true };
+var wwwPrefix;
+var domain;
+var path;
+var trail;
+var emailDomainDotTrail;
+var wwwAutolink;
+var protocolAutolink;
+var emailAutolink;
+var text3;
+var code;
+var init_syntax = __esm(() => {
+  init_dev4();
+  init_default();
+  wwwPrefix = { tokenize: tokenizeWwwPrefix, partial: true };
+  domain = { tokenize: tokenizeDomain, partial: true };
+  path = { tokenize: tokenizePath, partial: true };
+  trail = { tokenize: tokenizeTrail, partial: true };
+  emailDomainDotTrail = {
+    tokenize: tokenizeEmailDomainDotTrail,
+    partial: true
+  };
+  wwwAutolink = {
+    name: "wwwAutolink",
+    tokenize: tokenizeWwwAutolink,
+    previous: previousWww
+  };
+  protocolAutolink = {
+    name: "protocolAutolink",
+    tokenize: tokenizeProtocolAutolink,
+    previous: previousProtocol
+  };
+  emailAutolink = {
+    name: "emailAutolink",
+    tokenize: tokenizeEmailAutolink,
+    previous: previousEmail
+  };
+  text3 = {};
+  code = codes.digit0;
+  while (code < codes.leftCurlyBrace) {
+    text3[code] = emailAutolink;
+    code++;
+    if (code === codes.colon)
+      code = codes.uppercaseA;
+    else if (code === codes.leftSquareBracket)
+      code = codes.lowercaseA;
+  }
+  text3[codes.plusSign] = emailAutolink;
+  text3[codes.dash] = emailAutolink;
+  text3[codes.dot] = emailAutolink;
+  text3[codes.underscore] = emailAutolink;
+  text3[codes.uppercaseH] = [emailAutolink, protocolAutolink];
+  text3[codes.lowercaseH] = [emailAutolink, protocolAutolink];
+  text3[codes.uppercaseW] = [emailAutolink, wwwAutolink];
+  text3[codes.lowercaseW] = [emailAutolink, wwwAutolink];
+});
+var init_dev16 = __esm(() => {
+  init_syntax();
+});
 function gfmFootnote() {
   return {
     document: {
@@ -9452,6 +9924,19 @@ function tokenizeIndent2(effects, ok3, nok) {
     return tail && tail[1].type === "gfmFootnoteDefinitionIndent" && tail[2].sliceSerialize(tail[1], true).length === constants.tabSize ? ok3(code2) : nok(code2);
   }
 }
+var indent;
+var init_syntax2 = __esm(() => {
+  init_development();
+  init_dev12();
+  init_dev5();
+  init_dev4();
+  init_dev3();
+  init_default();
+  indent = { tokenize: tokenizeIndent2, partial: true };
+});
+var init_dev17 = __esm(() => {
+  init_syntax2();
+});
 function gfmStrikethrough(options) {
   const options_ = options || {};
   let single = options_.singleTilde;
@@ -9550,6 +10035,15 @@ function gfmStrikethrough(options) {
     }
   }
 }
+var init_syntax3 = __esm(() => {
+  init_development();
+  init_dev();
+  init_dev6();
+  init_default();
+});
+var init_dev18 = __esm(() => {
+  init_syntax3();
+});
 
 class EditMap {
   constructor() {
@@ -9626,6 +10120,9 @@ function gfmTableAlign(events, index2) {
   }
   return align;
 }
+var init_infer = __esm(() => {
+  init_development();
+});
 function gfmTable() {
   return {
     flow: {
@@ -10010,7 +10507,16 @@ function getPoint(events, index2) {
   const side = event[0] === "enter" ? "start" : "end";
   return event[1][side];
 }
-var tasklistCheck = { name: "tasklistCheck", tokenize: tokenizeTasklistCheck };
+var init_syntax4 = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  init_infer();
+});
+var init_dev19 = __esm(() => {
+  init_syntax4();
+});
 function gfmTaskListItem() {
   return {
     text: { [codes.leftSquareBracket]: tasklistCheck }
@@ -10071,6 +10577,17 @@ function spaceThenNonSpace(effects, ok3, nok) {
     return code2 === codes.eof ? nok(code2) : ok3(code2);
   }
 }
+var tasklistCheck;
+var init_syntax5 = __esm(() => {
+  init_development();
+  init_dev5();
+  init_dev4();
+  init_default();
+  tasklistCheck = { name: "tasklistCheck", tokenize: tokenizeTasklistCheck };
+});
+var init_dev20 = __esm(() => {
+  init_syntax5();
+});
 function gfm(options) {
   return combineExtensions([
     gfmAutolinkLiteral(),
@@ -10080,6 +10597,14 @@ function gfm(options) {
     gfmTaskListItem()
   ]);
 }
+var init_micromark_extension_gfm = __esm(() => {
+  init_micromark_util_combine_extensions();
+  init_dev16();
+  init_dev17();
+  init_dev18();
+  init_dev19();
+  init_dev20();
+});
 function isPlainObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -10093,40 +10618,8 @@ function validateNonEmptyString(violations, value, field, missingCode, invalidCo
     violations.push(violation("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
-var DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
-var RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
-var DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
 function isValidClaimedAt(value) {
   return typeof value === "string" && (RFC3339_Z_RE.test(value) || DATE_ONLY_RE.test(value));
-}
-function validateExecutionLease(lease) {
-  const violations = [];
-  if (!isPlainObject2(lease)) {
-    return {
-      ok: false,
-      violations: [
-        violation("high", "lease.execution-lease.invalid", "execution_lease must be an object — null and tombstone objects are invalid; writers delete the key on release")
-      ]
-    };
-  }
-  validateNonEmptyString(violations, lease.holder, "holder", "lease.execution-lease.missing-holder", "lease.execution-lease.invalid-holder");
-  if (lease.claimed_at === undefined) {
-    violations.push(violation("high", "lease.execution-lease.missing-claimed-at", "missing required field: claimed_at"));
-  } else if (!isValidClaimedAt(lease.claimed_at)) {
-    violations.push(violation("medium", "lease.execution-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T02:30:00Z) or a YYYY-MM-DD date"));
-  }
-  if (lease.worktree_path === undefined) {
-    violations.push(violation("high", "lease.execution-lease.missing-worktree-path", "missing required field: worktree_path"));
-  } else if (typeof lease.worktree_path !== "string" || lease.worktree_path.trim() === "") {
-    violations.push(violation("medium", "lease.execution-lease.invalid-worktree-path", "worktree_path must be a non-empty string"));
-  } else if (!isAbsolute3(lease.worktree_path)) {
-    violations.push(violation("medium", "lease.execution-lease.invalid-worktree-path", "worktree_path must be an absolute path — it identifies the dedicated feature-worktree root (a Git checkout distinct from the main worktree and the integration worktree)"));
-  }
-  validateNonEmptyString(violations, lease.working_branch, "working_branch", "lease.execution-lease.missing-working-branch", "lease.execution-lease.invalid-working-branch");
-  if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
-    violations.push(violation("medium", "lease.execution-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
-  }
-  return { ok: violations.length === 0, violations };
 }
 function validateIntegrationMergeLease(lease) {
   const violations = [];
@@ -10152,11 +10645,76 @@ function validateIntegrationMergeLease(lease) {
   }
   return { ok: violations.length === 0, violations };
 }
-var heldLockDirs = new AsyncLocalStorage2;
-var fsStoreInstances = new WeakSet;
-var ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
-var ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
-var COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
+async function withStatusWriteLock(statusPath, fn, opts = {}) {
+  const lockDir = join5(dirname5(resolve4(statusPath)), STATUS_WRITE_LOCKDIR);
+  const held = heldLockDirs.getStore();
+  if (held !== undefined && held.has(lockDir)) {
+    throw new Error(`${lockDir} is already held by this process in this async context — withStatusWriteLock is not reentrant; a nested acquisition on the same status.json is a bug`);
+  }
+  const timeoutMs = opts.timeoutMs ?? 30000;
+  const pollMs = opts.pollMs ?? 25;
+  const deadline = Date.now() + timeoutMs;
+  let acquired = null;
+  for (;; ) {
+    try {
+      mkdirSync2(lockDir);
+      const st = statSync2(lockDir);
+      acquired = { dev: st.dev, ino: st.ino };
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        throw error;
+      if (Date.now() >= deadline) {
+        throw new Error(`${lockDir} already exists — another writer holds the status write lock; Blocked (same-host exclusive lock; status-and-residuals.md § Same-host exclusive write lock). ` + `Recovery: remove ${lockDir} if no writer is alive (holder.pid inside names the acquiring process)`);
+      }
+      await sleep(pollMs);
+    }
+  }
+  try {
+    writeFileSync2(join5(lockDir, LOCKDIR_HOLDER_PID), String(process.pid), "utf8");
+  } catch {}
+  const owns = held ?? new Set;
+  owns.add(lockDir);
+  try {
+    return await heldLockDirs.run(owns, fn);
+  } finally {
+    owns.delete(lockDir);
+    try {
+      const current = statSync2(lockDir);
+      if (acquired !== null && current.dev === acquired.dev && current.ino === acquired.ino) {
+        try {
+          unlinkSync2(join5(lockDir, LOCKDIR_HOLDER_PID));
+        } catch {}
+        rmdirSync(lockDir);
+      }
+    } catch {}
+  }
+}
+var DATE_PART;
+var RFC3339_Z_RE;
+var DATE_ONLY_RE;
+var STATUS_WRITE_LOCKDIR = ".status-write.lockdir";
+var LOCKDIR_HOLDER_PID = "holder.pid";
+var heldLockDirs;
+var init_lease = __esm(() => {
+  DATE_PART = String.raw`\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])`;
+  RFC3339_Z_RE = new RegExp(String.raw`^${DATE_PART}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$`);
+  DATE_ONLY_RE = new RegExp(String.raw`^${DATE_PART}$`);
+  heldLockDirs = new AsyncLocalStorage2;
+});
+var PLAN_SHAPED_KEY_RE;
+var fsStoreInstances;
+var URI_SCHEME_RE;
+var init_store = __esm(() => {
+  init_core();
+  init_coordination_write();
+  init_coordination();
+  init_path();
+  init_store_db();
+  PLAN_SHAPED_KEY_RE = /^[0-9]{8}-[a-z0-9-]+$/;
+  fsStoreInstances = new WeakSet;
+  URI_SCHEME_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+});
 function enforcementValue(raw) {
   const value = raw.trim();
   const unquoted = value.replace(/^(['"])(.*)\1$/, "$2");
@@ -10174,12 +10732,75 @@ function parseEnforcementFlag(text4) {
     return { hard: enforcementValue(compass[1]) === "hard", source: "compass" };
   return { hard: false, source: "none" };
 }
-var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
-var WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
-var WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
-var WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
-var WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
-var WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
+var REQUIRED_FIELDS;
+var REVIEW_SEAT_ROLES;
+var BUDGET_LABELS;
+var RETURN_SHAPE_LABELS;
+var TASK_BUDGET_LABELS;
+var ASSIGNMENT_ENFORCEMENT_BOLD_RE;
+var ASSIGNMENT_ENFORCEMENT_PLAIN_RE;
+var COMPASS_ENFORCEMENT_RE;
+var ASSIGNMENT_BODY_START_RE;
+var ASSIGNMENT_HEADING_RE;
+var ASSIGNMENT_FIELD_RE;
+var init_dispatch = __esm(() => {
+  init_core();
+  REQUIRED_FIELDS = [
+    { key: "executeAs", label: "Execute as", code: "execute-as" },
+    { key: "delegation", label: "Delegation", code: "delegation" },
+    { key: "taskCategory", label: "Task category", code: "task-category" }
+  ];
+  REVIEW_SEAT_ROLES = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer", "qa-engineer"];
+  BUDGET_LABELS = ["Budget (review / QC seats)", "Budget"];
+  RETURN_SHAPE_LABELS = ["Return shape (review / QC seats)", "Return shape"];
+  TASK_BUDGET_LABELS = ["Task budget (implement / ops rounds)", "Task budget"];
+  ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
+  ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
+  COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
+  ASSIGNMENT_BODY_START_RE = /^(?:#{1,6}[ \t]+Task\b|-{3,}[ \t]*$|#[ \t])/m;
+  ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
+  ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
+});
+var PlanPathError;
+var PLAN_CONSULTED_HEADERS;
+var init_plan_path = __esm(() => {
+  init_coordination_write();
+  init_path();
+  PlanPathError = class PlanPathError2 extends Error {
+    code;
+    details;
+    constructor(code2, message, details = {}) {
+      super(message);
+      this.name = "PlanPathError";
+      this.code = code2;
+      this.details = details;
+    }
+  };
+  PLAN_CONSULTED_HEADERS = {
+    plan_id: true,
+    "main worktree branch": true,
+    "working branch": true
+  };
+});
+var WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA;
+var STATUS_V2_PAYLOAD_SCHEMA;
+var init_persist_payload_schemas = __esm(() => {
+  WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
+    version: { required: true, type: "number", description: "Root artifact version." },
+    schema_version: { required: true, type: "number", description: "Snapshot schema version; currently 1." },
+    id: { required: true, type: "string", description: "Workflow id, equal to the persist key." },
+    type: { required: true, type: "string", description: "Workflow lifecycle type: plan or iteration." },
+    status: { required: true, type: "string", description: "Current lifecycle status." },
+    started_at: { required: true, type: "string", description: "Workflow start timestamp." },
+    updated_at: { required: true, type: "string", description: "Last snapshot update timestamp." },
+    plans: { required: false, type: "array", description: "Plan rows, validated by the workflow engine." }
+  };
+  STATUS_V2_PAYLOAD_SCHEMA = {
+    version: { required: true, type: "number", description: "Root schema version; must be 2." },
+    updated_at: { required: true, type: "string", description: "Last status-register update date." },
+    workflows: { required: true, type: "array", description: "Active workflow entries." }
+  };
+});
 function isStandaloneDevelopmentWorkflow(snapshot) {
   return snapshot.type === "plan" && snapshot.delivery_kind === "development" && Array.isArray(snapshot.plans) && snapshot.plans.length === 1;
 }
@@ -10195,58 +10816,6 @@ function rowValidationRoute(snapshot, row) {
   }
   return "integration";
 }
-function validateStandaloneCompletedCoherence(snapshot, row) {
-  const violations = [];
-  const standalone = isStandaloneDevelopmentWorkflow(snapshot) || isStandaloneReportOnlyWorkflow(snapshot);
-  if (!standalone || row.id !== snapshot.plans[0]?.id)
-    return violations;
-  const coordination = row.coordination;
-  if (!isPlainObject(coordination))
-    return violations;
-  if (!isPlainObject(coordination.handoff)) {
-    if (row.status === "Done") {
-      violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done and carries a coordination block without its handoff — a coordinated Done row requires the handoff that authorized it (state "completed" plus the accepted/QC/QA record); only deleting that block produces this shape`));
-    }
-    return violations;
-  }
-  const handoff = coordination.handoff;
-  const completed = handoff.state === "completed";
-  if (row.status !== "Done" && !completed)
-    return violations;
-  if (!completed) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone row ${String(row.id)} is Done but its stored handoff is ${JSON.stringify(handoff.state)} — a Done standalone row requires handoff.state "completed" (a stored handoff rewritten out of the completed shape is refused, never trusted)`));
-  }
-  if (handoff.integration !== undefined) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff must not carry integration for row ${String(row.id)}`));
-  }
-  if (isStandaloneReportOnlyWorkflow(snapshot)) {
-    if (snapshot.integration_worktree_path !== undefined) {
-      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry integration_worktree_path"));
-    }
-    if (isNonEmptyString(snapshot.branch?.integration)) {
-      violations.push(violation3("high", "coordination.row.handoff-field", "report-only completed handoff must not carry branch.integration"));
-    }
-  }
-  if (row.status !== "Done") {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires row ${String(row.id)} to be Done`));
-  }
-  if (row.execution_lease !== undefined) {
-    violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff requires no execution lease on row ${String(row.id)}`));
-  }
-  if (snapshot.integration_merge_lease !== undefined) {
-    violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires no integration_merge_lease on the snapshot"));
-  }
-  if (isStandaloneDevelopmentWorkflow(snapshot)) {
-    const source = snapshot.branch?.source;
-    const target = snapshot.branch?.target;
-    if (!isNonEmptyString(source) || !isNonEmptyString(target)) {
-      violations.push(violation3("high", "coordination.row.handoff-field", "standalone completed handoff requires nonblank branch.source and branch.target"));
-    } else if (handoff.source_branch !== source) {
-      violations.push(violation3("high", "coordination.row.handoff-field", `standalone completed handoff source_branch ${String(handoff.source_branch)} must equal branch.source ${source}`));
-    }
-  }
-  return violations;
-}
 function violation3(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
@@ -10258,7 +10827,7 @@ function validateNonEmptyString2(violations, value, field, missingCode, invalidC
   }
 }
 function validateWorktreePathValue(violations, value, field) {
-  if (typeof value !== "string" || value.trim() === "" || !isAbsolute6(value)) {
+  if (typeof value !== "string" || value.trim() === "" || !isAbsolute5(value)) {
     violations.push(violation3("high", "workflow.snapshot.invalid-integration-worktree-path", `${field} must be a non-empty absolute path — got ${JSON.stringify(value)}`, "record the absolute integration checkout path (integration_worktree_path)"));
   }
 }
@@ -10360,14 +10929,10 @@ function validateWorkflowSnapshot(doc) {
     const snapshotDoc = doc;
     for (const row of doc.plans) {
       violations.push(...validatePlanRow(row).violations);
-      if (isPlainObject(row) && row.execution_lease !== undefined) {
-        violations.push(...validateExecutionLease(row.execution_lease).violations);
-      }
       if (isPlainObject(row) && row.coordination !== undefined) {
         const planRow = row;
         const route = rowValidationRoute(snapshotDoc, planRow);
         violations.push(...validateRowCoordination(row.coordination, `plans[${String(row.id)}].coordination`, route));
-        violations.push(...validateStandaloneCompletedCoherence(snapshotDoc, planRow));
       }
     }
   }
@@ -10431,21 +10996,43 @@ function validateWorkflowSnapshot(doc) {
     if (doc.ended_at === undefined) {
       violations.push(violation3("high", "workflow.snapshot.missing-ended-at", `terminal status ${JSON.stringify(doc.status)} requires ended_at — a terminal snapshot must record when the lifecycle ended`));
     }
-    if (Array.isArray(doc.plans)) {
-      for (const row of doc.plans) {
-        if (isPlainObject(row) && row.execution_lease !== undefined) {
-          violations.push(violation3("high", "workflow.snapshot.terminal-dangling-execution-lease", `terminal snapshot must not carry a row execution_lease (dangling lease) — release every lease before the lifecycle ends`));
-        }
-      }
-    }
     if (doc.integration_merge_lease !== undefined) {
       violations.push(violation3("high", "workflow.snapshot.terminal-dangling-merge-lease", "terminal snapshot must not carry integration_merge_lease (dangling lease) — release the merge lease before the lifecycle ends"));
     }
   }
   return { ok: violations.length === 0, violations };
 }
+var WORKFLOW_SNAPSHOT_FILE = "snapshot.json";
+var WORKFLOW_LIFECYCLE_STATUSES;
+var WORKFLOW_TERMINAL_STATUSES;
+var WORKFLOW_LIFECYCLE_TYPES;
+var WORKFLOW_DELIVERY_KINDS;
+var WORKFLOW_COMPOUND_OUTCOMES;
 var LEGACY_WORKTREE_PATH_CODE = "workflow.snapshot.legacy-control-worktree-path";
-var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+var WorkflowSnapshotValidationError;
+var init_workflow = __esm(() => {
+  init_core();
+  init_coordination_write();
+  init_lease();
+  init_path();
+  init_plan_path();
+  init_status();
+  init_store();
+  init_store_db();
+  init_persist_payload_schemas();
+  WORKFLOW_LIFECYCLE_STATUSES = ["running", "paused", "completed", "failed", "stopped"];
+  WORKFLOW_TERMINAL_STATUSES = ["completed", "failed", "stopped"];
+  WORKFLOW_LIFECYCLE_TYPES = ["plan", "iteration"];
+  WORKFLOW_DELIVERY_KINDS = ["development", "verification/report-only"];
+  WORKFLOW_COMPOUND_OUTCOMES = ["created", "updated", "skipped"];
+  WorkflowSnapshotValidationError = class WorkflowSnapshotValidationError2 extends Error {
+    violations;
+    constructor(message, violations) {
+      super(message);
+      this.violations = violations;
+    }
+  };
+});
 function rowPlanIds(row) {
   if (!isPlainObject(row))
     return [];
@@ -10459,9 +11046,6 @@ function rowPlanIds(row) {
 function rowPlanId(row) {
   return rowPlanIds(row)[0];
 }
-var PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
-var RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
-var RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
 function violation4(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
@@ -10477,7 +11061,7 @@ function validatePlanRow(row) {
   if (!isPlainObject(row)) {
     return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
-  const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
+  const { id, plan_id: planId, title, file, status, metadata } = row;
   if (id === undefined && planId === undefined) {
     violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
@@ -10500,12 +11084,6 @@ function validatePlanRow(row) {
   }
   if (metadata !== undefined && !isPlainObject(metadata)) {
     violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
-  }
-  if (execution_lease !== undefined && !isPlainObject(execution_lease)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
-  }
-  if (status === "Done" && execution_lease !== undefined) {
-    violations.push(violation4("medium", "status.plan-row.done-with-lease", 'plan status Done must not carry an execution_lease — the Done authority deletes the lease in the same complete-file update as status: "Done" (status-and-residuals.md § Hold, release, and override)', 'delete plans[].execution_lease in the same update that sets status: "Done"'));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -10599,7 +11177,7 @@ function validateStatusV2(docOrPath, opts = {}) {
   if (typeof docOrPath === "string") {
     try {
       doc = readJson(docOrPath);
-      harnessDir = dirname7(resolve7(docOrPath));
+      harnessDir = dirname6(resolve7(docOrPath));
     } catch (error) {
       return {
         ok: false,
@@ -10700,7 +11278,6 @@ function validateStatusV2(docOrPath, opts = {}) {
   }
   return { ok: violations.length === 0, violations };
 }
-var validateStatus = validateStatusV2;
 function resolveCompassEnforcement(harnessDir) {
   const iterationsDir = resolveIterationDir(harnessDir);
   if (!existsSync7(iterationsDir))
@@ -10735,7 +11312,7 @@ function resolveCompassEnforcement(harnessDir) {
 }
 function resolveMstarcEnforcement(harnessDir) {
   const dir = resolve7(harnessDir);
-  const rc = loadMstarc(dir, dirname7(dir));
+  const rc = loadMstarc(dir, dirname6(dir));
   const value = rc?.config.enforcement;
   if (value === "hard")
     return { hard: true, source: "mstarc" };
@@ -10749,8 +11326,28 @@ function resolveRepoEnforcement(harnessDir) {
     return rc;
   return resolveCompassEnforcement(harnessDir);
 }
-var COMPASS_STATUSES = ["active", "locked", "completed"];
-var DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
+var DATE_RE;
+var PLAN_STATUSES;
+var RESIDUAL_DECISIONS;
+var RESIDUAL_LIFECYCLES;
+var validateStatus;
+var init_status = __esm(() => {
+  init_core();
+  init_path();
+  init_lease();
+  init_coordination_write();
+  init_store();
+  init_store_db();
+  init_dispatch();
+  init_mstarc();
+  init_workflow();
+  init_persist_payload_schemas();
+  DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  PLAN_STATUSES = ["Todo", "InProgress", "InReview", "Blocked", "Done"];
+  RESIDUAL_DECISIONS = ["defer", "accept", "risk-accepted"];
+  RESIDUAL_LIFECYCLES = ["open", "resolved", "waived", "superseded", "duplicate"];
+  validateStatus = validateStatusV2;
+});
 function typeName(value) {
   if (value === null)
     return "null";
@@ -10919,8 +11516,25 @@ function parseFlowArray(raw, filePath) {
   }
   return items;
 }
-var ROADMAP_STATUSES = ["active", "paused", "completed"];
-var DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
+var COMPASS_STATUSES;
+var DATE_RE2;
+var COMPLETENESS_ROOTS;
+var GAP_CODE;
+var init_iteration = __esm(() => {
+  init_catalog();
+  init_store_db();
+  init_status();
+  init_workflow();
+  COMPASS_STATUSES = ["active", "locked", "completed"];
+  DATE_RE2 = /^\d{4}-\d{2}-\d{2}$/;
+  COMPLETENESS_ROOTS = ["iterations", "plans", "knowledge", "specs", "projects"];
+  GAP_CODE = {
+    iteration: "catalog.discovery.missing-iteration",
+    plan: "catalog.discovery.missing-plan",
+    project: "catalog.discovery.missing-project",
+    document: "catalog.discovery.missing-document"
+  };
+});
 function violation6(severity, code2, message) {
   return { ok: false, severity, code: code2, message };
 }
@@ -11061,21 +11675,172 @@ function parseRoadmapContent(contentMarkdown) {
     sections
   };
 }
-class IssueError extends Error {
-  code;
-  constructor(code2, message) {
-    super(`[${code2}] ${message}`);
-    this.name = "IssueError";
-    this.code = code2;
-  }
-}
+var ROADMAP_STATUSES;
+var DATE_RE3;
+var init_roadmap_content = __esm(() => {
+  init_dev15();
+  init_mdast_util_gfm();
+  init_micromark_extension_gfm();
+  init_iteration();
+  ROADMAP_STATUSES = ["active", "paused", "completed"];
+  DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
+});
 function assertIssueProvenanceSchema(db) {
   const schema = db.prepare("select max(version) as version from schema_version").get();
   if ((schema?.version ?? 0) < MIGRATIONS.length) {
     throw new IssueError("issue.schema-outdated", `Issue provenance requires schema ${MIGRATIONS.length}; run "mstar store upgrade --operator <name>" first.`);
   }
 }
-var DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+var ISSUE_PAYLOAD_SCHEMAS;
+var IssueError;
+var KINDS;
+var SEVERITIES;
+var DISPOSITIONS;
+var RELATIONS2;
+var PROVENANCE_KINDS;
+var TERMINAL;
+var ENVELOPE_SEATS;
+var init_issue = __esm(() => {
+  init_coordination();
+  init_path();
+  init_store_db();
+  init_workflow();
+  ISSUE_PAYLOAD_SCHEMAS = {
+    CaptureInput: {
+      projectId: { required: true, type: "string", description: "Project identifier" },
+      title: { required: true, type: "string", description: "Finding title" },
+      kind: { required: true, type: "string", description: "Issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
+      severity: { required: true, type: "string", description: "Severity", values: ["critical", "high", "medium", "low", "info"] },
+      impact: { required: true, type: "string", description: "User or system impact" },
+      acceptance: { required: true, type: "string", description: "Acceptance condition" },
+      owner: { required: false, type: "string", description: "Optional owner" },
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    OccurrenceInput: {
+      sourceIdentity: { required: true, type: "string", description: "Stable source identity" },
+      rootCauseKey: { required: true, type: "string", description: "Semantic root-cause key; not unknown or ?" },
+      acceptanceKey: { required: true, type: "string", description: "Semantic acceptance key; not unknown or ?" },
+      occurrenceKey: { required: true, type: "string", description: "Unique observation key" },
+      sourceKind: { required: true, type: "string", description: "Source category" },
+      location: { required: true, type: "string", description: "Source location" },
+      observedBehavior: { required: true, type: "string", description: "Observed behavior" },
+      evidence: { required: true, type: "string[]", description: "Evidence strings" },
+      discoveredAt: { required: true, type: "string", description: "Observation timestamp" }
+    },
+    IssueTriage: {
+      reason: { required: true, type: "string", description: "Reason for triage change" },
+      kind: { required: false, type: "string", description: "Replacement issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
+      severity: { required: false, type: "string", description: "Replacement severity", values: ["critical", "high", "medium", "low", "info"] },
+      impact: { required: false, type: "string", description: "Updated impact; nonblank when supplied", nonblankWhenPresent: true },
+      acceptance: { required: false, type: "string", description: "Updated acceptance condition; nonblank when supplied", nonblankWhenPresent: true },
+      owner: { required: false, type: "string | null", description: "Updated owner, or null to clear", nullable: true }
+    },
+    ClosureEvidence: {
+      reason: { required: true, type: "string", description: "Reason for closure" },
+      references: {
+        required: false,
+        requiredWhen: ["close"],
+        type: "string[]",
+        description: "Acceptance evidence references; required for resolved closure",
+        minItems: 1
+      },
+      scope: { required: false, requiredWhen: ["waive"], type: "string", description: "Named closure scope; required for waived closure" },
+      canonicalIssueId: {
+        required: false,
+        requiredWhen: ["duplicate", "supersede"],
+        type: "string",
+        description: "Canonical issue for duplicate/superseded; required for those dispositions"
+      },
+      alignmentRef: {
+        required: false,
+        requiredWhen: ["close", "waive"],
+        type: "string",
+        description: "Authority alignment reference; required for resolved/waived closure"
+      }
+    },
+    IssueLink: {
+      relation: { required: false, type: "string", description: "Issue relation; pair with issueId", values: ["related", "blocks", "duplicate-of", "superseded-by"] },
+      issueId: { required: false, type: "string", description: "Target issue id; required with relation" },
+      kind: { required: false, type: "string", description: "Provenance kind; pair with target", values: ["plan", "iteration", "pr", "report"] },
+      target: { required: false, type: "string", description: "Provenance target; required with kind" }
+    },
+    PlanProgress: {
+      status: { required: true, type: "string", description: "Progress state", values: ["InProgress", "InReview", "Blocked"] },
+      summary: { required: true, type: "string", description: "Current progress or blocker summary" },
+      evidence_paths: {
+        required: true,
+        type: "string[]",
+        description: "Canonical absolute artifact paths for this plan",
+        itemsNonblank: true
+      },
+      track_branches: {
+        required: false,
+        type: "string[]",
+        description: "Reported L2 track branches",
+        itemsNonblank: true
+      }
+    }
+  };
+  IssueError = class IssueError2 extends Error {
+    code;
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "IssueError";
+      this.code = code2;
+    }
+  };
+  KINDS = {
+    bug: true,
+    risk: true,
+    improvement: true,
+    request: true,
+    decision: true,
+    "review-obligation": true
+  };
+  SEVERITIES = {
+    critical: true,
+    high: true,
+    medium: true,
+    low: true,
+    info: true
+  };
+  DISPOSITIONS = {
+    open: true,
+    resolved: true,
+    waived: true,
+    duplicate: true,
+    superseded: true
+  };
+  RELATIONS2 = {
+    related: true,
+    blocks: true,
+    "duplicate-of": true,
+    "superseded-by": true
+  };
+  PROVENANCE_KINDS = {
+    plan: true,
+    iteration: true,
+    pr: true,
+    report: true
+  };
+  TERMINAL = {
+    resolved: true,
+    waived: true,
+    duplicate: true,
+    superseded: true
+  };
+  ENVELOPE_SEATS = {
+    coordinator: "project-manager"
+  };
+});
 function violation7(severity, code2, message, fix) {
   return { ok: false, severity, code: code2, message, fix };
 }
@@ -11128,6 +11893,15 @@ function validateProjectRegister(doc) {
   }
   return { ok: violations.length === 0, violations };
 }
+var DATE_RE4;
+var init_project = __esm(() => {
+  init_roadmap_content();
+  init_coordination_write();
+  init_store_db();
+  init_issue();
+  init_status();
+  DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+});
 function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
   const start = resolve8(startDir);
   const explicit = opts.harnessDir ?? process.env.MSTAR_HARNESS_DIR;
@@ -11147,7 +11921,7 @@ function resolveHarnessDir(startDir = process.cwd(), opts = {}) {
     }
     if (dir === boundary)
       return null;
-    const parent = dirname8(dir);
+    const parent = dirname7(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -11165,7 +11939,7 @@ function defaultWorkspaceRoot(startDir) {
     let boundary = startDir;
     for (const segment of cdup.split(/[\\/]/)) {
       if (segment && segment !== ".")
-        boundary = dirname8(boundary);
+        boundary = dirname7(boundary);
     }
     return resolve8(boundary);
   } catch {}
@@ -11173,11 +11947,11 @@ function defaultWorkspaceRoot(startDir) {
 }
 function isAtOrBelow2(dir, root) {
   const rel = relative3(root, dir);
-  return rel === "" || !rel.startsWith("..") && !isAbsolute8(rel);
+  return rel === "" || !rel.startsWith("..") && !isAbsolute7(rel);
 }
 function mstarcDirOverride(harnessDir, key) {
   const dir = resolve8(harnessDir);
-  const rc = loadMstarc(dir, dirname8(dir));
+  const rc = loadMstarc(dir, dirname7(dir));
   const declared = rc?.config[key];
   return declared ? resolve8(rc.dir, declared) : null;
 }
@@ -11189,7 +11963,7 @@ function resolveSpecsDir(harnessDir, opts = {}) {
     return declared;
   }
   const harness = resolve8(harnessDir);
-  const repoRoot = dirname8(harness);
+  const repoRoot = dirname7(harness);
   const candidates = [
     join13(harness, "specs"),
     join13(repoRoot, "docs", "specs"),
@@ -11242,31 +12016,6 @@ function resolveWorkflowDir(startDir = process.cwd(), opts = {}) {
 function resolveProjectDir(startDir = process.cwd(), opts = {}) {
   return resolveHarnessSubdir(startDir, opts, "projectDir", "projects");
 }
-var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
-# Principle: process stays local; results are shared with the team.
-# Default-ignore everything under .mstar/, then re-include the tracked results.
-.mstar/**
-!.mstar/AGENTS.md
-!.mstar/knowledge/
-!.mstar/knowledge/**
-!.mstar/specs/
-!.mstar/specs/**
-# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
-.mstarc
-`;
-var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-`;
-var GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
-`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
-var GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
-`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
 function isDirectory(dir) {
   try {
     return statSync4(dir).isDirectory();
@@ -11289,35 +12038,253 @@ function hasFiles(dir) {
     return false;
   }
 }
-function storedCoordinationViolations(block, options) {
-  const { revision, route, submitterAssociated, activeSessionBound, what } = options;
-  const { handoff, ...rest } = block;
-  const violations = validateRowCoordination({ revision, ...rest }, what, route);
-  if (handoff !== undefined) {
-    violations.push(...validatePlanHandoff(handoff, `${what}.handoff`, route));
-    if (!submitterAssociated) {
-      violations.push({
-        ok: false,
-        severity: "high",
-        code: "coordination.row.handoff-field",
-        message: `${what}.handoff submitted_by has no matching historical plan-pm session for this plan`
-      });
-    }
-    if (activeSessionBound === false && !(isPlainObject(handoff) && handoff.state === "completed")) {
-      violations.push({
-        ok: false,
-        severity: "high",
-        code: "coordination.row.handoff-field",
-        message: `${what}.handoff requires a bound plan session`
-      });
-    }
-  }
-  return violations;
+var EMPTY_STATUS_TEMPLATE;
+var SCAFFOLD_DIRS;
+var GITIGNORE_SNIPPET = `# Morning Star harness (.mstar/)
+# Principle: process stays local; results are shared with the team.
+# Default-ignore everything under .mstar/, then re-include the tracked results.
+.mstar/**
+!.mstar/AGENTS.md
+!.mstar/knowledge/
+!.mstar/knowledge/**
+!.mstar/specs/
+!.mstar/specs/**
+# .mstarc — repo-local harness config (may declare [config] harness_dir=<name>)
+.mstarc
+`;
+var GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
+# Default-ignore everything under .agents/, then re-include the tracked results.
+.agents/**
+!.agents/AGENTS.md
+!.agents/knowledge/
+!.agents/knowledge/**
+!.agents/specs/
+!.agents/specs/**
+`;
+var GITIGNORE_PROCESS_ENTRIES;
+var GITIGNORE_PROCESS_ENTRIES_AGENTS;
+var HARNESS_ROOT_DECLARATION;
+var init_path = __esm(() => {
+  init_catalog();
+  init_mstarc();
+  init_project();
+  init_status();
+  init_lease();
+  init_store();
+  init_store_db();
+  init_coordination_write();
+  EMPTY_STATUS_TEMPLATE = {
+    version: 2,
+    updated_at: "1970-01-01",
+    workflows: []
+  };
+  SCAFFOLD_DIRS = ["plans", "iterations", "knowledge", "specs", "sdd"];
+  GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
+`).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
+  GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
+`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
+  HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+});
+var init_session_identity = __esm(() => {
+  init_coordination_write();
+  init_path();
+});
+function storedCoordinationViolations(block, input) {
+  return validateRowCoordination({ ...block, revision: input.revision }, input.what, input.route);
 }
-var AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
-var AUDIT_RISKS = ["LOW", "MED", "HIGH"];
-var AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
-var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var IMPLEMENTED_OPERATIONS;
+var OPERATION_NAMES;
+var NON_COMPLETION_OPERATIONS;
+var PROGRESS_TRANSITIONS;
+var init_coordination_transitions = __esm(() => {
+  init_coordination_write();
+  init_workflow();
+  init_project();
+  init_path();
+  IMPLEMENTED_OPERATIONS = {
+    prepare: true,
+    progress: true,
+    "residual-add": true,
+    "residual-close": true,
+    complete: true
+  };
+  OPERATION_NAMES = Object.keys(IMPLEMENTED_OPERATIONS);
+  NON_COMPLETION_OPERATIONS = OPERATION_NAMES.filter((operation) => operation !== "complete");
+  PROGRESS_TRANSITIONS = {
+    Todo: ["InProgress", "Blocked"],
+    InProgress: ["InProgress", "Blocked", "InReview"],
+    Blocked: ["Blocked", "InProgress"],
+    InReview: ["InReview", "InProgress", "Blocked"]
+  };
+});
+var AUDIT_PRIORITIES;
+var AUDIT_EFFORTS;
+var AUDIT_RISKS;
+var AUDIT_CONFIDENCES;
+var AUDIT_CATEGORIES;
+var AUDIT_STATUS_FIELDS;
+var WHOLE_MATCH_PATTERNS;
+var VALUE_PATTERNS;
+var NEVER_COMMIT_FILENAMES;
+var CI_IAC_LEAK_SHAPES;
+var SAFE_PLACEHOLDER_SHAPES;
+var SAFE_PLACEHOLDER_VALUES;
+var ACTIONS_ENV_KEY;
+var LOCKFILE_NAMES;
+var AUDIT_FINGERPRINT_RE;
+var AUDIT_SEVERITY_ORDER;
+var DEFAULT_IGNORABLE_RE;
+var LONE_SURROGATE_RE;
+var init_audit = __esm(() => {
+  init_lease();
+  init_coordination_write();
+  init_path();
+  init_store();
+  init_status();
+  init_workflow();
+  AUDIT_PRIORITIES = ["P1", "P2", "P3"];
+  AUDIT_EFFORTS = ["XS", "S", "M", "L", "XL"];
+  AUDIT_RISKS = ["LOW", "MED", "HIGH"];
+  AUDIT_CONFIDENCES = ["HIGH", "MED", "LOW"];
+  AUDIT_CATEGORIES = [
+    "bug",
+    "security",
+    "perf",
+    "tests",
+    "tech-debt",
+    "migration",
+    "dx",
+    "docs",
+    "direction"
+  ];
+  AUDIT_STATUS_FIELDS = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"];
+  WHOLE_MATCH_PATTERNS = [
+    { type: "private-key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g },
+    { type: "aws-access-key", re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
+    { type: "github-token", re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g },
+    { type: "github-pat", re: /\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
+    { type: "stripe-live-key", re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
+    { type: "slack-token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
+    { type: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\.[A-Za-z0-9_-]{10,1024}\b/g },
+    { type: "api-secret-key", re: /\bsk-[A-Za-z0-9-]{20,}\b/g }
+  ];
+  VALUE_PATTERNS = [
+    {
+      typeOf: (key) => key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[_-]+/g, "-"),
+      re: /(["']?)\b(password|passwd|api[_-]?key|access[_-]?token|auth[_-]?token|secret|token)\b(["']?)(\s*[:=]\s*)("[^"\n]{8,}"|'[^'\n]{8,}'|[A-Za-z0-9_./+\-=]{16,})/gi
+    }
+  ];
+  NEVER_COMMIT_FILENAMES = [
+    { type: "env-file", re: /^\.env/i },
+    { type: "private-key-file", re: /\.(?:pem|key)$/i },
+    { type: "ssh-private-key-file", re: /^id_(?:rsa|ed25519|ecdsa|dsa)$/ },
+    { type: "credentials-json", re: /^credentials\.json$/i },
+    { type: "service-account-json", re: /^service-account\.json$/i },
+    { type: "git-credentials", re: /^\.?git-credentials$/i }
+  ];
+  CI_IAC_LEAK_SHAPES = [
+    {
+      kind: "actions-plaintext-env",
+      description: "GitHub Actions env assignment with plaintext literal",
+      re: /^\s*(?:-\s+)?env:\s*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*[:=]\s*["']?[A-Za-z0-9_/+=-]{8,}["']?\s*$/
+    },
+    {
+      kind: "actions-secret-echo",
+      description: "echo of a GitHub Actions secrets context value",
+      re: /\becho\b[^#\n]*\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}/
+    },
+    {
+      kind: "dockerfile-credential-env",
+      description: "Dockerfile ENV/ARG with credential-looking name",
+      re: /^\s*(?:ENV|ARG)\s+[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b/i
+    },
+    {
+      kind: "terraform-hardcoded-password",
+      description: "Terraform hardcoded password attribute",
+      re: /^\s*password\s*=\s*"[^$\{][^"]*"\s*$/
+    }
+  ];
+  SAFE_PLACEHOLDER_SHAPES = [
+    /\$\{[A-Za-z_][A-Za-z0-9_]*\}/g,
+    /process\.env\.[A-Za-z_][A-Za-z0-9_]*/g,
+    /os\.environ(?:\.get)?\(?\s*["']/g
+  ];
+  SAFE_PLACEHOLDER_VALUES = ["your-api-key-here", "<your_api_key>", "<your-api-key>"];
+  ACTIONS_ENV_KEY = /[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*/;
+  LOCKFILE_NAMES = [
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "Cargo.lock",
+    "poetry.lock",
+    "uv.lock",
+    "Gemfile.lock",
+    "composer.lock"
+  ];
+  AUDIT_FINGERPRINT_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*(?![\s\S])/;
+  AUDIT_SEVERITY_ORDER = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+  DEFAULT_IGNORABLE_RE = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/u;
+  LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+});
+var CatalogRegistrationError;
+var ENTITY_KINDS2;
+var ROOT_KINDS2;
+var DOCUMENT_KINDS2;
+var RELATIONS3;
+var init_catalog_registration = __esm(() => {
+  init_audit();
+  init_catalog();
+  init_coordination_write();
+  init_lease();
+  init_path();
+  init_plan_path();
+  init_store_db();
+  init_status();
+  init_workflow();
+  CatalogRegistrationError = class CatalogRegistrationError2 extends Error {
+    code;
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "CatalogRegistrationError";
+      this.code = code2;
+    }
+  };
+  ENTITY_KINDS2 = {
+    project: true,
+    iteration: true,
+    plan: true,
+    document: true
+  };
+  ROOT_KINDS2 = {
+    repository: true,
+    harness: true,
+    plans: true,
+    iterations: true,
+    specs: true,
+    knowledge: true,
+    projects: true
+  };
+  DOCUMENT_KINDS2 = {
+    spec: true,
+    knowledge: true,
+    guide: true,
+    compass: true,
+    plan: true,
+    roadmap: true,
+    review: true,
+    other: true
+  };
+  RELATIONS3 = {
+    "belongs-to": true,
+    documents: true,
+    "spec-ref": true,
+    "knowledge-ref": true,
+    "derived-from": true,
+    supersedes: true
+  };
+});
 function gitProbeTimeoutMs() {
   const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "")
@@ -11373,6 +12340,1479 @@ function readMainWorktree(cwd) {
     return null;
   }
 }
+var DEFAULT_PROBE_TIMEOUT_MS = 1e4;
+var QC_ALIGNMENT_FIELDS;
+var init_worktree = __esm(() => {
+  QC_ALIGNMENT_FIELDS = [
+    { key: "planId", label: "plan_id" },
+    { key: "reviewRange", label: "Review range" },
+    { key: "diffBasis", label: "Diff basis" }
+  ];
+});
+var MSTAR_REVIEW_V1_PAYLOAD_SCHEMA;
+var init_qcreview_schema = __esm(() => {
+  MSTAR_REVIEW_V1_PAYLOAD_SCHEMA = {
+    schema: { required: true, type: "string", description: "Must be mstar.review/v1." },
+    verdict: { required: true, type: "string", description: "Harness PR verdict." },
+    summary_md: { required: true, type: "string", description: "Review summary in Markdown." },
+    findings: { required: true, type: "array", description: "Review findings with harness merge-class vocabulary." },
+    tally: { required: false, type: "object", description: "Optional computed tally; when present, full shape and verdict consistency are validated." },
+    target: { required: false, type: "object", description: "Optional target identity." }
+  };
+});
+function resolveRelativePath(raw, label) {
+  if (typeof raw !== "string" || raw.trim() === "")
+    return { ok: false, reason: `${label} must be a nonblank relative path` };
+  const value = raw.trim().replace(/\\/g, "/");
+  if (value.includes("\x00"))
+    return { ok: false, reason: `${label} contains a NUL byte` };
+  if (value.startsWith("/") || /^[A-Za-z]:\//.test(value))
+    return { ok: false, reason: `${label} must be relative to its catalog root` };
+  const parts = [];
+  for (const part of value.split("/")) {
+    if (part === "" || part === ".")
+      continue;
+    if (part === "..")
+      return { ok: false, reason: `${label} must not traverse outside its catalog root` };
+    parts.push(part);
+  }
+  if (parts.length === 0)
+    return { ok: false, reason: `${label} must name a path inside its catalog root` };
+  return { ok: true, relativePath: parts.join("/") };
+}
+function cellsOf(line) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+function isDelimiterRow(line) {
+  if (!line.trim().startsWith("|"))
+    return false;
+  const cells = cellsOf(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell.replace(/\s/g, "")));
+}
+function readTables(text4) {
+  const lines = text4.split(/\r?\n/);
+  const tables = [];
+  for (let i = 0;i < lines.length - 1; i += 1) {
+    const line = lines[i];
+    if (!line.trim().startsWith("|") || !isDelimiterRow(lines[i + 1] ?? ""))
+      continue;
+    const rows = [];
+    let last = i + 1;
+    for (let j = i + 2;j < lines.length; j += 1) {
+      const row = lines[j];
+      if (!row.trim().startsWith("|"))
+        break;
+      rows.push({ cells: cellsOf(row), line: j + 1 });
+      last = j;
+    }
+    tables.push({ header: cellsOf(line), headerLine: i + 1, firstLine: i + 1, lastLine: last + 1, rows });
+    i = last;
+  }
+  return tables;
+}
+function cellText(cell) {
+  return cell.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/`/g, "").trim();
+}
+function cellLinkTarget(cell) {
+  const match = /\[[^\]]*\]\(([^)]+)\)/.exec(cell);
+  return match === null ? null : match[1].trim();
+}
+function cellBacktickToken(cell) {
+  const match = /^`([^`]+)`$/.exec(cell.trim());
+  return match === null ? null : match[1].trim();
+}
+function cellReference(cell) {
+  return cellLinkTarget(cell) ?? cellBacktickToken(cell);
+}
+function detectIndexFamily(header) {
+  const keys = header.map((cell) => cellText(cell).toLowerCase());
+  const has = (token) => keys.includes(token);
+  if (has("iteration"))
+    return "iteration-rows";
+  if (has("document") && has("kind"))
+    return "package-documents";
+  if (has("document"))
+    return "document-rows";
+  return null;
+}
+function indexRowIdentity(family, cells, owner) {
+  if (family === "iteration-rows")
+    return cellBacktickToken(cells[0] ?? "");
+  const reference = cellReference(cells[0] ?? "");
+  if (reference === null)
+    return null;
+  const trimmed = reference.replace(/^\.\//, "").replace(/\/+$/, "");
+  const resolved = resolveRelativePath(family === "package-documents" && owner !== null ? `${owner}/${trimmed}` : trimmed, "index row path");
+  return resolved.ok ? resolved.relativePath : null;
+}
+var ENTITY_KINDS3;
+var ROOT_KINDS3;
+var DOCUMENT_KINDS3;
+var LIFECYCLES2;
+var RELATIONS4;
+var ORDINARY_FILES;
+var CatalogImportError;
+var init_catalog_import = __esm(() => {
+  init_catalog();
+  init_iteration();
+  ENTITY_KINDS3 = {
+    project: true,
+    iteration: true,
+    plan: true,
+    document: true
+  };
+  ROOT_KINDS3 = {
+    repository: true,
+    harness: true,
+    plans: true,
+    iterations: true,
+    specs: true,
+    knowledge: true,
+    projects: true
+  };
+  DOCUMENT_KINDS3 = {
+    spec: true,
+    knowledge: true,
+    guide: true,
+    compass: true,
+    plan: true,
+    roadmap: true,
+    review: true,
+    other: true
+  };
+  LIFECYCLES2 = { active: true, archived: true, superseded: true };
+  RELATIONS4 = {
+    "belongs-to": true,
+    documents: true,
+    "spec-ref": true,
+    "knowledge-ref": true,
+    "derived-from": true,
+    supersedes: true
+  };
+  ORDINARY_FILES = { "readme.md": true, "install.md": true, "index.md": true };
+  CatalogImportError = class CatalogImportError2 extends Error {
+    code;
+    partial;
+    constructor(code2, message, partial = null) {
+      super(`[${code2}] ${message}`);
+      this.name = "CatalogImportError";
+      this.code = code2;
+      this.partial = partial;
+    }
+  };
+});
+var exports_store_activation = {};
+__export(exports_store_activation, {
+  ACTIVATION_PROTOCOL_VERSION: () => ACTIVATION_PROTOCOL_VERSION,
+  AGENT_FLOW_COMPACTION_JOURNAL: () => AGENT_FLOW_COMPACTION_JOURNAL,
+  BACKUP_RECEIPT_VERSION: () => BACKUP_RECEIPT_VERSION,
+  RETAINED_BODY_PROTOCOL_VERSION: () => RETAINED_BODY_PROTOCOL_VERSION,
+  StoreActivationError: () => StoreActivationError,
+  activateStore: () => activateStore,
+  activationReceiptFor: () => activationReceiptFor,
+  appliedReceiptFor: () => appliedReceiptFor,
+  assertAuthorityCurrent: () => assertAuthorityCurrent,
+  assertBackupDescribesStore: () => assertBackupDescribesStore,
+  backupStore: () => backupStore,
+  backupStoreUnderExclusion: () => backupStoreUnderExclusion,
+  canonicalPath: () => canonicalPath,
+  currentAuthorityHandle: () => currentAuthorityHandle,
+  executionMaintenanceLockWaitMs: () => executionMaintenanceLockWaitMs,
+  freezeRetainedBodies: () => freezeRetainedBodies,
+  inspectBackupCopy: () => inspectBackupCopy,
+  isPathWithin: () => isPathWithin,
+  readRetainedBodyInventory: () => readRetainedBodyInventory,
+  retainedInventoryPath: () => retainedInventoryPath,
+  retireStoreSources: () => retireStoreSources,
+  validateActivationAttestation: () => validateActivationAttestation,
+  withExecutionMaintenanceLock: () => withExecutionMaintenanceLock
+});
+function sha256Bytes3(bytes) {
+  return createHash6("sha256").update(bytes).digest("hex");
+}
+function readIfExists(path2) {
+  try {
+    return readFileSync13(path2);
+  } catch {
+    return;
+  }
+}
+function scalar2(db, sql) {
+  const row = db.prepare(sql).get();
+  return typeof row?.n === "number" ? row.n : 0;
+}
+function writeTextAtomic(path2, text4) {
+  mkdirSync6(dirname8(path2), { recursive: true });
+  const tmp = join18(dirname8(path2), `.${basename9(path2)}.${process.pid}.tmp`);
+  try {
+    writeFileSync4(tmp, text4, "utf8");
+    renameSync2(tmp, path2);
+  } finally {
+    rmSync2(tmp, { force: true });
+  }
+}
+function readMetaRow(db) {
+  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
+  if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the authority generation cannot be verified");
+  }
+  return {
+    storeId: row.store_id,
+    authorityState: row.authority_state,
+    epoch: row.authority_epoch,
+    revision: row.revision,
+    catalogRevision: row.catalog_revision
+  };
+}
+function schemaVersionOf(db) {
+  const max = scalar2(db, "select max(version) as n from schema_version");
+  const applied = scalar2(db, "select count(*) as n from schema_version");
+  if (max < 1 || applied !== max) {
+    throw new StoreError("store.schema-drift", "applied schema versions are not contiguous; the store cannot be backed up or activated");
+  }
+  return max;
+}
+function countsOf(db) {
+  const tables = new Set(db.prepare("select name from sqlite_master where type = 'table'").all().map((row) => row.name));
+  const counts = {
+    issues: scalar2(db, "select count(*) as n from issues"),
+    occurrences: scalar2(db, "select count(*) as n from occurrences"),
+    transitions: scalar2(db, "select count(*) as n from issue_transitions"),
+    migrationReceipts: scalar2(db, "select count(*) as n from migration_receipts")
+  };
+  if (tables.has("catalog_entities"))
+    counts.catalogEntities = scalar2(db, "select count(*) as n from catalog_entities");
+  if (tables.has("catalog_links"))
+    counts.catalogLinks = scalar2(db, "select count(*) as n from catalog_links");
+  return counts;
+}
+function readExecutionMetaOfCopy(db, schemaVersion) {
+  if (schemaVersion < EXECUTION_MIGRATION_VERSION)
+    return null;
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw new StoreActivationError("store.activation-stale", `the copy records migration ${EXECUTION_MIGRATION_VERSION} (execution-authority) but its execution metadata is missing or malformed; the copy cannot be verified as an execution-bearing recovery point.`);
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
+function liveExecutionMeta(meta) {
+  if (meta === null)
+    return null;
+  return {
+    protocolVersion: meta.protocolVersion,
+    authorityState: meta.authorityState,
+    revision: meta.revision,
+    rootUpdatedAt: meta.rootUpdatedAt,
+    manifestId: meta.manifestId,
+    activatedAt: meta.activatedAt
+  };
+}
+function sameExecution(a, b) {
+  if (a === null || b === null)
+    return a === b;
+  return a.protocolVersion === b.protocolVersion && a.authorityState === b.authorityState && a.revision === b.revision && a.rootUpdatedAt === b.rootUpdatedAt && a.manifestId === b.manifestId && a.activatedAt === b.activatedAt;
+}
+function canonicalPath(value) {
+  let current = resolve13(value);
+  const trailing = [];
+  for (;; ) {
+    try {
+      return join18(realpathSync6(current), ...[...trailing].reverse());
+    } catch {
+      const parent = dirname8(current);
+      if (parent === current)
+        return resolve13(value);
+      trailing.push(basename9(current));
+      current = parent;
+    }
+  }
+}
+function isPathWithin(root, candidate) {
+  const parent = canonicalPath(root);
+  const child = canonicalPath(candidate);
+  if (child === parent)
+    return true;
+  return child.startsWith(parent.endsWith(sep9) ? parent : `${parent}${sep9}`);
+}
+function refuseUnlessSameGeneration(live, expected, what) {
+  if (live.storeId !== expected.storeId) {
+    throw new StoreActivationError("store.activation-stale", `${what} belongs to store_id ${expected.storeId}, but the live store is ${live.storeId}; re-resolve the control root and re-attest. Nothing was changed.`);
+  }
+  if (live.epoch !== expected.epoch) {
+    throw new StoreActivationError("store.stale-epoch", `${what} belongs to authority epoch ${expected.epoch}, but the live store is epoch ${live.epoch}; the generation it was admitted under has been superseded. Resume with the current activation receipt. Nothing was changed.`);
+  }
+}
+async function currentAuthorityHandle(context) {
+  const handle = await openStore(context, "read");
+  try {
+    const meta = readMetaRow(handle.db);
+    return { storeId: meta.storeId, epoch: meta.epoch };
+  } finally {
+    handle.close();
+  }
+}
+async function assertAuthorityCurrent(context, handle) {
+  refuseUnlessSameGeneration(await currentAuthorityHandle(context), handle, "the handle");
+}
+async function withExecutionMaintenanceLock(context, fn) {
+  const key = join18(canonicalPath(dirname8(storeDbPath(context))), ".execution-maintenance", "execution-migration");
+  mkdirSync6(dirname8(key), { recursive: true });
+  return withStatusWriteLock(key, fn, { timeoutMs: executionMaintenanceLockWaitMs() });
+}
+function executionMaintenanceLockWaitMs() {
+  if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
+    const parsed = Number.parseInt(process.env.MSTAR_EXECUTION_MIGRATION_LOCK_WAIT_MS ?? "", 10);
+    if (Number.isFinite(parsed) && parsed > 0)
+      return parsed;
+  }
+  return 30000;
+}
+function retainedInventoryDigest(inventory) {
+  return sha256Bytes3(Buffer.from(JSON.stringify({
+    version: inventory.version,
+    protocol: inventory.protocol,
+    storeId: inventory.storeId,
+    epoch: inventory.epoch,
+    revision: inventory.revision,
+    bodies: inventory.bodies.map((body) => ({
+      path: body.path,
+      sha256: body.sha256,
+      records: [...body.records],
+      partial: body.partial,
+      selection: body.selection
+    }))
+  }), "utf8"));
+}
+function retainedBodyPath(root, absolute, what) {
+  const segments = relative4(root, absolute).split(sep9).filter((segment) => segment !== "");
+  if (segments.length === 0 || segments.includes("..")) {
+    throw new StoreActivationError("store.activation-stale", `${what} lives at ${absolute}, outside the control root ${root}; a recovery point freezes exactly the retained bodies it protects, so a body outside the root refuses the freeze instead of being copied by guesswork.`);
+  }
+  return segments.join("/");
+}
+function checkpointRetainedBody(root, relativeBodyPath, selection) {
+  const absolute = join18(root, ...relativeBodyPath.split("/"));
+  let info;
+  try {
+    info = lstatSync3(absolute);
+  } catch (error) {
+    throw new StoreActivationError("store.activation-stale", `the retained body ${relativeBodyPath} disappeared while the inventory was being frozen (${error.message}); the set is not the set that was discovered. Nothing was written.`);
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new StoreActivationError("store.activation-stale", `the retained body ${relativeBodyPath} is not a regular file (a symlink or a non-file is not a retained accepted body); the inventory cannot be frozen over it.`);
+  }
+  const bytes = readFileSync13(absolute);
+  const records = [];
+  let start = 0;
+  for (let index2 = 0;index2 < bytes.length; index2 += 1) {
+    if (bytes[index2] !== 10)
+      continue;
+    records.push(sha256Bytes3(bytes.subarray(start, index2)));
+    start = index2 + 1;
+  }
+  return {
+    path: relativeBodyPath,
+    sha256: sha256Bytes3(bytes),
+    records,
+    partial: start < bytes.length ? sha256Bytes3(bytes.subarray(start)) : null,
+    selection
+  };
+}
+function readRetainedBodyCheckpoints(context) {
+  const root = canonicalPath(dirname8(storeDbPath(context)));
+  const paths = [];
+  if (existsSync13(join18(root, ...ENGINE_STATUS_BODY.split("/")))) {
+    paths.push({ path: ENGINE_STATUS_BODY, selection: true });
+  }
+  const workflowsDir = resolveWorkflowDir(root, { harnessDir: root });
+  let entries = [];
+  try {
+    entries = readdirSync9(workflowsDir, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const unfinished = [];
+  const workflowEntries = entries.filter((candidate) => {
+    if (candidate.isSymbolicLink()) {
+      throw new StoreActivationError("store.activation-stale", `${join18(workflowsDir, candidate.name)} is a symlink, not a real workflow body dir; a retained ledger home is never a link, so the live retained set cannot be enumerated through it. Nothing was frozen.`);
+    }
+    return candidate.isDirectory();
+  });
+  for (const entry of workflowEntries.sort((a, b) => a.name < b.name ? -1 : 1)) {
+    const dir = join18(workflowsDir, entry.name);
+    const prefix = retainedBodyPath(root, dir, `the workflow body dir of ${entry.name}`);
+    if (existsSync13(join18(dir, AGENT_FLOW_COMPACTION_JOURNAL))) {
+      unfinished.push(`${prefix}/${AGENT_FLOW_COMPACTION_JOURNAL}`);
+      continue;
+    }
+    for (const file of RETAINED_WORKFLOW_BODIES) {
+      const absolute = join18(dir, file);
+      if (existsSync13(absolute))
+        paths.push({ path: retainedBodyPath(root, absolute, `the retained body ${file}`), selection: false });
+    }
+    const historyDir = join18(dir, AGENT_FLOW_HISTORY_DIR);
+    let chunks = [];
+    try {
+      chunks = readdirSync9(historyDir, { withFileTypes: true });
+    } catch {
+      chunks = [];
+    }
+    for (const chunk of chunks.filter((candidate) => AGENT_FLOW_HISTORY_CHUNK.test(candidate.name)).sort((a, b) => a.name < b.name ? -1 : 1)) {
+      const absolute = join18(historyDir, chunk.name);
+      if (existsSync13(absolute))
+        paths.push({ path: retainedBodyPath(root, absolute, `the history chunk ${chunk.name}`), selection: false });
+    }
+  }
+  if (unfinished.length > 0) {
+    throw new StoreActivationError("store.activation-stale", `the workflow ${unfinished.length === 1 ? "body dir" : "body dirs"} ${unfinished.sort().join(", ")} hold ${AGENT_FLOW_COMPACTION_JOURNAL}: §5's transient ledger compaction journal pins the exact before/after tail bytes and the ` + `removed archive range, so this retained set is IN FLIGHT. A recovery point that captured or restored it would be a ` + `partial copy of an unfinished transaction — corruption, not an accepted duplicate-history residual. Nothing was ` + `frozen; resolve the compaction through the ledger lock and retry.`);
+  }
+  return paths.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map((entry) => checkpointRetainedBody(root, entry.path, entry.selection));
+}
+function stampRetainedInventory(identity, bodies) {
+  const withoutDigest = {
+    version: RETAINED_BODY_PROTOCOL_VERSION,
+    protocol: "retained-body-inventory-v1",
+    storeId: identity.storeId,
+    epoch: identity.epoch,
+    revision: identity.revision,
+    bodies
+  };
+  return { ...withoutDigest, digest: retainedInventoryDigest(withoutDigest) };
+}
+function freezeRetainedBodies(context, identity) {
+  return stampRetainedInventory(identity, readRetainedBodyCheckpoints(context));
+}
+function retainedInventoryPath(backupPath) {
+  return `${backupPath}.retained.json`;
+}
+function writeRetainedInventory(backupPath, inventory) {
+  writeTextAtomic(retainedInventoryPath(backupPath), `${JSON.stringify(inventory)}
+`);
+}
+function requireRetainedInventory(value, what) {
+  const invalid4 = (detail) => new StoreActivationError("store.activation-stale", `${what} ${detail}`);
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw invalid4("is not an object");
+  const raw = value;
+  if (raw.version !== RETAINED_BODY_PROTOCOL_VERSION) {
+    throw invalid4(`declares version ${JSON.stringify(raw.version)}, not this protocol's ${RETAINED_BODY_PROTOCOL_VERSION}; a retained-body inventory of another generation is refused by name rather than decoded as if it described this one`);
+  }
+  if (raw.protocol !== "retained-body-inventory-v1")
+    throw invalid4(`declares protocol ${JSON.stringify(raw.protocol)}`);
+  const storeId = raw.storeId;
+  if (typeof storeId !== "string" || storeId.trim() === "")
+    throw invalid4("carries no storeId");
+  const digest = raw.digest;
+  if (typeof digest !== "string" || digest.trim() === "")
+    throw invalid4("carries no digest");
+  const epoch = raw.epoch;
+  if (typeof epoch !== "number" || !Number.isSafeInteger(epoch))
+    throw invalid4(`carries epoch ${JSON.stringify(epoch)}`);
+  const revision = raw.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision))
+    throw invalid4(`carries revision ${JSON.stringify(revision)}`);
+  if (!Array.isArray(raw.bodies))
+    throw invalid4("carries no bodies array");
+  const recorded = raw.bodies;
+  const bodies = [];
+  for (const [index2, candidate] of recorded.entries()) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate))
+      throw invalid4(`body ${index2} is not an object`);
+    const body = candidate;
+    const path2 = body.path;
+    if (typeof path2 !== "string" || path2.trim() === "")
+      throw invalid4(`body ${index2} carries no path`);
+    const sha2563 = body.sha256;
+    if (typeof sha2563 !== "string" || !/^[0-9a-f]{64}$/.test(sha2563))
+      throw invalid4(`body ${index2} carries no byte digest`);
+    if (!Array.isArray(body.records))
+      throw invalid4(`body ${index2} carries a malformed accepted-record list`);
+    const records = [];
+    for (const record of body.records) {
+      if (typeof record !== "string" || !/^[0-9a-f]{64}$/.test(record))
+        throw invalid4(`body ${index2} carries a malformed accepted-record list`);
+      records.push(record);
+    }
+    let partial = null;
+    if (body.partial !== null) {
+      const value2 = body.partial;
+      if (typeof value2 !== "string" || !/^[0-9a-f]{64}$/.test(value2))
+        throw invalid4(`body ${index2} carries a malformed partial-record digest`);
+      partial = value2;
+    }
+    const selection = body.selection;
+    if (typeof selection !== "boolean")
+      throw invalid4(`body ${index2} carries no selection flag`);
+    bodies.push({ path: path2, sha256: sha2563, records, partial, selection });
+  }
+  const inventory = {
+    version: RETAINED_BODY_PROTOCOL_VERSION,
+    protocol: "retained-body-inventory-v1",
+    storeId,
+    epoch,
+    revision,
+    bodies
+  };
+  return { ...inventory, digest };
+}
+async function readRetainedBodyInventory(backupPath) {
+  const path2 = retainedInventoryPath(backupPath);
+  const bytes = readIfExists(path2);
+  if (bytes === undefined) {
+    throw new StoreActivationError("store.activation-stale", `the recovery point at ${backupPath} records no retained-body inventory (${path2} is absent); a whole-store SQLite copy alone does not back up the file-native ledgers, so this point cannot describe the body loss a restore would cause. Take the point with \`backupStore\`, which freezes and records that inventory. Nothing was replaced.`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new StoreActivationError("store.activation-stale", `the retained-body inventory at ${path2} is not readable JSON (${error.message}); the point cannot be restored without it. Nothing was replaced.`);
+  }
+  return requireRetainedInventory(parsed, `the retained-body inventory at ${path2}`);
+}
+function assertCopyIsConsistent(db, backupPath) {
+  const integrity = db.prepare("pragma integrity_check").all().map((row) => String(Object.values(row)[0] ?? ""));
+  if (integrity.length !== 1 || integrity[0] !== "ok") {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} fails SQLite integrity_check (${integrity.slice(0, 3).join("; ") || "no result"}); it is not a verified recovery point.`);
+  }
+  const violations = db.prepare("pragma foreign_key_check").all();
+  if (violations.length > 0) {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} holds ${violations.length} row(s) violating the schema's foreign keys (first: ${JSON.stringify(violations[0])}); it is not a verified recovery point.`);
+  }
+}
+function assertCopySchemaIsThisBuild(db, backupPath) {
+  const rows = db.prepare("select version from schema_version order by version").all();
+  if (rows.length === 0) {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records no applied migration; it is not a store this build can verify.`);
+  }
+  if (rows.length > MIGRATIONS.length) {
+    throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(rows[rows.length - 1]?.version)}, which this build does not have (it knows ${MIGRATIONS.length}); the copy was written by a newer build and is not a recovery point for this one.`);
+  }
+  for (const [index2, row] of rows.entries()) {
+    const migration = MIGRATIONS[index2];
+    if (row.version !== migration.version) {
+      throw new StoreActivationError("store.activation-stale", `the copy at ${backupPath} records migration ${String(row.version)} at position ${index2 + 1}, not this build's ${migration.version}; the copy is not this build's store.`);
+    }
+  }
+}
+async function inspectBackupCopy(backupPath) {
+  assertStoreRuntimeSupported();
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(backupPath, { readOnly: true });
+  try {
+    db.exec("pragma query_only=ON");
+    assertCopyIsConsistent(db, backupPath);
+    assertCopySchemaIsThisBuild(db, backupPath);
+    const schemaVersion = schemaVersionOf(db);
+    return {
+      ...readMetaRow(db),
+      schemaVersion,
+      execution: readExecutionMetaOfCopy(db, schemaVersion),
+      counts: countsOf(db)
+    };
+  } finally {
+    db.close();
+  }
+}
+function sameCounts(a, b) {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key]);
+}
+function defaultBackupPath(context, meta, label) {
+  const name = label === undefined ? `${meta.storeId.slice(0, 8)}-e${meta.epoch}-r${meta.revision}.db` : `${label}.db`;
+  return join18(dirname8(storeDbPath(context)), "archived", "store-migration", "backups", name);
+}
+async function takeVerifiedBackup(context, options) {
+  const dbPath = storeDbPath(context);
+  const retainedBodies = readRetainedBodyCheckpoints(context);
+  const handle = await openStore(context, "write");
+  try {
+    const meta = readMetaRow(handle.db);
+    const retained = stampRetainedInventory({ storeId: meta.storeId, epoch: meta.epoch, revision: meta.revision }, retainedBodies);
+    const schemaVersion = schemaVersionOf(handle.db);
+    const counts = countsOf(handle.db);
+    const execution = liveExecutionMeta(handle.execution);
+    let walPending = false;
+    try {
+      walPending = statSync5(`${dbPath}-wal`).size > 0;
+    } catch {
+      walPending = false;
+    }
+    const targetPath = options.out === undefined ? defaultBackupPath(context, meta, options.label) : resolve13(options.out);
+    if (existsSync13(targetPath)) {
+      if (!options.reuseMatchingIdentity) {
+        throw new StoreActivationError("store.activation-stale", `a backup already exists at ${targetPath}; pass --out <path> for a different target instead of overwriting a recorded recovery point.`);
+      }
+      let existing;
+      try {
+        existing = await inspectBackupCopy(targetPath);
+      } catch (error) {
+        throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} cannot be verified (${error.message}). Refusing to overwrite a recorded recovery point.`);
+      }
+      if (existing.storeId !== meta.storeId || existing.epoch !== meta.epoch || existing.revision !== meta.revision || existing.catalogRevision !== meta.catalogRevision || existing.authorityState !== meta.authorityState || existing.schemaVersion !== schemaVersion || !sameExecution(existing.execution, execution)) {
+        throw new StoreActivationError("store.activation-stale", `the existing backup at ${targetPath} does not describe this store (identity/epoch/revision/schema/execution mismatch). Refusing to overwrite a recorded recovery point.`);
+      }
+      const sidecarBytes = readIfExists(retainedInventoryPath(targetPath));
+      let recorded = retained;
+      if (sidecarBytes !== undefined) {
+        recorded = requireRetainedInventory(JSON.parse(sidecarBytes.toString("utf8")), `the retained-body inventory at ${retainedInventoryPath(targetPath)}`);
+        if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
+          throw new StoreActivationError("store.activation-stale", `the retained-body inventory at ${retainedInventoryPath(targetPath)} describes store ${recorded.storeId} epoch ${recorded.epoch}, not this point's ${meta.storeId} epoch ${meta.epoch}; the recorded bodies are not this authority generation's. Refusing to re-bind one recovery point to another generation's bodies.`);
+        }
+      } else {
+        writeRetainedInventory(targetPath, retained);
+      }
+      return {
+        receiptVersion: BACKUP_RECEIPT_VERSION,
+        backupPath: targetPath,
+        ...existing,
+        walPending,
+        bytes: statSync5(targetPath).size,
+        takenAt: new Date().toISOString(),
+        retained: recorded
+      };
+    }
+    mkdirSync6(dirname8(targetPath), { recursive: true });
+    handle.db.prepare("vacuum into ?").run(targetPath);
+    let verified;
+    try {
+      verified = await inspectBackupCopy(targetPath);
+    } catch (error) {
+      rmSync2(targetPath, { force: true });
+      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} could not be reopened for verification (${error.message}); the unverified copy was removed. Nothing was activated.`);
+    }
+    if (verified.storeId !== meta.storeId || verified.epoch !== meta.epoch || verified.revision !== meta.revision || verified.catalogRevision !== meta.catalogRevision || verified.authorityState !== meta.authorityState || verified.schemaVersion !== schemaVersion || !sameExecution(verified.execution, execution) || !sameCounts(verified.counts, counts)) {
+      rmSync2(targetPath, { force: true });
+      throw new StoreActivationError("store.activation-stale", `the backup written to ${targetPath} does not match the source store (identity, schema or row counts); the unverified copy was removed. Nothing was activated.`);
+    }
+    writeRetainedInventory(targetPath, retained);
+    return {
+      receiptVersion: BACKUP_RECEIPT_VERSION,
+      backupPath: targetPath,
+      ...verified,
+      walPending,
+      bytes: statSync5(targetPath).size,
+      takenAt: new Date().toISOString(),
+      retained
+    };
+  } finally {
+    handle.close();
+  }
+}
+async function backupStoreUnderExclusion(context, options = {}) {
+  return takeVerifiedBackup(context, { out: options.out, reuseMatchingIdentity: false });
+}
+async function backupStore(context, options = {}) {
+  const root = canonicalPath(dirname8(storeDbPath(context)));
+  return withExecutionMaintenanceLock(context, () => withStatusWriteLock(join18(root, "status.json"), () => backupStoreUnderExclusion(context, { out: options.out })));
+}
+async function assertBackupDescribesStore(context, receipt, reviewed) {
+  const stale = (detail) => {
+    throw new StoreActivationError("store.activation-stale", detail);
+  };
+  if (!receipt || receipt.receiptVersion !== ACTIVATION_PROTOCOL_VERSION && receipt.receiptVersion !== BACKUP_RECEIPT_VERSION || typeof receipt.backupPath !== "string" || receipt.backupPath.trim() === "") {
+    stale("the supplied recovery point is not a backup receipt of this protocol version; take one with `backupStore` and apply the manifest that names it.");
+  }
+  const controlRoot = dirname8(storeDbPath(context));
+  if (!isPathWithin(controlRoot, receipt.backupPath)) {
+    stale(`the recovery point ${receipt.backupPath} is outside the authorized control root ${controlRoot}; a migration recovery point must live inside the root it protects.`);
+  }
+  const liveStore = canonicalPath(storeDbPath(context));
+  const candidate = canonicalPath(receipt.backupPath);
+  if (candidate === liveStore || candidate === `${liveStore}-wal` || candidate === `${liveStore}-shm`) {
+    stale(`the recovery point ${receipt.backupPath} names the live store database (${liveStore}), not an independent copy. A migration recovery point must be taken with \`backupStore\` (SQLite \`VACUUM INTO\`); the live database and its WAL/SHM sidecars cannot be their own recovery point.`);
+  }
+  if (receipt.storeId !== reviewed.storeId || receipt.epoch !== reviewed.epoch || receipt.schemaVersion !== reviewed.schemaVersion || receipt.catalogRevision !== reviewed.catalogRevision) {
+    stale(`the recovery point ${receipt.backupPath} belongs to store ${receipt.storeId} epoch ${receipt.epoch} schema ${receipt.schemaVersion} catalog revision ${receipt.catalogRevision}, not to the reviewed authority ${reviewed.storeId} epoch ${reviewed.epoch} schema ${reviewed.schemaVersion} catalog revision ${reviewed.catalogRevision}; take a recovery point of the reviewed authority.`);
+  }
+  let copy;
+  try {
+    copy = await inspectBackupCopy(receipt.backupPath);
+  } catch (error) {
+    throw new StoreActivationError("store.activation-stale", `the recovery point ${receipt.backupPath} cannot be reopened for verification (${error.message}).`);
+  }
+  if (copy.storeId !== receipt.storeId || copy.epoch !== receipt.epoch || copy.revision !== receipt.revision || copy.catalogRevision !== receipt.catalogRevision || copy.authorityState !== receipt.authorityState || copy.schemaVersion !== receipt.schemaVersion || !sameExecution(copy.execution, receipt.execution ?? null) || !sameCounts(copy.counts, receipt.counts)) {
+    stale(`the copy at ${receipt.backupPath} does not match the receipt recorded for it; the receipt is not evidence for these bytes, so it is not a verified recovery point.`);
+  }
+  const handle = await openStore(context, "read");
+  try {
+    const meta = readMetaRow(handle.db);
+    const counts = countsOf(handle.db);
+    if (meta.authorityState !== receipt.authorityState || !sameCounts(counts, receipt.counts)) {
+      stale(`the recovery point ${receipt.backupPath} no longer describes the live issue/catalog authority (${meta.authorityState}, ${counts.issues} issue(s) / ${counts.catalogEntities} catalog entit(ies) live). Issue/catalog work committed after the point would be silently outside its coverage; take a fresh backup.`);
+    }
+  } finally {
+    handle.close();
+  }
+}
+function attestationRefusal(message) {
+  throw new StoreActivationError("store.attestation-invalid", message);
+}
+function activationBlocked(message) {
+  throw new StoreActivationError("store.activation-blocked", message);
+}
+function attestationObject(value, what) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    attestationRefusal(`${what} must be an object`);
+  return value;
+}
+function attestationKeys(object, allowed, what) {
+  for (const key of Object.keys(object)) {
+    if (!allowed.includes(key)) {
+      attestationRefusal(`${what} declares an undeclared field "${key}"; the attestation records only installed entrypoints/versions, ` + `quiesced sessions and the approving operator — never session credentials or other data.`);
+    }
+  }
+}
+function attestationString(object, key, what) {
+  const value = object[key];
+  if (typeof value !== "string" || value.trim() === "")
+    attestationRefusal(`${what}.${key} must be a nonblank string`);
+  return value;
+}
+function validateActivationAttestation(value) {
+  const raw = attestationObject(value, "the attestation");
+  attestationKeys(raw, ["version", "attestedAt", "operator", "consumers", "stoppedSessions"], "the attestation");
+  if (raw.version !== ACTIVATION_PROTOCOL_VERSION) {
+    attestationRefusal(`the attestation version must be ${ACTIVATION_PROTOCOL_VERSION}`);
+  }
+  const attestedAt = attestationString(raw, "attestedAt", "the attestation");
+  if (!Number.isFinite(Date.parse(attestedAt)))
+    attestationRefusal("the attestation.attestedAt must be an ISO/RFC3339 instant");
+  const operator = attestationObject(raw.operator, "the attestation.operator");
+  attestationKeys(operator, ["actor", "authorizationRef"], "the attestation.operator");
+  const actor = attestationString(operator, "actor", "the attestation.operator");
+  const authorizationRef = attestationString(operator, "authorizationRef", "the attestation.operator");
+  if (!Array.isArray(raw.consumers))
+    attestationRefusal("the attestation.consumers must be an array");
+  if (raw.consumers.length === 0) {
+    activationBlocked("the attestation must attest at least one installed consumer (entrypoint, version and disposition); a merely merged source tree is not installed-consumer readiness");
+  }
+  const consumers = raw.consumers.map((entry, index2) => {
+    const what = `the attestation.consumers[${index2}]`;
+    const consumer = attestationObject(entry, what);
+    attestationKeys(consumer, ["entryId", "kind", "entrypoint", "runtime", "runtimeVersion", "version", "current", "disposition"], what);
+    const kind = consumer.kind;
+    if (typeof kind !== "string" || !Object.hasOwn(CONSUMER_KINDS, kind)) {
+      attestationRefusal(`${what}.kind must be one of ${Object.keys(CONSUMER_KINDS).join(", ")}`);
+    }
+    const runtime = consumer.runtime;
+    if (runtime !== "bun" && runtime !== "node")
+      attestationRefusal(`${what}.runtime must be "bun" or "node"`);
+    const entryId = attestationString(consumer, "entryId", what);
+    const runtimeVersion = attestationString(consumer, "runtimeVersion", what);
+    const floor = runtime === "bun" ? MIN_BUN_VERSION : MIN_NODE_VERSION;
+    if (compareVersions(runtimeVersion, floor) < 0) {
+      activationBlocked(`${what} (${entryId}) reports ${runtime} ${runtimeVersion}, below the ${floor} floor; an old binary is not a compatible consumer. Upgrade/reload it or exclude it explicitly.`);
+    }
+    const disposition = consumer.disposition;
+    if (typeof disposition !== "string" || !Object.hasOwn(DISPOSITIONS2, disposition)) {
+      activationBlocked(`${what}.disposition must be one of ${Object.keys(DISPOSITIONS2).join(", ")}; a consumer left running/unattested ` + `stops the barrier — if a host cannot reload safely, stop at the exact user-restart step instead`);
+    }
+    if (typeof consumer.current !== "boolean")
+      attestationRefusal(`${what}.current must be a boolean`);
+    return {
+      entryId,
+      kind,
+      entrypoint: attestationString(consumer, "entrypoint", what),
+      runtime,
+      runtimeVersion,
+      version: attestationString(consumer, "version", what),
+      current: consumer.current,
+      disposition
+    };
+  });
+  const current = consumers.filter((consumer) => consumer.current);
+  if (current.length === 0) {
+    activationBlocked("the attestation does not mark a current coordinator; the coordinator driving this activation must attest its own reloaded/upgraded entry, including its queued/reused sessions");
+  }
+  if (current.length > 1)
+    attestationRefusal(`${current.length} consumers are marked current; exactly one current coordinator is allowed`);
+  if (current[0].kind !== "coordinator") {
+    attestationRefusal(`the current consumer is attested as "${current[0].kind}"; the current-coordinator attestation must be a coordinator entry`);
+  }
+  if (!Array.isArray(raw.stoppedSessions))
+    attestationRefusal("the attestation.stoppedSessions must be an array (possibly empty)");
+  const stoppedSessions = raw.stoppedSessions.map((entry, index2) => {
+    const what = `the attestation.stoppedSessions[${index2}]`;
+    const session = attestationObject(entry, what);
+    attestationKeys(session, ["sessionId", "host", "state"], what);
+    const state = session.state;
+    if (typeof state !== "string" || !Object.hasOwn(SESSION_STATES, state)) {
+      activationBlocked(`${what}.state must be "stopped" or "reloaded"; a running or queued session is not quiesced and stops the barrier`);
+    }
+    return {
+      sessionId: attestationString(session, "sessionId", what),
+      host: attestationString(session, "host", what),
+      state
+    };
+  });
+  return { version: ACTIVATION_PROTOCOL_VERSION, attestedAt, operator: { actor, authorizationRef }, consumers, stoppedSessions };
+}
+function currentRegisterSources(context) {
+  const projectsRoot = catalogRootDir(context, "projects");
+  let entries;
+  try {
+    entries = readdirSync9(projectsRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const sources = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isSymbolicLink() || !entry.isDirectory())
+      continue;
+    const absolutePath = join18(projectsRoot, entry.name, "residuals.json");
+    let info;
+    try {
+      info = lstatSync3(absolutePath);
+    } catch {
+      continue;
+    }
+    if (info.isSymbolicLink() || !info.isFile())
+      continue;
+    sources.push({ project: entry.name, absolutePath, relativePath: `${entry.name}/residuals.json` });
+  }
+  return sources;
+}
+function revalidateSources(context, manifest, mode) {
+  const reviewed = new Set(manifest.sources.map((source) => source.relativePath));
+  const retired = new Set(manifest.retirement.registers.map((register) => register.relativePath));
+  const changed = (detail) => {
+    throw new StoreActivationError(mode === "activation" ? "store.migration-source-changed" : "store.legacy-write-detected", `${detail} ` + (mode === "activation" ? "Nothing was activated; re-run the preview, review the final manifest, apply it and re-attest." : "Nothing was retired; re-preview and re-apply, then resume retirement."));
+  };
+  for (const source of currentRegisterSources(context)) {
+    if (!reviewed.has(source.relativePath) && !retired.has(source.relativePath)) {
+      changed(`an unreviewed legacy register appeared at ${source.relativePath}.`);
+    }
+  }
+  for (const reviewedSource of manifest.sources) {
+    const live = readIfExists(join18(catalogRootDir(context, "projects"), reviewedSource.relativePath));
+    if (live === undefined && !retired.has(reviewedSource.relativePath)) {
+      changed(`register ${reviewedSource.relativePath} is gone.`);
+    }
+  }
+}
+function readReceiptRows(db, where, param) {
+  const statement = db.prepare(`select ${RECEIPT_COLUMNS} from migration_receipts where ${where} order by id`);
+  return param === undefined ? statement.all() : statement.all(param);
+}
+async function appliedReceiptFor(context, manifest) {
+  const handle = await openStore(context, "read");
+  try {
+    if (resolve13(manifest.controlRoot) !== resolve13(context.harnessDir)) {
+      throw new StoreActivationError("store.activation-stale", `the manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}; nothing was activated.`);
+    }
+    const row = readReceiptRows(handle.db, "phase = 'applied'").at(-1);
+    if (!row) {
+      throw new StoreActivationError("store.activation-stale", "this store has no recorded apply receipt; apply the reviewed manifest first (store migrate --apply --manifest <path>).");
+    }
+    const storedMapping = JSON.parse(row.mapping_json);
+    const counts = JSON.parse(row.source_counts_json);
+    if (typeof counts.storeRevision !== "number") {
+      throw new StoreActivationError("store.activation-stale", "the recorded apply receipt carries no store revision; the staged store cannot be checked against the reviewed apply.");
+    }
+    return {
+      receiptId: row.id,
+      manifestHash: row.manifest_hash,
+      phase: "applied",
+      replayed: true,
+      issueIds: storedMapping.filter((entry) => entry.issueId !== "").map((entry) => ({ source: entry.source, issueId: entry.issueId })),
+      historyRows: storedMapping.filter((entry) => entry.issueId === "" && (entry.classification === "history" || entry.classification === "excluded")).map((entry) => ({
+        source: entry.source,
+        classification: entry.classification,
+        rationale: entry.rationale ?? "",
+        legacyJson: entry.legacyJson ?? ""
+      })),
+      counts: { ...counts, history: counts.history ?? 0, excluded: counts.excluded ?? 0, created: 0, updated: 0 },
+      storeRevision: counts.storeRevision,
+      appliedAt: row.applied_at
+    };
+  } finally {
+    handle.close();
+  }
+}
+function activationReceiptOfRow(row, replayed) {
+  const stored = JSON.parse(row.manifest_json);
+  return { ...stored, receiptId: row.id, phase: "activated", replayed, activatedAt: row.activated_at ?? row.applied_at };
+}
+async function activationReceiptFor(context, manifest) {
+  const apply = await appliedReceiptFor(context, manifest);
+  const handle = await openStore(context, "read");
+  try {
+    const row = findActivationRow(readReceiptRows(handle.db, "phase = 'activated'"), apply.receiptId);
+    if (!row) {
+      throw new StoreActivationError("store.activation-stale", `the applied receipt #${apply.receiptId} has no recorded activation; run "store activate" with the reviewed manifest and attestation first.`);
+    }
+    return activationReceiptOfRow(row, true);
+  } finally {
+    handle.close();
+  }
+}
+function findActivationRow(rows, applyReceiptId) {
+  for (const row of [...rows].reverse()) {
+    let stored;
+    try {
+      stored = JSON.parse(row.manifest_json);
+    } catch {
+      continue;
+    }
+    if (stored === null || typeof stored !== "object" || !("applyReceiptId" in stored))
+      continue;
+    if (typeof stored.applyReceiptId === "number" && stored.applyReceiptId === applyReceiptId)
+      return row;
+  }
+  return;
+}
+function activationHashOf(parts) {
+  return sha256Bytes3(Buffer.from(`activation\x00${JSON.stringify(parts)}`, "utf8"));
+}
+function findRetirementRow(rows, activationReceiptId, live) {
+  for (const row of [...rows].reverse()) {
+    let stored;
+    try {
+      stored = JSON.parse(row.manifest_json);
+    } catch {
+      continue;
+    }
+    if (stored === null || typeof stored !== "object")
+      continue;
+    const candidate = stored;
+    if (candidate.activationReceiptId !== activationReceiptId)
+      continue;
+    if (candidate.storeId !== live.storeId || candidate.epoch !== live.epoch)
+      continue;
+    return row;
+  }
+  return;
+}
+function failureHook(stage, completed) {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
+    return;
+  if (stage === "flip") {
+    if (process.env.MSTAR_STORE_FAIL_ACTIVATION_AFTER === "flip")
+      throw new Error("induced activation failure after the authority flip");
+    return;
+  }
+  if (stage === "section-write") {
+    if (process.env.MSTAR_STORE_FAIL_RETIREMENT_AFTER_SECTION_WRITE === "1") {
+      throw new Error("induced retirement failure after the section rewrite");
+    }
+    return;
+  }
+  const raw = process.env.MSTAR_STORE_FAIL_RETIREMENT_AFTER;
+  if (raw === undefined || raw === "")
+    return;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isInteger(parsed) && parsed === completed)
+    throw new Error(`induced retirement failure after ${completed} item(s)`);
+}
+function legacyWriteHook(stage) {
+  if (process.env.MSTAR_STORE_TEST_RUNNER !== "1")
+    return;
+  if (process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_AFTER !== stage)
+    return;
+  const target = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_TARGET;
+  const source = process.env.MSTAR_STORE_INJECT_LEGACY_WRITE_FROM;
+  if (target === undefined || source === undefined)
+    return;
+  copyFileSync(source, target);
+}
+async function activateStore(context, receipt, attestation) {
+  if (!receipt || receipt.phase !== "applied" || typeof receipt.receiptId !== "number" || typeof receipt.manifestHash !== "string" || typeof receipt.storeRevision !== "number") {
+    throw new StoreActivationError("store.activation-stale", "the activation requires the reviewed apply receipt (receiptId, storeRevision; manifestHash is provenance); re-apply the reviewed manifest.");
+  }
+  const validated = validateActivationAttestation(attestation);
+  const attestationHash = sha256Bytes3(Buffer.from(`attestation\x00${JSON.stringify(validated)}`, "utf8"));
+  const inspection = await openStore(context, "write");
+  let meta;
+  let manifest;
+  try {
+    meta = readMetaRow(inspection.db);
+    if (meta.authorityState === "active") {
+      const row = findActivationRow(readReceiptRows(inspection.db, "phase = 'activated'"), receipt.receiptId);
+      if (!row) {
+        throw new StoreActivationError("store.activation-stale", "the store is already active under a different activation; the authority generation cannot be replaced by a new receipt.");
+      }
+      const recorded = activationReceiptOfRow(row, true);
+      if (recorded.storeId !== meta.storeId || recorded.epoch !== meta.epoch) {
+        throw new StoreActivationError("store.activation-stale", `the recorded activation #${recorded.receiptId} belongs to store ${recorded.storeId} epoch ${recorded.epoch}, not this live store ${meta.storeId} epoch ${meta.epoch}; it cannot be served as this store's activation.`);
+      }
+      return recorded;
+    }
+    const appliedRow = readReceiptRows(inspection.db, "id = ? and phase = 'applied'", receipt.receiptId)[0];
+    if (!appliedRow) {
+      throw new StoreActivationError("store.activation-stale", `the supplied receipt (#${receipt.receiptId}) is not a recorded apply receipt of this store; re-apply the reviewed manifest and use its receipt. Nothing was activated.`);
+    }
+    const applied = readReceiptRows(inspection.db, "phase = 'applied'");
+    if (applied.at(-1).id !== appliedRow.id) {
+      throw new StoreActivationError("store.activation-stale", `the supplied receipt is not the FINAL applied manifest (a later apply, receipt #${applied.at(-1).id}, is recorded); revalidate the final manifest, re-apply it and re-attest. Nothing was activated.`);
+    }
+    manifest = JSON.parse(appliedRow.manifest_json);
+    if (resolve13(manifest.controlRoot) !== resolve13(context.harnessDir)) {
+      throw new StoreActivationError("store.activation-stale", `the applied manifest was reviewed for control root ${manifest.controlRoot}, not ${context.harnessDir}. Nothing was activated.`);
+    }
+    if (meta.revision !== receipt.storeRevision) {
+      throw new StoreActivationError("store.activation-stale", `the staged store is at revision ${meta.revision}, but the reviewed apply committed revision ${receipt.storeRevision}; the staged store changed after the reviewed apply. Re-apply the final manifest first.`);
+    }
+    revalidateSources(context, manifest, "activation");
+  } finally {
+    inspection.close();
+  }
+  const backup = await takeVerifiedBackup(context, {
+    label: `pre-activation-${meta.storeId.slice(0, 8)}-r${meta.revision}`,
+    reuseMatchingIdentity: true
+  });
+  legacyWriteHook("inspection");
+  const flip = await openStore(context, "write");
+  try {
+    const at = new Date().toISOString();
+    flip.db.exec("begin immediate");
+    try {
+      const current = readMetaRow(flip.db);
+      if (current.authorityState !== "staged" || current.storeId !== meta.storeId || current.revision !== meta.revision) {
+        throw new StoreActivationError("store.activation-stale", "the staged store changed while the barrier was running; the activation was rolled back. Re-check and retry.");
+      }
+      revalidateSources(context, manifest, "activation");
+      const epoch = current.epoch + 1;
+      const revision = current.revision + 1;
+      const activationHash = activationHashOf({
+        applyManifestHash: receipt.manifestHash,
+        applyReceiptId: receipt.receiptId,
+        storeId: current.storeId,
+        previousEpoch: current.epoch,
+        epoch,
+        attestationHash,
+        backupPath: backup.backupPath
+      });
+      flip.db.prepare("update store_meta set authority_state = 'active', authority_epoch = ?, revision = ?, activated_at = ? where id = 1").run(epoch, revision, at);
+      flip.db.prepare("update migration_receipts set activated_at = ? where id = ?").run(at, receipt.receiptId);
+      failureHook("flip", 0);
+      const stored = {
+        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+        activationHash,
+        applyReceiptId: receipt.receiptId,
+        applyManifestHash: receipt.manifestHash,
+        storeId: current.storeId,
+        previousEpoch: current.epoch,
+        epoch,
+        revision,
+        catalogRevision: current.catalogRevision,
+        attestationHash,
+        attestation: validated,
+        backup
+      };
+      const result = flip.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, activated_at) values (?, 'activated', ?, '[]', ?, ?, ?)").run(activationHash, JSON.stringify(stored), JSON.stringify({ consumers: validated.consumers.length, stoppedSessions: validated.stoppedSessions.length }), at, at);
+      const receiptId = Number(result.lastInsertRowid);
+      flip.db.exec("commit");
+      return { ...stored, receiptId, phase: "activated", replayed: false, activatedAt: at };
+    } catch (error) {
+      try {
+        flip.db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+  } finally {
+    flip.close();
+  }
+}
+function relativePathSegments(relativePath) {
+  const segments = relativePath.split(/[\\/]+/);
+  if (segments.length === 0 || segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new StoreActivationError("store.migration-source-changed", `the catalog source path "${relativePath}" is not a safe root-relative path; nothing was retired.`);
+  }
+  return segments;
+}
+function readLedger(path2) {
+  const bytes = readIfExists(path2);
+  if (bytes === undefined)
+    return;
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new StoreActivationError("store.activation-stale", `the retirement ledger at ${path2} is unreadable (${error.message}); refusing to guess at partial retirement state.`);
+  }
+}
+function writeLedger(path2, ledger) {
+  ledger.updatedAt = new Date().toISOString();
+  writeJson(path2, ledger);
+}
+function markerText(ledger, receipt) {
+  return [
+    `# Legacy source archive — activation receipt #${ledger.activationReceiptId}`,
+    "",
+    "Retired from the live control root by `mstar store retire`, after the activation barrier passed.",
+    "",
+    `- successor authority: \`${ledger.successorDbPath}\` (store_id \`${ledger.storeId}\`, authority epoch ${ledger.epoch})`,
+    `- activation receipt: #${ledger.activationReceiptId} (\`${ledger.activationHash}\`)`,
+    `- retirement receipt: ${receipt === null ? "pending" : `#${receipt.receiptId} (\`${receipt.retirementHash}\`)`}`,
+    `- recovery point: \`${ledger.backupPath}\``,
+    `- archived: ${ledger.registers.length} residual register(s), ${ledger.sections.length} reviewed index section(s)`,
+    `- last updated: ${ledger.updatedAt}`,
+    "",
+    "These archived bytes are historical migration input, not a post-activation rollback path: they were the",
+    "pre-activation authority and are superseded history, and restoring them would recreate a second authority.",
+    "Recovery after activation uses the quiesced SQLite-consistent `VACUUM INTO` backup above plus reconciliation.",
+    "",
+    "The per-item retirement ledger (`ledger.json`, same directory) is the resumable record of exactly which",
+    "bytes and sections were moved and verified.",
+    ""
+  ].join(`
+`);
+}
+function retirementReceiptOfRow(row, replayed) {
+  const stored = JSON.parse(row.manifest_json);
+  return { ...stored, receiptId: row.id, phase: "retired", replayed, retiredAt: row.retired_at ?? row.applied_at };
+}
+function finalizeDisclosure(ledgerPath, ledger, receipt) {
+  writeLedger(ledgerPath, ledger);
+  writeTextAtomic(join18(ledger.archiveDir, "MARKER.md"), markerText(ledger, receipt));
+}
+function retireRegister(context, ledgerPath, ledger, item) {
+  const livePath = join18(catalogRootDir(context, "projects"), item.relativePath);
+  const liveBytes = readIfExists(livePath);
+  if (liveBytes !== undefined) {
+    mkdirSync6(dirname8(item.archivePath), { recursive: true });
+    rmSync2(item.archivePath, { force: true });
+    copyFileSync(livePath, item.archivePath);
+    item.state = "archived";
+    writeLedger(ledgerPath, ledger);
+    unlinkSync4(livePath);
+  } else if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `register ${item.relativePath} is gone and no archive copy exists; the reviewed source cannot be retired truthfully. Nothing was retired.`);
+  }
+  item.state = "verified";
+  writeLedger(ledgerPath, ledger);
+}
+function verifyArchivedRegister(item) {
+  if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `the archived register ${item.relativePath} is missing; refusing to claim retirement.`);
+  }
+}
+function matchedRowsIn(table, owner, wanted) {
+  const family = detectIndexFamily(table.header);
+  if (family === null || family !== wanted.family)
+    return [];
+  const hits = [];
+  for (const row of table.rows) {
+    const identity = indexRowIdentity(family, row.cells, owner);
+    if (identity !== null && wanted.identities.has(identity))
+      hits.push({ identity, line: row.line });
+  }
+  return hits;
+}
+function selectReviewedSection(live, item) {
+  const wanted = { family: item.family, identities: new Set(item.retiredRows ?? item.reviewedRows) };
+  if (wanted.identities.size === 0)
+    return;
+  const slash = item.relativePath.indexOf("/");
+  const owner = slash === -1 ? null : item.relativePath.slice(0, slash);
+  let best;
+  for (const table of readTables(live)) {
+    const hits = matchedRowsIn(table, owner, wanted);
+    if (hits.length === 0)
+      continue;
+    if (best === undefined || hits.length > best.hits.length)
+      best = { table, hits };
+  }
+  return best;
+}
+function retireSection(context, ledgerPath, ledger, item) {
+  const livePath = join18(catalogRootDir(context, item.rootKind), ...relativePathSegments(item.relativePath));
+  const live = readIfExists(livePath)?.toString("utf8");
+  if (live === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; the reviewed section cannot be retired truthfully. Nothing was retired.`);
+  }
+  const selection = selectReviewedSection(live, item);
+  if (selection === undefined) {
+    item.removedLines ??= 0;
+    verifyRetiredSection(livePath, item);
+    item.state = "verified";
+    writeLedger(ledgerPath, ledger);
+    return;
+  }
+  const reviewedLines = new Set(selection.hits.map((hit) => hit.line));
+  const survivingRows = selection.table.rows.filter((row) => !reviewedLines.has(row.line));
+  const dropped = new Set;
+  if (survivingRows.length === 0) {
+    for (let line = selection.table.firstLine;line <= selection.table.lastLine; line += 1)
+      dropped.add(line);
+  } else {
+    for (const line of reviewedLines)
+      dropped.add(line);
+  }
+  const excised = live.split(`
+`).filter((_line, index2) => !dropped.has(index2 + 1)).join(`
+`);
+  mkdirSync6(dirname8(item.archivePath), { recursive: true });
+  rmSync2(item.archivePath, { force: true });
+  copyFileSync(livePath, item.archivePath);
+  item.retiredRows = [...new Set(selection.hits.map((hit) => hit.identity))].sort();
+  item.removedLines = dropped.size;
+  item.expectedLiveSha256 = sha256Bytes3(Buffer.from(excised, "utf8"));
+  writeLedger(ledgerPath, ledger);
+  writeTextAtomic(livePath, excised);
+  item.state = "verified";
+  failureHook("section-write", 0);
+  verifyRetiredSection(livePath, item);
+  writeLedger(ledgerPath, ledger);
+}
+function verifyRetiredSection(livePath, item) {
+  const live = readIfExists(livePath)?.toString("utf8");
+  if (live === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} is gone; refusing to claim retirement.`);
+  }
+  if (selectReviewedSection(live, item) !== undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `catalog source ${item.rootKind}:${item.relativePath} still holds a reviewed row of the retired section; refusing to claim retirement.`);
+  }
+  if (readIfExists(item.archivePath) === undefined) {
+    throw new StoreActivationError("store.migration-source-changed", `the archived original of ${item.relativePath} is missing; refusing to claim retirement.`);
+  }
+}
+async function retireStoreSources(context, activationReceipt) {
+  if (!activationReceipt || activationReceipt.phase !== "activated" || typeof activationReceipt.receiptId !== "number" || typeof activationReceipt.activationHash !== "string" || typeof activationReceipt.storeId !== "string" || typeof activationReceipt.epoch !== "number") {
+    throw new StoreActivationError("store.activation-stale", 'retirement requires the recorded activation receipt (receiptId, activationHash, storeId, epoch); run "store activate" first.');
+  }
+  const handle = await openStore(context, "write");
+  try {
+    const meta = readMetaRow(handle.db);
+    if (meta.authorityState !== "active") {
+      throw new StoreActivationError("store.not-active", `the store is ${meta.authorityState}; legacy sources are retired only after the activation barrier made the store active. Nothing was retired.`);
+    }
+    refuseUnlessSameGeneration({ storeId: meta.storeId, epoch: meta.epoch }, { storeId: activationReceipt.storeId, epoch: activationReceipt.epoch }, "the activation receipt");
+    const activationRow = readReceiptRows(handle.db, "id = ? and phase = 'activated'", activationReceipt.receiptId)[0];
+    if (!activationRow) {
+      throw new StoreActivationError("store.activation-stale", `no activation receipt #${activationReceipt.receiptId} is recorded for this store; nothing was retired.`);
+    }
+    const activationRowReceipt = activationReceiptOfRow(activationRow, true);
+    if (activationRowReceipt.storeId !== meta.storeId || activationRowReceipt.epoch !== meta.epoch || activationRowReceipt.applyReceiptId !== activationReceipt.applyReceiptId) {
+      throw new StoreActivationError("store.activation-stale", `the recorded activation #${activationReceipt.receiptId} belongs to store ${activationRowReceipt.storeId} epoch ${activationRowReceipt.epoch} over apply receipt #${activationRowReceipt.applyReceiptId}, not this store ${meta.storeId} epoch ${meta.epoch} over apply receipt #${activationReceipt.applyReceiptId}; nothing was retired.`);
+    }
+    const appliedRow = readReceiptRows(handle.db, "id = ? and phase = 'applied'", activationReceipt.applyReceiptId)[0];
+    if (!appliedRow) {
+      throw new StoreActivationError("store.activation-stale", `the applied receipt #${activationReceipt.applyReceiptId} behind this activation is missing; nothing was retired.`);
+    }
+    const manifest = JSON.parse(appliedRow.manifest_json);
+    const registers = manifest.retirement.registers;
+    const sections = manifest.catalog.retirementSections;
+    const archiveDir = join18(dirname8(storeDbPath(context)), "archived", "store-migration", String(activationReceipt.receiptId));
+    const ledgerPath = join18(archiveDir, "ledger.json");
+    const retirementHash = sha256Bytes3(Buffer.from(`retirement\x00${JSON.stringify({
+      activationReceiptId: activationReceipt.receiptId,
+      activationHash: activationReceipt.activationHash,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      registers: registers.map((register) => ({ relativePath: register.relativePath, sha256: register.sha256 })),
+      sections: sections.map((section) => ({
+        rootKind: section.rootKind,
+        relativePath: section.relativePath,
+        startLine: section.startLine,
+        endLine: section.endLine,
+        sha256: section.sha256
+      }))
+    })}`, "utf8"));
+    const recorded = findRetirementRow(readReceiptRows(handle.db, "phase = 'retired'"), activationReceipt.receiptId, meta);
+    if (recorded) {
+      const receipt2 = retirementReceiptOfRow(recorded, true);
+      const existing = readLedger(ledgerPath);
+      if (existing)
+        finalizeDisclosure(ledgerPath, existing, receipt2);
+      return receipt2;
+    }
+    const existingLedger = readLedger(ledgerPath);
+    if (existingLedger && (existingLedger.storeId !== meta.storeId || existingLedger.epoch !== meta.epoch)) {
+      throw new StoreActivationError("store.activation-stale", `the retirement ledger at ${ledgerPath} belongs to a different activation generation; refusing to resume another generation's partial retirement. Nothing was retired.`);
+    }
+    revalidateSources(context, manifest, "retirement");
+    const resumed = existingLedger !== undefined;
+    const ledger = existingLedger ?? {
+      version: ACTIVATION_PROTOCOL_VERSION,
+      activationReceiptId: activationReceipt.receiptId,
+      activationHash: activationReceipt.activationHash,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      archiveDir,
+      successorDbPath: storeDbPath(context),
+      backupPath: activationReceipt.backup.backupPath,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      retirementReceiptId: null,
+      registers: registers.map((register) => ({
+        project: register.project,
+        relativePath: register.relativePath,
+        sha256: register.sha256,
+        archivePath: join18(archiveDir, "registers", ...relativePathSegments(register.relativePath)),
+        state: "pending"
+      })).sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
+      sections: sections.map((section) => ({
+        rootKind: section.rootKind,
+        relativePath: section.relativePath,
+        header: section.header,
+        startLine: section.startLine,
+        endLine: section.endLine,
+        sha256: section.sha256,
+        preservedLines: section.preservedLines,
+        family: section.family,
+        reviewedRows: section.rows,
+        retiredRows: null,
+        removedLines: null,
+        archivePath: join18(archiveDir, "index-sections", section.rootKind, ...relativePathSegments(section.relativePath)),
+        expectedLiveSha256: null,
+        state: "pending"
+      })).sort((a, b) => a.relativePath.localeCompare(b.relativePath) || a.startLine - b.startLine)
+    };
+    for (const item of ledger.sections) {
+      const section = sections.find((candidate) => candidate.rootKind === item.rootKind && candidate.relativePath === item.relativePath && candidate.startLine === item.startLine);
+      if (section === undefined)
+        continue;
+      item.family = section.family;
+      item.reviewedRows = section.rows;
+    }
+    mkdirSync6(archiveDir, { recursive: true });
+    writeLedger(ledgerPath, ledger);
+    let completed = 0;
+    for (const item of ledger.registers) {
+      if (item.state === "verified") {
+        verifyArchivedRegister(item);
+        continue;
+      }
+      retireRegister(context, ledgerPath, ledger, item);
+      completed += 1;
+      failureHook("retirement", completed);
+    }
+    for (const item of ledger.sections) {
+      retireSection(context, ledgerPath, ledger, item);
+      completed += 1;
+      failureHook("retirement", completed);
+    }
+    const at = new Date().toISOString();
+    const retiredRegisters = ledger.registers.map((item) => ({
+      project: item.project,
+      relativePath: item.relativePath,
+      sha256: item.sha256,
+      bytes: statSync5(item.archivePath).size,
+      archivedPath: item.archivePath
+    }));
+    const retiredSections = ledger.sections.map((item) => ({
+      rootKind: item.rootKind,
+      relativePath: item.relativePath,
+      header: item.header,
+      startLine: item.startLine,
+      endLine: item.endLine,
+      sha256: item.sha256,
+      archivedPath: item.archivePath,
+      liveSha256: item.expectedLiveSha256,
+      preservedLines: item.preservedLines,
+      removedLines: item.removedLines ?? item.endLine - item.startLine + 1
+    }));
+    handle.db.exec("begin immediate");
+    let receiptId;
+    try {
+      handle.db.prepare("update migration_receipts set retired_at = ? where id in (?, ?)").run(at, activationReceipt.receiptId, activationReceipt.applyReceiptId);
+      const stored = {
+        receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+        retirementHash,
+        activationReceiptId: activationReceipt.receiptId,
+        activationHash: activationReceipt.activationHash,
+        storeId: meta.storeId,
+        epoch: meta.epoch,
+        archiveDir,
+        markerPath: join18(archiveDir, "MARKER.md"),
+        registers: retiredRegisters,
+        sections: retiredSections,
+        resumed
+      };
+      const result = handle.db.prepare("insert into migration_receipts(manifest_hash, phase, manifest_json, mapping_json, source_counts_json, applied_at, retired_at) values (?, 'retired', ?, '[]', ?, ?, ?)").run(retirementHash, JSON.stringify(stored), JSON.stringify({
+        registers: retiredRegisters.length,
+        sections: retiredSections.length,
+        bytes: retiredRegisters.reduce((total, item) => total + item.bytes, 0),
+        resumed
+      }), at, at);
+      receiptId = Number(result.lastInsertRowid);
+      handle.db.exec("commit");
+    } catch (error) {
+      try {
+        handle.db.exec("rollback");
+      } catch {}
+      throw error;
+    }
+    ledger.retirementReceiptId = receiptId;
+    const receipt = {
+      receiptVersion: ACTIVATION_PROTOCOL_VERSION,
+      receiptId,
+      phase: "retired",
+      replayed: false,
+      retirementHash,
+      activationReceiptId: activationReceipt.receiptId,
+      activationHash: activationReceipt.activationHash,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      archiveDir,
+      markerPath: join18(archiveDir, "MARKER.md"),
+      registers: retiredRegisters,
+      sections: retiredSections,
+      resumed,
+      retiredAt: at
+    };
+    finalizeDisclosure(ledgerPath, ledger, receipt);
+    return receipt;
+  } finally {
+    handle.close();
+  }
+}
+var ACTIVATION_PROTOCOL_VERSION = 1;
+var RETAINED_BODY_PROTOCOL_VERSION = 1;
+var BACKUP_RECEIPT_VERSION = 2;
+var StoreActivationError;
+var EXECUTION_MIGRATION_VERSION;
+var RETAINED_WORKFLOW_BODIES;
+var AGENT_FLOW_HISTORY_DIR = "agent-flow-history";
+var AGENT_FLOW_HISTORY_CHUNK;
+var AGENT_FLOW_COMPACTION_JOURNAL = "agent-flow-compaction.json";
+var ENGINE_STATUS_BODY = "snapshots/engine-status.json";
+var CONSUMER_KINDS;
+var DISPOSITIONS2;
+var SESSION_STATES;
+var RECEIPT_COLUMNS = "id, manifest_hash, manifest_json, mapping_json, source_counts_json, applied_at, activated_at, retired_at";
+var init_store_activation = __esm(() => {
+  init_catalog();
+  init_catalog_import();
+  init_core();
+  init_lease();
+  init_path();
+  init_store_db();
+  StoreActivationError = class StoreActivationError2 extends Error {
+    code;
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "StoreActivationError";
+      this.code = code2;
+    }
+  };
+  EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+  RETAINED_WORKFLOW_BODIES = [
+    "notes.jsonl",
+    "agent-flow.jsonl",
+    "agent-flow-ids.jsonl",
+    "workflow-ledger-cursors.json",
+    "omp-launches.json"
+  ];
+  AGENT_FLOW_HISTORY_CHUNK = /^chunk-\d{6}\.jsonl$/;
+  CONSUMER_KINDS = { cli: true, "host-plugin": true, hook: true, coordinator: true };
+  DISPOSITIONS2 = {
+    reloaded: true,
+    upgraded: true,
+    "excluded:not-this-control-root": true,
+    "excluded:no-store-access": true,
+    "excluded:superseded-binary": true
+  };
+  SESSION_STATES = { stopped: true, reloaded: true };
+});
 function errorCode(error) {
   if (error !== null && typeof error === "object" && "code" in error) {
     const code2 = error.code;
@@ -11382,22 +13822,25 @@ function errorCode(error) {
 }
 function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   if (isNonEmptyString(harnessDir))
-    return resolve12(cwd, harnessDir);
-  const start = resolve12(cwd);
+    return resolve14(cwd, harnessDir);
+  const start = resolve14(cwd);
   const main = readMainWorktree(start);
   if (main !== null)
     return resolveHarnessDir(main.root);
-  for (let dir = start;; dir = dirname9(dir)) {
+  for (let dir = start;; ) {
     let linked = false;
     try {
-      linked = statSync5(join17(dir, ".git")).isFile();
+      const marker = statSync6(join19(dir, ".git"));
+      if (marker.isDirectory())
+        return resolveHarnessDir(start, { workspaceRoot: dir });
+      linked = marker.isFile();
     } catch (error) {
       const code2 = errorCode(error);
       if (code2 !== "ENOENT" && code2 !== "ENOTDIR")
         throw error;
     }
     if (linked) {
-      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join17(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join17(dir, ".git") });
+      throw new CoordinationError("coordination.not-in-git", `${start} is a linked checkout (${join19(dir, ".git")} is a file) whose main worktree is unreadable — refusing to resolve a process harness root from local artifacts`, { cwd: start, marker: join19(dir, ".git") });
     }
     const parent = dirname9(dir);
     if (parent === dir)
@@ -11406,17 +13849,124 @@ function resolveProcessHarnessDir(cwd = process.cwd(), harnessDir) {
   }
   return resolveHarnessDir(start);
 }
-var MIN_BUN_VERSION = "1.4.0";
-var MIN_NODE_VERSION = "24.18.0";
-var DEFAULT_BUSY_TIMEOUT_MS = 5000;
-
-class StoreError extends Error {
-  code;
-  constructor(code2, message) {
-    super(`[${code2}] ${message}`);
-    this.name = "StoreError";
-    this.code = code2;
-  }
+var PERSIST_PAYLOAD_CONTRACTS;
+var ENVELOPE_KEYS;
+var EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict";
+var ExecutionPinConflictError;
+var FROZEN_ROW_FIELDS;
+var FROZEN_METADATA_FIELDS;
+var PROTECTED_SOURCE_BRANCHES;
+var GIT_OBJECT_ID;
+var UNFINISHED_GIT_OPERATIONS;
+var PREPARE_PATCH_KEYS;
+var PREPARE_APPEND_KEYS;
+var PREPARE_CORRECTION_KEYS;
+var PREPARE_APPEND_METADATA_KEYS;
+var PREPARE_APPEND_AUTHORITY_METADATA_KEYS;
+var PLAN_PARALLELISM_VALUES;
+var AMENDMENT_MINIMUM;
+var RECOVERY_INPUT_KEYS;
+var init_coordination = __esm(() => {
+  init_core();
+  init_coordination_write();
+  init_recovery_intent();
+  init_session_identity();
+  init_coordination_transitions();
+  init_lease();
+  init_path();
+  init_project();
+  init_catalog_registration();
+  init_catalog();
+  init_plan_path();
+  init_iteration();
+  init_status();
+  init_store();
+  init_store_db();
+  init_issue();
+  init_worktree();
+  init_workflow();
+  init_qcreview_schema();
+  init_persist_payload_schemas();
+  PERSIST_PAYLOAD_CONTRACTS = {
+    status: { schema: STATUS_V2_PAYLOAD_SCHEMA, validation: "status-v2" },
+    snapshot: { schema: WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, validation: "workflow-snapshot" },
+    review: { schema: MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, validation: "mstar.review/v1" },
+    json: {
+      schema: null,
+      validation: "parse-only",
+      reason: "Arbitrary JSON has no declared domain shape.",
+      alternative: "Use status, snapshot, or review for governed artifacts."
+    }
+  };
+  ENVELOPE_KEYS = ["schema_version", "role", "session_id", "workflow_id", "harness_root"];
+  ExecutionPinConflictError = class ExecutionPinConflictError2 extends Error {
+    code = EXECUTION_PIN_CONFLICT_CODE;
+    details;
+    constructor(message, details = {}) {
+      super(`[${EXECUTION_PIN_CONFLICT_CODE}] ${message}`);
+      this.name = "ExecutionPinConflictError";
+      this.details = details;
+    }
+  };
+  FROZEN_ROW_FIELDS = ["id", "plan_id", "title", "file"];
+  FROZEN_METADATA_FIELDS = ["primary_spec", "spec_refs", "iteration_compass", "iteration_refs"];
+  PROTECTED_SOURCE_BRANCHES = { main: true, master: true, develop: true, dev: true };
+  GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  UNFINISHED_GIT_OPERATIONS = [
+    ["MERGE_HEAD", "merge"],
+    ["CHERRY_PICK_HEAD", "cherry-pick"],
+    ["REVERT_HEAD", "revert"],
+    ["rebase-merge", "rebase"],
+    ["rebase-apply", "rebase"]
+  ];
+  PREPARE_PATCH_KEYS = [
+    "mainWorktreeBranch",
+    "appendPlans",
+    "correctPlanFiles",
+    "integrationWorktreePath",
+    "planParallelism"
+  ];
+  PREPARE_APPEND_KEYS = ["id", "title", "file", "metadata"];
+  PREPARE_CORRECTION_KEYS = ["id", "expectedFile", "file"];
+  PREPARE_APPEND_METADATA_KEYS = [
+    "primary_spec",
+    "spec_refs",
+    "iteration_compass",
+    "iteration_refs",
+    "working_branch",
+    "spec_integration_branch",
+    "merge_target"
+  ];
+  PREPARE_APPEND_AUTHORITY_METADATA_KEYS = ["catalog_pin"];
+  PLAN_PARALLELISM_VALUES = ["serial", "parallel"];
+  AMENDMENT_MINIMUM = {
+    "coordination.prepare-amendment.duplicate-plan": "a plan id this workflow does not already hold, or the removal of that entry from the patch",
+    "coordination.prepare-amendment.invalid-plan": "an addressed existing unstarted row named by that plan's own registered file",
+    "coordination.prepare-amendment.invalid-patch": "a patch whose addressed fields are well formed",
+    "coordination.prepare-amendment.compass-mismatch": "an addressed plan, checkout or branch the reviewed compass declares",
+    "coordination.prepare-amendment.execution-started": "the addressed fact's own execution state settled, or that entry removed from the patch",
+    "coordination.prepare-amendment.invalid-worktree": "an existing distinct checkout of this repository on branch.integration",
+    "coordination.not-in-git": "a readable main worktree of the caller's checkout, or a patch whose components read no checkout fact",
+    "coordination.scope-mismatch": "a call from the main worktree of the branch the patch declares"
+  };
+  RECOVERY_INPUT_KEYS = [
+    "cwd",
+    "harnessDir",
+    "identity",
+    "priorSessionPath",
+    "priorSessionId",
+    "operationId",
+    "reason",
+    "authorizationRef",
+    "stoppedSessionIds",
+    "attestation"
+  ];
+});
+function parsedInstant(value) {
+  if (typeof value !== "string" || value === "")
+    return null;
+  const instant = Date.parse(value);
+  return Number.isFinite(instant) ? instant : null;
 }
 function detectStoreRuntime() {
   const bun = globalThis.Bun;
@@ -11455,14 +14005,11 @@ async function loadSqliteDriver() {
     throw new StoreError("store.runtime-unsupported", `Failed to load the native "node:sqlite" module: ${error.message}`);
   }
 }
-var requireDriver = createRequire22(import.meta.url);
 function storeDbPath(context) {
   if (!context?.harnessDir)
     throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const start = resolve13(context.harnessDir);
-  const resolved = resolveProcessHarnessDir(start);
-  const hijackedPlansFallback = resolved !== null && resolved === join18(start, "plans");
-  return join18(hijackedPlansFallback ? start : resolved ?? start, "store.db");
+  const root = resolve15(context.harnessDir);
+  return join20(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 function busyTimeoutMs() {
   if (process.env.MSTAR_STORE_TEST_RUNNER === "1") {
@@ -11521,14 +14068,11 @@ async function connect(dbPath, mode) {
   const { DatabaseSync } = await loadSqliteDriver();
   return openConnection(dbPath, mode, DatabaseSync);
 }
-var DATABASE_HEADER_BYTES = 100;
-var SQLITE_FORMAT_MAGIC = "SQLite format 3\x00";
-var WAL_FILE_FORMAT_VERSION = 2;
 function assertAbsentOrRegularStoreFile(dbPath) {
   let stats;
   let examineError;
   try {
-    stats = lstatSync3(dbPath);
+    stats = lstatSync5(dbPath);
   } catch (error) {
     const code2 = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     if (code2 === "ENOENT")
@@ -11628,6 +14172,296 @@ function openConnection(dbPath, mode, DatabaseSync) {
   }
   return busyAware(db, dbPath);
 }
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseStoredRecord(text4, what) {
+  const parsed = typeof text4 === "string" ? JSON.parse(text4) : undefined;
+  if (!isRecord(parsed))
+    throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
+  return parsed;
+}
+function normalizeLegacyCoordination(legacy) {
+  const out = {};
+  const prepared = legacy.prepared;
+  if (isRecord(prepared)) {
+    const qaGate = prepared.qa_gate;
+    const findings = prepared.findings_cleanup;
+    if (typeof prepared.prepared_by === "string" && prepared.prepared_by !== "" && typeof prepared.prepared_at === "string" && prepared.prepared_at !== "" && (qaGate === "mandatory" || qaGate === "pm-acceptance") && (findings === "zero-residual" || findings === "allow-residual")) {
+      out.prepared = { qa_gate: qaGate, findings_cleanup: findings, prepared_by: prepared.prepared_by, prepared_at: prepared.prepared_at };
+    }
+  }
+  if (isRecord(legacy.progress))
+    out.progress = legacy.progress;
+  const handoff = legacy.handoff;
+  if (isRecord(handoff) && handoff.state === "completed") {
+    const qc = handoff.qc;
+    const qa = handoff.qa;
+    const integration = handoff.integration;
+    const mapped = {
+      source_branch: typeof handoff.source_branch === "string" && handoff.source_branch !== "" ? handoff.source_branch : null,
+      source_sha: typeof handoff.source_sha === "string" && handoff.source_sha !== "" ? handoff.source_sha : null,
+      worktree_path: typeof handoff.worktree_path === "string" && handoff.worktree_path !== "" ? handoff.worktree_path : null,
+      review_base: typeof handoff.review_base === "string" && handoff.review_base !== "" ? handoff.review_base : null,
+      review_head: typeof handoff.review_head === "string" && handoff.review_head !== "" ? handoff.review_head : null,
+      qc: isRecord(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
+      qa: isRecord(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      completed_by: typeof handoff.accepted_by === "string" && handoff.accepted_by !== "" ? handoff.accepted_by : "",
+      completed_at: typeof handoff.completed_at === "string" && handoff.completed_at !== "" ? handoff.completed_at : ""
+    };
+    if (isRecord(integration)) {
+      mapped.integration = {
+        target_branch: typeof integration.target_branch === "string" ? integration.target_branch : "",
+        worktree_path: typeof integration.worktree_path === "string" ? integration.worktree_path : "",
+        base_sha: typeof integration.base_sha === "string" ? integration.base_sha : "",
+        result_sha: typeof integration.result_sha === "string" ? integration.result_sha : "",
+        verified_at: typeof integration.verified_at === "string" ? integration.verified_at : ""
+      };
+    }
+    out.completion = mapped;
+  }
+  return out;
+}
+function reconcileLeaseScope(metadata, lease) {
+  const worktree = typeof lease.worktree_path === "string" && lease.worktree_path !== "" ? lease.worktree_path : typeof lease.plan_worktree_path === "string" && lease.plan_worktree_path !== "" ? lease.plan_worktree_path : undefined;
+  const branch = typeof lease.working_branch === "string" && lease.working_branch !== "" ? lease.working_branch : typeof lease.plan_branch === "string" && lease.plan_branch !== "" ? lease.plan_branch : undefined;
+  if (worktree === undefined && branch === undefined)
+    return null;
+  const out = { ...metadata };
+  const recordedWorktree = metadata.worktree_path;
+  const recordedBranch = metadata.working_branch;
+  if (worktree !== undefined && (typeof recordedWorktree !== "string" || recordedWorktree === "")) {
+    out.worktree_path = worktree;
+  }
+  if (branch !== undefined && (typeof recordedBranch !== "string" || recordedBranch === "")) {
+    out.working_branch = branch;
+  }
+  return out;
+}
+function readLeaseCutover(db) {
+  const table = db.prepare("select name from sqlite_master where type = 'table' and name = 'execution_lease_cutover'").get();
+  const leases = new Map;
+  if (table === undefined)
+    return leases;
+  const rows = db.prepare("select workflow_id, plan_id, lease_json from execution_lease_cutover").all();
+  for (const row of rows) {
+    const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
+    if (!isRecord(raw)) {
+      throw new StoreError("store.corrupt", `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`);
+    }
+    leases.set(`${String(row.workflow_id)}/${String(row.plan_id)}`, raw);
+  }
+  return leases;
+}
+function normalizeExecutionState(db, context) {
+  const tables = new Set(db.prepare("select name from sqlite_master where type = 'table'").all().map((row) => typeof row.name === "string" ? row.name : "").filter((name) => name !== ""));
+  if (!tables.has("execution_plans") || !tables.has("execution_workflows"))
+    return;
+  const leaseCutover = readLeaseCutover(db);
+  const plans = db.prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans").all();
+  const updatePlan = db.prepare("update execution_plans set state_json = ?, coordination_json = ? where workflow_id = ? and plan_id = ?");
+  for (const row of plans) {
+    const workflowId = String(row.workflow_id ?? "");
+    const planId = String(row.plan_id ?? "");
+    const what = `execution_plans(${workflowId},${planId})`;
+    const state = parseStoredRecord(row.state_json, `${what}.state_json`);
+    const legacy = parseStoredRecord(row.coordination_json, `${what}.coordination_json`);
+    const coordination = normalizeLegacyCoordination(legacy);
+    const lease = leaseCutover.get(`${workflowId}/${planId}`);
+    const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const scope = lease === undefined ? null : reconcileLeaseScope(metadata, lease);
+    const nextState = { ...state };
+    if (scope !== null)
+      nextState.metadata = scope;
+    if (isRecord(coordination.completion) && (!(typeof nextState.status === "string") || nextState.status === "Todo")) {
+      nextState.status = "Done";
+    }
+    delete nextState.coordination;
+    delete nextState.execution_lease;
+    updatePlan.run(JSON.stringify(nextState), JSON.stringify(coordination), workflowId, planId);
+  }
+  const workflows = db.prepare("select workflow_id, state_json from execution_workflows").all();
+  const updateWorkflow = db.prepare("update execution_workflows set state_json = ? where workflow_id = ?");
+  for (const row of workflows) {
+    const workflowId = String(row.workflow_id ?? "");
+    const state = parseStoredRecord(row.state_json, `execution_workflows(${workflowId}).state_json`);
+    const coordination = isRecord(state.coordination) ? state.coordination : undefined;
+    const next = { ...state };
+    delete next.coordination;
+    delete next.self_amendments;
+    if (coordination !== undefined && coordination.identity_recoveries !== undefined) {
+      next.identity_recoveries = coordination.identity_recoveries;
+    }
+    updateWorkflow.run(JSON.stringify(next), workflowId);
+  }
+  settleRetiredPlanPmIntegrationClaims(db, context);
+}
+function settleRetiredPlanPmIntegrationClaims(db, context) {
+  const retiredByWorkflowSession = new Map;
+  for (const row of db.prepare("select workflow_id, plan_id, session_id from execution_session_cutover").all()) {
+    if (typeof row.session_id !== "string" || row.session_id === "")
+      continue;
+    retiredByWorkflowSession.set(`${String(row.workflow_id ?? "")}/${row.session_id}`, String(row.plan_id ?? ""));
+  }
+  const attestation = context.attestation;
+  const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+  const cutoverInstant = parsedInstant(new Date().toISOString());
+  const claims = db.prepare("select workflow_id, lease_json from execution_integration_cutover").all();
+  const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
+  for (const row of claims) {
+    const workflowId = String(row.workflow_id ?? "");
+    const raw = typeof row.lease_json === "string" ? JSON.parse(row.lease_json) : undefined;
+    if (!isRecord(raw)) {
+      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
+    }
+    const claim = raw;
+    if (claim.status === "released")
+      continue;
+    const holder = claim.holder;
+    if (typeof holder !== "string" || holder === "")
+      continue;
+    const seatPlanId = retiredByWorkflowSession.get(`${workflowId}/${holder}`);
+    if (seatPlanId === undefined)
+      continue;
+    const planRow = db.prepare("select 1 as present from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, typeof claim.plan_id === "string" ? claim.plan_id : "");
+    if (planRow === undefined) {
+      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in this workflow's registry. Recover the store from its supported backup/restore recovery point: run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` (add \`--harness\` when needed). Nothing was modified.`);
+    }
+    const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
+    const attestedInstant2 = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+    const claimedInstant = parsedInstant(claim.claimed_at);
+    const settled = attestation !== undefined && attested !== undefined && (attested.state === "stopped" || attested.state === "reloaded") && claimedInstant !== null && attestedInstant2 !== null && cutoverInstant !== null && claimedInstant <= attestedInstant2 && attestedInstant2 <= cutoverInstant;
+    if (!settled) {
+      throw new StoreError("store.upgrade-attestation-missing", `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder}, and this cutover has no valid, current stop attestation for it; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's full activation attestation (version, operator authorization, a current consumer) naming ${holder} as stopped at or after the claim.`);
+    }
+    const tombstone = {
+      ...claim,
+      status: "released",
+      prior_holder: holder,
+      released_by: "store-upgrade",
+      released_at: attestation.attestedAt,
+      release_reason: `retired-plan-pm-seat:${holder}`
+    };
+    update.run(JSON.stringify(tombstone), workflowId);
+  }
+}
+function readAppliedMigrations(db, tolerateMissingTable) {
+  const present = db.prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'").get();
+  if (!present?.n) {
+    if (tolerateMissingTable)
+      return [];
+    throw new StoreError("store.corrupt", "The store database has no schema_version table");
+  }
+  let rows;
+  try {
+    rows = db.prepare("select version, name, checksum from schema_version order by version").all();
+  } catch (error) {
+    throw new StoreError("store.corrupt", `schema_version is unreadable: ${error.message}`);
+  }
+  return rows.map((row) => {
+    if (typeof row.version !== "number" || !Number.isInteger(row.version) || typeof row.name !== "string" || typeof row.checksum !== "string") {
+      throw new StoreError("store.corrupt", "schema_version contains a malformed row");
+    }
+    return { version: row.version, name: row.name, checksum: row.checksum };
+  });
+}
+function validateAppliedMigrations(applied) {
+  if (applied.length === 0) {
+    throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
+  }
+  let max = 0;
+  for (let i = 0;i < applied.length; i++) {
+    const row = applied[i];
+    const compiled = MIGRATIONS.find((m) => m.version === row.version);
+    if (!compiled) {
+      throw new StoreError("store.schema-unsupported", `The store was written by schema version ${row.version}, which this build does not know. Known versions: 1..${MIGRATIONS.length}. Upgrade the harness to read this store; nothing was modified.`);
+    }
+    if (row.version !== i + 1) {
+      throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
+    }
+    max = row.version;
+  }
+  return max;
+}
+function readStoreMeta(db) {
+  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
+  if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
+  }
+  return {
+    storeId: row.store_id,
+    authorityState: row.authority_state,
+    epoch: row.authority_epoch,
+    revision: row.revision,
+    catalogRevision: row.catalog_revision
+  };
+}
+function presentExecutionTables(db) {
+  const placeholders = EXECUTION_TABLE_NAMES.map(() => "?").join(", ");
+  const rows = db.prepare(`select name from sqlite_master where type = 'table' and name in (${placeholders})`).all(...EXECUTION_TABLE_NAMES);
+  return rows.map((row) => row.name).filter((name) => typeof name === "string");
+}
+function readExecutionMeta(db, schemaVersion) {
+  const expected = EXECUTION_MIGRATION?.version;
+  if (expected === undefined || schemaVersion < expected)
+    return null;
+  const present = presentExecutionTables(db);
+  const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
+  if (missing.length > 0) {
+    throw new StoreError("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
+  }
+  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
+  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
+    throw new StoreError("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
+  }
+  return {
+    protocolVersion: row.protocol_version,
+    authorityState: row.authority_state,
+    revision: row.revision,
+    rootUpdatedAt: row.root_updated_at,
+    manifestId: row.manifest_id ?? null,
+    activatedAt: row.activated_at ?? null
+  };
+}
+async function openStore(context, mode) {
+  assertStoreRuntimeSupported();
+  const dbPath = storeDbPath(context);
+  assertAbsentOrRegularStoreFile(dbPath);
+  if (!existsSync15(dbPath)) {
+    throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. For a genuinely empty workspace, run "mstar store upgrade --harness ${JSON.stringify(resolve15(context.harnessDir))} --operator <name>" to create and activate the selected store (or "mstar store init" with the same --harness when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`);
+  }
+  let db;
+  try {
+    db = await connect(dbPath, mode);
+  } catch (error) {
+    refuseOpenFailure(error, dbPath);
+  }
+  try {
+    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
+    const meta = readStoreMeta(db);
+    return {
+      db,
+      storeId: meta.storeId,
+      epoch: meta.epoch,
+      schemaVersion,
+      execution: readExecutionMeta(db, schemaVersion),
+      close() {
+        db.close();
+      }
+    };
+  } catch (error) {
+    db.close();
+    refuseOpenFailure(error, dbPath);
+  }
+}
+var MIN_BUN_VERSION = "1.4.0";
+var MIN_NODE_VERSION = "24.18.0";
+var DEFAULT_BUSY_TIMEOUT_MS = 5000;
+var StoreError;
+var requireDriver;
+var DATABASE_HEADER_BYTES = 100;
+var SQLITE_FORMAT_MAGIC = "SQLite format 3\x00";
+var WAL_FILE_FORMAT_VERSION = 2;
 var MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
@@ -12057,138 +14891,73 @@ end;
 var MIGRATION_8_SQL = `
 alter table provenance add column origin text not null default 'scoped' check (origin in ('scoped','unscoped'));
 `;
-var MIGRATIONS = [
-  { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
-  { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
-  { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
-  { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
-  { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
-  { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
-  { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
-  { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL }
-];
-var EXECUTION_TABLE_NAMES = [
-  "execution_meta",
-  "execution_workflows",
-  "execution_registry",
-  "execution_plans",
-  "execution_sessions",
-  "execution_leases",
-  "execution_integration_leases",
-  "execution_inputs",
-  "execution_operations",
-  "execution_migrations"
-];
-var EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
-function readAppliedMigrations(db, tolerateMissingTable) {
-  const present = db.prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'").get();
-  if (!present?.n) {
-    if (tolerateMissingTable)
-      return [];
-    throw new StoreError("store.corrupt", "The store database has no schema_version table");
-  }
-  let rows;
-  try {
-    rows = db.prepare("select version, name, checksum from schema_version order by version").all();
-  } catch (error) {
-    throw new StoreError("store.corrupt", `schema_version is unreadable: ${error.message}`);
-  }
-  return rows.map((row) => {
-    if (typeof row.version !== "number" || !Number.isInteger(row.version) || typeof row.name !== "string" || typeof row.checksum !== "string") {
-      throw new StoreError("store.corrupt", "schema_version contains a malformed row");
+var MIGRATION_9_SQL = `
+create table execution_session_cutover as
+  select workflow_id, plan_id, session_id from execution_sessions where role = 'plan-pm';
+create table execution_lease_cutover as
+  select workflow_id, plan_id, owner_epoch, lease_json from execution_leases;
+create table execution_integration_cutover as
+  select workflow_id, lease_json from execution_integration_leases;
+delete from execution_sessions where role = 'plan-pm';
+create table execution_sessions_coordinator(
+  workflow_id text not null references execution_workflows(workflow_id),
+  role text not null check (role = 'coordinator'),
+  session_id text not null,
+  epoch integer not null check (epoch > 0),
+  revision integer not null check (revision > 0),
+  state text not null check (state in ('active','suspended','revoked')),
+  bound_at text not null,
+  primary key (workflow_id, role, session_id)
+);
+insert into execution_sessions_coordinator(workflow_id, role, session_id, epoch, revision, state, bound_at)
+  select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions;
+drop table execution_sessions;
+alter table execution_sessions_coordinator rename to execution_sessions;
+create unique index execution_sessions_active_coordinator
+  on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+drop table execution_leases;
+`;
+var MIGRATIONS;
+var EXECUTION_TABLE_NAMES;
+var EXECUTION_MIGRATION;
+var init_store_db = __esm(() => {
+  init_coordination();
+  StoreError = class StoreError2 extends Error {
+    code;
+    constructor(code2, message) {
+      super(`[${code2}] ${message}`);
+      this.name = "StoreError";
+      this.code = code2;
     }
-    return { version: row.version, name: row.name, checksum: row.checksum };
-  });
-}
-function validateAppliedMigrations(applied) {
-  if (applied.length === 0) {
-    throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
-  }
-  let max = 0;
-  for (let i = 0;i < applied.length; i++) {
-    const row = applied[i];
-    const compiled = MIGRATIONS.find((m) => m.version === row.version);
-    if (!compiled) {
-      throw new StoreError("store.schema-unsupported", `The store was written by schema version ${row.version}, which this build does not know. Known versions: 1..${MIGRATIONS.length}. Upgrade the harness to read this store; nothing was modified.`);
-    }
-    if (row.version !== i + 1) {
-      throw new StoreError("store.schema-drift", `Applied schema versions are not contiguous from 1 (found version ${row.version} at position ${i + 1}). The store is refused rather than migrated; nothing was modified.`);
-    }
-    max = row.version;
-  }
-  return max;
-}
-function readStoreMeta(db) {
-  const row = db.prepare("select store_id, authority_state, authority_epoch, revision, catalog_revision from store_meta where id = 1").get();
-  if (!row || typeof row.store_id !== "string" || row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.authority_epoch !== "number" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new StoreError("store.corrupt", "store_meta is missing or malformed; the store identity cannot be verified");
-  }
-  return {
-    storeId: row.store_id,
-    authorityState: row.authority_state,
-    epoch: row.authority_epoch,
-    revision: row.revision,
-    catalogRevision: row.catalog_revision
   };
-}
-function presentExecutionTables(db) {
-  const placeholders = EXECUTION_TABLE_NAMES.map(() => "?").join(", ");
-  const rows = db.prepare(`select name from sqlite_master where type = 'table' and name in (${placeholders})`).all(...EXECUTION_TABLE_NAMES);
-  return rows.map((row) => row.name).filter((name) => typeof name === "string");
-}
-function readExecutionMeta(db, schemaVersion) {
-  const expected = EXECUTION_MIGRATION?.version;
-  if (expected === undefined || schemaVersion < expected)
-    return null;
-  const present = presentExecutionTables(db);
-  const missing = EXECUTION_TABLE_NAMES.filter((name) => !present.includes(name));
-  if (missing.length > 0) {
-    throw new StoreError("store.schema-drift", `Migration ${expected} (execution-authority) is recorded but its schema is incomplete: missing ${missing.join(", ")}. The store is refused rather than repaired; nothing was modified.`);
-  }
-  const row = db.prepare("select protocol_version, authority_state, revision, root_updated_at, manifest_id, activated_at from execution_meta where id = 1").get();
-  if (!row || typeof row.protocol_version !== "number" || row.authority_state !== "legacy" && row.authority_state !== "staged" && row.authority_state !== "active" || typeof row.revision !== "number" || typeof row.root_updated_at !== "string" || row.manifest_id !== null && row.manifest_id !== undefined && typeof row.manifest_id !== "string" || row.activated_at !== null && row.activated_at !== undefined && typeof row.activated_at !== "string") {
-    throw new StoreError("store.corrupt", "execution_meta is missing or malformed; the execution authority state cannot be verified");
-  }
-  return {
-    protocolVersion: row.protocol_version,
-    authorityState: row.authority_state,
-    revision: row.revision,
-    rootUpdatedAt: row.root_updated_at,
-    manifestId: row.manifest_id ?? null,
-    activatedAt: row.activated_at ?? null
-  };
-}
-async function openStore(context, mode) {
-  assertStoreRuntimeSupported();
-  const dbPath = storeDbPath(context);
-  assertAbsentOrRegularStoreFile(dbPath);
-  if (!existsSync15(dbPath)) {
-    throw new StoreError("store.not-initialized", `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace (or the staged migration for an existing workspace). Nothing was created.`);
-  }
-  let db;
-  try {
-    db = await connect(dbPath, mode);
-  } catch (error) {
-    refuseOpenFailure(error, dbPath);
-  }
-  try {
-    const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
-    const meta = readStoreMeta(db);
-    return {
-      db,
-      storeId: meta.storeId,
-      epoch: meta.epoch,
-      schemaVersion,
-      execution: readExecutionMeta(db, schemaVersion),
-      close() {
-        db.close();
-      }
-    };
-  } catch (error) {
-    db.close();
-    refuseOpenFailure(error, dbPath);
-  }
-}
+  requireDriver = createRequire22(import.meta.url);
+  MIGRATIONS = [
+    { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
+    { version: 2, name: "catalog-authority", sql: MIGRATION_2_SQL },
+    { version: 3, name: "execution-projections", sql: MIGRATION_3_SQL },
+    { version: 4, name: "execution-authority", sql: MIGRATION_4_SQL },
+    { version: 5, name: "execution-coverage-column", sql: MIGRATION_5_SQL },
+    { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
+    { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
+    { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
+    { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState }
+  ];
+  EXECUTION_TABLE_NAMES = [
+    "execution_meta",
+    "execution_workflows",
+    "execution_registry",
+    "execution_plans",
+    "execution_sessions",
+    "execution_integration_leases",
+    "execution_inputs",
+    "execution_operations",
+    "execution_migrations"
+  ];
+  EXECUTION_MIGRATION = MIGRATIONS.find((migration) => migration.name === "execution-authority");
+});
+init_store_db();
+init_roadmap_content();
+
 class RoadmapError extends Error {
   code;
   constructor(code2, message) {
@@ -12248,8 +15017,33 @@ function readOn(db, projectId) {
 function readRoadmapAuthorityOn(db, projectId) {
   return readOn(db, projectId);
 }
+init_roadmap_content();
+init_core();
+init_mstarc();
+init_path();
+init_plan_path();
+init_status();
+init_status();
+init_lease();
+init_workflow();
+init_workflow();
+init_workflow();
+init_workflow();
+init_path();
 var INPUT_ENTRIES_CAP = 1e4;
 var MAX_RETAINED_ENTRIES = INPUT_ENTRIES_CAP / 2;
+init_dispatch();
+init_worktree();
+init_core();
+init_path();
+init_store_db();
+init_workflow();
+init_path();
+init_mstarc();
+init_core();
+init_workflow();
+init_worktree();
+init_recovery_intent();
 class SddScriptError extends Error {
   exitCode;
   constructor(message, exitCode) {
@@ -12258,12 +15052,19 @@ class SddScriptError extends Error {
     this.exitCode = exitCode;
   }
 }
+init_iteration();
+init_project();
+init_core();
+init_path();
+init_status();
+init_workflow();
+init_project();
 var STATUS_FILE = "status.json";
 var SNAPSHOT_FILE2 = "snapshot.json";
 var REGISTER_FILE = "residuals.json";
 function hasEntry(dir, name) {
   try {
-    statSync8(join21(dir, name));
+    statSync9(join23(dir, name));
     return true;
   } catch {
     return false;
@@ -12281,11 +15082,11 @@ function hasHarnessRootMarkers(dir) {
   }
 }
 function resolveHarnessRootOf(target) {
-  let dir = resolve15(target);
+  let dir = resolve17(target);
   for (;; ) {
     if (hasHarnessRootMarkers(dir))
       return dir;
-    const parent = dirname13(dir);
+    const parent = dirname14(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -12294,12 +15095,12 @@ function resolveHarnessRootOf(target) {
 function harnessDocKindOfTarget(targetPath) {
   if (typeof targetPath !== "string" || targetPath.trim() === "")
     return null;
-  const resolved = resolve15(targetPath);
-  const name = basename11(resolved);
+  const resolved = resolve17(targetPath);
+  const name = basename13(resolved);
   if (name !== STATUS_FILE && name !== SNAPSHOT_FILE2 && name !== REGISTER_FILE)
     return null;
   const classify = (harnessDir2) => {
-    const rel = relative6(harnessDir2, resolved);
+    const rel = relative7(harnessDir2, resolved);
     if (name === STATUS_FILE && rel === STATUS_FILE)
       return { harnessDir: harnessDir2, kind: "status" };
     let workflowDir;
@@ -12308,19 +15109,19 @@ function harnessDocKindOfTarget(targetPath) {
       workflowDir = resolveWorkflowDir(harnessDir2, { harnessDir: harnessDir2 });
       projectDir = resolveProjectDir(harnessDir2, { harnessDir: harnessDir2 });
     } catch {
-      workflowDir = join21(harnessDir2, "workflows");
-      projectDir = join21(harnessDir2, "projects");
+      workflowDir = join23(harnessDir2, "workflows");
+      projectDir = join23(harnessDir2, "projects");
     }
-    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative6(workflowDir, resolved))) {
+    if (name === SNAPSHOT_FILE2 && /^[^/]+\/snapshot\.json$/.test(relative7(workflowDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "snapshot" };
     }
-    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative6(projectDir, resolved))) {
+    if (name === REGISTER_FILE && /^[^/]+\/residuals\.json$/.test(relative7(projectDir, resolved))) {
       return { harnessDir: harnessDir2, kind: "register" };
     }
     return null;
   };
-  const probeRoot = resolveHarnessRootOf(dirname13(resolved));
-  const harnessDir = probeRoot ?? resolveHarnessDir(dirname13(resolved));
+  const probeRoot = resolveHarnessRootOf(dirname14(resolved));
+  const harnessDir = probeRoot ?? resolveHarnessDir(dirname14(resolved));
   if (harnessDir === null)
     return null;
   const classified = classify(harnessDir);
@@ -12328,7 +15129,7 @@ function harnessDocKindOfTarget(targetPath) {
     return classified;
   if (probeRoot === null)
     return null;
-  const fallbackDir = resolveHarnessDir(dirname13(resolved));
+  const fallbackDir = resolveHarnessDir(dirname14(resolved));
   if (fallbackDir === null || fallbackDir === probeRoot)
     return null;
   return classify(fallbackDir);
@@ -12342,7 +15143,7 @@ function oversizedViolation(filePath) {
     ok: false,
     severity: "high",
     code: "status.oversized",
-    message: `${basename11(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
+    message: `${basename13(filePath)} exceeds the ${MAX_STATUS_CONTENT_LENGTH}-byte (2 MiB) coordination-document validation budget — repair out of band or disable for this session with MSTAR_WRITE_GATE=off`
   };
 }
 function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
@@ -12370,7 +15171,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
           ok: false,
           severity: "high",
           code: "status.invalid-json",
-          message: `${basename11(filePath)} content must be a JSON object`
+          message: `${basename13(filePath)} content must be a JSON object`
         }
       ];
     }
@@ -12379,7 +15180,7 @@ function validateStatusWriteDoc(content3, filePath, kind, options = {}) {
   if (!existsSync17(filePath))
     return [];
   try {
-    if (statSync8(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
+    if (statSync9(filePath).size > MAX_STATUS_CONTENT_LENGTH) {
       return oversized === "violate" ? [oversizedViolation(filePath)] : [];
     }
   } catch {
@@ -12413,9 +15214,22 @@ function formatStatusWriteBlockReason(violations, skillPointer) {
   return violations.map((v) => `${violationLine(v)} (${skillPointer})`).join(`
 `);
 }
+init_core();
+init_iteration();
+init_lease();
+init_path();
+init_project();
+init_store();
+init_store_db();
+init_coordination_write();
+init_status();
+init_workflow();
+init_audit();
+init_iteration();
 var WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
 var DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)";
 var DATED_SLUG_TOKEN_RE = new RegExp(DATED_SLUG_TOKEN_SOURCE, "g");
+init_audit();
 var PR_REVIEW_TIER_BUDGETS = Object.freeze({
   quick: Object.freeze({ wallClockMinutes: 5, maxSeats: 1, perSeatFindingsCap: 5, evidenceTokensCap: 600, fileOpenCap: 12 }),
   default: Object.freeze({ wallClockMinutes: 10, maxSeats: 2, perSeatFindingsCap: 6, evidenceTokensCap: 900, fileOpenCap: 20 }),
@@ -12424,6 +15238,30 @@ var PR_REVIEW_TIER_BUDGETS = Object.freeze({
 var EFFORT_ENUM_RE = new RegExp(`^(?:${AUDIT_EFFORTS.join("|")})(?:\\s*\\(|$)`);
 var RISK_ENUM_RE = new RegExp(`^(?:${AUDIT_RISKS.join("|")})(?:\\b|$)`);
 var CONFIDENCE_ENUM_RE = new RegExp(`^(${[...AUDIT_CONFIDENCES, "MEDIUM"].join("|")})\\b`, "i");
+init_qcreview_schema();
+init_coordination();
+init_store();
+init_workflow();
+init_session_identity();
+init_coordination();
+init_coordination();
+init_store_db();
+init_workflow();
+init_coordination();
+init_coordination_write();
+init_lease();
+init_status();
+init_workflow();
+init_coordination();
+init_coordination_write();
+init_coordination_transitions();
+init_lease();
+init_path();
+init_recovery_intent();
+init_status();
+init_store_db();
+init_workflow();
+
 class ExecutionError extends Error {
   code;
   details;
@@ -12509,7 +15347,6 @@ var KIND_KEY_LENGTHS = {
   workflow: 1,
   plan: 2,
   session: 3,
-  "execution-lease": 2,
   "integration-lease": 1,
   input: 2
 };
@@ -12537,8 +15374,8 @@ function assertKeyShape(kind, key) {
     if (!isNonEmptyString(part))
       throw tokenRefusal(`every ${kind} token key part must be a non-empty string`);
   }
-  if (kind === "session" && key[1] !== "coordinator" && key[1] !== "plan-pm") {
-    throw tokenRefusal(`a session token key carries the role as its second part — got ${JSON.stringify(key[1])}`);
+  if (kind === "session" && key[1] !== "coordinator") {
+    throw tokenRefusal(`a session token key carries role coordinator as its second part — got ${JSON.stringify(key[1])}`);
   }
 }
 function encodeTokenKey(key) {
@@ -12623,12 +15460,21 @@ function readFrozenInput(json, what) {
     relation_hash: pin.relation_hash
   };
 }
-function readExecutionLease(json, what) {
-  const lease = storedJsonObject(json, what);
-  const validation = validateExecutionLease(lease);
-  if (!validation.ok)
-    throw validationRefusal(what, validation.violations);
-  return lease;
+function sessionRef(store, workflowId, row) {
+  if (row.role !== "coordinator")
+    throw corrupt(`execution_sessions(${workflowId}) carries a non-coordinator role`);
+  if (!isNonEmptyString(row.session_id))
+    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
+  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
+    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
+  }
+  return {
+    storeId: store.storeId,
+    epoch: row.epoch,
+    workflowId,
+    role: "coordinator",
+    sessionId: row.session_id
+  };
 }
 function readIntegrationLease(json, what) {
   const lease = storedJsonObject(json, what);
@@ -12636,60 +15482,6 @@ function readIntegrationLease(json, what) {
   if (!validation.ok)
     throw validationRefusal(what, validation.violations);
   return lease;
-}
-function assertLeaseOwnership(lease, sessionRow, ownerEpoch, store, workflowId, planId) {
-  if (lease.status !== "held")
-    return;
-  const what = `execution_leases(${workflowId},${planId}).lease_json`;
-  if (!isNonEmptyString(lease.holder_session_id) || lease.holder_role !== "plan-pm" && lease.holder_role !== "coordinator") {
-    throw corrupt(`${what} is held without the holder session identity and role it must agree with`);
-  }
-  if (lease.plan_worktree_path !== lease.worktree_path || lease.plan_branch !== lease.working_branch) {
-    throw corrupt(`${what} records a plan scope that disagrees with its own lease identity fields`);
-  }
-  if (ownerEpoch !== store.epoch)
-    return;
-  if (sessionRow === undefined) {
-    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)} while ${planId} has no session of that identity`);
-  }
-  if (sessionRow.state !== "active") {
-    throw corrupt(`${what} is held in current epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that session is ${String(sessionRow.state)} and cannot authorize the lease`);
-  }
-  if (sessionRow.epoch !== ownerEpoch) {
-    throw corrupt(`${what} is held in epoch ${ownerEpoch} by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but that active session is in epoch ${String(sessionRow.epoch)}; a lease and the session row it names as its owner are ONE ownership fact of one epoch`);
-  }
-  if (sessionRow.session_id !== lease.holder_session_id || sessionRow.role !== lease.holder_role) {
-    throw corrupt(`${what} is held by ${String(lease.holder_role)} session ${String(lease.holder_session_id)}, but the active session row of ${planId} in epoch ${ownerEpoch} is ${String(sessionRow.role)} session ${String(sessionRow.session_id)}`);
-  }
-}
-function sessionRef(store, workflowId, row) {
-  const role = row.role;
-  if (role !== "plan-pm" && role !== "coordinator") {
-    throw corrupt(`execution_sessions(${workflowId}) carries role ${JSON.stringify(role)}`);
-  }
-  if (!isNonEmptyString(row.session_id)) {
-    throw corrupt(`execution_sessions(${workflowId}) carries an empty session identity`);
-  }
-  if (typeof row.epoch !== "number" || !Number.isSafeInteger(row.epoch) || row.epoch < 0) {
-    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) carries a non-integer epoch`);
-  }
-  let planId = null;
-  if (role === "plan-pm") {
-    if (!isNonEmptyString(row.plan_id)) {
-      throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a plan-pm row without a plan id`);
-    }
-    planId = row.plan_id;
-  } else if (row.plan_id !== null && row.plan_id !== undefined) {
-    throw corrupt(`execution_sessions(${workflowId},${row.session_id}) is a coordinator row with a plan id`);
-  }
-  return {
-    storeId: store.storeId,
-    epoch: row.epoch,
-    workflowId,
-    role,
-    sessionId: row.session_id,
-    planId
-  };
 }
 function readIntegrationLeaseRow(db, workflowId) {
   const row = db.prepare("select revision, owner_epoch, lease_json from execution_integration_leases where workflow_id = ?").get(workflowId);
@@ -12725,9 +15517,8 @@ function readWorkflowView(db, store, workflowId) {
   if (!workflowValidation.ok) {
     throw validationRefusal(`execution_workflows(${workflowId}).state_json`, workflowValidation.violations);
   }
-  const sessions = db.prepare("select role, session_id, plan_id, epoch, state from execution_sessions where workflow_id = ?").all(workflowId);
+  const sessions = db.prepare("select role, session_id, epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator'").all(workflowId);
   const activeSessions = sessions.filter((entry) => entry.state === "active");
-  const leases = db.prepare("select plan_id, owner_epoch, lease_json from execution_leases where workflow_id = ?").all(workflowId);
   const inputs = db.prepare("select plan_id, catalog_pin_json from execution_inputs where workflow_id = ?").all(workflowId);
   const integrationRow = readIntegrationLeaseRow(db, workflowId);
   const coordinatorRow = activeSessions.find((row) => row.role === "coordinator");
@@ -12746,7 +15537,7 @@ function readWorkflowView(db, store, workflowId) {
     const planState = storedJsonObject(row.state_json, `execution_plans(${workflowId},${planId}).state_json`);
     const storedCoordination = storedJsonObject(row.coordination_json, `execution_plans(${workflowId},${planId}).coordination_json`);
     if (planState.coordination !== undefined || planState.execution_lease !== undefined) {
-      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json/execution_leases`);
+      throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries coordination/execution_lease, which are owned by coordination_json, not by the row state`);
     }
     if (planState.id !== planId) {
       throw corrupt(`execution_plans(${workflowId},${planId}).state_json carries id ${JSON.stringify(planState.id)} and does not describe its own key`);
@@ -12758,35 +15549,22 @@ function readWorkflowView(db, store, workflowId) {
     if (storedCoordination.revision !== undefined || storedCoordination.session !== undefined) {
       throw corrupt(`execution_plans(${workflowId},${planId}).coordination_json carries revision/session, which live in the revision column and in execution_sessions; the DB authority stores neither`);
     }
-    const projectedCoordination = { revision: planRevision, ...storedCoordination };
-    const activeSessionRow = activeSessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId);
-    const handoff = isPlainObject(storedCoordination.handoff) ? storedCoordination.handoff : undefined;
-    const submitter = handoff?.submitted_by;
-    const historicalSessionRow = typeof submitter === "string" ? sessions.find((entry) => entry.role === "plan-pm" && entry.plan_id === planId && entry.session_id === submitter) : undefined;
     const coordinationViolations = storedCoordinationViolations(storedCoordination, {
       revision: planRevision,
       route: rowValidationRoute(routeSnapshot, planState),
-      submitterAssociated: handoff === undefined || historicalSessionRow !== undefined,
       what: `execution_plans(${workflowId},${planId}).coordination_json`
     });
     if (coordinationViolations.length > 0) {
       throw validationRefusal(`execution_plans(${workflowId},${planId}).coordination_json`, coordinationViolations);
     }
     const hasCoordination = Object.keys(storedCoordination).length > 0;
-    const leaseRow = leases.find((entry) => entry.plan_id === planId);
     const inputRow = inputs.find((entry) => entry.plan_id === planId);
-    const executionLease = leaseRow ? readExecutionLease(leaseRow.lease_json, `execution_leases(${workflowId},${planId}).lease_json`) : null;
-    if (leaseRow !== undefined && executionLease !== null) {
-      const holderRow = executionLease.status === "held" ? sessions.find((entry) => entry.role === executionLease.holder_role && entry.session_id === executionLease.holder_session_id && (entry.role === "coordinator" || entry.plan_id === planId)) : undefined;
-      assertLeaseOwnership(executionLease, holderRow, storedRevision(leaseRow.owner_epoch, `execution_leases(${workflowId},${planId}).owner_epoch`), store, workflowId, planId);
-    }
+    const projectedCoordination = { revision: planRevision, ...storedCoordination };
     planTokens[planId] = executionToken("plan", store.storeId, store.epoch, [workflowId, planId], planRevision);
     plans.push({
       workflow: state,
       plan: planState,
       coordination: hasCoordination ? projectedCoordination : null,
-      session: activeSessionRow ? sessionRef(store, workflowId, activeSessionRow) : null,
-      executionLease,
       integrationLease,
       frozenInput: inputRow ? readFrozenInput(inputRow.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`) : null
     });
@@ -12854,9 +15632,27 @@ async function readExecutionState(context) {
     epoch: tx.epoch
   }));
 }
-var EXECUTION_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
+init_store_activation();
+init_coordination();
+init_coordination_write();
+init_status();
+init_workflow();
+init_store_db();
 var UNPARSEABLE_JSON = Symbol("unparseable-json");
+init_coordination_write();
+init_store_db();
+init_session_identity();
 var SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
+init_catalog_registration();
+init_coordination_write();
+init_coordination();
+init_coordination_transitions();
+init_issue();
+init_path();
+init_coordination_write();
+init_issue();
+init_store_db();
+
 class MilestoneError extends Error {
   code;
   constructor(code2, message) {
@@ -12901,6 +15697,13 @@ function readMilestonesOn(db, projectId, milestoneId) {
   const unassigned = db.prepare("select count(*) as count from issues where project_id=? and milestone_id is null").get(projectId);
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };
 }
+init_store_db();
+init_catalog();
+init_coordination_write();
+init_iteration();
+init_lease();
+init_status();
+init_workflow();
 var PROJECTION_FORMAT_VERSION = 2;
 var PROJECTION_ROOT_FILE = "status.json";
 
@@ -13097,17 +15900,6 @@ function deriveWorkflowRows(content3, declared) {
       doneAt: text4(row.done_at),
       catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null
     });
-    if (isPlainObject(row.execution_lease)) {
-      const lease = row.execution_lease;
-      leases.push({
-        workflowId: snapshot.id,
-        planId,
-        kind: "execution",
-        holder: text4(lease.holder),
-        worktreePath: text4(lease.worktree_path),
-        expiresAt: text4(lease.expires_at)
-      });
-    }
   }
   if (isPlainObject(snapshot.integration_merge_lease)) {
     const lease = snapshot.integration_merge_lease;
@@ -13338,7 +16130,6 @@ async function captureExecutionProjectionSources(context) {
     }
     const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
     const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
-    const servedLeaseIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.filter((plan) => plan.executionLease !== null).map((plan) => plan.plan.id))]));
     const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
     const plans = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, plan_id, revision, state_json, coordination_json from execution_plans where workflow_id in (${placeholders}) order by workflow_id, plan_id`, servedWorkflowIds, (id) => [id]);
     for (const row of plans) {
@@ -13377,29 +16168,6 @@ async function captureExecutionProjectionSources(context) {
       const mappedCoordination = authorityPlanView.coordination;
       const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text4(authorityPlanView.plan.status), progress: text4(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text4(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
-    }
-    const leases = servedWorkflowIds.length === 0 ? [] : selectWhereIn(db, (placeholders) => `select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${placeholders}) order by workflow_id, plan_id`, servedWorkflowIds, (id) => [id]);
-    for (const lease of leases) {
-      if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id))
-        continue;
-      const leaseSpec = spec("workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`);
-      let value;
-      try {
-        value = JSON.parse(lease.lease_json);
-      } catch {
-        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON", "invalid");
-        continue;
-      }
-      const validation = validateExecutionLease(value);
-      if (!isPlainObject(value) || !validation.ok) {
-        recordInvalid(leaseSpec, lease.lease_json, `invalid: execution lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
-        continue;
-      }
-      const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
-      if (!servedLease || servedLease.status === "released")
-        continue;
-      record(leaseSpec, lease.lease_json);
-      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text4(servedLease.holder), worktreePath: text4(servedLease.worktree_path), expiresAt: text4(servedLease.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
       const fspec = { source: "file", sourceKey: sourceKeyOf2("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join30(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };
@@ -13840,6 +16608,8 @@ async function refreshProjections(context) {
   }
   return attempt.report;
 }
+init_roadmap_content();
+init_store_db();
 
 class StoreReadError extends Error {
   code;
@@ -14586,11 +17356,49 @@ function readRoadmap(db, filters) {
     milestones
   };
 }
+init_recovery_intent();
+init_store_db();
+init_workflow();
+init_status();
+init_coordination_write();
+init_coordination();
+init_coordination_transitions();
+init_iteration();
+init_path();
+init_recovery_intent();
+init_store_activation();
+init_store_db();
+init_workflow();
+init_worktree();
+init_issue();
+init_catalog();
+init_catalog_import();
+init_catalog_registration();
+init_catalog();
+init_catalog_registration();
+init_coordination_write();
+init_recovery_intent();
+init_catalog_import();
+init_catalog();
+init_store_db();
+init_issue();
+init_status();
+init_store_activation();
+init_coordination_write();
+init_lease();
+init_path();
+init_store_db();
 var NOTE_KEYS = ["version", "id", "workflowId", "sessionId", "kind", "ts", "text"];
 var NOTE_KEY_ORDER = [...NOTE_KEYS].sort();
+init_coordination_write();
+init_core();
+init_lease();
+init_store_db();
+init_store_activation();
 var EXECUTION_MIGRATION_VERSION2 = MIGRATIONS.find((migration) => migration.name === "execution-authority")?.version ?? Number.POSITIVE_INFINITY;
 var CATALOG_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "catalog-authority")?.version ?? 2;
 var PROVENANCE_ORIGIN_MIGRATION_VERSION = MIGRATIONS.find((migration) => migration.name === "issue-provenance-origin")?.version ?? Number.POSITIVE_INFINITY;
+init_recovery_intent();
 
 // hooks/src/mstar-write-gate.ts
 var SKILL_POINTER = "skill: mstar-artifacts/references/status-and-residuals.md";
@@ -14631,7 +17439,7 @@ async function readAuthorityRoute(harnessDir) {
 }
 function hasEntry2(dir, name) {
   try {
-    statSync2(join(dir, name));
+    statSync3(join6(dir, name));
     return true;
   } catch {
     return false;
@@ -14647,22 +17455,22 @@ function isHarnessRootDir(dir) {
       }
     } catch {}
   }
-  const parentResolved = resolveHarnessDir(dirname(dir));
-  return parentResolved !== null && resolve(parentResolved) === dir;
+  const parentResolved = resolveHarnessDir(dirname11(dir));
+  return parentResolved !== null && resolve5(parentResolved) === dir;
 }
 function landedPathOf(resolved) {
   try {
     return realpathSync(resolved);
   } catch {
     try {
-      return resolve(dirname(resolved), readlinkSync(resolved));
+      return resolve5(dirname11(resolved), readlinkSync(resolved));
     } catch {
-      let dir = dirname(resolved);
+      let dir = dirname11(resolved);
       for (;; ) {
         try {
-          return join(realpathSync(dir), relative5(dir, resolved));
+          return join6(realpathSync(dir), relative6(dir, resolved));
         } catch {
-          const parent = dirname(dir);
+          const parent = dirname11(dir);
           if (parent === dir)
             return resolved;
           dir = parent;
@@ -14672,27 +17480,27 @@ function landedPathOf(resolved) {
   }
 }
 function isStoreAuthorityTarget(target) {
-  if (!STORE_AUTHORITY_NAMES.includes(basename(target).toLowerCase()))
+  if (!STORE_AUTHORITY_NAMES.includes(basename3(target).toLowerCase()))
     return false;
-  return isHarnessRootDir(dirname(target));
+  return isHarnessRootDir(dirname11(target));
 }
 function caseFoldedRegisterRoot(candidate) {
-  const target = resolve(candidate);
-  if (!REGISTER_BASENAME.test(basename(target)))
+  const target = resolve5(candidate);
+  if (!REGISTER_BASENAME.test(basename3(target)))
     return null;
-  let dir = dirname(target);
+  let dir = dirname11(target);
   for (;; ) {
     if (isHarnessRootDir(dir)) {
       let projectDir;
       try {
         projectDir = resolveProjectDir(dir, { harnessDir: dir });
       } catch {
-        projectDir = join(dir, PROJECT_DIR_NAME);
+        projectDir = join6(dir, PROJECT_DIR_NAME);
       }
-      if (REGISTER_SHAPE.test(relative5(projectDir, target)))
+      if (REGISTER_SHAPE.test(relative6(projectDir, target)))
         return dir;
     }
-    const parent = dirname(dir);
+    const parent = dirname11(dir);
     if (parent === dir)
       return null;
     dir = parent;
@@ -14749,8 +17557,8 @@ function displaySafe(text6) {
   return text6.replace(/[\x00-\x1f\x7f]/g, (ch) => `\\x${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 function displayTarget(targetPath, harnessDir) {
-  const rel = relative5(harnessDir, targetPath);
-  return displaySafe(rel && !rel.startsWith("..") && !isAbsolute4(rel) ? rel : targetPath);
+  const rel = relative6(harnessDir, targetPath);
+  return displaySafe(rel && !rel.startsWith("..") && !isAbsolute3(rel) ? rel : targetPath);
 }
 function readStdinJson() {
   try {
@@ -14789,7 +17597,7 @@ function reconstructEditContent(tool, targetPath) {
       return;
     if (typeof newString !== "string" || newString === "")
       return;
-    if (statSync2(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
+    if (statSync3(targetPath).size > MAX_STATUS_CONTENT_LENGTH)
       return;
     const current = readFileSync2(targetPath, "utf8");
     const first = current.indexOf(oldString);
@@ -14818,11 +17626,11 @@ try {
   const tool = toolInput;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   for (const rawPath of writeTargetPaths(tool)) {
-    const targetPath = resolve(isAbsolute4(rawPath) ? rawPath : join(cwd, rawPath));
+    const targetPath = resolve5(isAbsolute3(rawPath) ? rawPath : join6(cwd, rawPath));
     const landed = landedPathOf(targetPath);
     const storeTarget = isStoreAuthorityTarget(targetPath) ? targetPath : isStoreAuthorityTarget(landed) ? landed : null;
     if (storeTarget !== null) {
-      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname(storeTarget)), [
+      blockAuthorityWrite(toolName, displayTarget(targetPath, dirname11(storeTarget)), [
         storeDirectWriteRefusal(storeTarget)
       ]);
     }

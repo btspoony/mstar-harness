@@ -19,10 +19,6 @@ export function collectActiveLifecycleBranches(snapshots: readonly Record<string
     if (!Array.isArray(doc.plans)) continue;
     for (const row of doc.plans) {
       if (!isPlainObject(row)) continue;
-      const lease = row.execution_lease;
-      if (isPlainObject(lease) && typeof lease.working_branch === "string" && lease.working_branch.trim() !== "") {
-        owned.add(lease.working_branch);
-      }
       const meta = row.metadata;
       if (isPlainObject(meta) && Array.isArray(meta.track_branches)) {
         for (const branch of meta.track_branches) {

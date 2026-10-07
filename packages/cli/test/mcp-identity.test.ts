@@ -197,7 +197,7 @@ describe("MCP session identity", () => {
     const plan = "plan-owned";
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: fixture.root });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: fixture.root });
-    const owner = { source: "local" as const, sessionId: "recorded-owner", workflowId: workflow, role: "coordinator" as const, planId: null };
+    const owner = { source: "local" as const, sessionId: "recorded-owner", workflowId: workflow, role: "coordinator" as const };
     const created = await createExecutionWorkflow(executionContextFor({ harnessDir: fixture.harness }, owner), {
       entry: { id: workflow, type: "iteration", status: "running", started_at: "2026-09-30T00:00:00Z", dir: `workflows/${workflow}` } as never,
       snapshot: {
@@ -217,7 +217,7 @@ describe("MCP session identity", () => {
     expect(bound.structuredContent.status).toBe("ok");
     const sessionRef = encodeExecutionSessionRef({
       storeId: fixture.authority.storeId, epoch: fixture.authority.epoch,
-      workflowId: workflow, role: "coordinator", sessionId: owner.sessionId, planId: null,
+      workflowId: workflow, role: "coordinator", sessionId: owner.sessionId,
     });
     const payload = { sessionRef, plan, harness: fixture.harness };
     const ownerRead = await registeredMcpCall("plan.show", { ...payload, sessionId: owner.sessionId }, context(fixture.root));
@@ -225,7 +225,7 @@ describe("MCP session identity", () => {
     const before = readFileSync(path.join(fixture.harness, "store.db"));
     const wrongSession = await registeredMcpCall("plan.show", { ...payload, sessionId: "different-valid-session" }, context(fixture.root));
     const after = readFileSync(path.join(fixture.harness, "store.db"));
-    expect(wrongSession.structuredContent).toMatchObject({ status: "refused", code: "coordination.session-mismatch" });
+    expect(wrongSession.structuredContent).toMatchObject({ status: "refused", code: "coordination.identity-mismatch" });
     expect(after).toEqual(before);
   });
 

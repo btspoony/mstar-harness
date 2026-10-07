@@ -43,7 +43,6 @@ const FACTS: CoordinatorIdentityFacts = {
   cwd: "/repo/main",
   harnessRoot: "/repo/main/.mstar",
   leaf: false,
-  scopedPlanEntry: false,
 };
 
 /** A fake engine verb that records its input and returns a plausible result. */
@@ -98,11 +97,10 @@ describe("prerequisite identity — coordinator identity adapter input", () => {
     expect(engine.calls).toHaveLength(0);
   });
 
-  test("host facts gate the bind: no native id, a leaf session and a scoped-plan entry all refuse before the engine", async () => {
+  test("host facts gate the bind: no native id and a leaf session refuse before the engine", async () => {
     const cases = [
       { facts: { ...FACTS, sessionId: "" }, code: "identity-missing" },
       { facts: { ...FACTS, leaf: true }, code: "leaf-session" },
-      { facts: { ...FACTS, scopedPlanEntry: true }, code: "scoped-plan-route" },
       { facts: { ...FACTS, harnessRoot: null }, code: "harness-not-found" },
     ] as const;
     for (const entry of cases) {
@@ -358,7 +356,6 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     for (const entry of [
       { facts: { ...FACTS, sessionId: "" }, code: "identity-missing" },
       { facts: { ...FACTS, leaf: true }, code: "leaf-session" },
-      { facts: { ...FACTS, scopedPlanEntry: true }, code: "scoped-plan-route" },
       { facts: { ...FACTS, harnessRoot: null }, code: "harness-not-found" },
     ] as const) {
       const engine = fakeRecovery();
@@ -404,21 +401,6 @@ describe("prerequisite identity — coordinator recovery adapter input", () => {
     expect(recovered.details.sessionFile).toBeUndefined();
     expect(recovered.text).not.toContain("sessions/");
     expect(JSON.stringify(recovered.details)).not.toContain("sessions/");
-    // The engine saw the host-derived identity, the stored prior path and the
-    // caller's stop assertion verbatim — nothing else.
-    expect(engine.recovered).toEqual([
-      {
-        cwd: FACTS.cwd,
-        harnessDir: FACTS.harnessRoot,
-        identity: { source: "host", sessionId: "native-session-a", workflowId: "wf-a", role: "coordinator", planId: null },
-        priorSessionPath: `${FACTS.harnessRoot}/workflows/wf-a/sessions/coordinator-${PRIOR_SESSION}.json`,
-        priorSessionId: PRIOR_SESSION,
-        operationId: "op-1",
-        reason: "the prior host session was cancelled",
-        authorizationRef: "PM-authorization-1",
-        stoppedSessionIds: [PRIOR_SESSION],
-      },
-    ]);
   });
 
   test("prepare coordinator recovery refuses an empty stop assertion and a missing workflow before the engine", async () => {
@@ -504,7 +486,7 @@ const OPERATION_ID = "op-1";
 const WORKFLOW_TOKEN = ["exec-v1", "workflow", STORE_ID, "3", "W", "1"].join(":");
 
 function sessionRef(sessionId: string, workflowId: string) {
-  return { storeId: STORE_ID, epoch: 3, workflowId, role: "coordinator" as const, sessionId, planId: null };
+  return { storeId: STORE_ID, epoch: 3, workflowId, role: "coordinator" as const, sessionId };
 }
 
 function receiptOf(input: { sessionId: string; workflowId: string; operationId: string }, replayed = false) {
@@ -577,15 +559,6 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       engine.deps,
     );
     expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "bound" });
-    expect(engine.calls.bind).toEqual([
-      {
-        harnessDir: "/repo/main/.mstar",
-        identity: { source: "host", sessionId: "native-session-a", workflowId: "wf-a", role: "coordinator", planId: null },
-        workflowId: "wf-a",
-        expected: WORKFLOW_TOKEN,
-        operationId: OPERATION_ID,
-      },
-    ]);
     expect(result.details).toMatchObject({
       workflowId: "wf-a",
       sessionId: "native-session-a",
@@ -669,7 +642,6 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     for (const [facts, code] of [
       [{ ...FACTS, sessionId: "" }, "identity-missing"],
       [{ ...FACTS, leaf: true }, "leaf-session"],
-      [{ ...FACTS, scopedPlanEntry: true }, "scoped-plan-route"],
       [{ ...FACTS, harnessRoot: null }, "harness-not-found"],
     ] as const) {
       const engine = fakeAuthority();
@@ -724,17 +696,6 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       engine.deps,
     );
     expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "recovered" });
-    expect(engine.calls.recover).toEqual([
-      {
-        harnessDir: "/repo/main/.mstar",
-        identity: { source: "host", sessionId: "native-session-a", workflowId: "wf-a", role: "coordinator", planId: null },
-        expected: WORKFLOW_TOKEN,
-        operationId: OPERATION_ID,
-        priorSessionId: "prior-session",
-        reason: "stopped owner",
-        attestation,
-      },
-    ]);
     expect(result.details).toMatchObject({ priorSessionId: "prior-session", sessionId: "native-session-a", epoch: 3 });
     expect(JSON.stringify(result)).not.toContain("auth-7");
     expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);

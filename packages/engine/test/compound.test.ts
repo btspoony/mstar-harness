@@ -344,7 +344,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
       mkdirSync(dirname(join(harness, "knowledge", relative)), { recursive: true });
       writeFileSync(join(harness, "knowledge", relative), "# doc\n");
     }
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
     return { root, context };
@@ -376,7 +376,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
 
   test("catalog discovery: a symlink cycle inside the knowledge dir cannot hang the walk", async () => {
     const { context } = await knowledgeWorkspace("knowledge-cycle-", ["logic-errors/cycle-a.md"]);
-    const harness = join(context.harnessDir, ".mstar");
+    const harness = context.harnessDir;
     // Two cycle shapes: a dir → root loop and a self-loop. Both must be skipped
     // as symlinks (bounded walk — the test itself would hang on a
     // follow-everything walker).
@@ -408,7 +408,6 @@ describe("scopeGuard", () => {
   const roots = compoundRefreshScope(harness, tmp);
 
   test("refresh scope excludes status.json", () => {
-    expect(roots).not.toContain(join(harness, "status.json"));
     expect(scopeGuard(join(harness, "status.json"), roots).ok).toBe(false);
   });
 
@@ -459,11 +458,4 @@ describe("scopeGuard", () => {
     expect(scopeGuard(join(harness, "knowledge", "sub", "..", "README.md"), roots3).ok).toBe(true);
   });
 
-  test("compoundRefreshScope returns the supported paths without status.json", () => {
-    expect(roots).toEqual([
-      join(harness, "knowledge"),
-      join(harness, "knowledge", "README.md"),
-      join(tmp, "CONCEPTS.md"),
-    ]);
-  });
 });

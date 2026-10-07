@@ -1,7 +1,6 @@
 /**
  * Phase-2 host adapter tests — `packages/omp/src/extensions/phase2-orchestration.ts`
- * (plan the registered Phase-2 instances plan T3; primary spec §A native observation,
- * §B reminder event/latch, §C capacity/journal).
+ * (primary spec §A native observation, §B reminder event/latch).
  *
  * ## What is real here, and what the test supplies
  *
@@ -37,13 +36,9 @@
  *   session's own v2 `ExecutionBinding`; the LEGACY arm (`buildLegacyFixture`)
  *   keeps the pre-activation file route (`bindPlanSession`,
  *   `mutatePlanCoordination`, the canonical snapshot writer) and observes
- *   through the v1 envelope record. Launch and journal cases run on the ACTIVE
- *   arm because the launch journal is adopted under the DB authority; the
- *   envelope-drift, retired-document and terminal cases run on the LEGACY arm
- *   because their semantics are exactly what the file route preserves.
- * - Native settings come from the host's own project override surface
- *   (`<cwd>/.omp/plugin-overrides.json`), read through the real
- *   `getPluginSettings` helper — no user settings are read or written.
+ *   through the v1 envelope record. The envelope-drift, retired-document and
+ *   terminal cases run on the LEGACY arm because their semantics are exactly
+ *   what the file route preserves.
  *
  * Supplied by the test: the job *content* (which real jobs exist), the model
  * registry double (this extension must never touch models — the double throws),
@@ -51,12 +46,9 @@
  *
  * ## What is *not* claimed here
  *
- * No multiplexer is executed: no pane is created, no OMP child is started and no
- * prompt is submitted. The Herdr/tmux transport is PM-executed skill work (plan
- * T4); these cases prove admission bookkeeping around real files, and the
- * `uncertain` launch stays occupied exactly as the spec requires when a real
- * submission outcome is unknown. No process start, no credentials, no user
- * terminal state.
+ * Nothing is spawned, submitted or merged: this extension only binds the
+ * observation, records checkpoints and exports bounded history. No process
+ * start, no credentials, no user terminal state.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -75,11 +67,11 @@ import {
   loadExtensionFromFactory,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import {
   bindExecutionSession,
@@ -108,7 +100,6 @@ import phase2OrchestrationFactory, {
   PHASE2_NOTICE_CUSTOM_TYPE,
   PHASE2_PHASE,
   derivePhase2State,
-  phase2Seams,
   readPhase2Records,
   type Phase2Record,
 } from "../src/extensions/phase2-orchestration";
@@ -120,8 +111,6 @@ import {
 const WORKFLOW_ID = "wf-phase2";
 const PROJECT_ID = "proj-phase2";
 const PLAN_IDS = ["plan-a", "plan-b"] as const;
-const JOURNAL_FILE = "omp-launches.json";
-const PLUGIN_NAME = "@mstar-harness/omp";
 const TOOL_NAME = "mstar_phase2";
 /** The session owner whose jobs the snapshot exposes (the host's own owner filter). */
 const OWNER = "primary-coordinator";
@@ -187,29 +176,6 @@ function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
-/** The scoped Assignment header block `parseAssignmentFile` accepts. */
-function assignmentText(input: { harness: string; planId: string; planPath: string; worktreePath: string; sddDir: string; branch: string }): string {
-  return [
-    `# Assignment — ${input.planId} independent slice`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${WORKFLOW_ID}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Independent prepared plan for the Phase-2 host adapter cases.",
-    "",
-  ].join("\n");
-}
 
 /* -------------------------------------------------------------- fixture ---- */
 
@@ -218,14 +184,12 @@ type Fixture = {
   harness: string;
   workflowDir: string;
   snapshotPath: string;
-  journalPath: string;
   integrationPath: string;
   /** The legacy arm's coordinator envelope path; `""` on the ACTIVE arm (no file binding). */
   coordinatorSession: string;
   /** The ACTIVE arm's DB coordinator session reference; `null` on the legacy arm. */
   coordinator: ExecutionSessionRef | null;
   planPaths: Record<string, string>;
-  assignments: Record<string, string>;
   sddDirs: Record<string, string>;
   worktrees: Record<string, string>;
 };
@@ -238,7 +202,7 @@ const ACTIVE_TS = "2026-09-16T00:00:00Z";
 /**
  * The real repository every arm starts from: one Git main checkout, one real
  * integration checkout, two plan worktrees on their own branches with a real
- * slice commit each, and their Assignment files. No coordination document is
+ * slice commit each. No coordination document is
  * written here — an ACTIVE execution authority is initialized only for an EMPTY
  * execution workspace, so the legacy arm adds its retired file sources on top.
  */
@@ -254,7 +218,6 @@ function makeRepo(): Fixture {
   git(["worktree", "add", "-q", "-b", "integration/wf", integrationPath], root);
 
   const planPaths: Record<string, string> = {};
-  const assignments: Record<string, string> = {};
   const sddDirs: Record<string, string> = {};
   const worktrees: Record<string, string> = {};
   for (const planId of PLAN_IDS) {
@@ -262,7 +225,7 @@ function makeRepo(): Fixture {
     const sddDir = join(harness, "sdd", planId);
     const branch = `feature/${planId}`;
     const worktreePath = join(root, `wt-${planId}`);
-    writeText(planPath, `# Plan ${planId}\n`);
+    writeText(planPath, `# Plan ${planId}\n\n**plan_id:** ${planId}\n`);
     mkdirSync(sddDir, { recursive: true });
     git(["worktree", "add", "-q", "-b", branch, worktreePath], root);
     writeText(join(worktreePath, "slice.txt"), `${planId} slice\n`);
@@ -271,8 +234,6 @@ function makeRepo(): Fixture {
     planPaths[planId] = planPath;
     worktrees[planId] = worktreePath;
     sddDirs[planId] = sddDir;
-    assignments[planId] = join(sddDir, "assignment.md");
-    writeText(assignments[planId]!, assignmentText({ harness, planId, planPath, worktreePath, sddDir, branch }));
   }
   setArtifactStore(createFsStore(harness));
 
@@ -281,12 +242,10 @@ function makeRepo(): Fixture {
     harness,
     workflowDir,
     snapshotPath,
-    journalPath: join(workflowDir, JOURNAL_FILE),
     integrationPath,
     coordinatorSession: "",
     coordinator: null,
     planPaths,
-    assignments,
     sddDirs,
     worktrees,
   };
@@ -304,7 +263,7 @@ function makeFixture(): Fixture {
     id: planId,
     plan_id: planId,
     title: `Plan ${planId}`,
-    file: `.mstar/plans/${planId}.md`,
+    file: `plans/${planId}.md`,
     status: "Todo",
     metadata: { project_id: PROJECT_ID },
   }));
@@ -342,7 +301,10 @@ async function buildLegacyFixture(): Promise<Fixture> {
       sessionPath: fixture.coordinatorSession,
       planId,
       expectedRevision: view.revision,
-      operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! },
+      operation: {
+        kind: "prepare",
+        config: { worktreePath: fixture.worktrees[planId], workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+      },
     });
     expect(prepared.outcome).toBe("prepared");
   }
@@ -353,15 +315,7 @@ async function buildLegacyFixture(): Promise<Fixture> {
 function activeCoordinatorContext(fixture: Fixture, sessionId: string): ExecutionContext {
   return {
     harnessDir: fixture.harness,
-    caller: { sessionId, role: "coordinator", workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
-  };
-}
-
-/** The plan-pm caller of one plan's own DB session (its address is the plan). */
-function activePlanContext(fixture: Fixture, planId: PlanId, sessionId: string): ExecutionContext {
-  return {
-    harnessDir: fixture.harness,
-    caller: { sessionId, role: "plan-pm", workflowId: WORKFLOW_ID, planId } satisfies ExecutionCaller,
+    caller: { sessionId, role: "coordinator", workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
   };
 }
 
@@ -383,10 +337,10 @@ async function workflowTokenOf(fixture: Fixture): Promise<ExecutionToken> {
 }
 
 /**
- * REAL ACTIVE execution authority (the phase2-launches recipe): the issue store
+ * REAL ACTIVE execution authority: the issue store
  * upgraded to an execution authority, both plans registered in the catalog, one
  * workflow created in `phase-2-execute` holding them with its integration
- * checkout, both plans PREPARED from their real Assignment files through the DB
+ * checkout, both plans configured through ordinary prepare via the DB
  * verb, and the DB coordinator bound under the native session id the observation
  * uses. Nothing is planted as file state on this route.
  */
@@ -424,21 +378,20 @@ async function seedActiveAuthority(fixture: Fixture, sessionId: string): Promise
   // must never be handed to a workflow-scoped verb.
   const bound = await bindExecutionSession(context, {
     workflowId: WORKFLOW_ID,
-    planId: null,
     role: "coordinator",
     expected: await workflowTokenOf(fixture),
     operationId: `bind-${WORKFLOW_ID}`,
   });
-  // The journal (and the lock the launcher takes) lives in the canonical
-  // workflow directory, so it must exist on disk — the authority never writes it.
-  mkdirSync(fixture.workflowDir, { recursive: true });
   for (const planId of PLAN_IDS) {
     await mutateExecutionPlan(context, {
       operationId: `prepare-${planId}`,
       session: bound.data,
       expected: await planTokenOf(fixture, planId),
       planId,
-      operation: { kind: "prepare", assignmentPath: fixture.assignments[planId]! } as never,
+      operation: {
+        kind: "prepare",
+        config: { worktreePath: fixture.worktrees[planId], workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+      },
     });
   }
   return bound.data;
@@ -471,13 +424,6 @@ async function writeSnapshot(fixture: Fixture, patch: Pick<WorkflowSnapshot, "ph
   const now = new Date().toISOString();
   await writeWorkflowSnapshot({ ...snapshotOf(fixture), ...patch, updated_at: now }, fixture.workflowDir, {
     sessionPath: fixture.coordinatorSession,
-  });
-}
-
-/** Seed the native preference through the host's project override surface. */
-function writeSettings(fixture: Fixture, settings: { enabled: boolean; cap: number }): void {
-  writeJson(join(fixture.root, ".omp", "plugin-overrides.json"), {
-    settings: { [PLUGIN_NAME]: { phase2PlanInstances: settings.enabled, maxPlanInstances: settings.cap } },
   });
 }
 
@@ -623,6 +569,8 @@ async function createHarness(options: {
   cwd: string;
   /** Simulate an unavailable native snapshot (null is never "no jobs"). */
   snapshotUnavailable?: boolean;
+  /** Observe the real projection at the host's snapshot boundary. */
+  onSnapshot?: (snapshot: AsyncJobSnapshot) => void;
   mode?: ExtensionMode;
 }): Promise<Harness> {
   const settings = Settings.isolated({});
@@ -653,7 +601,12 @@ async function createHarness(options: {
     undefined,
     settings,
     undefined,
-    () => (options.snapshotUnavailable === true ? null : snapshotOfJobs(options.jobs)),
+    () => {
+      if (options.snapshotUnavailable === true) return null;
+      const snapshot = snapshotOfJobs(options.jobs);
+      options.onSnapshot?.(snapshot);
+      return snapshot;
+    },
   );
 
   const session = (): SessionManager => runner.sessionManager;
@@ -749,10 +702,6 @@ function codeOf(result: ToolResult): string {
   return String(result.details.mstarPhase2?.code ?? "");
 }
 
-function intentOf(result: ToolResult): Record<string, unknown> {
-  return (result.details.mstarPhase2?.intent ?? {}) as Record<string, unknown>;
-}
-
 function bindParams(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   // The caller names only the workflow. The route is read from the addressed
   // control root and the identity is host-derived, so there is no session path
@@ -769,11 +718,6 @@ function reminderKeys(harness: Harness): readonly string[] {
   return harness
     .records()
     .flatMap((record) => (record.kind === "reminder" ? [record.observationKey] : []));
-}
-
-function journalIntents(fixture: Fixture): Array<Record<string, unknown>> {
-  if (!existsSync(fixture.journalPath)) return [];
-  return readJson(fixture.journalPath).intents as Array<Record<string, unknown>>;
 }
 
 /* ----------------------------------------------------------------- tests --- */
@@ -803,9 +747,7 @@ describe("phase2 host adapter", () => {
     expect(harness.validate({ operation: "bind" })).toMatchObject({ success: false });
     expect(harness.validate({ ...bindParams(), extra: 1 })).toMatchObject({ success: false });
     expect(harness.validate({ operation: "checkpoint", reason: "before-wait" })).toMatchObject({ success: false });
-    expect(harness.validate({ operation: "record-launch", intentId: "i", observation: "created", evidencePath: "/tmp/e" })).toMatchObject({
-      success: false,
-    });
+    expect(harness.validate({ operation: "export-history" })).toMatchObject({ success: false });
 
     // The ACTIVE route writes no retired document: the bind adopts the DB
     // coordinator binding instead of planting a snapshot beside it.
@@ -849,8 +791,7 @@ describe("phase2 host adapter", () => {
     expect(codeOf(foreignWorkflow)).toBe("coordination.workflow-not-found");
     expect(harness.records()).toHaveLength(1);
 
-    // Nothing engine-visible changed: no journal, no retired snapshot, no notice.
-    expect(existsSync(fixture.journalPath)).toBe(false);
+    // Nothing engine-visible changed: no retired snapshot, no notice.
     expect(existsSync(fixture.snapshotPath)).toBe(false);
     expect(harness.noticeTexts()).toEqual([]);
 
@@ -861,29 +802,15 @@ describe("phase2 host adapter", () => {
     expect(reminderKeys(harness)).toEqual([]);
   });
 
-  test("opt-in off still permits bounded reminder", async () => {
+  test("the bounded reminder is independent of any host preference", async () => {
     const { fixture, session } = await buildActiveFixture();
-    // The saved preference is explicitly off — and it gates launches only.
-    writeSettings(fixture, { enabled: false, cap: 2 });
     const jobs = new AsyncJobManager({});
     const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
 
     expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
-    // Launch admission is refused while the opt-in is off (settings gate first).
-    const refused = await harness.runTool({
-      operation: "reserve-launch",
-      planId: "plan-a",
-      transport: "herdr",
-      skill: { name: "herdr", source: "herdr" },
-      capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" },
-    });
-    expect(refused.isError).toBe(true);
-    expect(codeOf(refused)).toBe("launch.settings-disabled");
-    expect(existsSync(fixture.journalPath)).toBe(false);
-
-    // The bounded reminder is independent of that opt-in: real running work is
-    // an opportunity the coordinator has not been told about yet.
+    // The bounded reminder sees real running work as an opportunity the
+    // coordinator has not been told about yet.
     startJob(jobs, "job-1", "background slice");
     await harness.emitAgentEnd();
     const advisories = harness.advisories();
@@ -910,7 +837,6 @@ describe("phase2 host adapter", () => {
 
   test("one followup per changed observation", async () => {
     const { fixture, session } = await buildActiveFixture();
-    writeSettings(fixture, { enabled: true, cap: 2 });
     const jobs = new AsyncJobManager({});
     const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
     expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
@@ -1047,13 +973,25 @@ describe("phase2 host adapter", () => {
 
   test("native completion does not duplicate", async () => {
     const { fixture, session } = await buildActiveFixture();
-    writeSettings(fixture, { enabled: true, cap: 2 });
     const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
+    const deliveredIds: string[] = [];
+    const recordDelivery = (jobId: string): void => {
+      deliveredIds.push(jobId);
+    };
+    jobs.registerDeliverySink(OWNER, recordDelivery);
+    let onSnapshot: ((snapshot: AsyncJobSnapshot) => void) | undefined;
+    const harness = await createHarness({
+      sessionManager: session,
+      jobs,
+      cwd: fixture.root,
+      onSnapshot: (snapshot) => onSnapshot?.(snapshot),
+    });
     expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
 
     // Baseline: a running job is reminded about exactly once.
     const settle = startJob(jobs, "job-1", "background compile");
+    await harness.emitAgentEnd();
+    expect(harness.advisories()).toHaveLength(1);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(1);
 
@@ -1062,6 +1000,8 @@ describe("phase2 host adapter", () => {
     // this coordinator turn also produced tool results before `agent_end`.
     settle();
     await awaitSettled(jobs, "job-1");
+    await awaitDeliveryDrain(jobs);
+    expect(deliveredIds).toEqual(["job-1"]);
     await harness.emitToolResult("tool-settled");
     await harness.emitBeforeAgentStart("continue after native delivery");
     await harness.emitAgentEnd();
@@ -1070,7 +1010,8 @@ describe("phase2 host adapter", () => {
 
     // Same when a delivery is queued or in flight: never duplicated.
     const parkedDelivery = Promise.withResolvers<void>();
-    const stopSink = jobs.registerDeliverySink(OWNER, async () => {
+    const stopSink = jobs.registerDeliverySink(OWNER, async (jobId) => {
+      recordDelivery(jobId);
       // Parked on purpose: the host's delivery state stays pending until this
       // sub-case is done, which is exactly the condition to test.
       await parkedDelivery.promise;
@@ -1087,42 +1028,41 @@ describe("phase2 host adapter", () => {
     parkedDelivery.resolve();
     await awaitDeliveryDrain(jobs);
     stopSink();
+    jobs.registerDeliverySink(OWNER, recordDelivery);
+    expect(deliveredIds).toEqual(["job-1", "job-2"]);
     expect(snapshotOfJobs(jobs).delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
 
-    // A job that settles while the decision is still awaiting the settings read
-    // is not swallowed by that decision's consumption: the ids consumed are
-    // exactly the ones the decision sampled.
+    // Completion before sampling is covered above. For the race, first observe
+    // the real host snapshot containing the running job, then release its real
+    // completion promise. Starting agent_end alone does not mean it has sampled:
+    // the adapter awaits the engine ownership probe before reading native jobs.
     const beforeRace = harness.advisories().length;
-    const heldSettings = Promise.withResolvers<void>();
-    const realReadSettings = phase2Seams.readSettings;
-    let seamEntered = false;
-    phase2Seams.readSettings = async (cwd) => {
-      seamEntered = true;
-      await heldSettings.promise;
-      return realReadSettings(cwd);
-    };
     const settleThree = startJob(jobs, "job-3", "third background compile");
+    const sampledRace = Promise.withResolvers<AsyncJobSnapshot>();
+    onSnapshot = sampledRace.resolve;
     const inFlight = harness.emitAgentEnd();
-    // Advance the emission to the held settings read without wall-clock waits.
-    for (let tick = 0; tick < 2000 && !seamEntered; tick += 1) await Promise.resolve();
-    expect(seamEntered).toBe(true);
+    const raceSnapshot = await sampledRace.promise;
+    onSnapshot = undefined;
+    expect(raceSnapshot.running.map((job) => job.id)).toEqual(["job-3"]);
+    expect(raceSnapshot.recent.some((job) => job.id === "job-3")).toBe(false);
+    expect(raceSnapshot.delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
     settleThree();
     await awaitSettled(jobs, "job-3");
-    heldSettings.resolve();
     await inFlight;
-    phase2Seams.readSettings = realReadSettings;
+    await awaitDeliveryDrain(jobs);
+    expect(deliveredIds).toEqual(["job-1", "job-2", "job-3"]);
 
-    // The decision sampled job-3 as running, so this turn nudges exactly once
-    // for that changed observation — and with nothing pending, the nudge cannot
-    // be suppressed by a delivery.
     const afterRace = harness.advisories().length;
     expect(afterRace - beforeRace).toBe(1);
     expect(snapshotOfJobs(jobs).recent.some((job) => job.id === "job-3")).toBe(true);
+    expect(reminderKeys(harness)).toHaveLength(afterRace);
     // The settle is native delivery's, so the next turn must not nudge a second
     // time — under a second-snapshot consumption it would (that id would have
     // been consumed by the race turn and the settled state would look new).
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(afterRace);
+    expect(reminderKeys(harness)).toHaveLength(afterRace);
+    expect(snapshotOfJobs(jobs).delivery).toMatchObject({ queued: 0, delivering: false, pendingJobIds: [] });
 
     // Nothing delivered at all is still a real opportunity: reminded once, then
     // bounded by the latch. Exact counts, so a silent no-op cannot pass.
@@ -1131,6 +1071,7 @@ describe("phase2 host adapter", () => {
     expect(harness.advisories()).toHaveLength(afterRace + 1);
     await harness.emitAgentEnd();
     expect(harness.advisories()).toHaveLength(afterRace + 1);
+    expect(reminderKeys(harness)).toHaveLength(afterRace + 1);
 
     // No completion text is ever reproduced by the plugin notice.
     for (const advisory of harness.advisories()) {
@@ -1138,30 +1079,21 @@ describe("phase2 host adapter", () => {
     }
   });
 
-  test("a scoped-plan PM session never claims the active observation", async () => {
+  test("a session that is not the recorded coordinator never claims the active observation", async () => {
     const { fixture } = await buildActiveFixture();
-    // A REAL engine plan binding, under the plan session's own native id: the DB
-    // coordinator seat still belongs to the fixture's coordinator session, so a
-    // plan-pm identity can hold its plan's lease without ever becoming the
-    // observation owner.
-    const planSession = newSession(fixture.root);
-    const planBound = await bindExecutionSession(activePlanContext(fixture, "plan-a", planSession.getSessionId()), {
-      workflowId: WORKFLOW_ID,
-      planId: "plan-a",
-      role: "plan-pm",
-      expected: await planTokenOf(fixture, "plan-a"),
-      operationId: "bind-plan-a-observation",
-    });
-    expect(planBound.data).toMatchObject({ role: "plan-pm", planId: "plan-a", workflowId: WORKFLOW_ID });
-
+    // The DB coordinator seat still belongs to the fixture's coordinator
+    // session, so a different native session that binds the workflow is refused
+    // before it ever becomes the observation owner. (One workflow has one
+    // coordinator seat: a second bind is a holder conflict, never a second seat.)
+    const otherSession = newSession(fixture.root);
     const jobs = new AsyncJobManager({});
-    const planHarness = await createHarness({ sessionManager: planSession, jobs, cwd: fixture.root });
-    const refusal = await planHarness.runTool(bindParams());
+    const otherHarness = await createHarness({ sessionManager: otherSession, jobs, cwd: fixture.root });
+    const refusal = await otherHarness.runTool(bindParams());
     expect(refusal.isError).toBe(true);
     expect(codeOf(refusal)).toBe("phase2.coordinator-mismatch");
-    expect(planHarness.records()).toEqual([]);
-    await planHarness.emitAgentEnd();
-    expect(planHarness.advisories()).toEqual([]);
+    expect(otherHarness.records()).toEqual([]);
+    await otherHarness.emitAgentEnd();
+    expect(otherHarness.advisories()).toEqual([]);
   });
 
   test("a legacy envelope binding on an ACTIVE root refuses as not-ready and never reads the retired documents", async () => {
@@ -1258,7 +1190,6 @@ describe("phase2 host adapter", () => {
 
   test("task scoped, foreign, retired-document and terminal states stay inert on the pre-activation file route", async () => {
     const fixture = await buildLegacyFixture();
-    writeSettings(fixture, { enabled: true, cap: 2 });
     const jobs = new AsyncJobManager({});
     startJob(jobs, "job-1", "running work");
 
@@ -1421,128 +1352,6 @@ describe("phase2 host adapter", () => {
     expect(harness.noticeTexts()).toHaveLength(1);
   });
 
-  test("journal replay preserves uncertain launch", async () => {
-    const { fixture, session } = await buildActiveFixture();
-    writeSettings(fixture, { enabled: true, cap: 2 });
-    // The caller is inside the matching managed environment (the real gate the
-    // journal checks; the CLI itself is never executed here).
-    process.env.HERDR_ENV = "1";
-    const jobs = new AsyncJobManager({});
-    const harness = await createHarness({ sessionManager: session, jobs, cwd: fixture.root });
-    expect(codeOf(await harness.runTool(bindParams()))).toBe("bound");
-
-    const reserved = await harness.runTool({
-      operation: "reserve-launch",
-      planId: "plan-a",
-      transport: "herdr",
-      skill: { name: "herdr", source: "herdr" },
-      capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" },
-    });
-    expect(reserved.isError).toBe(false);
-    expect(codeOf(reserved)).toBe("reserved");
-    expect(reserved.details.mstarPhase2).toMatchObject({ applied: true });
-    const intentId = String(intentOf(reserved).id);
-
-    const evidence = (name: string): string => {
-      const path = join(fixture.root, "evidence", `${name}.txt`);
-      writeText(path, `${name}\n`);
-      return path;
-    };
-    const record = (observation: string, extra: Record<string, unknown> = {}): Promise<ToolResult> =>
-      harness.runTool({
-        operation: "record-launch",
-        intentId,
-        observation,
-        evidencePath: evidence(`${intentId}-${observation}`),
-        ...extra,
-      });
-
-    for (const observation of ["starting", "created", "submitting"]) {
-      const step = await record(observation, observation === "created" ? { target: "pane-42" } : {});
-      // The step's own outcome code is asserted, not only `isError`: a step this
-      // transport refused reports WHICH refusal it was (e.g. `phase2.journal-failed`
-      // for a failure inside the journal) instead of an anonymous boolean.
-      expect({ code: codeOf(step), isError: step.isError }).toEqual({ code: "recorded", isError: false });
-      expect(step.details.mstarPhase2).toMatchObject({ applied: true });
-    }
-    // A stalled prompt is uncertainty, not a retryable failure.
-    const uncertain = await record("uncertain", { target: "pane-42" });
-    expect(codeOf(uncertain)).toBe("recorded");
-    expect(intentOf(uncertain).state).toBe("uncertain");
-    expect(journalIntents(fixture)).toHaveLength(1);
-
-    // Replaying the same observation writes nothing and authorizes nothing…
-    const replay = await record("uncertain", { target: "pane-42" });
-    expect(codeOf(replay)).toBe("replayed");
-    expect(replay.details.mstarPhase2).toMatchObject({ applied: false });
-    // …a blind resubmission is refused (uncertain is terminal)…
-    const retry = await record("submitted", { target: "pane-42" });
-    expect(retry.isError).toBe(true);
-    expect(codeOf(retry)).toBe("launch.transition-invalid");
-    // …and the plan stays occupied: a duplicate request returns the recorded
-    // intent without another authorization, so no second owner can appear.
-    const duplicate = await harness.runTool({
-      operation: "reserve-launch",
-      planId: "plan-a",
-      transport: "herdr",
-      skill: { name: "herdr", source: "herdr" },
-      capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" },
-    });
-    expect(duplicate.isError).toBe(false);
-    expect(codeOf(duplicate)).toBe("replayed");
-    expect(duplicate.details.mstarPhase2).toMatchObject({ applied: false });
-    expect(intentOf(duplicate).state).toBe("uncertain");
-    expect(journalIntents(fixture)).toHaveLength(1);
-
-    // A fresh instance replays both the identity pointer and the journal from
-    // disk: the uncertain intent still occupies its slot, the other plan can
-    // still take the remaining one.
-    const reloaded = await createHarness({ sessionManager: harness.sessionManager, jobs, cwd: fixture.root });
-    const rebound = await reloaded.runTool(bindParams());
-    expect(codeOf(rebound)).toBe("already-bound");
-    expect(rebound.details.mstarPhase2).toMatchObject({ applied: false });
-    const second = await reloaded.runTool({
-      operation: "reserve-launch",
-      planId: "plan-b",
-      transport: "herdr",
-      skill: { name: "herdr", source: "herdr" },
-      capability: { executable: process.execPath, version: "0.9.0", target: "pane-current" },
-    });
-    expect(second.isError).toBe(false);
-    expect(codeOf(second)).toBe("reserved");
-
-    const intents = journalIntents(fixture);
-    expect(intents).toHaveLength(2);
-    expect(intents.map((entry) => entry.state)).toEqual(["uncertain", "reserved"]);
-    // The journal records transport observations only — no completion, no lease.
-    expect(Object.keys(intents[0]!).sort()).toEqual([
-      "assignmentPath",
-      "coordinatorSessionId",
-      "evidencePaths",
-      "id",
-      "planId",
-      "preparedHash",
-      "state",
-      "target",
-      "transport",
-      "workflowId",
-      "worktreePath",
-    ]);
-
-    // The document is the v2 generation, owned by exactly this store, epoch and
-    // native session: the journal records its own DB writer, never a file
-    // envelope, and adoption of the legacy generation is provenance only.
-    const journal = readJson(fixture.journalPath);
-    expect(journal.version).toBe(2);
-    expect(journal.workflow_id).toBe(WORKFLOW_ID);
-    expect(journal.owner).toEqual({
-      storeId: fixture.coordinator.storeId,
-      epoch: fixture.coordinator.epoch,
-      sessionId: session.getSessionId(),
-      workflowId: WORKFLOW_ID,
-    });
-    expect(journal.legacy).toBeUndefined();
-  });
 });
 
 /* ------------------------------------------------- coordinator bar titles --- */

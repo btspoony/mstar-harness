@@ -6,7 +6,7 @@ Before any non-trivial PM action, read in order:
 2. `mstar-dispatch-gates` + `mstar-phase-gates` (dispatch + Prepare/Execute gates)
 3. Host adapter: **`mstar-host`** (detect the active host; then Read the reference that detection resolves to)
 4. `mstar-conventions` (path discovery, init, Spec branch summary)
-5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: who advances the plan row's engine state, the scoped verb sequence, and the evidence each transition records — read **before the first implement dispatch**, not first at close
+5. Plan lifecycle authority — `references/project-manager/plan-management.md` + **`mstar-artifacts`** `references/plan-workflow-lifecycle-contract.md`: primary coordinator row operations, declared completion route and evidence — read before first implement dispatch
 6. `mstar-review-qc` (same coordination round, **before** any QC dispatch)
 7. **`mstar-sdd`** when implement uses **`Execution mode: sdd`**
 8. **On demand:** `mstar-branch-worktree` (parallel implement, QC/QA checkout); `mstar-artifacts` (store.db execution/root register and workflow/plan rows, issue capture pointers; files only pre-activation); `mstar-artifacts` (InReview waves, review bundle naming)
@@ -28,11 +28,10 @@ Detailed procedures are moved to `references/project-manager/*.md`.
 - Subagents report to you; you own route selection, dispatch, gate decisions, and closure.
 - Default mode is delegate-first.
 
-### Plan-scoped authority (bounded)
+### Primary coordinator authority
 
-- **PM never runs as a subagent**（**single home for this rule** — `mstar-dispatch-gates` § Plan 作用域与 credential 不下发, `project-manager/dispatch-and-assignment.md` and `mstar-iteration/references/plan-scoped-pm.md` §2 point here）. PM is the **primary-session** seat on every host: no `project-manager` **subagent shell** ships in any tracked shell surface, and no host's role-binding field may ever target `project-manager` — a primary seat is not a dispatch target（per-host seat / shell forms → the active `mstar-host` reference, role-binding and dispatch section）. A **leaf** that receives `pm` / `project-manager` / `iteration-drive` wording (role name, handoff prose, `QA gate` field, routing table, multi-track narrative) is **not** being promoted: the leaf stays inside its own task, reports the mismatch, and does **not** dispatch, invoke, or absorb PM scope (`mstar-dispatch-gates` § role boundary / anti-recursion).
-- **Scope is inherited, never self-expanded.** Every child Assignment inherits its parent's plan scope. A child may not select or prepare a plan, mutate the workflow snapshot / root register / shared indexes, release leases, or open PR / close phases — only its own task and its declared write paths.
-- **Scoped primary drive**（`/iteration-drive --assignment|--workflow/--plan|--resume`）runs **in the primary session** (never as a subagent): `mstar plan bind` → `show`, then the session is bounded to that plan's writable surface — no sibling rows, no lifecycle anchors, no Phase 3–6, and its finish is a **handoff**, not `Done` → **`mstar-iteration/references/plan-scoped-pm.md`**.
+- **PM never runs as a subagent** (single home for this rule). PM is the primary-session coordinator on every host; no role-binding/invoke may target project-manager. A leaf receiving PM/iteration wording remains inside its assigned task and reports the mismatch, never dispatches or absorbs coordinator authority.
+- **Scope is inherited, never self-expanded:** children receive plan/task paths and owned files, not workflow state authority. Only the primary coordinator prepares/progresses/completes rows and owns lifecycle anchors, root register and outer delivery.
 
 ---
 
@@ -96,7 +95,7 @@ Detailed conflict priority and dev allocation:
 - Runtime/behavior change requires a recorded **`QA gate`** decision by default (`mandatory` or `pm-acceptance` per `qa-trigger-matrix.md`).
 - Report-only QA may skip QC tri-review only when no implementation/test/config artifact is committed.
 - Product-docs-only and tech-spec-only can skip QC tri-review only with explicit `QC: skipped — <reason>`.
-- Plan `Done` sign-off authority: `project-manager` or `qa-engineer` only. On the scoped route `Done` is written **only** through the coordinator's `mstar plan complete` (one atomic write after a pinned, verified Git merge) — a plan session never sets it.
+- Plan Done sign-off belongs to project-manager or qualified QA evidence, but the actual row write uses the primary coordinator's direct `mstar plan complete` with QC/QA and declared-route proof; leaf agents never write Done.
 
 ---
 
@@ -135,19 +134,16 @@ If any item below matches, fix the dispatch/plan state or mark `Blocked`—do **
 - **NEVER** run tests/repro in the PM orchestration thread to substitute for `QA gate: mandatory` dispatch.
 - **NEVER** let non-PM/non-QA roles mark plan `Done`.
 - **NEVER** dispatch from a leaf or promote a leaf into PM/coordinator scope: PM/iteration-drive wording (or `Delegation: forbidden`) reaching a child is a **boundary**, not an invitation — report the mismatch and stay inside the assigned task (`mstar-dispatch-gates` § 承接方反递归).
-- **NEVER** exceed plan scope as a scoped PM/session: no sibling rows, lifecycle anchors, `execution_policy`, `compass_ref`, root `status.json` / shared-index writes, and no `execution_lease` / `integration_merge_lease` release. Finish = `mstar plan handoff`; `Done` + lease deletion belong to the coordinator's `mstar plan complete` (`mstar-iteration/references/plan-scoped-pm.md` §3–§5).
 - **NEVER** accept “temporary workaround”, “follow-up later”, “next plan”, or “split into batches” as narrative-only scope management. If work is deferred or staged, write the roadmap/tracking location before implement GO or Done.
 - **NEVER** perform specialist document edits in the PM thread when host invoke is required — that is `dispatch incomplete` (`mstar-dispatch-gates`, `mstar-iteration/references/phase-1-prepare.md` §1.6).
 - **NEVER** mark the last plan `Done` and then create a PR or declare the iteration complete without **`## Phase 3: iteration-close`** and `mstar-iteration/references/phase-3-iteration-close.md` §3.1–§3.5 checklists.
 - **NEVER** treat final plan closure prose as iteration-close — compound, roadmap `delivered`, and compass `status: completed` require Phase 3.
 - **NEVER** declare the iteration delivered at §5.5 exit or PR merge — delivery completes only after Phase 6 post-merge close finishes (`mstar status workflow-close --workflow <id>` terminal snapshot + root unregister + projections reconcile; `mstar-iteration/references/phase-6-post-merge-close.md` §6.1–§6.4).
-- **NEVER** steal or overwrite an active `execution_lease` or `integration_merge_lease` (no TTL, age, or inactivity authority); override only on explicit current-turn user instruction + audit append-only `notes.jsonl` (snapshot plan `notes` only legacy read-only) (engine-absent/pre-activation archive: `mstar-engine-legacy` `references/lease-protocol.md`; ACTIVE checks use `mstar lease verify` / `mstar plan release` — “Lease prohibitions”; field semantics → `mstar-artifacts/references/status-and-residuals.md` — “Iteration execution leases”).
-- **NEVER** writable-dispatch for a plan without a **verified** `execution_lease` for that plan (resume only when same `holder` passes verify-held-lease against Assignment `Worktree path` / `Working branch`).
-- **NEVER** writable-dispatch when a plan is `InProgress` but has **no** `execution_lease` — complete orphan recovery first (engine-absent/pre-activation archive: `mstar-engine-legacy` `references/lease-protocol.md`; ACTIVE checks use `mstar lease verify` / `mstar plan release` — “Orphan recovery”; engine-present: `mstar lease verify --workflow <id>` + iteration checklist).
-- **NEVER** run or dispatch **parallel** integration merges into `spec_integration_branch` — merge is **serial** via the snapshot top-level `integration_merge_lease` from the integration worktree (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
-- **NEVER** cross-plan writable implement without distinct per-plan verified `execution_lease` + feature worktree; `Plan parallelism: serial` forces serial **scheduling** only — it does **not** waive the worktree or lease gates (`mstar-iteration/references/phase-2-worktree-lease.md` §2.0 #5).
-- **NEVER** dispatch **cross-plan parallel** writable implement when same-host exclusive coordination is **not** available (ACTIVE: store.db `withExecutionTransaction`; pre-activation fallback: snapshot-path exclusive lock; cross-host is not covered by either) — default **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel; exception only on current-turn user `Cross-host lease race: accepted` (or equivalent) + audit `plans[].notes` — **including when `Worktree mode: waived`** (engine-absent/pre-activation archive: `mstar-engine-legacy` `references/lease-protocol.md`; ACTIVE checks use `mstar lease verify` / `mstar plan release` — full protocol; `mstar-iteration` `references/phase-2-worktree-lease.md` — execution checklist).
-- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). No flock → serial scheduling only, not worktree waiver.
+- **NEVER** steal an active workflow's actual write/merge exclusion by age, idle status or labels (no TTL, age, or inactivity authority). Explicit current-turn user-directed recovery still uses the selected authority's supported public recovery path and append-only `notes.jsonl` audit; user instruction and audit alone never bypass ACTIVE foreign-exclusion, transaction/token guards or the cross-plan safety gate below. Ordinary coordinator operations manage exclusion inside their transaction; no leaf claim, per-plan bind or transfer is required.
+- **NEVER** writable-dispatch without validating actual source metadata/checkouts and L1/L2 isolation (distinct feature worktree per writable track).
+- **NEVER** run or dispatch parallel integration merges into `spec_integration_branch`; the workflow's `integration_merge_lease` serializes the recorded integration checkout, and direct complete verifies the actual result (`mstar-iteration` §2.6 · `mstar-branch-worktree` L1).
+- **NEVER** bypass atomic coordination safety for cross-plan writes. ACTIVE requires shared control-store transaction and execution-token CAS arbitration; when that arbitration is unavailable, use **`Plan parallelism: serial`** or **Blocked** if Assignment still claims parallel. The current-turn `Cross-host lease race: accepted` exception + append-only `notes.jsonl` applies **only to pre-activation / engine-absent file routes** lacking a shared exclusive snapshot lock; it never bypasses ACTIVE arbitration. **`Worktree mode: waived`** changes neither gate, and serial policy does not waive checkout isolation.
+- **NEVER** set `Worktree mode: waived` because default-gitignored `plans/` are missing under a feature worktree — keep feature worktrees; put absolute control **`Plan Path`** / **`SDD dir`** / **`Control harness root`** on Assignments (`mstar-branch-worktree` 「Harness path SSOT under default gitignore」). Missing flock defaults to serial scheduling on the pre-activation file route, not worktree waiver; missing flock alone is not an ACTIVE arbitration failure.
 
 ---
 
@@ -164,7 +160,6 @@ Entry spellings differ per host — the active `mstar-host` reference owns them 
 | Host ships a **`/pm`** command or exposes this **`pm`** skill | This shim → **`project-manager.md`** § Required Reading + topic skills on demand |
 | Host iteration `commands/` (where shipped) | Command Boot + **`project-manager.md`** — iteration lifecycle only; **not** required for ordinary per-plan PM |
 | Host with no command entry | `project-manager` + `mstar-host` → the active host reference |
-| **`/iteration-drive --assignment` / `--workflow --plan` / `--resume`**（scoped primary） | **`mstar-iteration/references/plan-scoped-pm.md`** — bind → `show` → constrain to the returned scope; finish = handoff; coordinator sequence for accept/integration/complete |
 
 **Dispatch-first**, iteration branch policy（`iteration_base_branch` / `spec_integration_branch` / `target_branch`）, Autonomous Execute → **`mstar-iteration/references/phase-2-worktree-lease.md`**；Phase 2 的 **`Rescheduling checkpoint`**（何时重新评估可派发 work、五个冻结 reason、wait reason）→ 该文件 §2.4。Routing, gates, Task Board, QC, templates → this file + topic `mstar-*` skills.
 

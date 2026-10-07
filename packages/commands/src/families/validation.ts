@@ -117,8 +117,6 @@ function activeGraphLifecycleBranches(graph: ExecutionState): string[] {
     const integration = workflow.state.branch?.integration;
     if (typeof integration === "string" && integration.trim() !== "") branches.add(integration);
     for (const view of workflow.plans) {
-      const leaseBranch = view.executionLease?.working_branch;
-      if (typeof leaseBranch === "string" && leaseBranch.trim() !== "") branches.add(leaseBranch);
       const metadata = view.plan.metadata;
       if (!isPlainRecord(metadata)) continue;
       const trackBranches = metadata.track_branches;
@@ -263,7 +261,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
           const branch = registered.state.branch ?? {};
           const lifecycleBranches = activeGraphLifecycleBranches(graph);
-          const lease = planView.executionLease;
+          const metadata = isPlainRecord(planView.plan.metadata) ? planView.plan.metadata : {};
           const selectedIntegration = input.integration ?? input.control;
           const gate = l1PreDispatchCheck({
             workflowType: registered.state.type,
@@ -274,8 +272,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
             mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
             expectedMainBranch: input.mainBranch ?? String(branch.base ?? ""),
             lifecycleBranches: [...lifecycleBranches],
-            leaseWorktreePath: String(lease?.worktree_path ?? ""),
-            leaseWorkingBranch: String(lease?.working_branch ?? ""),
+            rowWorktreePath: typeof metadata.worktree_path === "string" ? metadata.worktree_path : "",
+            rowWorkingBranch: typeof metadata.working_branch === "string" ? metadata.working_branch : "",
             planId: selectedPlanId,
           });
           const gateResult = gateData(gate);
@@ -310,31 +308,49 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree");
         const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
         if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed");
-        const lease = rows[0].execution_lease ?? {};
+        const observedMainBranch = mainBranch.stdout.trim();
+        const rowMetadata = isPlainRecord(rows[0].metadata) ? rows[0].metadata : {};
         const lifecycleBranches = new Set<string>();
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
         if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail);
         for (const other of siblingScan.branches) lifecycleBranches.add(other);
-        // The selected lease branch is checked by the dedicated lease-vs-main
-        // identity guard; other current-snapshot ownership still blocks main.
-        const snapshotWithoutSelectedLease = {
+        // The selected row's source checkout/branch uses the dedicated identity
+        // guard; its retained tracks and other snapshot ownership still block main.
+        const snapshotWithoutSelectedSource = {
           ...snapshot,
           plans: snapshot.plans.map((row: Record<string, unknown>) =>
-            row.id === plan || row.plan_id === plan ? { ...row, execution_lease: undefined } : row,
+            row.id === plan || row.plan_id === plan ? { ...row, metadata: { track_branches: rowMetadata.track_branches } } : row,
           ),
         };
-        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedLease])) lifecycleBranches.add(branch);
+        for (const branch of collectActiveLifecycleBranches([snapshotWithoutSelectedSource])) lifecycleBranches.add(branch);
         const integrationPath = input.integration ?? input.control ?? snapshot.integration_worktree_path;
         const integrationBranch = snapshot.branch?.integration;
         const gate = l1PreDispatchCheck({
           workflowType: snapshot.type,
           integrationWorktreePath: integrationPath === undefined ? "" : path.resolve(integrationPath),
           integrationBranch: typeof integrationBranch === "string" ? integrationBranch : "",
-          mainWorktree: { root: primary, branch: mainBranch.stdout.trim() },
+          mainWorktree: { root: primary, branch: observedMainBranch },
           expectedMainBranch: input.mainBranch ?? String(snapshot.branch?.base ?? ""),
           lifecycleBranches: [...lifecycleBranches],
-          leaseWorktreePath: String(lease.worktree_path ?? ""), leaseWorkingBranch: String(lease.working_branch ?? ""), planId: plan,
+          rowWorktreePath: String(rowMetadata.worktree_path ?? ""), rowWorkingBranch: String(rowMetadata.working_branch ?? ""), planId: plan,
         });
+        if (
+          observedMainBranch === (input.mainBranch ?? String(snapshot.branch?.base ?? "")) &&
+          Array.isArray(rowMetadata.track_branches) && rowMetadata.track_branches.includes(observedMainBranch)
+        ) {
+          for (const violation of gate.violations) {
+            if (violation.code !== "worktree.main.residency-switched") continue;
+            const recovery =
+              `workflow "${workflow}" plan "${plan}" in control harness "${harness}" records the main branch "${observedMainBranch}" as a retained track. ` +
+              "Use its workflow coordinator's ordinary mstar plan show --session <coordinator-envelope> --plan <plan-id> --harness <control-root> " +
+              "to read the current revision and progress, then mstar plan progress --session <coordinator-envelope> " +
+              "--plan <plan-id> --harness <control-root> --expect <observed-revision> --progress <JSON> with the current status, summary, " +
+              "evidence_paths and corrected complete track_branches. Keep all live tracks; use [] only when no tracks remain. " +
+              "If the track is live, move it to a distinct feature branch and report that real branch; do not clear live ownership or switch main merely to satisfy this check.";
+            violation.fix = recovery;
+            violation.message += ` Recovery: ${recovery}`;
+          }
+        }
         const gateResult = gateData(gate);
         const resultData = warnings.length ? { ...gateResult, warnings } : gateResult;
         return gate.ok ? ok(id, resultData) : rejected(id, gate, "worktree.l1.invalid");

@@ -404,24 +404,6 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
     expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
   });
 
-  test("terminal snapshot with a leftover row execution_lease → PHASE6_DANGLING_LEASE", () => {
-    const result = evaluatePostMergeClose(
-      phase6Snapshot({
-        plans: [
-          {
-            id: "plan-a",
-            title: "Plan A",
-            file: "plans/plan-a.md",
-            status: "InProgress",
-            execution_lease: { holder: "dev-1", claimed_at: "2026-08-19T08:00:00Z", worktree_path: "/tmp/wt/plan-a" },
-          },
-        ],
-      }),
-      phase6Root([]),
-    );
-    expect(result.ok).toBe(false);
-    expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
-  });
 
   test("invalid snapshot document → PHASE6_INVALID_SNAPSHOT (local close state cannot be verified)", () => {
     for (const bad of [{ ...phase6Snapshot(), schema_version: 2 }, { ...phase6Snapshot(), id: "" }]) {
@@ -695,24 +677,6 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (mstar
     expect(reasoned.ok).toBe(true);
   });
 
-  test("terminal plan workflow with a dangling row lease → PHASE6_DANGLING_LEASE (type-generic probe, close never releases leases)", () => {
-    const result = evaluatePostMergeClose(
-      phase6PlanSnapshot({
-        plans: [
-          {
-            id: "plan-a",
-            title: "Plan A",
-            file: "plans/plan-a.md",
-            status: "Done",
-            execution_lease: { holder: "dev-1", claimed_at: "2026-08-19T08:00:00Z", worktree_path: "/tmp/wt/plan-a" },
-          },
-        ],
-      }),
-      phase6Root([]),
-    );
-    expect(result.ok).toBe(false);
-    expect(result.violations.some((v) => v.code === "PHASE6_DANGLING_LEASE")).toBe(true);
-  });
 
   test("failed plan workflow keeps its status and row state and passes (§5 — failure closes are never rewritten as completed)", () => {
     const result = evaluatePostMergeClose(
@@ -848,9 +812,8 @@ describe("pushCadenceProbe — §5.1a push gate (never push while CI or AI revie
 describe("catalog discovery — the completeness query that replaced the iteration index obligation", () => {
   /**
    * A workspace whose stores exist as files (iterations with compasses, plan
-   * files) and whose catalog is a real `store.db`. The store context is the
-   * workspace root, so `resolveHarnessDir` stops at the `.mstar` marker rung
-   * (the same fixture shape the catalog authority tests use).
+   * files) and whose catalog is a real `store.db` in the selected `.mstar`
+   * harness directory.
    */
   async function catalogRoot(name: string, files: string[]): Promise<{ root: string; harness: string; context: StoreContext }> {
     const root = tmpRoot(name);
@@ -860,7 +823,7 @@ describe("catalog discovery — the completeness query that replaced the iterati
       mkdirSync(dirname(join(harness, relative)), { recursive: true });
       writeFileSync(join(harness, relative), "---\n", "utf8");
     }
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
     return { root, harness, context };
@@ -912,7 +875,7 @@ describe("catalog discovery — the completeness query that replaced the iterati
     const root = tmpRoot("mstar-discovery-nostore-");
     try {
       mkdirSync(join(root, ".mstar", "plans"), { recursive: true });
-      const report = await readCatalogCompleteness({ harnessDir: root }, ["plans"]);
+      const report = await readCatalogCompleteness({ harnessDir: join(root, ".mstar") }, ["plans"]);
       expect(report.ok).toBe(false);
       expect(report.registered).toBe(0);
       expect(report.violations.map((violation) => violation.code)).toEqual(["store.not-initialized"]);

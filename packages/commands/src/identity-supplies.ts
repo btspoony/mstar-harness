@@ -12,10 +12,8 @@ export const IDENTITY_SUPPLIES =
  * (envelope `token`, flattened `workflows[].token`, `authority.workflows[]`
  * planTokens). Help lines interpolate these constants directly. The engine's
  * own wrong-kind refusal (`tokenKindReadPointer`, execution-store.ts) states
- * the same paths in parallel literals it cannot import from here — the two
- * sides are pinned together by contract tests (help-disclosure.test.ts and
- * the execution-store wrong-kind test); when a read path changes, co-edit
- * that refusal text in the same change set.
+ * the same paths in parallel literals it cannot import from here. When a
+ * read path changes, co-edit that refusal text in the same change set.
  */
 export const TOKEN_SUPPLIES = {
   root: "the store's root execution token: read `mstar status validate` output field data.token",
@@ -29,4 +27,4 @@ export const TOKEN_SUPPLIES = {
  * validates, matching the `plan bind --execution` receipt's session object.
  */
 export const SESSION_REF_SUPPLIES =
-  "the active session reference returned by the `plan bind --execution` receipt: wire format exec-session-v1:<base64url JSON carrying storeId, epoch, workflowId, role, sessionId, planId>";
+  "the active session reference returned by the `plan bind --execution` receipt: wire format exec-session-v1:<base64url JSON carrying storeId, epoch, workflowId, role, sessionId>";

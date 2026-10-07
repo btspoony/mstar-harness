@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-  bindPlanSession,
   bindExecutionSession,
+  bindPlanSession,
   createFsStore,
   decodeExecutionSessionRef,
   executionContextFor,
@@ -33,6 +33,28 @@ const progressPayloadSchema = z.record(z.string(), z.unknown());
 const entryPayloadSchema = z.record(z.string(), z.unknown());
 const entriesPayloadSchema = z.array(entryPayloadSchema);
 const evidencePayloadSchema = z.record(z.string(), z.unknown());
+/**
+ * The declared payload shape of `plan complete`: the ordinary completion
+ * evidence the engine records, mirrored here so both transports publish one
+ * contract. The engine re-validates the same fields (hashed `EvidenceRef`s,
+ * accepted QC decisions, QA `pass`) — this schema is transport shaping, never
+ * the authority.
+ */
+const completionEvidenceSchema = z.object({
+  source_sha: z.string().min(1).optional(),
+  review_base: z.string().min(1).optional(),
+  review_head: z.string().min(1).optional(),
+  qc: z.object({
+    decision: z.enum(["Approve", "Approve with residuals"]),
+    reports: z.array(z.string().min(1)),
+    consolidated: z.string().min(1),
+  }),
+  qa: z.object({
+    gate: z.enum(["mandatory", "pm-acceptance"]),
+    decision: z.literal("pass"),
+    report: z.string().min(1),
+  }),
+});
 const inputSchema = z.object({
   session: z.string().min(1).optional(),
   sessionRef: z.string().min(1).optional(),
@@ -42,34 +64,28 @@ const inputSchema = z.object({
   execution: z.boolean().optional(),
   workflow: z.string().min(1).optional(),
   plan: z.string().min(1).optional(),
-  assignment: z.string().min(1).optional(),
   file: z.string().min(1).optional(),
   harness: z.string().min(1).optional(),
   expect: z.union([z.string().min(1), z.number().int().nonnegative()]).optional(),
   operation: z.string().min(1).optional(),
-  handoff: z.string().min(1).optional(),
-  reason: z.string().min(1).optional(),
+  worktreePath: z.string().min(1).optional(),
+  workingBranch: z.string().min(1).optional(),
+  qaGate: z.enum(["mandatory", "pm-acceptance"]).optional(),
+  findingsCleanup: z.enum(["zero-residual", "allow-residual"]).optional(),
   progress: progressPayloadSchema.optional(),
   entries: entriesPayloadSchema.optional(),
   issue: z.string().min(1).optional(),
   disposition: z.enum(["resolved", "waived", "duplicate", "superseded"]).optional(),
   evidence: evidencePayloadSchema.optional(),
+  integrationBaseSha: z.string().min(1).optional(),
+  integrationResultSha: z.string().min(1).optional(),
   expectIssue: z.number().int().nonnegative().optional(),
 });
+const bindInputSchema = inputSchema.omit({ plan: true }).passthrough();
 type PlanInput = z.infer<typeof inputSchema>;
 
 const optionKeys = Object.keys(inputSchema.shape);
-const transitions = [
-  ["accept", "Accept a submitted handoff and transfer execution ownership to the coordinator"],
-  ["return", "Return a submitted or accepted handoff to the plan owner"],
-  ["integration-start", "Record and pin an integration attempt before the operator performs Git merge"],
-  ["integration-accept", "Verify the pinned Git result of a started integration attempt"],
-  ["complete", "Record Done after verified delivery proof"],
-  ["repair-delivery-source", "Replace a wrong registered delivery source from the accepted handoff pin"],
-  ["reconcile", "Recover an interrupted integration attempt from the observed checkout"],
-] as const;
-
-export const PLAN_COORDINATOR_TRANSITIONS = transitions;
+const bindOptionKeys = optionKeys.filter((key) => key !== "plan");
 class PlanInputError extends Error {}
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
@@ -114,10 +130,40 @@ function payloadFromFile(file: string | undefined, field: string): unknown {
     throw new PlanInputError(error instanceof SyntaxError ? `${field} is not valid JSON` : `${field} payload file not found`);
   }
 }
+/**
+ * The ordinary revisable execution configuration of `plan prepare`. Each member
+ * is optional and falls back to the row's recorded metadata; the engine applies
+ * its own defaults (`mandatory`, `allow-residual`) and validates the actual
+ * supplied checkout/branch rather than comparing against a prior sealed value.
+ */
+function prepareConfig(input: PlanInput): PlanCoordinationOperation {
+  const config: { worktreePath?: string; workingBranch?: string; qaGate?: "mandatory" | "pm-acceptance"; findingsCleanup?: "zero-residual" | "allow-residual" } = {};
+  if (input.worktreePath !== undefined) config.worktreePath = input.worktreePath;
+  if (input.workingBranch !== undefined) config.workingBranch = input.workingBranch;
+  if (input.qaGate !== undefined) config.qaGate = input.qaGate;
+  if (input.findingsCleanup !== undefined) config.findingsCleanup = input.findingsCleanup;
+  return Object.keys(config).length === 0 ? { kind: "prepare" } : { kind: "prepare", config };
+}
+/**
+ * The direct completion the coordinator records after QC/QA and the real Git
+ * integration: the evidence payload (JSON file or inline), plus the optional
+ * already-performed serial merge pair an iteration row names. Both are the
+ * engine's own `CompletionEvidence` / `IntegrationResultInput`; a partial pair
+ * is a caller-input refusal rather than a silently half-stated merge.
+ */
+function completeOperation(input: PlanInput): PlanCoordinationOperation {
+  const evidence = jsonObject(input.evidence ?? payloadFromFile(input.file, "file"), "evidence");
+  if ((input.integrationBaseSha === undefined) !== (input.integrationResultSha === undefined)) {
+    throw new PlanInputError("integrationBaseSha and integrationResultSha must be supplied together");
+  }
+  return input.integrationBaseSha === undefined
+    ? { kind: "complete", evidence: evidence as never }
+    : { kind: "complete", evidence: evidence as never, integration: { base_sha: input.integrationBaseSha, result_sha: input.integrationResultSha! } };
+}
 function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation {
   switch (id) {
     case "plan.prepare":
-      return { kind: "prepare", assignmentPath: absolutePath(input.assignment, "assignment") };
+      return prepareConfig(input);
     case "plan.progress":
       return { kind: "progress", progress: jsonObject(input.progress ?? payloadFromFile(input.file, "file"), "progress") as never };
     case "plan.issue-add": {
@@ -136,23 +182,8 @@ function fileOperation(id: string, input: PlanInput): PlanCoordinationOperation 
         expectedIssueRevision: input.expectIssue,
         evidence: jsonObject(input.evidence ?? payloadFromFile(input.file, "file"), "file") as never,
       };
-    case "plan.handoff":
-      return { kind: "handoff", evidence: jsonObject(input.evidence ?? payloadFromFile(input.file, "file"), "file") as never };
-    case "plan.release":
-      return { kind: "release", ...(input.reason === undefined ? {} : { reason: input.reason }) };
-    case "plan.accept":
-    case "plan.return":
-    case "plan.integration-start":
-    case "plan.integration-accept":
     case "plan.complete":
-    case "plan.repair-delivery-source":
-    case "plan.reconcile":
-      if (input.handoff === undefined) throw new PlanInputError("handoff is required");
-      if (id === "plan.return") {
-        if (input.reason === undefined) throw new PlanInputError("reason is required for return");
-        return { kind: "return", handoffId: input.handoff, reason: input.reason };
-      }
-      return { kind: id.slice("plan.".length) as PlanCoordinationOperation["kind"], handoffId: input.handoff } as PlanCoordinationOperation;
+      return completeOperation(input);
     default:
       throw new PlanInputError(`unsupported plan operation ${id}`);
   }
@@ -163,14 +194,13 @@ function pinSessionStore(sessionPath: string): void {
 
 async function execute(id: string, input: PlanInput, context: InvocationContext): Promise<CommandEnvelope<unknown>> {
   try {
-    if (id === "plan.residual-add" || id === "plan.residual-close") {
-      const replacement = id.endsWith("residual-add") ? "issue-add" : "issue-close";
-      return refusalEnvelope({ command: id, status: "refused", code: "plan.verb-retired", exitCode: 1, message: `\`mstar plan ${replacement}\` is the replacement for \`${id.replace("plan.", "mstar plan ")}\`` });
-    }
     if (input.session !== undefined && input.sessionRef !== undefined) {
       return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "pre-activation and active transports are disjoint" });
     }
     if (id === "plan.bind") {
+      if (input.plan !== undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
+      }
       const cwd = context.cwd;
       if (input.resumeRef !== undefined) {
         if (context.sessionId === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active resume requires runtime session identity (${IDENTITY_SUPPLIES}).` });
@@ -182,24 +212,23 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           source: context.host === undefined ? "local" : "host",
           sessionId: context.sessionId,
           workflowId: ref.workflowId,
-          role: ref.role,
-          planId: ref.planId,
+          role: "coordinator",
         };
         return ok(id, await resumeExecutionSession(executionContextFor({ harnessDir: root }, identity), ref));
       }
       if (input.execution === true) {
+        // The ACTIVE bind carries the workflow's coordinator seat only: every
+        // per-plan bind arm existed for the removed scoped-PM seat.
         if (context.sessionId === undefined || input.workflow === undefined) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active bind requires runtime session identity and workflow (identity ${IDENTITY_SUPPLIES}).` });
         }
+        if (input.coordinator !== true) {
+          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires --coordinator; the coordinator seat is the only active bind" });
+        }
         if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires a full execution token" });
-        const coordinator = input.coordinator === true;
-        if (coordinator && input.plan !== undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "coordinator bind accepts no plan" });
-        if (!coordinator && input.plan === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active bind requires coordinator or plan" });
-        const role = coordinator ? "coordinator" : "plan-pm";
-        const planId = coordinator ? null : input.plan!;
         const acquired = context.executionIdentity;
         if (acquired !== undefined && (
-          acquired.workflowId !== input.workflow || acquired.role !== role || acquired.planId !== planId
+          acquired.workflowId !== input.workflow || acquired.role !== "coordinator"
         )) {
           return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind selectors do not match the acquired caller identity" });
         }
@@ -210,19 +239,13 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           source: context.host === undefined ? "local" : "host",
           sessionId: context.sessionId,
           workflowId: input.workflow,
-          role,
-          planId,
+          role: "coordinator",
         };
         const beforeBind = input.expect === undefined
-          ? await readExecutionAuthority({ harnessDir: root }, {
-            workflowId: input.workflow,
-            ...(role === "plan-pm" ? { planId: input.plan! } : {}),
-          })
+          ? await readExecutionAuthority({ harnessDir: root }, { workflowId: input.workflow })
           : undefined;
         const receipt = await bindExecutionSession(executionContextFor({ harnessDir: root }, identity), {
           workflowId: input.workflow,
-          planId,
-          role,
           expected: (input.expect ?? beforeBind!.token) as ExecutionToken,
           operationId: input.operation ?? randomUUID(),
         });
@@ -253,86 +276,74 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
           sessionId: context.sessionId,
           ...(input.harness !== undefined ? { harnessDir: absolutePath(input.harness, "harness") } : {}),
         };
-      } else if (input.assignment !== undefined) {
-        if (context.sessionId === undefined || context.sessionId.trim() === "") {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).` });
-        }
-        const root = resolveProcessHarnessDir(cwd, input.harness);
-        if (root !== null) setArtifactStore(createFsStore(root));
-        bindInput = {
-          scope: { assignmentPath: absolutePath(input.assignment, "assignment") },
-          cwd,
-          sessionId: context.sessionId,
-        };
-      } else if (input.workflow !== undefined && input.plan !== undefined) {
-        if (context.sessionId === undefined || context.sessionId.trim() === "") {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `plan-session bind requires runtime session identity (${IDENTITY_SUPPLIES}).` });
-        }
-        const root = resolveProcessHarnessDir(cwd, input.harness);
-        if (root !== null) setArtifactStore(createFsStore(root));
-        bindInput = {
-          scope: { workflowId: input.workflow, planId: input.plan, ...(input.harness !== undefined ? { harnessDir: absolutePath(input.harness, "harness") } : {}) },
-          cwd,
-          sessionId: context.sessionId,
-        };
       } else {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind requires a session, coordinator workflow, assignment, or workflow and plan" });
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "bind requires a resume path or the coordinator workflow" });
       }
-      const legacyWorkflowBind =
-        ("scope" in bindInput && bindInput.scope !== null && typeof bindInput.scope === "object" && "workflowId" in bindInput.scope)
-        || ("coordinator" in bindInput && bindInput.coordinator === true && "workflowId" in bindInput);
+      const legacyWorkflowBind = "coordinator" in bindInput && bindInput.coordinator === true && "workflowId" in bindInput;
       const root = resolveProcessHarnessDir(cwd, input.harness);
       if (legacyWorkflowBind && root !== null && await resolveExecutionReadRoute({ harnessDir: root }) === "execution") {
         throw new StoreError(
           "execution.consumer-not-ready",
           "This workflow is registered in the active DB execution authority; the legacy snapshot-file bind route is unavailable. " +
-            "Re-run with `--execution` (`mstar plan bind --execution --workflow <id> --coordinator` or `--plan <planId>`) and the runtime session identity.",
+            "Re-run with `--execution` (`mstar plan bind --execution --workflow <id> --coordinator`) and the runtime session identity.",
         );
       }
       return ok(id, await bindPlanSession(bindInput));
     }
     if (id === "plan.show") {
+      // The coordinator reads any row of its own workflow: the addressed plan is
+      // an explicit fact (`--plan`), never inferred from "the only" row, and the
+      // caller's own coordinator binding is derived from its trusted identity
+      // when no session reference is supplied.
+      if (input.plan === undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan show requires --plan; the coordinator states which row it reads" });
+      }
       if (input.session !== undefined) {
         const sessionPath = absolutePath(input.session, "session");
         pinSessionStore(sessionPath);
-        return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd));
+        return ok(id, await readPlanCoordination(sessionPath, input.plan, context.cwd, input.harness));
       }
-      if (input.sessionRef === undefined || input.plan === undefined || context.sessionId === undefined) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `show requires a session file or sessionRef, plan selector, and runtime session identity (identity ${IDENTITY_SUPPLIES}).` });
+      if (context.sessionId === undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active plan show requires runtime session identity (${IDENTITY_SUPPLIES}).` });
       }
-      const ref = decodeExecutionSessionRef(input.sessionRef);
       const root = resolveProcessHarnessDir(context.cwd, input.harness);
       if (root === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
       setArtifactStore(createFsStore(root));
+      const ref = input.sessionRef === undefined ? undefined : decodeExecutionSessionRef(input.sessionRef);
+      const workflowId = ref?.workflowId ?? input.workflow ?? context.executionIdentity?.workflowId;
+      if (workflowId === undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan show needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+      }
+      if (input.workflow !== undefined && ref !== undefined && input.workflow !== ref.workflowId) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the supplied session reference" });
+      }
       const identity: ExecutionIdentity = {
         source: context.host === undefined ? "local" : "host",
         sessionId: context.sessionId,
-        workflowId: ref.workflowId,
-        role: ref.role,
-        planId: ref.planId,
+        workflowId,
+        role: "coordinator",
       };
-      const result = await readExecutionPlan(executionContextFor({ harnessDir: root }, identity), ref, input.plan);
+      const contextForCaller = executionContextFor({ harnessDir: root }, identity);
+      const result = ref === undefined
+        ? await readExecutionPlan(contextForCaller, input.plan)
+        : await readExecutionPlan(contextForCaller, ref, input.plan);
       return ok(id, result);
     }
-    const sparseSelectors = context.executionIdentity !== undefined ||
-      (input.workflow !== undefined && (input.coordinator === true || input.plan !== undefined));
-    // `release` is ACTIVE-only and takes no pre-activation file form, so a
-    // selector-less invocation still routes here: the engine's own authority
-    // check then reports the truthful ACTIVE/upgrade fact instead of a dead end.
-    if (input.sessionRef !== undefined || (input.session === undefined && (sparseSelectors || id === "plan.release"))) {
+    // A coordinator intent reaches the ACTIVE operation by ANY of the three
+    // supported transports: an explicit `--workflow` (with `--plan`, the same
+    // default `show` applies), a minted launch identity, or a session
+    // reference. No extra `--coordinator` ceremony is required — the
+    // coordinator is the only remaining seat.
+    const activeRoute = input.sessionRef !== undefined ||
+      context.executionIdentity !== undefined ||
+      (input.session === undefined && input.workflow !== undefined);
+    if (activeRoute) {
       if (context.sessionId === undefined) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active operation requires an acquired runtime session identity (${IDENTITY_SUPPLIES}).` });
       }
       if (input.expect !== undefined && typeof input.expect !== "string") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active operation requires a full execution token" });
-      // Release is ACTIVE-only: a pre-activation control root has no DB claim to
-      // release, so it reports the supported operator-authorized store upgrade
-      // path rather than a generic unknown-operation. The engine re-reports the
-      // same fact for a request that reaches it.
-      if (id === "plan.release") {
-        const releaseRoot = resolveProcessHarnessDir(context.cwd, input.harness);
-        if (releaseRoot !== null && (await resolveExecutionReadRoute({ harnessDir: releaseRoot })) !== "execution") {
-          return refusalEnvelope({ command: id, status: "refused", code: "execution.not-active", exitCode: 1, message: "plan release requires an ACTIVE execution authority; this control root is pre-activation. An authorized operator may run `mstar store upgrade --operator <name>` to import legacy state and activate the authority, then bind and release. This call does not authorize that route." });
-        }
+      if (input.plan === undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: `active plan operation requires --plan; the coordinator states which row it addresses` });
       }
       // A numeric revision is the file route's CAS transport; the active route
       // takes only a full execution token, so the transports never mix.
@@ -344,70 +355,38 @@ async function execute(id: string, input: PlanInput, context: InvocationContext)
       setArtifactStore(createFsStore(root));
       const acquired = context.executionIdentity;
       const workflowId = ref?.workflowId ?? acquired?.workflowId ?? input.workflow;
-      const role = ref?.role ?? acquired?.role ?? (input.coordinator === true ? "coordinator" : input.plan !== undefined ? "plan-pm" : undefined);
-      // The plan the caller's own binding names (the seat), distinct from the
-      // plan this operation addresses (which a coordinator states explicitly).
-      const ownPlan = ref !== undefined ? ref.planId : acquired?.planId ?? input.plan ?? null;
+      if (workflowId === undefined) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "active plan operation needs the addressed workflow: bind the coordinator, pass --workflow, or launch the child with its minted identity" });
+      }
       if (input.workflow !== undefined && input.workflow !== workflowId) {
         return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow selector does not match the caller's workflow" });
       }
-      // A stated `--coordinator` seat is a role constraint, never a hint the
-      // family may reinterpret: when the acquired/declared caller is this
-      // plan's own plan session, the mismatch refuses before any address,
-      // token or ownership fact is read.
-      if (input.coordinator === true && role !== "coordinator") {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--coordinator does not match the caller's acquired plan session seat; a plan-session claim is released by the seat that holds it" });
-      }
-      if (workflowId === undefined || role === undefined) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "sparse active plan operation needs a minted own-scope identity or workflow plus coordinator/plan selector; bind the caller first" });
-      }
-      // A plan-pm call addresses its own bound plan; a coordinator call must
-      // state the plan it addresses. Neither is guessed from "the only" row.
-      let addressedPlan: string | undefined;
-      if (role === "coordinator") {
-        addressedPlan = input.plan;
-      } else {
-        if (ownPlan === null) {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "a plan-pm sparse operation needs its own plan binding or an explicit plan selector" });
-        }
-        if (input.plan !== undefined && input.plan !== ownPlan) {
-          return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "plan selector does not match the caller's plan" });
-        }
-        addressedPlan = ownPlan;
-      }
-      if (acquired !== undefined && (
-        workflowId !== acquired.workflowId ||
-        role !== acquired.role ||
-        (role === "plan-pm" && ownPlan !== acquired.planId)
-      )) {
-        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "selected workflow, role or plan does not match the acquired caller identity" });
+      if (acquired !== undefined && (workflowId !== acquired.workflowId || acquired.role !== "coordinator")) {
+        return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "selected workflow does not match the acquired coordinator identity" });
       }
       const identity: ExecutionIdentity = {
         source: acquired?.source ?? (context.host === undefined ? "local" : "host"),
         sessionId: context.sessionId,
         workflowId,
-        role,
-        planId: role === "coordinator" ? null : ownPlan,
+        role: "coordinator",
       };
       const receipt = await mutateExecutionPlan(executionContextFor({ harnessDir: root }, identity), {
         operationId,
         ...(ref === undefined ? {} : { session: ref }),
         ...(input.expect === undefined ? {} : { expected: input.expect as ExecutionToken }),
-        ...(addressedPlan === undefined ? {} : { planId: addressedPlan }),
+        planId: input.plan,
         operation: operation as never,
       });
       return ok(id, receipt);
     }
-    if (id === "plan.release") {
-      return refusalEnvelope({ command: id, status: "refused", code: "execution.not-active", exitCode: 1, message: "plan release is available only under ACTIVE execution authority; run the operator-authorized `mstar store upgrade --operator <name>` before binding and releasing" });
-    }
     const operation = fileOperation(id, input);
     if (input.session === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires session or active sessionRef" });
+    if (input.plan === undefined) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "operation requires --plan; every plan operation addresses its row explicitly" });
     const sessionPath = absolutePath(input.session, "session");
     pinSessionStore(sessionPath);
     const result = await mutatePlanCoordination({
       sessionPath,
-      ...(input.plan !== undefined ? { planId: input.plan } : {}),
+      planId: input.plan,
       expectedRevision: expectedRevision(input.expect),
       operation,
     });
@@ -423,40 +402,38 @@ const writeCommands: Record<string, true> = {
   progress: true,
   "issue-add": true,
   "issue-close": true,
-  handoff: true,
-  accept: true,
-  return: true,
-  "integration-start": true,
-  "integration-accept": true,
   complete: true,
-  "repair-delivery-source": true,
-  release: true,
-  reconcile: true,
-  "residual-add": true,
-  "residual-close": true,
 };
-const commandNames = ["bind", "show", "prepare", "progress", "issue-add", "issue-close", "handoff", "release", ...transitions.map(([verb]) => verb), "residual-add", "residual-close"] as const;
-const payloadFieldsByVerb: Partial<Record<(typeof commandNames)[number], readonly (keyof typeof inputSchema.shape)[]>> = {
+const commandNames = ["bind", "show", "prepare", "progress", "issue-add", "issue-close", "complete"] as const;
+type PlanVerb = (typeof commandNames)[number];
+/**
+ * The declared payload per verb. The descriptors are what both transports
+ * validate against — CLI inline values and MCP tool inputs — so the published
+ * contract and the enforced one stay one schema.
+ */
+const payloadByVerb: Partial<Record<PlanVerb, readonly (keyof typeof inputSchema.shape)[]>> = {
   progress: ["progress"],
   "issue-add": ["entries"],
   "issue-close": ["evidence"],
-  handoff: ["evidence"],
+  complete: ["evidence"],
 };
+const payloadSchemaFor = (verb: PlanVerb, field: keyof typeof inputSchema.shape) =>
+  verb === "complete" ? completionEvidenceSchema : inputSchema.shape[field];
 /**
  * Per-verb supply disclosure for the shared `--expect` / `--session-ref`
  * options, stated only where the ACTIVE route consumes them: bind expects the
- * bound seat's token (workflow for `--coordinator`, plan for `--plan`), every
- * other plan mutation the addressed plan's token, and `show` only carries the
- * session reference. Retired verbs disclose nothing (they refuse up front).
+ * bound workflow's token, every other plan mutation the addressed plan's token,
+ * and `show` only carries the optional session reference. The optional
+ * reference names the coordinator's own active session; supplying it is a
+ * transport convenience, never a prerequisite — the engine derives the live
+ * coordinator binding from the trusted caller.
  */
 const PLAN_EXPECT_HELP = `CAS expectation: ${TOKEN_SUPPLIES.plan}`;
-const PLAN_BIND_EXPECT_HELP =
-  `CAS expectation for the bound seat: coordinator bind takes ${TOKEN_SUPPLIES.workflow}; --plan bind takes ${TOKEN_SUPPLIES.plan}; read at bind time when omitted`;
+const PLAN_BIND_EXPECT_HELP = `CAS expectation for the bound workflow: coordinator bind takes ${TOKEN_SUPPLIES.workflow}; read at bind time when omitted`;
 function optionHelpFor(verb: (typeof commandNames)[number]): Partial<Record<string, string>> {
-  if (verb === "residual-add" || verb === "residual-close") return {};
-  if (verb === "bind") return { expect: PLAN_BIND_EXPECT_HELP, sessionRef: `session transport: ${SESSION_REF_SUPPLIES}` };
-  if (verb === "show") return { sessionRef: `session transport: ${SESSION_REF_SUPPLIES}` };
-  return { expect: PLAN_EXPECT_HELP, sessionRef: `session transport: ${SESSION_REF_SUPPLIES}` };
+  if (verb === "bind") return { expect: PLAN_BIND_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
+  if (verb === "show") return { sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
+  return { expect: PLAN_EXPECT_HELP, sessionRef: `optional session transport: ${SESSION_REF_SUPPLIES}` };
 }
 export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
   return commandNames.map((verb) => {
@@ -469,7 +446,7 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
         aliases: [],
         arguments: [],
         options: [
-          ...optionKeys.map((key) => ({
+          ...(verb === "bind" ? bindOptionKeys : optionKeys).map((key) => ({
             key,
             flags: `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)} <value>`,
             required: false,
@@ -478,14 +455,20 @@ export function getPlanCommandDefinitions(): readonly CommandDefinition[] {
           { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" as const },
         ],
       },
-      input: inputSchema,
+      input: verb === "bind" ? bindInputSchema : inputSchema,
       payloads: Object.fromEntries(
-        (payloadFieldsByVerb[verb] ?? []).map((field) => [field, { schema: inputSchema.shape[field] }]),
+        (payloadByVerb[verb] ?? []).map((field) => [field, { schema: payloadSchemaFor(verb, field) }]),
       ),
       output: commandEnvelopeSchema,
       effects: writeCommands[verb] === true ? ["write"] : ["read"],
-      description: verb === "release" ? "Release the caller's own held execution claim; explicitly bind to reacquire." : transitions.find(([name]) => name === verb)?.[1] ?? `Scoped plan ${verb} operation; engine enforces ownership, state and concurrency guards.`,
+      description: verb === "complete"
+        ? "Record Done after verified delivery proof"
+        : verb === "prepare"
+          ? "Prepare ordinary revisable plan execution configuration: source worktree/branch, QA gate and findings cleanup for one plan row."
+          : `Coordinator plan ${verb} operation; the engine enforces workflow/plan addressing, state and concurrency guards.`,
       execute: (input, context) => execute(id, input, context),
     });
   });
 }
+/** The payload shape the `plan complete` MCP tool publishes (one contract, both transports). */
+export const PLAN_COMPLETION_EVIDENCE_SCHEMA = completionEvidenceSchema;

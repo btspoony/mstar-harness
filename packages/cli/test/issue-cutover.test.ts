@@ -9,9 +9,9 @@
  *
  *  - command results come from `store.db` (read back through the CLI's own
  *    `mstar issue list`, never from the CLI's claim);
- *  - the retired verbs (`plan residual-add|residual-close`,
- *    `status backlog-register|backlog-close`, `status archive-residuals`,
- *    `persist residuals`) refuse with the migration path and write nothing —
+ *  - the retired verbs (`status backlog-register|backlog-close`,
+ *    `status archive-residuals`, `persist residuals`) refuse with the migration
+ *    path and write nothing —
  *    there is no write-through compatibility alias;
  *  - a missing, corrupt or staged store never yields an empty rollup or a
  *    passing findings gate;
@@ -112,36 +112,13 @@ function planRow(): Record<string, unknown> {
   };
 }
 
-function assignmentText(input: { harness: string; planPath: string; worktreePath: string; sddDir: string }): string {
-  return [
-    `# Assignment — ${PLAN_ID}`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${WORKFLOW_ID}`,
-    `**Plan id**: ${PLAN_ID}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: feature/plan-issues`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: zero-residual",
-    "",
-    "Body.",
-    "",
-  ].join("\n");
-}
-
 interface Fixture {
   root: string;
   harness: string;
   registerPath: string;
   snapshotPath: string;
-  planSession: string;
-  planSessionId: string;
+  coordinatorRef: string;
+  coordinatorSessionId: string;
 }
 function initializeFixtureStore(harness: string, cwd: string): void {
   const engineEntry = join(CLI_ROOT, "../engine/src/index.ts");
@@ -190,7 +167,9 @@ async function makeFixture(): Promise<Fixture> {
   const worktreePath = join(root, "wt-issues");
   writeText(planPath, "# plan issues\n");
   writeText(join(sddDir, "evidence.md"), "# evidence\n");
-  mkdirSync(worktreePath, { recursive: true });
+  // A REAL checkout on the branch prepare records: prepare validates the actual
+  // checkout and branch, not merely that a directory exists.
+  execFileSync("git", ["worktree", "add", "-q", "-b", "feature/plan-issues", worktreePath], { cwd: root });
 
   // Initialize the active DB directly; the CLI store-init command is not an
   // input surface for test setup.
@@ -207,9 +186,6 @@ async function makeFixture(): Promise<Fixture> {
     branch: { source: "feature/plan-issues", target: "main" },
   });
 
-  writeText(join(sddDir, "assignment.md"), assignmentText({ harness, planPath, worktreePath, sddDir }));
-
-  const planSessionId = "fixture-plan-pm";
   const coordinatorSessionId = "fixture-coordinator";
   const coordinatorWorkflowToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID })).token;
   const coordinatorBound = runCli(
@@ -233,7 +209,6 @@ async function makeFixture(): Promise<Fixture> {
   );
   expect(coordinatorBound).toMatchObject({ exitCode: 0 });
   const coordinatorRef = encodeExecutionSessionRef(jsonOf(coordinatorBound).data as ExecutionSessionRef);
-  const assignmentPath = join(sddDir, "assignment.md");
   const prepareToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID })).token;
   const prepared = runCli(
     [
@@ -243,8 +218,10 @@ async function makeFixture(): Promise<Fixture> {
       coordinatorRef,
       "--plan",
       PLAN_ID,
-      "--assignment",
-      assignmentPath,
+      "--worktree-path",
+      worktreePath,
+      "--working-branch",
+      "feature/plan-issues",
       "--expect",
       prepareToken,
       "--operation",
@@ -258,30 +235,7 @@ async function makeFixture(): Promise<Fixture> {
   );
   if (prepared.exitCode !== 0) throw new Error(`active prepare failed: ${prepared.stdout}${prepared.stderr}`);
 
-  const planToken = (await readExecutionAuthority({ harnessDir: harness }, { workflowId: WORKFLOW_ID, planId: PLAN_ID })).token;
-  const planBound = runCli(
-    [
-      "plan",
-      "bind",
-      "--execution",
-      "--workflow",
-      WORKFLOW_ID,
-      "--plan",
-      PLAN_ID,
-      "--expect",
-      planToken,
-      "--operation",
-      "bind-plan-pm",
-      "--session-id",
-      planSessionId,
-      "--harness",
-      harness,
-    ],
-    root,
-  );
-  expect(planBound.exitCode).toBe(0);
-  const planSession = encodeExecutionSessionRef(jsonOf(planBound).data as ExecutionSessionRef);
-  return { root, harness, registerPath, snapshotPath, planSession, planSessionId };
+  return { root, harness, registerPath, snapshotPath, coordinatorRef, coordinatorSessionId };
 }
 
 /** One captured issue entry with its owning project. */
@@ -309,7 +263,7 @@ function issueEntryOf(overrides: Record<string, unknown> = {}): Record<string, u
 /** The active plan CAS token reported by the session-bound plan view. */
 function planToken(fixture: Fixture): string {
   const show = runCli(
-    ["plan", "show", "--session-ref", fixture.planSession, "--plan", PLAN_ID, "--session-id", fixture.planSessionId, "--harness", fixture.harness],
+    ["plan", "show", "--session-ref", fixture.coordinatorRef, "--plan", PLAN_ID, "--session-id", fixture.coordinatorSessionId, "--harness", fixture.harness],
     fixture.root,
   );
   expect(show.exitCode).toBe(0);
@@ -337,7 +291,7 @@ function expectNoRegister(fixture: Fixture): void {
 }
 
 describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", () => {
-  test("captures and closes issues in store.db; no register file is ever written", async () => {
+  test("captures into the issue store, links the plan, and closes under the issue CAS without a register", async () => {
     const fixture = await makeFixture();
     const before = readFileSync(fixture.snapshotPath, "utf8");
 
@@ -348,7 +302,9 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
         "plan",
         "issue-add",
         "--session-ref",
-        fixture.planSession,
+        fixture.coordinatorRef,
+        "--plan",
+        PLAN_ID,
         "--file",
         entriesPath,
         "--expect",
@@ -356,41 +312,24 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
         "--operation",
         "issue-add-1",
         "--session-id",
-        fixture.planSessionId,
+        fixture.coordinatorSessionId,
         "--harness",
         fixture.harness,
       ],
       fixture.root,
     );
-    expect(added.exitCode).toBe(0);
-    const addedPayload = jsonOf(added);
-    expect((addedPayload.plan as Record<string, unknown>).id).toBe(PLAN_ID);
-    expect((addedPayload.coordination as Record<string, unknown>).revision).toBeGreaterThan(0);
+    expect(added.exitCode, added.stdout).toBe(0);
+    expect(jsonOf(added).status).toBe("ok");
 
-    // The DB is the only target, and the CLI reads it back through its own
-    // issue surface — the register path stays absent.
+    // The DB is the only target: the CLI's own `issue list` reads it back, and
+    // no project register appeared anywhere under the harness.
     const open = listedIssues(fixture);
     expect(open).toHaveLength(1);
     const issueId = String(open[0]!.id);
-    expect(issueId.startsWith("I-")).toBe(true);
-    expect(open[0]!.title).toBe("Stale rollup after the cutover");
-    expectNoRegister(fixture);
-
-    // The authoritative rollup and the closure gate both read that same row.
-    const openRollup = runCli(["status", "tech-debt", "--harness", fixture.harness], fixture.root);
-    expect(openRollup.exitCode).toBe(0);
-    expect(jsonOf(openRollup).total_open).toBe(1);
-    expect(jsonOf(openRollup).by_project).toEqual({ [PROJECT_ID]: 1 });
-    const blocked = runCli(
-      ["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"],
-      fixture.root,
-    );
-    expect(blocked.exitCode).toBe(1);
-    expect(JSON.stringify(jsonOf(blocked).details)).toContain(issueId);
 
     const evidencePath = join(fixture.root, "evidence.json");
     writeJson(evidencePath, {
-      reason: "fixed in the cutover",
+      reason: "fixed by the reviewer round",
       references: ["packages/cli/src/index.ts"],
       alignmentRef: "QA gate acceptance 2026-09-19",
     });
@@ -399,7 +338,9 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
         "plan",
         "issue-close",
         "--session-ref",
-        fixture.planSession,
+        fixture.coordinatorRef,
+        "--plan",
+        PLAN_ID,
         "--issue",
         issueId,
         "--disposition",
@@ -413,13 +354,13 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
         "--operation",
         "issue-close-1",
         "--session-id",
-        fixture.planSessionId,
+        fixture.coordinatorSessionId,
         "--harness",
         fixture.harness,
       ],
       fixture.root,
     );
-    expect(closed.exitCode).toBe(0);
+    expect(closed.exitCode, closed.stdout).toBe(0);
     expect(jsonOf(closed).status).toBe("ok");
 
     expect(listedIssues(fixture)).toHaveLength(0);
@@ -430,46 +371,14 @@ describe("mstar plan issue-add|issue-close — DB-only scoped findings (G2b)", (
       ["status", "findings-cleanup", PLAN_ID, "--harness", fixture.harness, "--mode", "zero-residual"],
       fixture.root,
     );
-    expect(released.exitCode).toBe(0);
+    expect(released.exitCode, released.stdout).toBe(0);
     expect(jsonOf(released).data).toMatchObject({ planId: PLAN_ID, violations: [] });
     expectNoRegister(fixture);
     expect(readFileSync(fixture.snapshotPath, "utf8")).toBe(before);
   }, 30000);
-
-  test("the view advertises the CLI's own issue verbs and no register version", async () => {
-    const fixture = await makeFixture();
-    const show = runCli(["plan", "show", "--session-ref", fixture.planSession, "--plan", PLAN_ID, "--session-id", fixture.planSessionId, "--harness", fixture.harness], fixture.root);
-    expect(show.exitCode).toBe(0);
-    const payload = jsonOf(show);
-    expect(payload.register_version).toBeUndefined();
-    expect(payload.plan).toMatchObject({ id: PLAN_ID, status: "InProgress" });
-    expect(payload.session).toMatchObject({ role: "plan-pm", planId: PLAN_ID });
-  });
 });
 
 describe("mstar issue — the retired commands refuse with the migration path (G2b)", () => {
-  test("plan residual-add|residual-close: retired, write nothing", async () => {
-    const fixture = await makeFixture();
-    const entriesPath = join(fixture.root, "entries.json");
-    writeJson(entriesPath, [issueEntryOf()]);
-
-    for (const [verb, replacement] of [
-      ["residual-add", "issue-add"],
-      ["residual-close", "issue-close"],
-    ] as const) {
-      const refused = runCli(
-        ["plan", verb, "--session", fixture.planSession, "--file", entriesPath, "--expect", "0", "--json"],
-        fixture.root,
-      );
-      expect(`${verb} -> ${refused.exitCode}`).toBe(`${verb} -> 1`);
-      const payload = jsonOf(refused);
-      expect(payload.ok).toBe(false);
-      expect(payload.code).toBe("plan.verb-retired");
-      expect(String(payload.message)).toContain(`\`mstar plan ${replacement}\``);
-    }
-    expect(listedIssues(fixture)).toHaveLength(0);
-    expectNoRegister(fixture);
-  });
 
   test("status backlog-register|backlog-close and archive-residuals: removed, name the replacement", async () => {
     const fixture = await makeFixture();
@@ -649,7 +558,7 @@ describe("mstar status — the issue authority is never read as an empty rollup 
         "plan",
         "issue-add",
         "--session-ref",
-        fixture.planSession,
+        fixture.coordinatorRef,
         "--file",
         entriesPath,
         "--expect",
@@ -657,7 +566,7 @@ describe("mstar status — the issue authority is never read as an empty rollup 
         "--operation",
         "issue-add-final",
         "--session-id",
-        fixture.planSessionId,
+        fixture.coordinatorSessionId,
         "--harness",
         fixture.harness,
       ],

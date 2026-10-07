@@ -12,7 +12,7 @@
  *     (repair-escape advisory + host-hook failure result);
  *  2. dispatch gate — valid / read-only assignments pass, missing-field
  *     Assignment is denied under hard;
- *  3. lease gate — SDD dispatch against a mismatched execution_lease warns
+ *  3. row-scope gate — SDD dispatch against a mismatched worktree warns
  *     (default) and denies (hard);
  *  4. skill-lint gate — broken SKILL.md write flagged;
  *  5. seam gates — broken DESIGN.md write flagged;
@@ -20,17 +20,17 @@
  *     into the step messages (AC-7 "full mstar-gated session");
  *  7. v2 seam tools — mstar_sdd_workspace creates the SDD dir,
  *     mstar_iteration_gate evaluates the committed fixtures;
- *  8. bundledSkillDir — the Task 4 reviewer note: relative roots are
- *     cwd-anchored (launch cwd = package root), with the fixture proof and
- *     the shipped `./skills` default tied back to the bundle patch.
+ *  8. bundledSkillDir — explicit relative roots resolve from an isolated
+ *     launch cwd, independently of the app workspace and test-runner cwd.
  *
  * AC-7/AC-8 evidence: this spec IS the "local install simulation boots a
  * full mstar-gated session" observable; the `dsh plugin --profile add`
  * CLI real-run outcome is documented in task-5-report.md.
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -43,7 +43,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { DispatchGateAdvisory, SeamLintAdvisory, SkillLintAdvisory, StatusGateAdvisory } from '../src/index.ts'
 import { DshHostAdapter, readAgentFlow } from '../src/index.ts'
-import { bootApp, seedHarness, v2Root, v2RootWithWorkflow, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, seedFileWorkflow, seedHarness, v2Root, v2Snapshot, v2WorkflowEntry, type BootResult } from './harness.ts'
 import { buildCatalogPayload } from '../src/gates/catalog.ts'
 import { ENGINE_VERSION } from './engine-version.ts'
 
@@ -62,8 +62,6 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url))
 const FIXTURE_CORDIS_YML = join(FIXTURES, 'cordis.yml')
 /** The repo-root mirror skills/ (byte-identical to the control mirror). */
 const MIRROR_SKILLS = fileURLToPath(new URL('../../../skills/', import.meta.url))
-/** The package root — the process cwd the test suite runs under. */
-const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url)).replace(/\/$/, '')
 
 /** Read one committed fixture file. */
 function fixture(rel: string): string {
@@ -167,25 +165,55 @@ const stepPayload = (messages: UserMessage[]) => ({
 const lastMessage = (decision: { kind: 'enter'; messages: UserMessage[] }): UserMessage | undefined =>
   decision.messages.at(-1)
 
-/** The snapshot plan row with a valid execution_lease (v3 lease home). */
-const LEASE_PLAN = {
-  id: 'e2e-lease-plan',
-  title: 'E2E lease plan',
-  status: 'InProgress',
-  execution_lease: {
-    holder: 'e2e-agent',
-    claimed_at: '2026-08-08',
-    worktree_path: '/dsh-e2e/lease-worktree',
-    working_branch: 'feature/e2e-lease',
-  },
+const LEASE_PLAN_ID = 'e2e-lease-plan'
+const LEASE_BRANCH = 'feature/e2e-lease'
+
+/** The SDD writable Assignment the row-scope gate re-verifies, parameterised by
+ * the real feature checkout the row records. */
+function sddAssignment(worktreePath: string): string {
+  return `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Execution mode**: sdd
+**Plan Path**: plans/${LEASE_PLAN_ID}.md
+**Worktree path**: ${worktreePath}
+**Working branch**: ${LEASE_BRANCH}
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+
+Do the thing, evidence-first.
+`
 }
 
-/** Seed the v2 lease tree: v2 root + active workflow snapshot carrying the leased plan row. */
-async function seedLeaseTree(harnessDir: string): Promise<void> {
-  await seedHarness(harnessDir, {
-    'status.json': v2RootWithWorkflow(),
-    'workflows/wf-1/snapshot.json': v2SnapshotWithPlans('wf-1', [LEASE_PLAN]),
+/**
+ * Build the real topology the row-scope gate re-verifies and seed the plan row
+ * through the public producers: the app root is a git repo on `main`, plus a
+ * dedicated integration checkout and the plan's feature worktree. The row's
+ * recorded scope names the feature checkout, so a scope-bearing row has real
+ * checkouts rather than absolute-looking placeholders. Returns the feature
+ * path the Assignment must name to match.
+ */
+async function seedScopedRow(app: BootResult): Promise<string> {
+  const root = app.root
+  execFileSync('git', ['init', '-q', '-b', 'main', root])
+  execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'])
+  const integrationPath = join(root, 'integration-checkout')
+  const featurePath = join(root, 'feature-checkout')
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
+  execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', LEASE_BRANCH, featurePath])
+  await seedFileWorkflow(app.harnessDir, 'wf-1', [{
+    id: LEASE_PLAN_ID,
+    title: 'E2E scoped plan',
+    file: `plans/${LEASE_PLAN_ID}.md`,
+    status: 'InProgress',
+    metadata: { worktree_path: featurePath, working_branch: LEASE_BRANCH },
+  }], {
+    type: 'iteration',
+    branch: { base: 'main', integration: 'integration/fixture' },
+    integration_worktree_path: integrationPath,
   })
+  return featurePath
 }
 
 /* ===========================================================================
@@ -302,12 +330,12 @@ describe('dispatch gate — full session dispatch decisions', () => {
     expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
   })
 
-  it('SDD assignment with a MATCHING lease → silent allow (the lease gate positive control)', async () => {
+  it('SDD assignment with a matching recorded row scope → silent allow', async () => {
     const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
-    await seedLeaseTree(app.harnessDir)
+    const feature = await seedScopedRow(app)
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-valid.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(feature)), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
@@ -315,16 +343,16 @@ describe('dispatch gate — full session dispatch decisions', () => {
 })
 
 /* ===========================================================================
- * 4. Lease gate — SDD dispatch against a mismatched execution_lease
+ * 4. Row-scope gate — SDD dispatch against a mismatched source worktree
  * ========================================================================== */
 
 describe('lease gate — SDD dispatch lease violation', () => {
   it('mismatched Worktree path → advisory lease.dispatch.worktree-mismatch, dispatch allowed (warn default)', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML })
-    await seedLeaseTree(app.harnessDir)
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, dispatchBinding: 'qc-specialist' })
+    await seedScopedRow(app)
     const advisories = captureDispatchAdvisories(app.ctx)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-mismatch.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(join(app.root, 'not-the-feature-checkout'))), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
@@ -332,10 +360,10 @@ describe('lease gate — SDD dispatch lease violation', () => {
   })
 
   it('mismatched Worktree path under hard → deny with lease.dispatch.worktree-mismatch', async () => {
-    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard' })
-    await seedLeaseTree(app.harnessDir)
+    const app = booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, enforcement: 'hard', dispatchBinding: 'qc-specialist' })
+    await seedScopedRow(app)
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(fixture('assignments/sdd-lease-mismatch.md')), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(sddAssignment(join(app.root, 'not-the-feature-checkout'))), defaultAllow)
 
     expect(decision.kind).toBe('deny')
     expect(decision.kind === 'deny' && decision.reason).toContain('lease.dispatch.worktree-mismatch')
@@ -491,7 +519,7 @@ describe('agent/pre-step — iteration-gate row + catalog watermark', () => {
     // the refusal instead of claiming there are no open issues.
     expect(text).toContain('residuals: unavailable — [store.not-initialized]')
     expect(text).toContain('branch: dev-dsh → dev-dsh')
-    expect(text).toContain('leases: none active')
+    expect(text).toContain('row scope: none recorded')
   })
 })
 
@@ -531,41 +559,45 @@ describe('v2 seam tools — callable in-app over the committed fixtures', () => 
 })
 
 /* ===========================================================================
- * 9. bundledSkillDir — relative root is cwd-anchored (Task 4 reviewer note)
+ * 9. bundledSkillDir — explicit relative root is launch-cwd anchored
  * ========================================================================== */
 
-describe('bundledSkillDir — launch-cwd resolution (Task 4 reviewer note)', () => {
-  it('the test launch cwd IS the package root — grounds the ./skills resolution finding', () => {
-    expect(process.cwd()).toBe(PACKAGE_ROOT)
+describe('bundledSkillDir — launch-cwd resolution', () => {
+  it('a relative bundledSkillDir discovers bundled skills from the launch cwd, not the app workspace', async () => {
+    const launchRoot = await mkdtemp(join(tmpdir(), 'dsh-e2e-relative-skills-'))
+    try {
+      // Only the child has this launch cwd; no process-global chdir can race
+      // other suites. The app workspace is a different directory.
+      await symlink(join(FIXTURES, 'skills'), join(launchRoot, 'skills'), 'dir')
+      const script = join(launchRoot, 'probe.ts')
+      await writeFile(script, [
+        `import { bootApp } from ${JSON.stringify(fileURLToPath(new URL('./harness.ts', import.meta.url)))}`,
+        "import { join } from 'node:path'",
+        `const app = await bootApp({ root: join(process.cwd(), 'workspace'), cordisYml: ${JSON.stringify(FIXTURE_CORDIS_YML)}, bundledSkillDir: './skills' })`,
+        'try {',
+        '  console.log(JSON.stringify(await app.ctx.skills.list()))',
+        '} finally {',
+        '  await app.dispose()',
+        '}',
+      ].join('\n'))
+      const skills = JSON.parse(execFileSync(process.execPath, [script], {
+        cwd: launchRoot,
+        encoding: 'utf8',
+      })) as Array<{ name: string; source: string; provider: string }>
+      const good = skills.find((s) => s.name === 'good-skill')
+      expect(good).toBeDefined()
+      expect(good!.source).toBe('bundled')
+      expect(good!.provider).toBe('mstar')
+      // Missing-description skills remain undiscoverable.
+      expect(skills.some((s) => s.name === 'broken-skill')).toBe(false)
+    } finally {
+      await rm(launchRoot, { recursive: true, force: true })
+    }
   })
 
-  it('a relative bundledSkillDir resolves against the launch cwd (fixture proof)', async () => {
-    // `./tests/fixtures/skills` is relative: skill-filesystem `join()` semantics
-    // anchor it to process.cwd() (the package root), so the committed
-    // fixture skill is discovered as a BUNDLED source. If the root were
-    // anchored anywhere else (install dir, module dir), discovery would be
-    // empty — the e2e proves the cwd anchoring the shipped `./skills`
-    // default relies on.
-    booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, bundledSkillDir: './tests/fixtures/skills' })
-    const skills = await booted.ctx.skills.list()
-    const good = skills.find((s) => s.name === 'good-skill')
-    expect(good).toBeDefined()
-    expect(good!.source).toBe('bundled')
-    expect(good!.provider).toBe('mstar')
-    // Missing-description skills are not discoverable (frontmatter contract).
-    expect(skills.some((s) => s.name === 'broken-skill')).toBe(false)
-  })
-
-  it('the shipped default (./skills, no deployment keys) boots safely: engine-status watermark always appends', async () => {
-    // Exactly the shipped patch config minus deployment keys: harnessDir
-    // omitted (the plugin never probes from the launch cwd — without the
-    // config the harness dir resolves per session workspace at event time;
-    // this agent-less step has no workspace, so the watermark shows
-    // `harness dir: none`), no enforcement (warn-only by construction),
-    // bundledSkillDir ./skills.
-    // The boot must settle and the advisory catalog must still append; the
-    // resolved harness dir / enforcement / gate row are environment state,
-    // so only the process-immutable watermark is asserted.
+  it('an explicit relative root without deployment keys boots safely: engine-status watermark always appends', async () => {
+    // No configured harness and no session workspace: skill configuration
+    // must not prevent the advisory catalog from composing its watermark.
     booted = await bootApp({ cordisYml: FIXTURE_CORDIS_YML, bundledSkillDir: './skills', harnessDir: null })
     expect(booted.ctx.dshHostAdapter).toBeInstanceOf(DshHostAdapter)
 

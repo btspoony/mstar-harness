@@ -1,5 +1,3 @@
-# Store authority leftovers hardening
-
 ---
 
 category: Harness

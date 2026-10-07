@@ -62,6 +62,8 @@ The plugin registers a non-blocking `tool.execute.before` lint for the `task` to
 
 Entry skill: **`mstar-harness-core`** (loaded before other `mstar-*` skills).
 
+`/iteration-drive` accepts no arguments; nonempty scoped/extra input refuses before boot rather than broadening scope. One primary PM directly prepares/progresses/completes all selected workflow rows and dispatches native leaf tasks, never another per-row primary. Configuration is revisable with mandatory QA/allow-residual defaults; normal SDD, QC tri, QA, checkout isolation and actual serial integration remain. Iteration rows leave parent delivery intact; standalone development keeps compound/PR/verified-merge/close; report-only records policy fulfilment before Done and closes from evidence without invented Git/PR. Command details live in `mstar-use-cli/references/plan-and-workflow.md`; Cursor and OpenCode use this same canonical policy.
+
 ## Docs
 
 - [INSTALL.md](./INSTALL.md) — setup, monorepo checkout, migration from legacy git plugin, troubleshooting

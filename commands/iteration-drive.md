@@ -2,7 +2,7 @@
 name: iteration-drive
 description: Drive the active iteration to completion — Phase 2 Autonomous Execute, Phase 3 iteration-close, Phase 4 Create PR, Phase 5 PR merge-ready loop (prefer babysit/*-babysit; optional greploop when repo has it; else CI fallback) until mergeable, then Phase 6 post-merge close once the PR is verified merged. Not Done until Phase 6 close completes.
 agent: project-manager
-input: "[no args] | --assignment <absolute-md-path> | --workflow <id> --plan <id> | --resume <absolute-session-json-path>"
+input: "[no args]"
 ---
 
 # Drive Iteration
@@ -15,29 +15,19 @@ Drive the active Morning Star iteration forward. **Boot loads skills; this comma
 
 **Done 定义**：Phase 5 §5.5 exit checklist 全 `[x]` **且** PR merged 后 Phase 6 §6.1–§6.4 完成。**Phase 3 close ≠ Done；Phase 4 开 PR ≠ Done；§5.5 exit / PR merged ≠ Done。**
 
-**Scoped route 的 Done 边界**：plan 会话 finish = **durable handoff**（保持 `InReview` 与 lease）；Done 与两类 lease 删除仅 coordinator 在验证 Git 合并后原子完成（ACTIVE：DB transition；pre-activation：snapshot write）。Phase 3–6 与 PR 仍归 coordinator → **`references/plan-scoped-pm.md`** §5–§6。
-
 ## 共享 invariants / preflight / todos / STOP
 
-Phase 2–5 共享内容（PM invariants、assignment preflight、session todos、continuous-execution STOP）→ **`mstar-iteration/references/command-shared-invariants.md`**（SSOT；不在本命令重复）。**Scoped route（下节）例外**：其 session todos / STOP 为 plan-local，不 seed 全局 phase 条目 → **`references/plan-scoped-pm.md`**。
+Phase 2–5 shared PM invariants, assignment preflight, session todos and continuous-execution STOP rules → **`mstar-iteration/references/command-shared-invariants.md`** (SSOT).
 
 ## Route（先于 Boot 判定）
 
-Scoped drive starts from the requested plan intent. Follow the current public verb and its receipt; do not require a separate snapshot repair, token-copy, or rebind hop when the authority can derive its own projection. On `partial`, retain applied components, name the precise unresolved target/identity/authorization conflict, and continue independent work. Never pass session credentials to leaf executors.
-
-| 调用形态 | 走向 |
-|---|---|
-| **无参数** | 下方 Boot → Phase 2 → 3 → 4 → 5 → 6（**语义不变**） |
-| `--assignment <绝对 md 路径>` / `--workflow <id> --plan <id>` / `--resume <绝对 session json 路径>` | **scoped route** → **`mstar-iteration/references/plan-scoped-pm.md`**（scoped boot 先于全局 boot；不加载 compound / Phase 3–6 detail）。`--assignment` 是唯一携带 locator 的形态：行尚未 `coordination.prepared` **且为可认领状态**（`Todo`/`Blocked`、无 `coordination.session`、无 `coordination.handoff`、无 `execution_lease`）时由它走 **claim bootstrap**（写入 plan-pm session 绑定、不取 lease、行状态保持为其原可认领状态（`Todo`/`Blocked`）），接着由该 session `prepare` 并再次 bind 取 lease（§2）；不可认领的行仍按 `prepare` 的同一套行准入拒绝。`--workflow/--plan` 无 locator，未 prepared 时 fail closed（`coordination.not-prepared`）。`--resume` 是 **pre-activation** 文件形态：执行 authority 为 active 的 harness 上它以 `execution.consumer-not-ready` 拒绝，本会话的只读续接改走 `mstar plan bind --execution --resume-ref <wire>` |
-| 其他任何非空参数形态（重复 flag、未知 flag、位置参数、缺值/空值、混用形态、半对 `--workflow`/`--plan`） | **fail closed**：在 bind 与 boot 之前停止并报告接受的形态；**禁止**回落为整迭代路线 |
+The primary coordinator drives every row of the selected iteration through ordinary `prepare`, `progress` and `complete` operations. Select the workflow explicitly when context is ambiguous; never launch a second PM for a row. This command accepts no arguments. Reject nonempty arguments before boot and report the supported no-argument invocation; do not silently reinterpret an obsolete scoped invocation as authorization for the entire iteration.
 
 **Leaf 边界**：leaf executor 收到本命令 → 角色边界拒绝（`mstar-dispatch-gates`），**不得**晋升为 PM 或递归分派。
 
 ## Boot
 
 按 **`mstar-iteration`** Load order 加载（`mstar-harness-core` → `mstar-roles` → `references/project-manager.md` → `mstar-iteration`（按当前 Phase 查 route map，只加载一行 detail）+ `command-shared-invariants.md` → `mstar-compound` → `mstar-dispatch-gates` + host reference → **`mstar-sdd`**（first implement dispatch 前）→ `mstar-review-qc`（first QC 前）→ `mstar-artifacts` / `mstar-conventions` / `mstar-branch-worktree` → **`mstar-iteration/references/phase-2-worktree-lease.md`**）。完整 load list → **`mstar-roles`**。
-
-**Scoped route 例外**：先按 **`references/plan-scoped-pm.md`** §2 建立 primary PM identity → 一次 `mstar plan bind` → `show` 并把会话约束到返回的 scope，再按本条加载；**不**加载 `mstar-compound`，也**不**加载 Phase 3–6 detail（scoped boot ≠ 整迭代 boot）。
 
 ## Phase 2: Autonomous Execute
 

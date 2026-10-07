@@ -20,11 +20,11 @@ mstar status workflow-close --workflow <id> --session-ref <wire> --expect <full-
 mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]   # pre-activation only
 ```
 
-- ACTIVE 在 `withExecutionTransaction` 中重读执行行，按已记录证据组合其拥有行的合法 completion bookkeeping，再判定全部 plan Done、无 dangling lease、交付证据完整；terminal state 与 DB 根 unregister **同事务提交**，失败整单回滚。不得手工删 lease 或伪造 Done 来满足条件。仅 pre-activation 文件路由才在 snapshot 写锁内重读 / atomic replace。
-- dangling lease / 非 Done 行 / 缺失或身份不符则拒绝；不提交失败 transition。pre-activation 的相应失败保持 snapshot 字节不变。
+- Close rereads current authoritative state under its transaction/lock, validates identity/shape, returns valid terminal no-op or requires all rows Done and no dangling workflow integration exclusion, then writes completed + ended_at. Under ACTIVE authority the terminal state and the DB root unregister commit in the same transaction and a failed transition rolls back whole; only the pre-activation file route rewrites a snapshot under its write lock. Per-row execution leases are removed.
+- dangling lease / 非 `Done` 行 / 缺失或身份不符则拒绝；不提交失败 transition。pre-activation 的相应失败保持 snapshot 字节不变。
 - **`type: plan` 交付证据 consult**：completed close 与只读 Phase-6 gate 共享 `consultDeliveryEvidence`；development 缺 compound disposition / PR 身份 / verified merge，或 report-only 缺完成策略履行，均以 `PHASE6_DELIVERY_*` 拒绝，当前权威保持 running + registered。补齐只经 `mstar workflow evidence`（ACTIVE：session reference + scope token + operation id；pre-activation：session envelope；flags 见 help），不手写状态。PR 身份一次写入，compound / merge 可覆写；failed / stopped 不要求 successful-delivery 证据。
 - **delivery kind 在注册期显式声明**：DB 创建路线注册时声明，不发明 ACTIVE 的补 kind 通道；历史 pre-activation 无 kind snapshot 才用 `mstar workflow evidence --declare-kind` 一次性声明。注册与声明的完整约束 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`，命令形状见 help。
-- **禁止**为通过 close 手工释放 lease 或伪造 Done；ACTIVE 只组合当前权威已记录证据所蕴含的合法 bookkeeping，不夺取外来所有权；pre-activation close 不释放 lease。
+- **禁止**为通过 close 释放 lease 或伪造 Done —— close 从不释放（甚至 caller 自己的）；ACTIVE 只组合当前权威已记录证据所蕴含的合法 bookkeeping，不夺取外来所有权；exclusion 的释放由 direct complete 在其已验证尝试中完成；pre-activation close 不释放 lease。
 - `--ended-at` 只属于 **pre-activation** 形态（省略时由 CLI 提供当天时间戳；引擎不接受自身时钟读数）；active 形态记录其自身时间戳，带 `--ended-at` 是 usage 拒绝
 
 ## §6.2 Unregister（removal-at-terminal）
@@ -52,7 +52,7 @@ mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date
 
 - cleanup **永不自动**、永不绕过 ownership / merge-evidence 守卫 —— 契约本体（ownership、合并证据、refusals、apply 顺序）唯一 home → **`mstar-branch-worktree`**「Worktree / branch cleanup」；本节只放 call site，不复制规则
 - `mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [--worktree <path>] [--all-workflows] [--verbose] [--ignore-unreadable-snapshots]` —— dry-run 默认，逐候选打印 `verdict | kind | ref | reason`（标志语义、默认候选范围与守卫本体见上方 owning-contract 指针）；先 dry-run 核对受保护行全部 `keep`/`refuse`，再 `--apply`
-- **lease 释放是 owner 动作、cleanup 范围外**：先由 owner 经所属 authority 的公共动词处理（ACTIVE `mstar plan release` 或 coordinator integration / complete 序列；pre-activation 见其协议）；不得为了 close / cleanup 释放外来 lease，不手写 snapshot。守卫不通过则保留受保护候选。
+- Cleanup/close never releases exclusion to force eligibility. Direct complete owns release for its verified attempt; a remaining foreign/in-flight claim stays protected and must be resolved through its owning authority. Never hand-edit snapshots or revive a transfer sequence.
 - squash-merged 分支（tip 非 base 祖先）→ STOP → residual；禁止 `git branch -D`
 
 Phase-6 gate 只查**本地 state**（valid terminal shape + 无 dangling lease + root 条目已注销 + `type: plan` 交付证据，§6.1），**不**验证远端 merged 证据，**不**检查物理清理是否完成。

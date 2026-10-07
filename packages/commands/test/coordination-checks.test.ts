@@ -5,6 +5,9 @@ import path from "node:path";
 import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 import {
+  bindExecutionSession,
+  executionContextFor,
+  mutateExecutionWorkflow,
   createExecutionWorkflow,
   openStore,
   initializeExecutionAuthority,
@@ -12,7 +15,6 @@ import {
   evaluatePostMergeCloseFromExecutionAuthority,
   registerCatalogEntity,
   type CatalogOperation,
-  type ExecutionCaller,
   type WorkflowSnapshot,
 } from "../../engine/src/index.js";
 
@@ -44,7 +46,7 @@ function definition(id: string) {
   return found;
 }
 
-async function activeWorkflow(cwd: string, workflowId: string, status: "running" | "completed" = "running") {
+async function activeWorkflow(cwd: string, workflowId: string, rowDone = false) {
   const harness = path.join(cwd, ".mstar");
   mkdirSync(harness, { recursive: true });
   const storeContext = { harnessDir: harness };
@@ -55,27 +57,29 @@ async function activeWorkflow(cwd: string, workflowId: string, status: "running"
   await registerCatalogEntity(storeContext, {
     kind: "plan", id: planId, title: planId, rootKind: "plans", relativePath: `${planId}.md`,
   }, { operationId: `catalog-${workflowId}`, actor: "project-manager" } satisfies CatalogOperation);
-  const caller: ExecutionCaller = { sessionId: `coordinator-${workflowId}`, role: "coordinator", workflowId, planId: null };
-  await createExecutionWorkflow({ ...storeContext, caller }, {
+  const identity = { source: "local" as const, sessionId: `coordinator-${workflowId}`, role: "coordinator" as const, workflowId };
+  const execution = executionContextFor(storeContext, identity);
+  const created = await createExecutionWorkflow(execution, {
     entry: { id: workflowId, type: "plan", started_at: "2026-09-01T00:00:00.000Z", dir: `workflows/${workflowId}` },
     snapshot: {
-      schema_version: 1, id: workflowId, type: "plan", status, started_at: "2026-09-01T00:00:00.000Z",
+      schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: "2026-09-01T00:00:00.000Z",
       updated_at: "2026-09-01T00:00:00.000Z", phase: "phase-2-execute",
-      plans: [{ id: planId, title: planId, file: `${planId}.md`, status: status === "completed" ? "Done" : "InProgress" }],
+      plans: [{ id: planId, title: planId, file: `${planId}.md`, status: rowDone ? "Done" : "InProgress" }],
       delivery_kind: "development",
       branch: { base: "main", source: "feature/test", target: "main", integration: "integration/test" },
     } as unknown as WorkflowSnapshot,
     expected: initialized.token,
     operationId: `create-${workflowId}`,
   });
-  return { harness, storeContext, planId };
+  return { harness, storeContext, planId, execution, workflowToken: created.data.workflows[0]!.workflowToken };
 }
 
+/** Inject inconsistent terminal histories only for the isolated negative gate fixtures. */
 async function completeAndUnregister(
   context: { harnessDir: string },
   workflowId: string,
   planId: string,
-  options: { releasedLease?: boolean; delivery?: boolean; rowDone?: boolean } = {},
+  options: { delivery?: boolean; rowDone?: boolean } = {},
 ) {
   const store = await openStore(context, "write");
   try {
@@ -99,11 +103,6 @@ async function completeAndUnregister(
     store.db.prepare("update execution_plans set state_json = ? where workflow_id = ? and plan_id = ?")
       .run(JSON.stringify(planState), workflowId, planId);
     store.db.prepare("delete from execution_registry where workflow_id = ?").run(workflowId);
-    if (options.releasedLease) {
-      store.db.prepare(
-        "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
-      ).run(workflowId, planId, JSON.stringify({ status: "released" }));
-    }
     store.db.exec("commit");
   } catch (error) {
     try { store.db.exec("rollback"); } catch {}
@@ -116,8 +115,20 @@ async function completeAndUnregister(
 
   test("completed unregistered workflow remains addressable in execution history", async () => {
     const cwd = tempRoot();
-    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-closed");
-    await completeAndUnregister(storeContext, "wf-active-closed", planId, { delivery: true, rowDone: true });
+    const { harness, execution, workflowToken } = await activeWorkflow(cwd, "wf-active-closed", true);
+    const bound = await bindExecutionSession(execution, { workflowId: "wf-active-closed", expected: workflowToken, operationId: "bind-closed" });
+    await mutateExecutionWorkflow(execution, {
+      workflowId: "wf-active-closed", session: bound.data, operationId: "evidence-closed",
+      operation: { kind: "delivery", delivery: {
+        compound: { outcome: "updated" },
+        pr: { repo: "fixture/repo", head: "feature/test", target: "main" },
+        merge: { provider: "fixture", evidence: "merged" },
+      } },
+    });
+    await mutateExecutionWorkflow(execution, {
+      workflowId: "wf-active-closed", session: bound.data, operationId: "close-history",
+      operation: { kind: "lifecycle", status: "completed", reason: "delivery complete" },
+    });
     const result = await definition("iteration.gate").execute(
       { workflow: "wf-active-closed", phase: "6", harness } as never,
       context(cwd),
@@ -125,20 +136,6 @@ async function completeAndUnregister(
     expect(result).toMatchObject({ status: "ok", data: { gate: { ok: true, violations: [] } } });
   });
 
-  test("released lease tombstone does not count as a dangling lease", async () => {
-    const cwd = tempRoot();
-    const { harness, storeContext, planId } = await activeWorkflow(cwd, "wf-active-released");
-    await completeAndUnregister(storeContext, "wf-active-released", planId, { releasedLease: true, delivery: true });
-    const result = await definition("iteration.gate").execute(
-      { workflow: "wf-active-released", phase: "6", harness } as never,
-      context(cwd),
-    );
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect((result.data as { gate: { violations: Array<{ code: string }> } }).gate.violations)
-        .not.toContainEqual(expect.objectContaining({ code: "PHASE6_DANGLING_LEASE" }));
-    }
-  });
 
 
   test("completed plan without delivery evidence is blocked", async () => {
@@ -352,20 +349,6 @@ plans:
     });
   });
 describe("coordination checks command family", () => {
-  test("lease verification refuses a plan id outside the workflow snapshot scope", async () => {
-    const cwd = tempRoot();
-    const harness = path.join(cwd, ".mstar");
-    const workflowDir = path.join(harness, "workflows", "wf-scope");
-    mkdirSync(workflowDir, { recursive: true });
-    writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({ plans: [{ id: "plan-a", status: "Todo" }] }));
-
-    const result = await definition("lease.verify").execute(
-      { workflow: "wf-scope", plan: "plan-b", harness } as never,
-      context(cwd),
-    );
-    expect(result).toMatchObject({ status: "refused", code: "lease.verify.plan-not-found", exitCode: 1 });
-    expect(result.message?.split("\n")[0]).toBe("no plan row with id/plan_id plan-b");
-  });
 
   test("migration refusal leaves the source tree untouched", async () => {
     const cwd = tempRoot();
@@ -433,47 +416,5 @@ describe("coordination checks command family", () => {
       code: "lease.merge-lease.invalid",
       exitCode: 1,
     });
-  });
-  test("derived view selects the requested row, ignores unrelated rows, and stays read-only", async () => {
-    const cwd = tempRoot();
-    const harness = path.join(cwd, ".mstar");
-    const workflowDir = path.join(harness, "workflows", "wf-derived");
-    mkdirSync(workflowDir, { recursive: true });
-    const file = path.join(workflowDir, "snapshot.json");
-    const selectedLease = {
-      holder: "session-a",
-      claimed_at: "2026-09-26T12:00:00Z",
-      worktree_path: path.join(cwd, "feature-a"),
-      working_branch: "feature/a",
-    };
-    writeFileSync(file, JSON.stringify({
-      plans: [
-        { id: "plan-a", status: "InProgress", execution_lease: selectedLease },
-        { id: "plan-b", status: "InProgress", execution_lease: { holder: "" } },
-      ],
-    }));
-    const before = readFileSync(file, "utf8");
-    const result = await definition("lease.verify").execute(
-      { workflow: "wf-derived", plan: "plan-a", harness } as never,
-      context(cwd),
-    );
-    expect(result).toMatchObject({ status: "ok", data: { workflow: "wf-derived", plan: "plan-a", lease: selectedLease } });
-    expect(readFileSync(file, "utf8")).toBe(before);
-  });
-
-  test("authority failure does not fall back to a snapshot", async () => {
-    const cwd = tempRoot();
-    const harness = path.join(cwd, ".mstar");
-    const workflowDir = path.join(harness, "workflows", "wf-authority");
-    mkdirSync(workflowDir, { recursive: true });
-    writeFileSync(path.join(workflowDir, "snapshot.json"), JSON.stringify({ plans: [{ id: "plan-a", status: "Todo" }] }));
-    // An invalid active execution store is authoritative; the readable snapshot
-    // must not be used as a fallback.
-    writeFileSync(path.join(harness, "store.db"), "not a sqlite database");
-    const result = await definition("lease.verify").execute(
-      { workflow: "wf-authority", plan: "plan-a", harness } as never,
-      context(cwd),
-    );
-    expect(result.status).not.toBe("ok");
   });
 });

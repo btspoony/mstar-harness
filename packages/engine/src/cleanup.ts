@@ -123,21 +123,14 @@ function ownerSnapshot(
 }
 
 /**
- * Rule 3 — any active execution/integration lease referencing the target,
- * by path and by branch, across all supplied snapshots. Presence is active:
- * writers delete the key on release and terminal snapshots cannot validly
- * carry leases, so any lease shape found is fail-closed.
+ * Rule 3 — any active integration merge attempt referencing the target.
+ * Plan row ownership is ordinary metadata and is handled by the non-terminal
+ * guard below rather than a per-plan lease.
  */
-function leaseRefusesTarget(snapshots: readonly WorkflowSnapshot[], target: CleanupTarget): boolean {
+function integrationMutexRefusesTarget(snapshots: readonly WorkflowSnapshot[], target: CleanupTarget): boolean {
   for (const doc of snapshots) {
     const merge = doc.integration_merge_lease;
     if (merge && (merge.source_branch === target.branch || merge.target_branch === target.branch)) return true;
-    if (!Array.isArray(doc.plans)) continue;
-    for (const row of doc.plans) {
-      if (!isPlainObject(row)) continue;
-      const lease = row.execution_lease;
-      if (isPlainObject(lease) && (lease.worktree_path === target.ref || lease.working_branch === target.branch)) return true;
-    }
   }
   return false;
 }
@@ -153,10 +146,10 @@ function protectedRefReason(snapshots: readonly WorkflowSnapshot[], facts: Clean
 
 /**
  * Rule 5 — non-terminal protection, across ALL supplied lifecycles.
- * Independent of attribution: the integration branch/worktree of any
- * non-terminal lifecycle refuses, as does any branch recorded by a non-Done
- * row (lease `working_branch`, retained `metadata.working_branch` /
- * `metadata.track_branches`). Attribution then decides the positive lane:
+ * A non-terminal lifecycle's integration branch/worktree and each non-Done
+ * row's `metadata.working_branch`, `metadata.worktree_path`, and
+ * `metadata.track_branches` refuse independently of attribution. Attribution
+ * then decides the positive lane:
  * lifecycle-owned targets need valid terminal close; iteration plan/track
  * rows need only row `Done` while the parent still runs (first timing
  * lane); a standalone plan is the whole lifecycle, so terminal close is
@@ -178,11 +171,10 @@ function nonTerminalRefuses(
     if (!Array.isArray(doc.plans)) continue;
     for (const row of doc.plans) {
       if (!isPlainObject(row) || row.status === "Done") continue;
-      const lease = row.execution_lease;
-      if (isPlainObject(lease) && lease.working_branch === target.branch) return true;
       const meta = row.metadata;
       if (isPlainObject(meta)) {
         if (meta.working_branch === target.branch) return true;
+        if (meta.worktree_path === target.ref) return true;
         if (Array.isArray(meta.track_branches) && meta.track_branches.includes(target.branch)) return true;
       }
     }
@@ -270,8 +262,8 @@ export function planWorktreeCleanup(snapshot: WorkflowSnapshot, facts: CleanupFa
     // 2. default/base-ref keep — protected regardless of lifecycle state.
     const protectedReason = protectedRefReason(snapshots, facts, target);
     if (protectedReason !== null) return decide("keep", protectedReason);
-    // 3. any active execution/merge lease, by path and branch, all snapshots.
-    if (leaseRefusesTarget(snapshots, target)) return decide("refuse", REASON.refuseActiveLease);
+    // 3. an active workflow integration merge mutex, across all snapshots.
+    if (integrationMutexRefusesTarget(snapshots, target)) return decide("refuse", REASON.refuseActiveLease);
     // 4. missing/foreign ownership — `owner` is the CLI's verified
     // attribution; unknown/ambiguous is `null`, never inferred.
     if (target.owner === null) {

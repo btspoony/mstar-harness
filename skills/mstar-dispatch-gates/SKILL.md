@@ -1,6 +1,6 @@
 ---
 name: mstar-dispatch-gates
-description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent、`Execute as` 与 `Delegation`、承接方反递归 NEVER 红线、**子 Assignment 继承 plan 作用域且 credential/session 不下发 leaf**、SDD 独立就绪任务并行派发、**SDD 路径 plan QC 强制 tri-review（N=3）**、inline 单席 QC 例外、Assignment 文案≠派发、未齐不发、**invoke 角色字段必填（漏写=静默 generic 回退=派发未完成）**。`project-manager` 派发时必读；leaf 动手前必读反递归。worktree 见 `mstar-branch-worktree`；SDD 见 `mstar-sdd`；宿主见 `mstar-host`；scoped plan 路线见 `mstar-iteration` `plan-scoped-pm.md`。
+description: "Morning Star dispatch gates: PM-only leaf dispatch, executor/delegation identity, anti-recursion, inherited plan paths and coordinator-reference boundary, parallel readiness/worktree isolation, SDD QC tri-review and inline single-seat exceptions. Read before PM dispatch or leaf execution; worktree and SDD procedures belong to their owning skills."
 ---
 
 ## Load order（必读顺序）
@@ -40,14 +40,10 @@ description: Morning Star 派发与委派门禁 —— 仅 PM 可增派 subagent
 
 派发前，与工具并发 / 角色绑定字段同级的硬门禁：
 
-- **子 Assignment 继承父 plan 作用域**：`plan_id` + 绝对 `Plan Path`（L1 另含 `SDD dir` / `Control harness root`）逐字下发。child **不得**自选或新建 plan、写 workflow snapshot / root register / 共享索引、释放 `execution_lease` / `integration_merge_lease`。缺失、相对路径或暗示「child 自行选 plan」= **派发未完成**（`mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template `Plan scope`）。
-- **credential 不下发 leaf**：session JSON 路径、`mstar plan --session` 写凭据、`--expect <revision>` 等**只由派发方（PM/coordinator）持有**。leaf 拿到 session 路径或写凭据即视为越权 → 停止并回报（`mstar-iteration/references/plan-scoped-pm.md` §8）。
-- **`project-manager` 不是派发目标**：PM 是 primary-session 角色，无 subagent shell（规则家 → `mstar-roles/references/project-manager.md` § Plan-scoped authority；宿主派发面 → 当前宿主的 **`mstar-host` reference**（角色绑定 / 派发小节））；scoped primary drive（`/iteration-drive --assignment | --workflow --plan | --resume`）在**主会话**启动 PM，不是 subagent。任何 `Execute as: project-manager` 的 invoke = 派发缺陷。
+- **Inherited leaf scope:** pass plan_id, absolute Plan Path/SDD dir/Control harness root unchanged. Children never choose a new plan, write workflow/root/shared projections or release integration exclusion. Missing/relative/self-selected scope means dispatch incomplete.
+- **Coordinator context never goes to a leaf:** session JSON paths/references, row revisions or full execution tokens and operation IDs stay with the primary coordinator. Leaves receive only their task scope and paths; report a mismatched Assignment without assuming workflow authority.
+- **`project-manager` is never a dispatch target:** PM is the primary-session coordinator, not a subagent or a second per-row primary. Any invoke targeting project-manager is a dispatch defect (`mstar-roles/references/project-manager.md` § Primary coordinator authority).
 
-## 跨会话 primary 并发：唯一受支持形式（scoped route）
-
-- 跨**独立主会话 / 终端**的并发只有一种受支持形式：**scoped route** —— 由已准备（prepared）的 Assignment 作为**全新会话的第一条指令**启动该会话。通过终端提示词下发自拟的 leaf Assignment **不是**受支持的派发路径：它绕过 scoped 启动、lease 归属与 handoff 交接。
-- 本边界不取代宿主的原生 leaf 派发，也不重复 N-invocation 机制（→ **`mstar-host`** → `references/parallel-dispatch.md`）；该路线的操作前置清单由宿主 reference 独有承载。
 
 ## 调度防串扰（强制；leaf executor 已在上方读过反递归红线，此处为完整规则供 PM/对照用）
 
@@ -103,9 +99,9 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 
 - 独立模块可并行 **implement 轨道**（不同 dev Assignment）；**同仓 ≥2 可写并发** → **`mstar-branch-worktree`** **`references/parallel-writable-pre-dispatch.md`**（先于 invoke；同 plan 多轨 = L2）。
 - **SDD 单 plan 内**：独立 ready tasks 默认并行；每轨先完成 L2 隔离，fresh session 与独立产物路径，PM 唯一写共享 ledger。规则 → **`mstar-sdd`** § Ready-task scheduling。
-- **跨 plan（迭代 Phase 2）≠ 单 plan 内并行**：不同 `plan_id` 的 feature implement **允许** lease 门控并行（每 plan 独立 verified store.db `execution_leases` 行（snapshot 字段仅 pre-activation） + feature worktree，L1）**仅当** ACTIVE same-host `withExecutionTransaction` 协调事务可用且每次协调变更经事务；pre-activation 文件路由才使用 snapshot 路径独占锁 → **`mstar-iteration`** §2.0 #5 · **`mstar-artifacts`**。**跨主机 / 无可用的同主机协调锁** → 默认 **`Plan parallelism: serial`** 或 Assignment 仍写并行 → **Blocked**（用户本轮 `Cross-host lease race: accepted` + audit `notes` 除外）。**无协调锁不豁免** control/feature worktree 或 lease。**`Worktree mode: waived` 不豁免**跨 plan 并行安全闸。**禁止**因默认 gitignore 导致 feature 缺 plans 而 waive worktree（harness 经 control 绝对路径）→ **`mstar-branch-worktree`**。**禁止**无 lease 的跨 plan 可写派发（lease 闸未 waive 时）。
+- **Cross-plan versus within-plan concurrency:** ready rows may implement in parallel through ordinary leaf dispatch with distinct recorded source checkouts and safe atomic coordination (ACTIVE: control DB transactions/CAS; pre-activation: shared same-host file lock). Without shared coordination safety choose serial scheduling; an unresolved unsafe parallel Assignment is blocked with that recovery. No missing plans under gitignore, serial policy or worktree waiver waives the parallel safety gate or actual checkout isolation. Procedure → `mstar-iteration` §2.0/§2.4; write-domain ownership → `mstar-branch-worktree` “Harness path SSOT under default gitignore”.
 - **`integration_merge_lease`**：`spec_integration_branch` 上的 merge **始终串行**（一次仅一 holder）→ **`mstar-iteration`** · **`mstar-artifacts`**。
-- **`Plan parallelism: serial`**：仅强制跨 plan implement **调度串行**；**不** waive worktree/lease 闸（integration worktree、feature worktree、`execution_lease`、`integration_merge_lease`）（`Worktree mode: waived` 才是 lease/worktree 豁免）→ **`mstar-iteration`** §2.0 #5。
+- **`Plan parallelism: serial`** constrains scheduling, not actual checkout isolation, atomic writers or serial integration safety.
 - **Plan QC tri** after SDD task loop（`Execution mode: sdd`）；**单席**仅 `inline` / hotfix。共用 `Review cwd` / `Working branch` / `plan_id` / `Review range`（**`mstar-branch-worktree`**）。
 - **Tri 同消息规则**：plan QC tri（SDD 或 Assignment 显式 `QC mode: full tri-review`）时三席 **同一条消息**、**同一套** scope 字段。
 

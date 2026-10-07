@@ -1842,26 +1842,25 @@ export function refusePendingRegistration(
 }
 
 /**
- * The SAME registration gate through a handle the caller ALREADY owns: a
- * root-visible workflow whose catalog operation is recorded but not committed
- * refuses `catalog.registration-pending`. The execution transaction opens one
- * handle on the same `store.db`, so a DB `prepare` enforces its registration
- * admission under its own write lock through this function instead of opening
- * a second connection — exactly as `catalogPinFactsOn` reads a pin — and the
- * "pending" verdict stays defined once, by `pendingRegistrationOf`.
+ * The registration gate for an ACTIVE execution transaction through its own
+ * handle: registry visibility and pending catalog operations are read from the
+ * same store.db under the caller's lock. A registered workflow whose catalog
+ * operation is not committed refuses `catalog.registration-pending`. No retired
+ * file register is consulted; the FILE route retains its separate gate above.
+ * The pending verdict stays defined once, by `pendingRegistrationOf`.
  *
  * Store-state tolerances stay with the handle owner: a missing store never gets
  * here (the opener refuses `store.not-initialized`), and a `store_meta` that is
  * not ACTIVE keeps the pre-activation exclusion (§7) — a staged store is not a
  * catalog verdict, so it passes through and is never retro-refused here.
  */
-export function assertCatalogExecutionCommittedOn(db: StoreDb, harnessDir: string, workflowId: string): void {
+export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: string): void {
   const id = requireText(workflowId, "workflowId");
   const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
     | { authority_state?: unknown }
     | undefined;
   if (meta?.authority_state !== "active") return;
-  if (findRegisteredWorkflow(resolve(harnessDir), id) === undefined) return;
+  if (db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(id) === undefined) return;
   const pending = pendingRegistrationOf(db, id);
   if (pending === null) return;
   refusePendingRegistration(id, pending);

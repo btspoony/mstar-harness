@@ -11,16 +11,7 @@ description: "Use when starting, driving, resuming, or closing a Morning Star it
 
 **Phase detail 不在本 skill 正文**：按下方 **Phase route map** 只加载当前动作对应的一行 detail——**禁止**无条件通读全部 phase references。
 
-**Scoped primary route**（`/iteration-drive --assignment|--workflow/--plan|--resume`）→ **`references/plan-scoped-pm.md`**，且**先于**本 skill 的全局 todo / backlog / last-plan 逻辑判定。
-
-## Scoped primary route（先于全局 Phase 逻辑）
-
-`/iteration-drive` 的 scoped 形态在**本 skill 的任何全局 Phase 逻辑之前**改道：
-
-- **先选 route，再 seed todo**：不得先按整迭代 boot 建立全局 session todos / backlog / last-plan Phase 3 判断，再把 scoped 会话当作过滤器处理。
-- **scoped finish = durable handoff**（plan 保持 `InReview`、保留 `execution_lease`）。`status: Done`、两个 lease 的删除、Phase 3–6、compass / index / root 投影与迭代 PR **仅 coordinator** 拥有。
-- 无参数调用**语义不变**（Phase 2 → 3 → 4 → 5 → 6）；非法非空形态 **fail closed**，**禁止**回落整迭代路线；leaf 收到该命令 → 角色边界拒绝。
-- boot / plan-local drive / finish / coordinator 序列全文 → **`references/plan-scoped-pm.md`**。
+The primary coordinator owns all rows of the selected iteration and dispatches ordinary leaf tasks. Row configuration remains revisable during active execution; `progress` records the start and review states, and direct `complete` verifies QC/QA and the actual serial merge before writing `Done`. No row-specific PM launch or binding is required. Command entry accepts no arguments; reject nonempty arguments instead of broadening their scope.
 
 ## 设计思路
 
@@ -55,7 +46,6 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 
 | 当前动作 | 必读 detail（按需加载，勿通读） |
 |---------|--------------------------------|
-| **scoped primary**（`/iteration-drive` 带 `--assignment` / `--workflow --plan` / `--resume`） | **`references/plan-scoped-pm.md`**（scoped boot → plan-local drive → handoff finish → coordinator 序列；**先于**整迭代 todo / last-plan 逻辑） |
 | **start** (new iteration / reopen direction lock) | **`references/phase-1-prepare.md`** (§1.1–§1.6: context → direction lock/hook → §1.2.5 retained prototype and feedback loop → formal compass/plans/specs → registration → selected Review & Edit rounds with mandatory final writer). Interactive requires current-design HTML confirmation before authoring; explicit autonomous opt-in retains an appropriate prototype without routine human approval. |
 | **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch、control root + integration worktree + lease execution checklist） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |
@@ -96,7 +86,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 - 不因 harness 流程问题常问「是否继续」「要不要现在启动」—— **决策、记录、dispatch**
 - 进度汇报 / subagent Completion Report 后，下一条必须是 **dispatch 或下一 gate 动作**，不得以确认问句收束 turn
 - 未知 → 读 `mstar-*`；仅 **`Blocked`**、secrets、不可逆范围缺口、branch metadata 缺失、或 Phase 5 多轮仍 blocked 时升级用户
-- 实际 Git ≠ `working_branch` → **同轮**经 `mstar plan progress` 更新当前权威行与适用的 working-branch 信息，并更新 authored plan；不得手写 snapshot 或 lease
+- Actual Git differs from recorded source scope → same-round ordinary correction through `mstar plan prepare` / `mstar plan progress` with real facts, updating the current authoritative row, applicable working-branch information and plan projections; never hand-edit state or recreate a per-row claim.
 - **跨 plan implement 并行安全闸**与 **integration merge 串行** → `references/phase-2-worktree-lease.md` §2.0 #5 /「Multi-plan parallelism」（**无论** `Worktree mode: waived`）
 - plan 内 SDD 独立 ready tasks **并行**，真实依赖与共享写目标串行 — phase-2 reference §2.4、§2.5、`mstar-sdd` Ready-task scheduling
 - **allow-residual（默认）**：open finding 先经 `mstar plan issue-add`（计划外 `mstar issue add`）捕获为 store issue，且各决策面披露（id + issue severity + 跟踪位置；close 面另含 blocker-defer 标记）；unresolved `critical` 仍阻断 Approve；`zero-residual` 为显式 opt-in（可修当轮清干净，仅真 blocker-defer + Durable Roadmap）— 捕获与披露职责 → **`mstar-artifacts`** Findings cleanup modes
@@ -114,7 +104,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 
 - **`mstar-compound`** — iteration-close 中触发知识结晶（**唯一**默认 knowledge 新增路径）
 - **`references/phase-1-prepare.md`** — start route detail（§1.1–§1.6）
-- **`references/phase-2-worktree-lease.md`** — execute/resume route detail（per-plan loop + integration worktree、`execution_lease`、`integration_merge_lease`）
+- references/phase-2-worktree-lease.md — direct coordinator execution, isolated feature/integration checkouts, atomic writes and real serial merge proof
 - **`references/autonomous-direction-lock.md`** — §1.2 autonomous direction lock、scale budget、branch resolve
 - **`references/iteration-artifact-boundaries.md`** — Phase 1 specs / iteration package / knowledge 分工
 - **`references/iteration-corpus-hygiene.md`** — §1.6 writing-specialist specs 卫生细则

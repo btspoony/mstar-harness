@@ -28,10 +28,11 @@
  *   both files kept; the restore serializes with the migration maintenance
  *   lock; and an abandoned attempt's scratch image and sidecars are reclaimed
  *   while an installed copy is left exactly where it is.
- * - `execution-export-*`: the diagnostic carries workflow/plan/lease state and
- *   the public frozen input while dropping every session identity, token,
- *   credential and session path it could otherwise be driven with, is
- *   byte-stable, and refuses to authorize anything when fed to a real writer.
+ * - `execution-export-*`: the diagnostic carries workflow/plan state and the
+ *   workflow-wide integration claim along with the public frozen input, while
+ *   dropping every session identity, token, credential and session path it
+ *   could otherwise be driven with, is byte-stable, and refuses to authorize
+ *   anything when fed to a real writer.
  *
  * Run with `bun test packages/engine/src/execution-recovery.test.ts
  * --test-name-pattern 'execution-backup|execution-restore|execution-export'`.
@@ -215,7 +216,7 @@ function nextTurn(): Promise<void> {
 }
 
 function callerOf(workflowId: string, sessionId: string): ExecutionCaller {
-  return { sessionId, role: "coordinator", workflowId, planId: null };
+  return { sessionId, role: "coordinator", workflowId };
 }
 
 function contextOf(context: StoreContext, caller: ExecutionCaller): ExecutionContext {
@@ -266,8 +267,6 @@ async function recoveryWorld(name: string, planIds: readonly string[] = [PLAN_1]
   const workflow = created.data.workflows[0]!;
   const bound = await bindExecutionSession(contextOf(fixture.context, caller), {
     workflowId: WF,
-    planId: null,
-    role: "coordinator",
     expected: workflow.workflowToken,
     operationId: `${name}-bind`,
   });
@@ -375,8 +374,6 @@ describe("execution-backup", () => {
       });
       await bindExecutionSession(contextOf(world.context, callerOf(WF, COORDINATOR)), {
         workflowId: WF,
-        planId: null,
-        role: "coordinator",
         expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
         operationId: "backup-wal-bind",
       });
@@ -1149,28 +1146,51 @@ describe("execution-export", () => {
   test("execution-export-is-a-credential-free-diagnostic-that-authorizes-nothing", async () => {
     const world = await recoveryWorld("export-world");
     const epoch = world.epoch;
-    // A REAL lease row in the DB's own lease shape, so the export's lease
-    // projection is proven rather than merely demanded.
+    // A REAL workflow-wide integration claim in the DB's own shape, so the
+    // export's claim projection is proven rather than merely demanded. The
+    // removed per-plan lease has no table any more.
     rawRun(
       world.dbPath,
-      "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, ?, ?, ?)",
+      "insert into execution_integration_leases(workflow_id, revision, owner_epoch, lease_json) values (?, 1, ?, ?)",
       WF,
-      PLAN_1,
-      1,
       epoch,
       JSON.stringify({
-        lease_id: "lease-1",
         holder: COORDINATOR,
         claimed_at: TS,
-        worktree_path: join(world.harness, "worktrees", PLAN_1),
-        working_branch: `feature/${PLAN_1}`,
-        status: "held",
+        plan_id: PLAN_1,
+        source_branch: `feature/${PLAN_1}`,
+        target_branch: "main",
+        started_at: TS,
       }),
     );
 
     // The store really does hold the session identity the export must drop.
     const identified = rawGet<{ session_id: string }>(world.dbPath, "select session_id from execution_sessions")!;
     expect(identified.session_id).toBe(COORDINATOR);
+    // A REAL prepared/completed coordination row: the contracted shapes record
+    // the coordinator identity in `prepared_by`/`completed_by`, so the export's
+    // redaction is proven against the row it actually projects — not only the
+    // top-level session list it already omits.
+    rawRun(
+      world.dbPath,
+      "update execution_plans set coordination_json = ? where workflow_id = ? and plan_id = ?",
+      JSON.stringify({
+        prepared: { qa_gate: "mandatory", findings_cleanup: "allow-residual", prepared_by: COORDINATOR, prepared_at: TS },
+        completion: {
+          source_branch: `feature/${PLAN_1}`,
+          source_sha: "a".repeat(40),
+          worktree_path: join(world.harness, "worktrees", PLAN_1),
+          review_base: "a".repeat(40),
+          review_head: "a".repeat(40),
+          qc: { decision: "Approve", reports: [{ path: join(world.harness, "qc.md"), sha256: "b".repeat(64) }], consolidated: { path: join(world.harness, "qc-s.md"), sha256: "c".repeat(64) } },
+          qa: { gate: "mandatory", decision: "pass", report: { path: join(world.harness, "qa.md"), sha256: "d".repeat(64) } },
+          completed_by: COORDINATOR,
+          completed_at: TS,
+        },
+      }),
+      WF,
+      PLAN_1,
+    );
     expect(rawGet<{ creator_session_id: string }>(world.dbPath, "select creator_session_id from execution_workflows")!.creator_session_id).toBe(
       COORDINATOR,
     );
@@ -1190,11 +1210,12 @@ describe("execution-export", () => {
     expect(workflow.state).toMatchObject({ id: WF, status: "running" });
     const plan = workflow.plans[0];
     expect(plan.planId).toBe(PLAN_1);
-    expect(plan.lease).toMatchObject({ claimed_at: TS, working_branch: `feature/${PLAN_1}`, status: "held" });
+    expect(plan).not.toHaveProperty("lease");
+    expect(workflow.integrationLease).toMatchObject({ claimed_at: TS, source_branch: `feature/${PLAN_1}` });
     // Sessions travel as a state projection without the identity they are
     // addressed by: role, state, epoch, revision and the binding instant.
     expect(parsed.sessions).toEqual([
-      { workflowId: WF, role: "coordinator", planId: null, state: "active", epoch, revision: 1, boundAt: expect.any(String) },
+      { workflowId: WF, role: "coordinator", state: "active", epoch, revision: 1, boundAt: expect.any(String) },
     ]);
 
     // The session identities, the CAS tokens and the credential paths the
@@ -1207,6 +1228,15 @@ describe("execution-export", () => {
     expect(exported.canonicalJson.includes(".status-write.lockdir")).toBe(false);
     expect(forbiddenKeysIn(parsed)).toEqual([]);
     expect(parsed.redactedKeys).toContain("holder");
+    // The row's own coordination projection is present (its business evidence
+    // travels) but carries no coordinator identity: `prepared_by`/`completed_by`
+    // are redacted exactly like the old `accepted_by`.
+    expect(parsed.redactedKeys).toEqual(expect.arrayContaining(["prepared_by", "completed_by"]));
+    const projected = workflow.plans[0].coordination as Record<string, any>;
+    expect(projected.prepared).not.toHaveProperty("prepared_by");
+    expect(projected.completion).toMatchObject({ qc: { decision: "Approve" }, qa: { decision: "pass" } });
+    expect(projected.completion).not.toHaveProperty("completed_by");
+    expect(projected.completion.completed_at).toBe(TS);
 
 
     // …and the artifact authorizes nothing: fed to a real writer as its

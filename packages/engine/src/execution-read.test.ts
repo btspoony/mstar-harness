@@ -29,11 +29,11 @@ async function fixture(label: string): Promise<StoreContext> {
   const entry: WorkflowEntry = { id: workflowId, type: "plan", started_at: TS, dir: `workflows/${workflowId}` };
   const snapshot = {
     schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: TS, updated_at: TS,
-    plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "Todo" }],
+    plans: [{ id: planId, title: planId, file: `plans/${planId}.md`, status: "Todo", metadata: { worktree_path: `/tmp/${workflowId}`, working_branch: `feature/${workflowId}` } }],
     delivery_kind: "development", branch: { source: `feature/${workflowId}`, target: "main" },
   } as unknown as WorkflowSnapshot;
   await createExecutionWorkflow(
-    { ...context, caller: { sessionId: `creator-${label}`, role: "coordinator", workflowId, planId: null } },
+    { ...context, caller: { sessionId: `creator-${label}`, role: "coordinator", workflowId } },
     { entry, snapshot, expected: initialized.token, operationId: `create-${label}` },
   );
   return context;
@@ -49,6 +49,10 @@ describe("execution-cleanup-read", () => {
     const result = await readExecutionCleanupState(context, "wf-registered");
     expect(result.selected.id).toBe("wf-registered");
     expect(result.selected.plans.map((row) => row.id)).toEqual(["plan-registered"]);
+    expect(result.selected.plans[0]?.metadata).toEqual({
+      worktree_path: "/tmp/wf-registered",
+      working_branch: "feature/wf-registered",
+    });
     expect(result.workflows.map((row) => row.id)).toContain("wf-registered");
   });
 
@@ -75,11 +79,11 @@ describe("execution-cleanup-read", () => {
       message: expect.stringContaining("List registered workflow ids via mstar status validate (data.workflows[].id), then re-run mstar worktree cleanup --workflow <listedId>; if no registered workflow remains, there is nothing to clean."),
     });
   });
-  test("missing plan refusal includes status and execution-bind recovery", async () => {
+  test("missing plan refusal names direct read recovery", async () => {
     const context = await fixture("missing-plan");
     await expect(readExecutionAuthority(context, { workflowId: "wf-missing-plan", planId: "plan-not-recorded" })).rejects.toMatchObject({
       code: "coordination.plan-not-found",
-      message: expect.stringContaining("List valid plan ids via mstar status validate (data.authority.workflows[].planTokens); re-run mstar plan bind --execution"),
+      message: expect.stringContaining("Select an existing plan id from workflow wf-missing-plan"),
     });
   });
 
@@ -139,52 +143,6 @@ describe("execution-cleanup-read", () => {
     await expect(readExecutionCleanupState(context, "wf-invalid-sibling")).rejects.toMatchObject({ code: "store.corrupt" });
   });
 
-  test("released execution claim is excluded while its plan remains readable", async () => {
-    const context = await fixture("released-execution");
-    const store = db(context);
-    try {
-      store.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values(?, ?, 2, 1, ?)")
-        .run(
-          "wf-released-execution",
-          "plan-released-execution",
-          JSON.stringify({
-            holder: "former-holder", claimed_at: TS, worktree_path: "/tmp/former-worktree",
-            working_branch: "feature/former", status: "released",
-          }),
-        );
-    } finally {
-      store.close();
-    }
-    const result = await readExecutionCleanupState(context, "wf-released-execution");
-    expect(result.selected.plans[0]).not.toHaveProperty("execution_lease");
-  });
-
-  test("held foreign execution lease remains as a protective deletion fact", async () => {
-    const context = await fixture("held-execution");
-    const store = db(context);
-    try {
-      store.prepare(
-        "insert into execution_sessions(workflow_id, role, session_id, plan_id, epoch, revision, state, bound_at) " +
-          "values(?, 'plan-pm', ?, ?, 1, 1, 'active', ?)",
-      ).run("wf-held-execution", "foreign-holder", "plan-held-execution", TS);
-      store.prepare("insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values(?, ?, 1, 1, ?)")
-        .run(
-          "wf-held-execution",
-          "plan-held-execution",
-          JSON.stringify({
-            holder: "foreign-holder", holder_session_id: "foreign-holder", holder_role: "plan-pm",
-            claimed_at: TS, worktree_path: "/tmp/foreign-worktree", working_branch: "feature/foreign",
-            plan_worktree_path: "/tmp/foreign-worktree", plan_branch: "feature/foreign", status: "held",
-          }),
-        );
-    } finally {
-      store.close();
-    }
-    const result = await readExecutionCleanupState(context, "wf-held-execution");
-    expect(result.selected.plans[0]?.execution_lease).toMatchObject({
-      holder: "foreign-holder", worktree_path: "/tmp/foreign-worktree", working_branch: "feature/foreign",
-    });
-  });
 
   test("inventory contains distinct retained workflows in the same read", async () => {
     const context = await fixture("retained-pair");
@@ -203,7 +161,7 @@ describe("execution-cleanup-read", () => {
       delivery_kind: "development", branch: { source: `feature/${secondWorkflow}`, target: "main" },
     } as unknown as WorkflowSnapshot;
     await createExecutionWorkflow(
-      { ...context, caller: { sessionId: "creator-retained-pair-second", role: "coordinator", workflowId: secondWorkflow, planId: null } },
+      { ...context, caller: { sessionId: "creator-retained-pair-second", role: "coordinator", workflowId: secondWorkflow } },
       { entry, snapshot, expected: current.token, operationId: "create-retained-pair-second" },
     );
     const store = db(context);

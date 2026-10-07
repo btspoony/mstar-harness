@@ -229,11 +229,8 @@ describe("validatePlanRow", () => {
     violationCodes("status.plan-row.invalid-status")(validatePlanRow(row({ status: "Finished" })));
   });
 
-  test("non-object metadata / execution_lease are violations", () => {
+  test("non-object metadata is a violation", () => {
     violationCodes("status.plan-row.invalid-metadata")(validatePlanRow(row({ metadata: [] })));
-    violationCodes("status.plan-row.invalid-execution-lease")(
-      validatePlanRow(row({ execution_lease: "cursor:abc" })),
-    );
   });
 
   test("empty-string id / plan_id are violations (non-empty required)", () => {
@@ -246,16 +243,6 @@ describe("validatePlanRow", () => {
     violationCodes("status.plan-row.invalid-plan-id")(validatePlanRow(rest));
   });
 
-  test("cross-field invariant: status Done must not carry an execution_lease", () => {
- // Spec: — the lease protocol says Done-with-lease never exists;
- // the Done authority deletes the lease in the same update as status Done.
-    const gate = validatePlanRow(
-      row({ status: "Done", execution_lease: { holder: "h", claimed_at: "2026-08-08", worktree_path: "/wt", working_branch: "b" } }),
-    );
-    expect(gate.ok).toBe(false);
-    expect(violationsOf(gate)).toContain("status.plan-row.done-with-lease");
-    expect(validatePlanRow(row({ status: "Done" })).ok).toBe(true);
-  });
 });
 
 describe("validateResidual", () => {

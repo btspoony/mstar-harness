@@ -24,7 +24,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFsStore, initializeStore, openStore, setArtifactStore, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
+import { createFsStore, initializeStore, openStore, setArtifactStore, WORKFLOW_SNAPSHOT_FILE, type IntegrationMergeLease } from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions, getPayloadSchema } from "../src/index.js";
 import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -178,29 +178,18 @@ const canonicalLedger: Record<string, LedgerEntry> = {
   "persist.delete": witnessed("protected kind deletion is refused and the document survives", "protected-deletion", "warm", 1, "safety-refusal"),
   migrate: unverified("rewrite a legacy v1 status tree in place", "destructive whole-tree rewrite; fixture deferred to the versioned scenario set"),
   // lease / coordination
-  "lease.verify": witnessed("foreign-holder lease receipt stops the interaction; malformed lease and missing snapshot refuse", "foreign-holder-lease", "warm", 3, "resolved"),
-  "lease.verify-integration": unverified("integration merge-lease verification", "requires a snapshot carrying a top-level integration_merge_lease; no fixture in this baseline suite"),
+  "lease.verify-integration": witnessed("an unclaimed integration lane is reported; a claimed lease is surfaced and an absent workflow refuses truthfully", "integration-claim (unclaimed + claimed + absent, 3 calls)", "warm", 3, "resolved"),
   "iteration.gate": unverified("evaluate a workflow phase gate", "requires an active workflow iteration; no in-package fixture"),
   "iteration.push-cadence": unverified("probe push cadence state", "requires workflow history state; no in-package fixture"),
   "iteration.register": unverified("register an iteration workflow", "requires control-root write authority; no in-package fixture"),
   // plan family
-  "plan.bind": unverified("bind a plan file to a workflow", "requires coordinator session authority; no in-package fixture"),
+  "plan.bind": unverified("adopt the workflow's coordinator seat", "requires coordinator session authority; no in-package fixture"),
   "plan.show": unverified("read a registered plan snapshot", "requires a registered plan fixture; deferred to the versioned scenario set"),
-  "plan.prepare": unverified("write a locked prepare bundle", "requires a bound plan and coordinator authority; no in-package fixture"),
+  "plan.prepare": unverified("record the ordinary revisable execution configuration", "requires a coordinator binding and an active row; no in-package fixture"),
   "plan.progress": unverified("advance plan progress", "requires a bound plan and coordinator authority; no in-package fixture"),
   "plan.issue-add": unverified("add a plan register issue", "requires plan register authority; no in-package fixture"),
   "plan.issue-close": unverified("close a plan register issue", "requires plan register authority; no in-package fixture"),
-  "plan.handoff": unverified("record a plan handoff", "requires accepted plan state; no in-package fixture"),
-  "plan.accept": unverified("accept a prepared plan", "requires coordinator authority; no in-package fixture"),
-  "plan.return": unverified("return a plan for rework", "requires coordinator authority; no in-package fixture"),
-  "plan.integration-start": unverified("open the integration lane for a plan", "requires integration worktree state; no in-package fixture"),
-  "plan.integration-accept": unverified("accept the integration lane outcome", "requires integration worktree state; no in-package fixture"),
-  "plan.complete": unverified("complete plan delivery", "requires sealed prepare and integration evidence; no in-package fixture"),
-  "plan.repair-delivery-source": unverified("repair delivery source metadata", "requires a registered plan; no in-package fixture"),
-  "plan.reconcile": unverified("reconcile plan state with snapshots", "requires workflow state; no in-package fixture"),
-  "plan.release": unverified("release the caller's own execution claim", "requires an active bound plan claim; no in-package fixture"),
-  "plan.residual-add": unverified("append a residual register entry", "requires a project register; no in-package fixture"),
-  "plan.residual-close": unverified("close a residual register entry", "requires a project register; no in-package fixture"),
+  "plan.complete": unverified("complete plan delivery", "requires QC/QA and Git proof evidence; no in-package fixture"),
   // session family
   "session.run": unverified("spawn a real host session", "process effect against real hosts; never deterministic in-process"),
   "session.recover": unverified("recover an interrupted host session", "requires an interrupted session artifact; no in-package fixture"),
@@ -433,6 +422,18 @@ function writeLeaseSnapshot(harness: string, workflowId: string, plans: unknown[
     schema_version: 1,
     id: workflowId,
     plans,
+  }));
+}
+
+/** The workflow snapshot carrying an integration merge lease (or a `null` tombstone). */
+function writeWorkflowSnapshotWithLease(harness: string, workflowId: string, integrationLease: Record<string, unknown> | null): void {
+  const workflowDir = join(harness, "workflows", workflowId);
+  mkdirSync(workflowDir, { recursive: true });
+  writeFileSync(join(workflowDir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
+    schema_version: 1,
+    id: workflowId,
+    plans: [],
+    integration_merge_lease: integrationLease,
   }));
 }
 
@@ -733,43 +734,68 @@ describe("status family witness", () => {
 });
 
 describe("lease witness", () => {
-  test("a foreign-holder receipt stops the interaction; malformed leases and missing snapshots refuse truthfully", async () => {
+  test("an unclaimed integration lane stops the interaction; a claimed lane is surfaced and an absent workflow refuses truthfully", async () => {
     const { harness, context } = leaseContext();
     const workflowId = "bounded-lease-workflow";
-    const foreignLease = {
-      holder: "session-foreign-fixture",
-      claimed_at: "2026-09-30T00:00:00Z",
-      worktree_path: join(harness, "foreign-worktree"),
-      working_branch: "feature/foreign-fixture",
-    };
-    writeLeaseSnapshot(harness, workflowId, [
-      { id: "plan-a", plan_id: "plan-a", title: "Lease fixture", file: "plan.md", status: "InProgress", execution_lease: foreignLease },
-    ]);
-    const interaction: Interaction = { label: "lease verification", context: "warm", extraDependency: "", calls: [] };
+    const interaction: Interaction = { label: "integration claim verification", context: "warm", extraDependency: "", calls: [] };
 
-    // The foreign holder is surfaced verbatim; the honest interaction stops —
+    // No integration merge claim: the honest interaction stops with the
+    // unclaimed fact instead of proceeding toward a serialized merge.
+    writeLeaseSnapshot(harness, workflowId, [
+      { id: "plan-a", plan_id: "plan-a", title: "Integration fixture", file: "plan.md", status: "InProgress" },
+    ]);
+    const snapshotPath = join(harness, "workflows", workflowId, WORKFLOW_SNAPSHOT_FILE);
+    const unclaimedBytes = readFileSync(snapshotPath);
+    const unclaimed = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
+    expect(unclaimed).toMatchObject({ status: "ok", data: { claimed: false } });
+    expect(readFileSync(snapshotPath)).toEqual(unclaimedBytes);
+
+    // A claimed lane is surfaced verbatim; the honest interaction stops —
     // the write is withheld pending explicit user authorization.
-    const verified = await countedCall(interaction, "execute", "lease.verify", { workflow: workflowId, plan: "plan-a" }, context);
-    expect(verified.status).toBe("ok");
-    if (verified.status === "ok") {
-      const leaseReceipt = verified.data as { lease: { holder: string } }; // verify receipt echoes the stored lease
-      expect(leaseReceipt.lease.holder).toBe("session-foreign-fixture");
-    }
-
-    // A malformed lease refuses with its violations instead of passing.
-    writeLeaseSnapshot(harness, workflowId, [
-      { id: "plan-a", plan_id: "plan-a", title: "Lease fixture", file: "plan.md", status: "InProgress", execution_lease: { claimed_at: "2026-09-30T00:00:00Z" } },
-    ]);
-    const malformed = await countedCall(interaction, "execute", "lease.verify", { workflow: workflowId, plan: "plan-a" }, context);
-    expect(malformed).toMatchObject({ status: "refused", exitCode: 1 });
+    const claim: IntegrationMergeLease = {
+      holder: "session-foreign-fixture",
+      plan_id: "plan-a",
+      claimed_at: "2026-09-30T00:00:00Z",
+      source_branch: "feature/foreign-fixture",
+      target_branch: "main",
+    };
+    writeWorkflowSnapshotWithLease(harness, workflowId, claim);
+    const claimedBytes = readFileSync(snapshotPath);
+    const verified = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId }, context);
+    expect(verified).toMatchObject({ status: "ok", data: { claimed: true, lease: claim } });
+    expect(readFileSync(snapshotPath)).toEqual(claimedBytes);
 
     // A missing snapshot refuses with the exact target named.
-    const absent = await countedCall(interaction, "execute", "lease.verify", { workflow: "bounded-absent-workflow" }, context);
+    const absent = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: "bounded-absent-workflow" }, context);
     expect(absent).toMatchObject({ status: "refused", code: "lease.verify.snapshot-not-found", exitCode: 1 });
     if (absent.status === "refused") expect(absent.message).toContain("bounded-absent-workflow");
 
-    // The write was withheld: no route toward the leased plan was executed.
+    // The write was withheld: no route toward the claimed integration lane was executed.
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 3 });
+  });
+
+  test("a malformed integration merge lease refuses: a null tombstone and a missing holder are invalid, never unclaimed", async () => {
+    const { harness, context } = leaseContext();
+    const workflowId = "bounded-merge-lease-workflow";
+    const interaction: Interaction = { label: "integration lease shape", context: "warm", extraDependency: "", calls: [] };
+
+    // A `null` top-level record is a tombstone, not "no claim": it fails closed.
+    writeWorkflowSnapshotWithLease(harness, workflowId, null);
+    const tombstone = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
+    expect(tombstone).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.invalid" });
+
+    // A claimed lane missing its holder names the missing field.
+    writeWorkflowSnapshotWithLease(harness, workflowId, {
+      plan_id: "plan-a",
+      claimed_at: "2026-09-30T00:00:00Z",
+      source_branch: "feature/f",
+      target_branch: "main",
+    });
+    const missingHolder = await countedCall(interaction, "execute", "lease.verify-integration", { workflow: workflowId, harness: harness }, context);
+    expect(missingHolder).toMatchObject({ status: "refused", exitCode: 1, code: "lease.merge-lease.missing-holder" });
+
+    // The interaction stopped on the malformed record; nothing was repaired.
+    expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 2 });
   });
 });
 

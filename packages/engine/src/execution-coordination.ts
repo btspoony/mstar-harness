@@ -1,115 +1,86 @@
 /**
- * execution-coordination.ts — the DB transport of the plan coordination
- * operations (primary spec §2.3/§3/§4.1).
+ * execution-coordination.ts — the DB transport of the ordinary coordinator plan
+ * operations (primary spec §3/§4.1; locked removal contract §Operation
+ * semantics).
  *
  * One accepted plan operation is ONE transaction. `withExecutionPlanAuthority`
  * owns that transaction, the shared role/scope gates and the sealed witness
- * every DB plan verb starts from; W2 adds the first two operations on top of it
- * — `prepare` (which seals the reviewed Assignment and selects the frozen
- * catalog input) and `progress` (which moves a bound row's status/summary) — and
- * W3 adds the two residual operations, whose issue-authority work is composed
- * into this same transaction through the handle-taking helpers of `issue.ts`.
- * W4 adds the rest here.
+ * every DB plan verb starts from. The closed union is the five ordinary
+ * coordinator operations — `prepare` (revisable execution configuration),
+ * `progress`, the two residual verbs and direct `complete` — and nothing else:
+ * there is no per-plan session, no handoff state machine, no integration
+ * bookkeeping verb and no ownership transfer. A row is owned by the workflow's
+ * coordinator; its CAS token, `BEGIN IMMEDIATE` and the operation receipt are
+ * the whole write exclusion.
  *
- * Nothing here is a public surface: the package index exports no coordination
- * mutator, and `mutateExecutionPlan` is published only once its whole closed
- * operation union exists (W4).
+ * Nothing here is a public surface: the package index publishes only
+ * `mutateExecutionPlan`.
  */
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { dirname, isAbsolute } from "node:path";
 import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
 import {
   CoordinationError,
   assertExactKeys,
   canonicalTarget,
+  evidenceRefOf,
   isNonEmptyString,
   isPlainObject,
-  sha256Bytes,
   validatePlanProgress,
-  validatePreparedCoordination,
-  type CoordinationErrorCode,
+  type CompletionRecord,
+  type PlanPrepareConfig,
   type PreparedCoordination,
 } from "./coordination-write.js";
 import {
   ExecutionPinConflictError,
   assertEvidenceInsidePlanArea,
   assertFeatureCheckout,
-  assertHandoffGitProof,
   assertIntegrationCheckout,
-  assertPreparedFresh,
-  assertRecordedResult,
-  assertStandaloneSourceGitProof,
   assertViolationFree,
-  assignmentIntentOf,
   catalogPinFactsOn,
   captureGitProofWitness,
   gitObjectExists,
   gitRead,
   integrationProof,
-  parseAssignmentFile,
   planAreaRoots,
-  proofRepository,
   revalidateGitProofWitness,
   selectCatalogPinOn,
-  type AssignmentHeaders,
   type GitProofWitness,
 } from "./coordination.js";
 import {
   IMPLEMENTED_OPERATIONS,
-  assertAcceptedReviewDecision,
-  assertExecutionHolder,
-  assertNoHandoffTransition,
+  assertCompletionReviewDecision,
   assertNoIntegrationContamination,
   assertOperationRole,
-  assertPlanAddress,
   assertPrepareAdmission,
   assertTrackBranches,
-  entailedHandoffStatus,
   gitProof,
   integrationAnchors,
   integrationDiverged,
-  integrationUnresolved,
-  mergeLeaseOfAttempt,
   missingDecision,
   projectBucketOf,
-  readHandoffEvidence,
-  requireExecutionLease,
-  requireHandoffState,
-  requireIntegration,
-  requirePlanHandoff,
+  readCompletionEvidence,
   requireProgressStatus,
-  requireRowStatus,
   rowStatusOf,
-  releaseStatus,
   standaloneDeliveryAnchors,
   storedCoordinationViolations,
-  summarize,
-  type CoordinationSeat,
+  type ValidatedCompletionEvidence,
 } from "./coordination-transitions.js";
 import {
   ExecutionError,
   advancePlanOperationRevisions,
   assertExecutionToken,
   assertOperationId,
-  claimIntegrationMergeLease,
-  executionLeaseOwnerEpoch,
   readExecutionPlan,
   readExecutionPlanWitness,
-  readExecutionState,
   readExecutionSealedInput,
-  readHeldExecutionLeases,
+  readExecutionState,
   readLiveSessionIdentities,
   readPlanOperationReplay,
-  readWorkflowSessionRows,
-  parseExecutionToken,
-  releaseExecutionLease,
+  readPlanOperationReplayBeforeProof,
   releaseIntegrationMergeLease,
   resolvePlanRead,
   resolveTokenFreshness,
   semanticRequestHash,
-  transferExecutionLease,
   withExecutionTransaction,
   writeExecutionInputPin,
   writePlanCoordinationRow,
@@ -126,7 +97,6 @@ import {
   type ExecutionToken,
   type ExecutionTransaction,
   type ResolvedPlanRead,
-  type SessionRow,
   type TokenFreshness,
 } from "./execution-store.js";
 import {
@@ -144,7 +114,7 @@ import {
   type CaptureInput,
   type ComposedTransactionRevision,
 } from "./issue.js";
-import { canonicalizeNearestExisting, resolvePlanDir, resolveSddDir } from "./path.js";
+import { canonicalizeNearestExisting } from "./path.js";
 import { resumeExecutionSession } from "./execution-session.js";
 import { resolveCurrentAuthority } from "./store-read.js";
 import {
@@ -155,8 +125,7 @@ import {
   type RecoveryProblem,
   type ResolutionSource,
 } from "./recovery-intent.js";
-import { findingsCleanupGate } from "./project.js";
-import { StoreError, storeDbPath } from "./store-db.js";
+import { storeDbPath } from "./store-db.js";
 import {
   consultDeliveryEvidence,
   isStandaloneDevelopmentWorkflow,
@@ -165,126 +134,46 @@ import {
   type WorkflowSnapshot,
 } from "./workflow.js";
 import type { PlanCoordinationOperation } from "./coordination.js";
-import type { PlanHandoff, RowCoordination } from "./coordination-write.js";
 import type { IntegrationMergeLease } from "./lease.js";
-import type { PlanRow } from "./status.js";
+import { normalizeSeverity, type PlanRow } from "./status.js";
 
-/**
- * §3 the DB route's verb vocabulary: the closed coordination union minus the
- * legacy delivery-source repair. That instrument exists only to correct pre-fix
- * file snapshots registered with `branch.source === branch.target`
- * (`plan-lifecycle-standalone-completion.md`) — `phase2a-execution-contract.md`
- * §3 lists eleven operations and does not include it, so the DB authority never
- * admits it.
- *
- * One union and one role/state machine for both transports — a second verb set
- * is what the extraction exists to prevent — and the exclusion is named once,
- * as this type plus the runtime set below.
- */
-export type CoordinationOperation = Exclude<PlanCoordinationOperation, { kind: "repair-delivery-source" }>;
+/** The same closed direct-coordinator operation union is used on both routes. */
+export type CoordinationOperation = PlanCoordinationOperation;
 
-/** The one §3 exclusion above, as the runtime half of the same single rule. */
-const LEGACY_ONLY_OPERATIONS: Record<string, true> = { "repair-delivery-source": true };
-
-/**
- * §3 one DB plan operation call: the session reference the caller claims, the
- * plan it addresses with the token it read, and the operation itself. The
- * caller identity is NOT part of this request — it comes from
- * `ExecutionContext.caller`, so a role named here authorizes nothing.
- *
- * § One resolver path an explicit supplied value is a CONSTRAINT, never a
- * prerequisite: `session`, `expected` and `planId` may be omitted, and the
- * frame resolves each from the current authority, the trusted caller's own
- * binding and the record it reads. A call that states all three resolves to
- * exactly the request it already was.
- */
 export type ExecutionPlanCall = {
   session?: ExecutionSessionRef;
-  /** The addressed plan's `exec-v1` token from the current read (the CAS). */
   expected?: ExecutionToken;
-  /** The plan this operation transitions; omitted for a plan-pm caller, whose own binding names it. */
-  planId?: string;
+  planId: string;
   operation: CoordinationOperation;
 };
 
-/**
- * §3 the sparse envelope a PUBLISHED DB mutation accepts: the operation id that
- * makes an identical retry a replay, and the two addressing facts the engine
- * can derive (`session`, `expected`). It is the `ExecutionMutation` shape with
- * its derivable half optional — a fully specified call is still a valid intent.
- */
 export type ExecutionMutationIntent = {
   operationId: string;
   session?: ExecutionSessionRef;
   expected?: ExecutionToken;
 };
 
-/** §3 one DB plan-operation intent: the sparse envelope plus the plan it addresses. */
-export type ExecutionPlanIntent<Operation extends CoordinationOperation = CoordinationOperation> = ExecutionMutationIntent & {
-  planId?: string;
-  operation: Operation;
-};
+export type ExecutionPlanIntent<Operation extends CoordinationOperation = CoordinationOperation> =
+  ExecutionMutationIntent & { planId: string; operation: Operation };
 
-/**
- * § One resolver path: the plan one DB intent addresses — the explicit
- * selection, else the plan the trusted plan-pm caller's own identity is bound
- * to. Neither is a guess (a coordinator states the plan it addresses), so when
- * both are absent the caller gets its own question instead of "the only plan"
- * or "the most recent row".
- */
-function resolvePlanAddress(caller: ExecutionCaller, stated: string | undefined, kind: string): string {
+function resolvePlanAddress(stated: string | undefined, kind: string): string {
   if (isNonEmptyString(stated)) return stated;
-  if (caller?.role === "plan-pm" && isNonEmptyString(caller.planId)) return caller.planId;
-  throw unresolvedPlanAddress(caller, kind);
-}
-
-/**
- * § One resolver path: no plan was stated and the trusted caller's own identity
- * names none. The refusal is the caller's question — the one selection that
- * would release the addressed effect — in the frozen problem shape, never a
- * guess at "the only plan" or "the most recent row".
- */
-function unresolvedPlanAddress(caller: ExecutionCaller, kind: string): CoordinationError {
-  const bound =
-    caller?.role === "plan-pm" || caller?.role === "coordinator"
-      ? `the trusted caller is a ${caller.role} session ${JSON.stringify(caller.sessionId)} of workflow ${JSON.stringify(caller.workflowId)}`
-      : "the trusted caller carries no usable session identity";
-  const code: CoordinationErrorCode = "coordination.invalid-input";
-  const problem: RecoveryProblem = {
-    component: "target",
+  throw new CoordinationError("coordination.invalid-input", `${kind} requires the explicit planId it addresses`, {
     path: "planId",
-    code,
-    sourcesTried: ["planId (intent.explicit)", "the trusted caller identity (association)"],
-    currentFacts: [bound, `no plan id was stated by this ${kind} intent`],
-    needed: `which plan this ${kind} addresses`,
-    withheldEffect:
-      "the addressed plan operation - no target was guessed, so no plan row, session or CAS token was read for it",
-    availableWork: [
-      "address the plan explicitly (planId)",
-      ...(caller?.role === "coordinator" ? ["run the operation under the addressed plan's own plan-pm session"] : []),
-    ],
-  };
-  return new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
-    component: problem.component,
-    path: problem.path,
-    sources_tried: problem.sourcesTried,
-    current_facts: problem.currentFacts,
-    available_work: problem.availableWork,
-    recovery: unresolvedRecovery({ target: {}, unresolved: [problem] }),
   });
 }
 
 /**
- * § One resolver path (S2/E02): the CURRENT authority of a sparse DB intent.
- * The route is what selects the authority — a flag never does — and a control
- * root whose authority is not the ACTIVE execution store has nothing to
- * resolve a session or a CAS token from, so a sparse intent refuses here
- * instead of falling back to the file route or to an invented binding.
- *
- * Module-scoped: `resolveSparseOwnSession` below is the exported half both DB
- * entrypoints share, so no consumer can perform the route read without the
- * own-binding read it exists for.
+ * The control harness root of the store this call transacts on: the directory
+ * that owns `store.db`. `StoreContext.harnessDir` is the anchor the store was
+ * RESOLVED from, so the root is read back from the store's own path rather than
+ * re-derived — the database's location decides where its harness, its plan area
+ * and its checkouts are.
  */
+function controlHarnessRoot(context: ExecutionContext): string {
+  return canonicalizeNearestExisting(dirname(storeDbPath(context)));
+}
+
 async function assertSparseExecutionAuthority(context: ExecutionContext, what: string): Promise<void> {
   const authority = await resolveCurrentAuthority(context);
   if (authority.route === "execution") return;
@@ -313,17 +202,18 @@ export async function resolveSparseOwnSession(context: ExecutionContext, what: s
 
 /**
  * § One resolver path (S2/E02) for the plan route: the plan address, then the
- * trusted caller's OWN live binding reconstructed from its durable session row
- * (E03/R8/A09 — a projection the caller had to keep is not required), then the
- * plan token that read returned. Every derived fact names a source the engine
- * actually read, and an explicitly supplied value is passed through untouched.
+ * trusted caller's OWN live coordinator binding reconstructed from its durable
+ * session row (E03/R8/A09 — a projection the caller had to keep is not
+ * required), then the plan token that read returned. Every derived fact names a
+ * source the engine actually read, and an explicitly supplied value is passed
+ * through untouched.
  */
 async function resolvePlanIntent<Operation extends CoordinationOperation>(
   context: ExecutionContext,
   request: ExecutionPlanIntent<Operation>,
   operation: Operation,
 ): Promise<ExecutionPlanRequest<Operation>> {
-  const planId = resolvePlanAddress(context.caller, request.planId, operation.kind);
+  const planId = resolvePlanAddress(request.planId, operation.kind);
   if (request.session !== undefined && request.expected !== undefined) {
     return { operationId: request.operationId, session: request.session, expected: request.expected, planId, operation };
   }
@@ -333,32 +223,39 @@ async function resolvePlanIntent<Operation extends CoordinationOperation>(
 }
 
 /**
- * §2.3/§3.1/§4.1 the authorization boundary of one DB plan operation.
+ * §3/§4.1 the accepted-kind gate shared by the boundary and the operation
+ * entries, so no verb can be reached by a kind the closed union does not carry.
+ */
+function assertPlanOperationAdmissible(kind: string): void {
+  if (IMPLEMENTED_OPERATIONS[kind] !== true) {
+    throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
+      operation: kind,
+    });
+  }
+}
+
+/**
+ * §3/§4.1 the authorization boundary of one DB plan operation.
  *
- * The operation's kind decides which seat may issue it and a plan session
- * addresses only its own plan — the SHARED pure rules, so the DB route cannot
- * drift from the file route. Inside one `BEGIN IMMEDIATE` transaction the
- * authority must be active, the trusted caller's own session row is revalidated
- * at the current epoch, the addressed plan is selected under that authority and
- * the supplied token is compared against the plan's exact CAS token. The
- * addressed plan's sealed witness is then handed to the operation's transition,
- * which commits or rolls back with everything above. The reference gate itself
- * runs inside that transaction, after the authority-state refusal: this route's
- * order is unchanged, and only `readExecutionPlan` — which owns no transaction
- * until its request is valid — gates before the store is opened.
+ * The operation's kind decides which seat may issue it — the SHARED pure rule,
+ * so the DB route cannot drift from the file route. Inside one
+ * `BEGIN IMMEDIATE` transaction the authority must be active, the trusted
+ * caller's own coordinator row is revalidated at the current epoch, the
+ * addressed plan is selected under that authority and the supplied token is
+ * compared against the plan's exact CAS token. The addressed plan's sealed
+ * witness is then handed to the operation's transition, which commits or rolls
+ * back with everything above.
  *
  * § One resolver path (S2/E02) an omitted `session` is the trusted caller's OWN
  * live binding reconstructed from its durable row, and an omitted `expected` is
  * the plan token this transaction reads — the two facts the caller would
  * otherwise copy out of a previous read. An explicit value is passed through
- * untouched, so a fully specified call keeps this frame's exact behavior; a
- * call that states neither still resolves *inside* the same authorization
- * boundary, and its resolved inputs stay strict.
+ * untouched.
  *
- * A forged caller/role, a sibling plan, a revoked or stale-epoch reference, a
- * stale token and a nested call all refuse with no row, revision or receipt
- * change. The transition body receives the owned transaction — the only handle
- * a DB operation may write through — and is synchronous for the same reason
+ * A forged caller/role, a revoked or stale-epoch reference, a stale token and a
+ * nested call all refuse with no row, revision or receipt change. The
+ * transition body receives the owned transaction — the only handle a DB
+ * operation may write through — and is synchronous for the same reason
  * `withExecutionTransaction` requires it: nothing awaits, launches, reads a file
  * or mutates Git between BEGIN and COMMIT (§4.1).
  */
@@ -371,10 +268,9 @@ export async function withExecutionPlanAuthority<T>(
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
     throw new CoordinationError("coordination.invalid-input", "a plan operation needs an operation with a kind");
   }
-  const planId = resolvePlanAddress(context.caller, call.planId, operation.kind);
-  assertPlanOperationAdmissible(context.caller, operation.kind, planId);
-  // This low-level mutation frame does not implement Prepare's satisfied path.
-  if (operation.kind === "prepare") assertOperationRole(context.caller, operation.kind);
+  const planId = resolvePlanAddress(call.planId, operation.kind);
+  assertPlanOperationAdmissible(operation.kind);
+  assertOperationRole(context.caller, operation.kind);
   const session = call.session ?? (await resolveSparseOwnSession(context, `a ${operation.kind} plan operation`));
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
@@ -400,11 +296,20 @@ export async function withExecutionPlanAuthority<T>(
  * §3 the operation envelope and the gates every plan operation runs
  * ------------------------------------------------------------------------ */
 
-/** §3 the `prepare` member of the closed union, unchanged. */
+/** §3 the `prepare` member of the closed union. */
 export type PrepareOperation = Extract<CoordinationOperation, { kind: "prepare" }>;
 
-/** §3 the `progress` member of the closed union, unchanged. */
+/** §3 the `progress` member of the closed union. */
 export type ProgressOperation = Extract<CoordinationOperation, { kind: "progress" }>;
+
+/** §3 the `residual-add` member of the closed union. */
+export type ResidualAddOperation = Extract<CoordinationOperation, { kind: "residual-add" }>;
+
+/** §3 the `residual-close` member of the closed union. */
+export type ResidualCloseOperation = Extract<CoordinationOperation, { kind: "residual-close" }>;
+
+/** §3 the `complete` member of the closed union. */
+export type CompleteOperation = Extract<CoordinationOperation, { kind: "complete" }>;
 
 /**
  * §3 one DB plan operation request: the §3.1 mutation envelope — operation id,
@@ -418,36 +323,11 @@ export type ExecutionPlanRequest<Operation extends CoordinationOperation = Coord
 };
 
 /**
- * §3 the seat/scope gate of one DB plan verb: the accepted-kind check, the
- * operation's required seat and the plan a plan session may address. One
- * implementation for the boundary and for the operation entries, so no verb can
- * be reached by a seat the shared rules refuse.
- */
-function assertPlanOperationAdmissible(caller: ExecutionCaller, kind: string, planId: string): void {
-  if (LEGACY_ONLY_OPERATIONS[kind] === true) {
-    throw new CoordinationError(
-      "coordination.legacy-only-operation",
-      `${kind} is available only through the file-backed plan route; run \`mstar plan ${kind}\` against the file-backed workflow.`,
-      { operation: kind },
-    );
-  }
-  if (IMPLEMENTED_OPERATIONS[kind] !== true) {
-    throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
-      operation: kind,
-    });
-  }
-  const seat: CoordinationSeat = { role: caller.role, sessionId: caller.sessionId, planId: caller.planId };
-  // Prepare's read-only claimant seat is authenticated from the live row witness.
-  if (kind !== "prepare") assertOperationRole(seat, kind);
-  assertPlanAddress(seat, planId);
-}
-
-/**
  * §3 one resolved plan operation: the validated envelope plus the address the
  * pure reference gate already authorized. Resolving the reference BEFORE the
- * store is opened preserves the precedence of `readExecutionPlan`: a malformed,
- * foreign-role or caller-mismatched reference is refused by itself, never by —
- * or after — an authority-state, store-open or file-read failure.
+ * store is opened preserves the precedence of `readExecutionPlan`: a malformed
+ * or caller-mismatched reference is refused by itself, never by — or after — an
+ * authority-state or store-open failure.
  */
 type ResolvedPlanOperation<Operation extends CoordinationOperation> = {
   call: ExecutionPlanRequest<Operation>;
@@ -463,25 +343,24 @@ function resolvePlanOperationRequest<Operation extends CoordinationOperation>(
   if (!isNonEmptyString(caller?.sessionId)) {
     throw invalidPlanInput("the execution caller needs a non-empty session identity");
   }
-  const operationId = assertOperationId((request as { operationId?: unknown }).operationId);
-  const planId = (request as { planId?: unknown }).planId;
+  const operationId = assertOperationId(request.operationId);
+  const planId = request.planId;
   if (!isNonEmptyString(planId)) throw invalidPlanInput("a plan operation needs the non-empty plan id it addresses");
-  assertPlanOperationAdmissible(caller, kind, planId);
+  assertPlanOperationAdmissible(kind);
   const read = resolvePlanRead(caller, request.session, planId);
   return { call: { ...request, operationId, planId }, read };
 }
 
 /** The caller-input refusal of this module (`coordination.invalid-input`). */
-function invalidPlanInput(detail: string): CoordinationError {
-  return new CoordinationError("coordination.invalid-input", detail);
+function invalidPlanInput(detail: string, details?: Record<string, unknown>): CoordinationError {
+  return new CoordinationError("coordination.invalid-input", detail, details);
 }
 
 /**
  * §4.1 the running-lifecycle admission of a plan operation, read from the
  * witness: a plan's transitions belong to a lifecycle that is still executing,
- * so a paused, failed, stopped or completed workflow refuses them — the same
- * admission the coordinator bind applies. The row, its revisions and the
- * operation ledger are untouched by the refusal.
+ * so a paused, failed, stopped or completed workflow refuses them. The row, its
+ * revisions and the operation ledger are untouched by the refusal.
  */
 function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
   const status = witness.view.workflow.status;
@@ -495,53 +374,6 @@ function assertRunningWorkflow(witness: ExecutionPlanWitness): void {
 }
 
 /**
- * §2.2 one plan view as the SHARED row rules read it: the stored row plus the
- * plan's own lease. The view serves the lease RECORD — a released row is §3.1's
- * tombstone and an existing key — so a rule that needs a HOLDER is handed the
- * lease only while it is held, exactly as the file route hands over its lease
- * object only when the key exists.
- */
-function planRowOf(view: ExecutionPlanView): PlanRow {
-  const lease = view.executionLease;
-  return {
-    ...(view.plan as unknown as Record<string, unknown>),
-    execution_lease: lease !== null && lease.status === "held" ? lease : undefined,
-  } as unknown as PlanRow;
-}
-
-/**
- * §D/§E the row admission every plan-owned write shares, read from the
- * store-held witness — the DB route's equivalent of the file route's
- * `assertRowBinding` plus its current semantic Assignment check:
- *
- * 1. named prepared Assignment fields remain current;
- * 2. the addressed row's own lease must be HELD by this session — identity is
- *    not ownership, and the store keeps released lease rows as tombstones;
- * 3. a handoff owns the plan's transition until the coordinator returns or
- *    completes it.
- */
-function assertPlanOwnedWrite(witness: ExecutionPlanWitness, what: string): void {
-  const planId = witness.planId;
-  const coordination = witness.view.coordination ?? undefined;
-  if (coordination?.prepared !== undefined) {
-    assertPreparedFresh(coordination.prepared.assignment_path, coordination.prepared);
-  }
-  assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, what);
-  assertNoHandoffTransition(coordination, planId);
-}
-
-/**
- * §2/§4 the issue-authority admission of the two residual verbs: the same row
- * admission as every plan-owned write, then the issue/catalog store
- * precondition the public issue verbs enforce through `withWrite`. Both are
- * read on the transaction this call already owns.
- */
-function assertResidualAdmission(witness: ExecutionPlanWitness, tx: ExecutionTransaction): void {
-  assertPlanOwnedWrite(witness, "a plan-owned write");
-  assertIssueStoreActive(tx.db);
-}
-
-/**
  * §3.1/§4.2 the request fingerprint of one plan operation: the operation kind,
  * the addressed plan, the caller identity the receipt is bound to and E01's
  * PUBLISHED semantic selection for that kind (`PLAN_OPERATION_SEMANTICS`) —
@@ -552,12 +384,6 @@ function assertResidualAdmission(witness: ExecutionPlanWitness, tx: ExecutionTra
  * an operation id for a different business payload still refuses
  * `execution.operation-conflict` instead of replaying a foreign receipt (A13),
  * and another actor cannot replay this one.
- *
- * The selected fields are E01's own table: the fingerprint's contract is the
- * published selection, so a verb-local projection that merely re-renders the
- * request — an absent `track_branches` written as `null`, a snake_case alias —
- * is never the intent. A projection that RENDERS the request for a mutation
- * stays with that mutation.
  */
 function planOperationRequestHash(
   caller: ExecutionCaller,
@@ -571,22 +397,6 @@ function planOperationRequestHash(
     intent: selectSemanticFields({ planId: read.planId, operation }, PLAN_OPERATION_SEMANTICS[operation.kind]),
   });
 }
-
-/**
- * §4.1/§4.2 (A13) the plan-owned record each operation kind's effect is read
- * from, as the dot paths `selectSemanticFields` walks over ONE
- * `ExecutionPlanView`: serving a committed receipt is current success only while
- * the state that receipt recorded is still the state this transaction reads.
- *
- * The projection is the kind's OWN effect and nothing else — never the whole
- * row, its siblings or a revision — so a later accepted operation that changed
- * an unrelated field leaves the recorded effect genuinely held (A10), while the
- * effect itself being replaced is disclosed (A13). The two residual verbs write
- * no plan-owned state at all (their effect is an issue row in the issue
- * authority, whose operation-id idempotency and issue CRS decide a retry, and
- * which neither a later plan operation nor anything else on that authority
- * supersedes): their plan-owned projection is empty by construction.
- */
 
 /**
  * §4.1 the sidecar of one plan-frame result: what this call did with the intent,
@@ -610,23 +420,6 @@ function planRecovery(input: {
     warnings: [],
     commitState: input.commitState,
   };
-}
-
-/**
- * §4.1 (R6/A09/A12) the sidecar of a served replay: the requested effect is the
- * one the recorded receipt already committed, so the call returns current
- * success without a second commit. `commitState: "committed"` describes the
- * receipt's own boundary — the effect IS committed, by the recorded operation,
- * and no revision or timestamp moved for this retry.
- */
-function replayRecovery(witness: ExecutionPlanWitness, kind: string): RecoveryDetails {
-  return planRecovery({
-    witness,
-    kind,
-    outcome: "already-satisfied",
-    commitState: "committed",
-    resolvedFrom: [{ path: "operationId", source: "execution_operations receipt" }],
-  });
 }
 
 /**
@@ -691,11 +484,7 @@ function stalePlanRowRefusal(
   );
 }
 
-/**
- * §2.2 one view's stored coordination block: what the view projects, minus the
- * revision that lives in the row column — and without the session binding the
- * DB authority stores in `execution_sessions`, never in the block.
- */
+/** §2.2 one view's stored coordination block, minus the revision that lives in the row column. */
 function storedCoordinationOf(view: ExecutionPlanView): Record<string, unknown> {
   const stored: Record<string, unknown> = { ...(view.coordination ?? {}) };
   delete stored.revision;
@@ -703,60 +492,94 @@ function storedCoordinationOf(view: ExecutionPlanView): Record<string, unknown> 
 }
 
 /**
+ * §4.1 the sidecar every accepted plan operation returns, naming the transaction
+ * boundary the caller can rely on.
+ */
+function appliedRecovery(witness: ExecutionPlanWitness, kind: string): RecoveryDetails {
+  return planRecovery({
+    witness,
+    kind,
+    outcome: "applied",
+    commitState: "committed",
+    resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
+  });
+}
+
+/**
+ * §2.2/§3 write the addressed plan's coordination block back in ONE statement
+ * that also carries the row's state and advances the plan row's revision — the
+ * plan token this operation spends its own on. The block is validated by the
+ * SHARED stored-shape rules first, so no verb can persist a shape its own
+ * validator refuses.
+ */
+function writeCoordinationBlock(
+  tx: ExecutionTransaction,
+  witness: ExecutionPlanWitness,
+  input: { block: Record<string, unknown>; state?: Record<string, unknown>; what: string },
+): void {
+  const route = rowValidationRoute(witnessSnapshot(witness), witness.view.plan as unknown as PlanRow);
+  assertViolationFree(
+    storedCoordinationViolations(input.block, { revision: witness.revision + 1, route, what: input.what }),
+    input.what,
+  );
+  writePlanCoordinationRow(tx, {
+    workflowId: witness.workflowId,
+    planId: witness.planId,
+    state: input.state ?? (witness.view.plan as unknown as Record<string, unknown>),
+    coordination: input.block,
+    revision: witness.revision + 1,
+  });
+}
+
+/**
  * §3.1/§4.1 the transaction of ONE accepted plan operation. Inside one
  * `BEGIN IMMEDIATE` transaction: the authority is active, the caller's
  * reference is revalidated against the store's own rows (which also selects the
- * addressed plan and re-reads the store-held session), the supplied token's
- * ADDRESS and generation are fenced, a committed receipt is returned for an
- * identical retry whose recorded effect the row still holds, the workflow must
- * still be running, and the supplied token's revision must be the plan's exact
- * CAS. Only then does `run` produce the operation's read, and the transaction's
- * one revision advance has already run: the advance and the receipt are the
- * frame's, so an operation cannot forget either, and an operation that composes
- * another domain's writes into this transaction reads the revision it commits
- * at from the shared counter instead of advancing it a second time.
+ * addressed plan), the supplied token's ADDRESS and generation are fenced, a
+ * committed receipt is returned for an identical retry whose recorded effect
+ * the row still holds, the workflow must still be running, and the supplied
+ * token's revision must be the plan's exact CAS. Only then does `run` produce
+ * the operation's read, and the transaction's one revision advance has already
+ * run: the advance and the receipt are the frame's, so an operation cannot
+ * forget either.
  *
- * The caller has already passed `assertPlanOperationAdmissible` and the
- * operation-shape checks; `run` is synchronous for the same reason
- * `withExecutionTransaction` requires it — nothing awaits, launches, reads Git
- * or appends a file between BEGIN and COMMIT.
+ * The caller has already passed the accepted-kind gate and the operation-shape
+ * checks; `run` is synchronous for the same reason `withExecutionTransaction`
+ * requires it — nothing awaits, launches, reads Git or appends a file between
+ * BEGIN and COMMIT.
  */
 function withExecutionPlanOperation<T>(
   context: ExecutionContext,
   resolved: ResolvedPlanOperation<CoordinationOperation>,
   requestHash: string,
+  preflight: ((witness: ExecutionPlanWitness, tx: ExecutionTransaction) => void) | undefined,
   run: (witness: ExecutionPlanWitness, tx: ExecutionTransaction, at: string) => ExecutionRead<T>,
   alreadySatisfied?: (witness: ExecutionPlanWitness, tx: ExecutionTransaction) => ExecutionRead<T> | undefined,
 ): Promise<ExecutionReceipt<T>> {
   const { call: request, read } = resolved;
   return withExecutionTransaction(context, (tx) => {
     if (tx.execution.authorityState !== "active") {
-      const releaseUpgrade = request.operation.kind === "release"
-        ? " ACTIVE-only release is unavailable here. An authorized operator may run `mstar store upgrade --harness <dir> --operator <name>` to import legacy state and activate the authority. This call does not authorize that route."
-        : "";
       throw new ExecutionError(
         "execution.not-active",
-        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority.` +
-          releaseUpgrade + ` A staged store is inspectable only through migration diagnostics.`,
+        `the execution authority is ${tx.execution.authorityState}; a plan operation requires an active authority. ` +
+          `A staged store is inspectable only through migration diagnostics.`,
       );
     }
     const witness = readExecutionPlanWitness(tx, read);
-    if (
-      request.operation.kind === "prepare" &&
-      context.caller.role !== "coordinator" &&
-      (witness.session.role !== "plan-pm" || witness.view.session?.sessionId !== witness.session.sessionId)
-    ) {
-      assertOperationRole(
-        { role: context.caller.role, sessionId: context.caller.sessionId, planId: context.caller.planId },
-        "prepare",
-      );
-    }
-    // §4.2 (R6/R7/A26) the supplied token's ADDRESS and generation are strict and
-    // are fenced BEFORE anything is replayed or decided: a token of another
-    // record, another store or a superseded epoch authorizes neither a replay nor
-    // a mutation. Its REVISION is not a constraint — the commit this frame
-    // records advanced the row, so an exact retry always presents a superseded
-    // revision, which is exactly why revision drift stays replay freshness.
+    // §4.1/§4.2 (R6/A09) a committed receipt is served BEFORE any external proof
+    // or evidence hash: an identical retry returns the RECORDED receipt verbatim
+    // — never re-derived, never with a rewritten timestamp — so a cleaned-up
+    // checkout, a moved HEAD or an edited report cannot turn a success into a
+    // failure. The caller's own semantic hash is the whole admission here; a
+    // reused operation id with a different payload still refuses inside the
+    // lookup.
+    const replay = readPlanOperationReplay<T>(tx, {
+      operationId: request.operationId,
+      requestHash,
+      workflowId: witness.workflowId,
+      planId: witness.planId,
+    });
+    if (replay !== null) return replay;
     const freshness = resolveTokenFreshness(
       request.expected,
       {
@@ -768,31 +591,24 @@ function withExecutionPlanOperation<T>(
       },
       { target: { workflowId: witness.workflowId, planId: witness.planId } },
     );
-    const replay = readPlanOperationReplay<T>(tx, {
-      operationId: request.operationId,
-      requestHash,
-      workflowId: witness.workflowId,
-      planId: witness.planId,
-    });
-    if (replay !== null) {
-      // A committed operation id is replayed from its recorded receipt; replay
-      // conflicts are decided by requestHash when the replay is read.
-      const { operationRecovery, ...recorded } = replay;
-      return {
-        ...recorded,
-        recovery: {
-          ...replayRecovery(witness, request.operation.kind),
-        },
-      };
-    }
     assertRunningWorkflow(witness);
-    // §4.2 (R6/R7) a row revision that moved is a relevant change to the very
-    // record this operation writes, so it is refused with the exact facts instead
-    // of overwritten.
     if (!freshness.current) throw stalePlanRowRefusal(witness, freshness, request.operation.kind);
-    const satisfiedReceipt = alreadySatisfied?.(witness, tx);
-    if (satisfiedReceipt !== undefined) {
-      const receipt = satisfiedReceipt;
+    // §4.1 the verb's own preflight — prepare's admission and actual-checkout
+    // validation, completion's captured-witness comparison — runs HERE, after the
+    // witness, the receipt conflict, the freshness and the running-lifecycle
+    // admission and BEFORE the equality decision and any shared revision or body
+    // write. A served replay returns above and never reaches it, so a retry does
+    // not re-run Git or re-hash evidence.
+    preflight?.(witness, tx);
+    // §4.1 an operation whose requested state the row ALREADY holds is decided
+    // HERE — after admission, receipt conflict and freshness, but BEFORE the
+    // shared revision advance and before the body: nothing about the plan row,
+    // the workflow header or the store revision moves for it. Its accepted
+    // operation still records its own receipt (that bookkeeping is what makes a
+    // later identical retry a replay), and the result carries the
+    // `already-satisfied` recovery rather than `applied`.
+    const satisfied = alreadySatisfied?.(witness, tx);
+    if (satisfied !== undefined) {
       const recovery = planRecovery({
         witness,
         kind: request.operation.kind,
@@ -805,27 +621,19 @@ function withExecutionPlanOperation<T>(
         requestHash,
         workflowId: witness.workflowId,
         planId: witness.planId,
-        receipt: { ...receipt, operationRecovery: recovery },
+        receipt: { ...satisfied, operationRecovery: recovery },
         now: new Date().toISOString(),
       });
-      return { ...receipt, operationId: request.operationId, replayed: false, recovery };
+      return { ...satisfied, operationId: request.operationId, replayed: false, recovery };
     }
     const at = new Date().toISOString();
     // §3.1 the ONE revision advance of this accepted multi-domain transaction
     // runs BEFORE the body: a composed mutation (the residual verbs' issue work)
     // joins the shared advance instead of bumping the counter again, so the body
-    // must be able to read the revision this transaction commits at. Nothing in a
-    // body reads the counters it advances, and a refusal rolls the advance back
-    // with everything else, so the order is not observable either way.
+    // must be able to read the revision this transaction commits at.
     advancePlanOperationRevisions(tx, { workflowId: witness.workflowId, now: at });
     const { operationRecovery, ...receipt } = run(witness, tx, at);
-    const recovery = operationRecovery ?? planRecovery({
-      witness,
-      kind: request.operation.kind,
-      outcome: "applied",
-      commitState: "committed",
-      resolvedFrom: [{ path: "planId", source: "intent.explicit" }],
-    });
+    const recovery = operationRecovery ?? appliedRecovery(witness, request.operation.kind);
     writePlanOperationReceipt(tx, {
       operationId: request.operationId,
       requestHash,
@@ -834,99 +642,55 @@ function withExecutionPlanOperation<T>(
       receipt: { ...receipt, operationRecovery: recovery },
       now: at,
     });
-    return {
-      ...receipt,
-      operationId: request.operationId,
-      replayed: false,
-      recovery,
-    };
+    return { ...receipt, operationId: request.operationId, replayed: false, recovery };
   });
 }
 
 /* ------------------------------------------------------------------------ *
- * §3 `prepare` — the reviewed Assignment's semantic scope and recorded provenance
+ * §3 `prepare` — ordinary revisable execution configuration
  * ------------------------------------------------------------------------ */
 
-/** Parsed prepare inputs and record-only document digests. */
-type PreparedInputs = {
-  assignment: AssignmentHeaders;
-  assignmentSha256: string;
-  planSha256: string;
-};
+/** Fully defaulted ordinary configuration accepted by coordinator prepare. */
+type PreparedInputs = { config: Required<Pick<PlanPrepareConfig, "qaGate" | "findingsCleanup">> & PlanPrepareConfig };
 
 /**
- * The control harness root of the store this call transacts on: the directory
- * that owns `store.db`. `StoreContext.harnessDir` is the anchor the store was
- * RESOLVED from (a workspace root, or the harness directory itself), so the
- * root is read back from the store's own path rather than re-derived: the
- * database's location is what decides where its harness, its `{PLAN_DIR}` and
- * its `{SDD_DIR}` are.
+ * Preparation configuration has no Assignment and no plan-body pin. Optional
+ * checkout metadata is supplied by the coordinator or inherited from the row;
+ * the omitted members keep the safe ordinary defaults.
  */
-function controlHarnessRoot(context: ExecutionContext): string {
-  return canonicalizeNearestExisting(dirname(storeDbPath(context)));
+function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
+  const config = call.operation.config ?? {};
+  assertExactKeys(config as Record<string, unknown>, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
+  if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute(config.worktreePath))) {
+    throw invalidPlanInput("prepare worktreePath must be an absolute path");
+  }
+  if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) {
+    throw invalidPlanInput("prepare workingBranch must be a non-empty branch name");
+  }
+  if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) {
+    throw invalidPlanInput("prepare qaGate must be mandatory or pm-acceptance");
+  }
+  if (config.findingsCleanup !== undefined && !["zero-residual", "allow-residual"].includes(config.findingsCleanup)) {
+    throw invalidPlanInput("prepare findingsCleanup must be zero-residual or allow-residual");
+  }
+  return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
 }
 
 /**
- * Read and validate current prepare inputs before the database transaction.
- * Named fields establish scope; digests are recorded as provenance only.
- */
-function readPrepareInputs(context: ExecutionContext, call: ExecutionPlanRequest<PrepareOperation>): PreparedInputs {
-  const assignment = parseAssignmentFile(call.operation.assignmentPath);
-  const harnessRoot = controlHarnessRoot(context);
-  if (assignment.controlHarnessRoot !== harnessRoot) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "Control harness root" ${assignment.controlHarnessRoot} does not match this store's control harness ${harnessRoot}`,
-      { expected: harnessRoot, actual: assignment.controlHarnessRoot },
-    );
-  }
-  if (assignment.workflowId !== context.caller.workflowId) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "Workflow id" ${assignment.workflowId} is not the workflow ${context.caller.workflowId} this session belongs to`,
-      { expected: context.caller.workflowId, actual: assignment.workflowId },
-    );
-  }
-  if (assignment.planId !== call.planId) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `request planId ${call.planId} is not the Assignment's plan ${assignment.planId}`,
-      { expected: assignment.planId, actual: call.planId },
-    );
-  }
-  const planDir = canonicalizeNearestExisting(resolvePlanDir(harnessRoot));
-  if (dirname(assignment.planPath) !== planDir || basename(assignment.planPath) !== `${call.planId}.md`) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "Plan Path" ${assignment.planPath} is not ${join(planDir, `${call.planId}.md`)}`,
-      { expected: join(planDir, `${call.planId}.md`), actual: assignment.planPath },
-    );
-  }
-  const expectedSdd = canonicalizeNearestExisting(resolveSddDir(harnessRoot, call.planId));
-  if (assignment.sddDir !== expectedSdd) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `Assignment "SDD dir" ${assignment.sddDir} does not match the engine's ${expectedSdd}`,
-      { expected: expectedSdd, actual: assignment.sddDir },
-    );
-  }
-  if (!existsSync(assignment.planPath)) {
-    throw new CoordinationError("coordination.plan-not-found", `plan markdown not found: ${assignment.planPath}`, {
-      path: assignment.planPath,
-    });
-  }
-  return {
-    assignment,
-    assignmentSha256: sha256Bytes(readFileSync(assignment.assignmentPath)),
-    planSha256: sha256Bytes(readFileSync(assignment.planPath)),
-  };
-}
-
-/**
- * `prepare` validates named Assignment scope, preserves semantic field
- * constraints, and records the selected catalog input in one transaction.
- * Only same-operation-id request-hash conflicts govern replay; document digests
- * remain provenance and do not make repeated or revised inputs stale.
+ * §3 `prepare` records the ordinary revisable execution configuration — the
+ * explicit scope facts, the QA gate and the findings-cleanup mode — in one
+ * transaction, and selects the frozen catalog input the registration pinned. It
+ * is OPTIONAL: a row with no prior record completes on the same defaults, so
+ * nothing downstream requires a prepare first. A later prepare revises the
+ * recorded configuration, including while the row is active; the row's status,
+ * progress and completion are never reset.
+ *
+ * §4.1 the transaction preflight validates the EFFECTIVE scope — the row's
+ * recorded worktree/branch with supplied members applied — against actual
+ * filesystem and Git before equality or domain writes. Done rows refuse there.
+ * An equal valid configuration is `already-satisfied`: plan/header/store
+ * revisions do not advance, while its operation receipt is retained with the
+ * actual transaction store/epoch so an identical retry can replay it.
  */
 export async function prepareExecutionPlan(
   context: ExecutionContext,
@@ -934,132 +698,204 @@ export async function prepareExecutionPlan(
 ): Promise<ExecutionReceipt<ExecutionPlanView>> {
   const resolved = resolvePlanOperationRequest(context.caller, request, "prepare");
   const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "assignmentPath"], "prepare operation");
-  if (!isNonEmptyString(operation.assignmentPath) || !isAbsolute(operation.assignmentPath)) {
-    throw invalidPlanInput("prepare requires an absolute assignmentPath");
-  }
-  const inputs = readPrepareInputs(context, resolved.call);
+  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "config"], "prepare operation");
+  const inputs = readPrepareInputs(resolved.call);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  const { planId, workflowId } = resolved.read;
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const state = witness.view.plan as Record<string, unknown>;
-    const plan = state as PlanRow;
-    const previous = witness.view.coordination?.prepared;
-    if (previous !== undefined && canonicalTarget(previous.assignment_path) !== inputs.assignment.assignmentPath) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} is prepared from ${previous.assignment_path}, not from ${inputs.assignment.assignmentPath}`,
-        { expected: previous.assignment_path, actual: inputs.assignment.assignmentPath },
-      );
-    }
-    assertPrepareAdmission({
-      planId: witness.planId,
-      // A transport whose lease lives outside the row hands the rule the lease
-      // it holds for this plan, so the refusal can still name the owner.
-      row: { ...state, execution_lease: witness.view.executionLease ?? undefined },
-      coordination: witness.view.coordination ?? undefined,
-      sessionBound: witness.view.session !== null,
-      leaseHeld: witness.view.executionLease !== null,
-    });
+  return withExecutionPlanOperation<ExecutionPlanView>(
+    context,
+    resolved,
+    requestHash,
+    (witness) => {
+      // §4.1 admission and actual-scope validation both run on the first attempt,
+      // before any write. `validateEffectiveScope` resolves the row's recorded
+      // scope, applies the supplied members and checks THAT against Git — a
+      // mistaken prior value stays revisable, and a supplied value is never an
+      // exemption from the check.
+      assertPrepareAdmission({ planId: witness.planId, row: witness.view.plan as PlanRow });
+      const effective = effectiveScope(witness.view, inputs.config);
+      if (effective.worktreePath !== undefined) {
+        validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
+      }
+    },
+    (witness, tx, at) => writePreparedConfig(context, resolved.read, inputs, witness, tx, at),
+    (witness, tx) => alreadyPrepared(witness.view, inputs, witness.token, tx),
+  );
+}
 
-    // §3 step 3 the registration admission the file route runs after its own
-    // row admission: a root-visible workflow whose catalog registration is
-    // still pending is never a valid workspace, because the row this operation
-    // is about to record would be prepared from an uncommitted registration. Read
-    // on THIS transaction's handle — one connection, one transaction, the same
-    // "pending" verdict as `assertCatalogExecutionCommitted` — before any pin
-    // or row write.
-    assertCatalogExecutionCommittedOn(tx.db, controlHarnessRoot(context), witness.workflowId);
+/**
+ * §4.1 the `already-satisfied` verdict of one `prepare`: the row ALREADY records
+ * exactly this configuration and its requested checkout, so the frame decides it
+ * before its shared revision advance — no row, header or store revision moves,
+ * and the result expresses the no-op as `already-satisfied` rather than
+ * `applied`. Its envelope is the REAL transaction identity (the same store and
+ * epoch the frame commits the no-op receipt in), never a fabricated one.
+ * Admission (a `Done` row) and the checkout validation are the caller's
+ * preflight's, and both have already run by the time this is consulted.
+ */
+function alreadyPrepared(
+  view: ExecutionPlanView,
+  inputs: PreparedInputs,
+  token: ExecutionToken,
+  tx: ExecutionTransaction,
+): ExecutionRead<ExecutionPlanView> | undefined {
+  const prior = view.coordination?.prepared;
+  if (prior === undefined) return undefined;
+  if (prior.qa_gate !== inputs.config.qaGate || prior.findings_cleanup !== inputs.config.findingsCleanup) {
+    return undefined;
+  }
+  const effective = effectiveScope(view, inputs.config);
+  const metadata = isPlainObject((view.plan as unknown as Record<string, unknown>).metadata)
+    ? ((view.plan as unknown as Record<string, unknown>).metadata as Record<string, unknown>)
+    : {};
+  const recordedWorktree = isNonEmptyString(metadata.worktree_path) ? canonicalTarget(metadata.worktree_path) : undefined;
+  const recordedBranch = isNonEmptyString(metadata.working_branch) ? metadata.working_branch : undefined;
+  if (effective.worktreePath !== recordedWorktree || effective.workingBranch !== recordedBranch) return undefined;
+  return { data: view, token, storeId: tx.storeId, epoch: tx.epoch };
+}
 
-    const sealed = readExecutionSealedInput(tx, witness.workflowId, witness.planId);
-    if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
-      throw new ExecutionPinConflictError(
-        `plan ${witness.planId}'s recorded catalog store ${sealed.pin.store_id} does not match the active store ${tx.storeId}`,
-        { workflow_id: witness.workflowId, plan_id: witness.planId, pin: sealed.pin, store_id: tx.storeId },
-      );
-    }
-    // The catalog's numeric revision and store/entity/path facts are current
-    // transaction facts. Input hashes below remain provenance only.
-    const pin = selectCatalogPinOn(
-      catalogPinFactsOn(tx.db, tx.storeId, witness.workflowId, witness.planId),
-      sealed.inputHash,
+/**
+ * The scope one `prepare` actually asks for: the row's recorded worktree/branch
+ * with the supplied members applied. Omitted members fall back to the row, so
+ * `workingBranch`-only and `worktreePath`-only edits are validated against the
+ * same pair they commit.
+ */
+function effectiveScope(
+  view: ExecutionPlanView,
+  config: PlanPrepareConfig,
+): { worktreePath: string | undefined; workingBranch: string | undefined } {
+  const metadata = isPlainObject((view.plan as unknown as Record<string, unknown>).metadata)
+    ? ((view.plan as unknown as Record<string, unknown>).metadata as Record<string, unknown>)
+    : {};
+  const recordedWorktree = isNonEmptyString(metadata.worktree_path) ? canonicalTarget(metadata.worktree_path) : undefined;
+  const recordedBranch = isNonEmptyString(metadata.working_branch) ? metadata.working_branch : undefined;
+  return {
+    worktreePath: config.worktreePath === undefined ? recordedWorktree : canonicalTarget(config.worktreePath),
+    workingBranch: config.workingBranch ?? recordedBranch,
+  };
+}
+
+/** The writing half of `prepare`, once the preflight admitted it. */
+function writePreparedConfig(
+  context: ExecutionContext,
+  read: ResolvedPlanRead,
+  inputs: PreparedInputs,
+  witness: ExecutionPlanWitness,
+  tx: ExecutionTransaction,
+  at: string,
+): ExecutionRead<ExecutionPlanView> {
+  const { planId, workflowId } = read;
+  const plan = witness.view.plan as PlanRow;
+  const storedMetadata = isPlainObject(plan.metadata) ? plan.metadata : {};
+  const nextWorktree = inputs.config.worktreePath === undefined
+    ? (isNonEmptyString(storedMetadata.worktree_path) ? canonicalTarget(storedMetadata.worktree_path) : undefined)
+    : canonicalTarget(inputs.config.worktreePath);
+  const nextBranch = inputs.config.workingBranch ??
+    (isNonEmptyString(storedMetadata.working_branch) ? storedMetadata.working_branch : undefined);
+  assertCatalogExecutionCommittedOn(tx.db, workflowId);
+  const sealed = readExecutionSealedInput(tx, workflowId, planId);
+  if (sealed.pin !== null && sealed.pin.store_id !== tx.storeId) {
+    throw new ExecutionPinConflictError(
+      `plan ${planId}'s recorded catalog identity belongs to another store`,
+      { workflow_id: workflowId, plan_id: planId, store_id: tx.storeId },
     );
-
-    // §D the plan's own worktree/branch anchors, which the later plan bind
-    // claims its execution lease against: recorded when the row carries none,
-    // and never silently rebound when it records a different scope.
-    const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
-    const worktree = inputs.assignment.worktreePath;
-    const branch = inputs.assignment.workingBranch;
-    if (isNonEmptyString(metadata.worktree_path) && canonicalTarget(String(metadata.worktree_path)) !== worktree) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} records worktree ${String(metadata.worktree_path)}, but the Assignment pins ${worktree} \u2014 an authorized prepare never rebinds a plan's scope`,
-        { plan_id: planId, expected: metadata.worktree_path, actual: worktree },
-      );
-    }
-    if (isNonEmptyString(metadata.working_branch) && metadata.working_branch !== branch) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `plan ${planId} records branch ${String(metadata.working_branch)}, but the Assignment pins ${branch} \u2014 an authorized prepare never rebinds a plan's scope`,
-        { plan_id: planId, expected: metadata.working_branch, actual: branch },
-      );
-    }
-    metadata.worktree_path = worktree;
-    metadata.working_branch = branch;
-
-    const prepared: PreparedCoordination = {
-      assignment_path: inputs.assignment.assignmentPath,
-      assignment_sha256: inputs.assignmentSha256,
-      plan_sha256: inputs.planSha256,
-      qa_gate: inputs.assignment.qaGate,
-      findings_cleanup: inputs.assignment.findingsCleanup,
-      // Named Assignment fields remain available for field-value scope and QA
-      // checks; the document digests above are provenance only.
-      assignment_intent: assignmentIntentOf(inputs.assignment),
-      prepared_by: witness.session.sessionId,
-      prepared_at: at,
-    };
-    assertViolationFree(validatePreparedCoordination(prepared), "prepared block");
-    // The catalog selection is written before the row, and both changes share
-    // the plan revision advanced by this operation.
-    writeExecutionInputPin(tx, { workflowId, planId, pin });
-    writeCoordinationBlock(tx, witness, {
-      block: { ...storedCoordinationOf(witness.view), prepared },
-      state: { ...state, metadata },
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return {
-      data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch,
-    };
-  }, (witness, tx) => {
-    const prepared = witness.view.coordination?.prepared;
-    const satisfied = prepared !== undefined &&
-      canonicalTarget(prepared.assignment_path) === inputs.assignment.assignmentPath &&
-      isDeepStrictEqual(prepared.assignment_intent, assignmentIntentOf(inputs.assignment));
-    return satisfied
-      ? { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch }
-      : undefined;
+  }
+  const pin = selectCatalogPinOn(catalogPinFactsOn(tx.db, tx.storeId, workflowId, planId), sealed.inputHash);
+  const metadata: Record<string, unknown> = { ...storedMetadata };
+  if (nextWorktree !== undefined) metadata.worktree_path = nextWorktree;
+  if (nextBranch !== undefined) metadata.working_branch = nextBranch;
+  const prepared: PreparedCoordination = {
+    qa_gate: inputs.config.qaGate,
+    findings_cleanup: inputs.config.findingsCleanup,
+    prepared_by: witness.session.sessionId,
+    prepared_at: at,
+  };
+  writeExecutionInputPin(tx, { workflowId, planId, pin });
+  writeCoordinationBlock(tx, witness, {
+    block: { ...storedCoordinationOf(witness.view), prepared },
+    state: { ...(witness.view.plan as Record<string, unknown>), metadata },
+    what: `plan ${planId} coordination`,
   });
+  const committed = readExecutionPlanWitness(tx, read);
+  return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
+}
+
+/**
+ * §4.1 validate the checkout and branch a `prepare` actually ASKS FOR, against
+ * the filesystem and Git: the worktree must be a readable Git worktree, must
+ * carry no unfinished Git operation and no uncommitted change, and — when a
+ * branch is supplied — must be ON that branch. The stored metadata is then a
+ * fact about a real checkout rather than a caller's string.
+ */
+function validateSuppliedCheckout(worktreePath: string, workingBranch: string | undefined, planId: string): void {
+  const repository = canonicalTarget(worktreePath);
+  const head = gitRead(repository, ["rev-parse", "HEAD"]);
+  if (head === undefined) {
+    throw new CoordinationError(
+      "coordination.not-in-git",
+      `prepare requires the supplied worktreePath ${worktreePath} to be a readable Git worktree`,
+      { plan_id: planId, worktree_path: worktreePath },
+    );
+  }
+  const dirty = gitRead(repository, ["status", "--porcelain"]);
+  if (dirty === undefined) {
+    throw new CoordinationError(
+      "coordination.not-in-git",
+      `prepare cannot read the Git state of the supplied worktreePath ${worktreePath}`,
+      { plan_id: planId, worktree_path: worktreePath },
+    );
+  }
+  if (dirty.length > 0) {
+    throw gitProof(`prepare requires a clean supplied worktree \u2014 ${worktreePath} has uncommitted changes`, {
+      plan_id: planId,
+      worktree_path: worktreePath,
+      head,
+    });
+  }
+  if (workingBranch === undefined) return;
+  const branch = gitRead(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== workingBranch) {
+    throw gitProof(
+      `prepare requires the supplied worktreePath ${worktreePath} to be on the supplied workingBranch ${workingBranch} \u2014 got ` +
+        `${branch || "a detached HEAD"}`,
+      { plan_id: planId, expected: workingBranch, actual: branch },
+    );
+  }
+  if (gitRead(repository, ["rev-parse", `refs/heads/${workingBranch}`]) === undefined) {
+    throw gitProof(`prepare requires refs/heads/${workingBranch} to exist in ${worktreePath}`, {
+      plan_id: planId,
+      working_branch: workingBranch,
+      worktree_path: worktreePath,
+    });
+  }
+}
+
+/**
+ * §3 the ordinary execution configuration one plan completes on: its own
+ * recorded configuration, or the safe defaults for a row that was never
+ * prepared. Prepare is optional and defaults apply, so no completion requires a
+ * prior prepare record.
+ */
+function effectivePrepareConfig(view: ExecutionPlanView): PreparedCoordination {
+  return view.coordination?.prepared ?? {
+    qa_gate: "mandatory",
+    findings_cleanup: "allow-residual",
+    prepared_by: "",
+    prepared_at: "",
+  };
 }
 
 /* ------------------------------------------------------------------------ *
- * §3 `progress` — the executing row's status, summary and evidence
+ * §3 `progress` — the row's status, summary, evidence and track branches
  * ------------------------------------------------------------------------ */
 
 /**
- * §3 `progress` on the DB authority: the plan session that HOLDS the plan's
- * execution lease moves its own row's status, summary and reported branches,
- * against the plan token it read.
- *
- * The seat is the store's own session row (never a file envelope), the lease is
- * the one `execution_leases` holds for this plan, and the shared rules decide
- * the handoff gate, the status transition and the track-branch scope, so the DB
- * route refuses exactly what the file route refuses. The frozen assignment and
- * the frozen catalog input are witnesses here, never writers: a changed
- * Assignment refuses `coordination.assignment-stale`, and no progress copies a
- * newer catalog title, path or reference into the plan's sealed input.
+ * §3 `progress` on the DB authority: the workflow's coordinator moves the
+ * addressed row's status, summary and reported branches against the plan token
+ * it read. There is no plan session and no holder proof: the coordinator
+ * binding and the row CAS are the whole admission. The shared rules decide the
+ * status transition and the track-branch scope, so the DB route refuses exactly
+ * what the file route refuses, and no progress copies a newer catalog title,
+ * path or reference into the plan's sealed input.
  */
 export async function progressExecutionPlan(
   context: ExecutionContext,
@@ -1075,10 +911,9 @@ export async function progressExecutionPlan(
   // §D the areas a plan's own evidence may live in: derived from the harness
   // root this store lives in, never from a caller-supplied path.
   const planAreas = planAreaRoots(controlHarnessRoot(context), planId);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
     const state = witness.view.plan as Record<string, unknown>;
     const plan = state as PlanRow;
-    assertPlanOwnedWrite(witness, "a plan-owned write");
     requireProgressStatus(plan, progress.status, planId);
     if (progress.track_branches !== undefined) {
       assertTrackBranches(
@@ -1115,130 +950,17 @@ export async function progressExecutionPlan(
   });
 }
 
-/** Release the caller's own execution claim without consulting mutable Assignment bytes. */
-export async function releaseExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<Extract<CoordinationOperation, { kind: "release" }>>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "release");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "reason"], "release operation");
-  if (operation.reason !== undefined && !isNonEmptyString(operation.reason)) {
-    throw invalidPlanInput("a release reason, when supplied, must be a non-empty string");
-  }
-  const reason = operation.reason ?? "holder-requested release";
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  const { planId } = resolved.read;
-  return withExecutionPlanOperation(context, resolved, requestHash, (witness, tx, at) => {
-    const coordination = witness.view.coordination ?? undefined;
-    const lease = requireExecutionLease(planRowOf(witness.view), planId, "release");
-    if (executionLeaseOwnerEpoch(tx, witness.workflowId, planId) !== tx.epoch) {
-      throw new ExecutionError(
-        "execution.stale-token",
-        `plan ${planId}'s held execution claim belongs to an earlier authority epoch and cannot be released by the current session`,
-        { workflow_id: witness.workflowId, plan_id: planId },
-      );
-    }
-    if (lease.holder_session_id !== witness.session.sessionId || lease.holder_role !== witness.session.role) {
-      throw new CoordinationError(
-        "coordination.session-mismatch",
-        `release requires plan ${planId}'s own held execution claim`,
-        { plan_id: planId, holder: lease.holder_session_id },
-      );
-    }
-    if (
-      witness.session.role === "plan-pm" &&
-      witness.view.session?.sessionId !== witness.session.sessionId
-    ) {
-      throw new CoordinationError("coordination.session-mismatch", `release requires the caller's acquired plan binding`, {
-        plan_id: planId,
-      });
-    }
-    if (coordination?.handoff !== undefined && coordination.handoff.state !== "returned") {
-      assertNoHandoffTransition(coordination, planId);
-    }
-    const status = releaseStatus(witness.view.plan as PlanRow, planId);
-    releaseExecutionLease(tx, {
-      workflowId: witness.workflowId,
-      planId,
-      lease,
-      releasedBy: witness.session.sessionId,
-      reason,
-      now: at,
-      operationId: request.operationId,
-    });
-    const state: Record<string, unknown> = { ...(witness.view.plan as unknown as Record<string, unknown>), status };
-    writePlanCoordinationRow(tx, {
-      workflowId: witness.workflowId,
-      planId,
-      state,
-      coordination: storedCoordinationOf(witness.view),
-      revision: witness.revision + 1,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  }, (witness, tx) => {
-    const lease = witness.view.executionLease;
-    if (lease?.status !== "released" || lease.holder_session_id !== witness.session.sessionId) return undefined;
-    if (lease.holder_role !== witness.session.role) {
-      throw new CoordinationError("coordination.session-mismatch", `released claim for plan ${planId} belongs to a different role`, {
-        plan_id: planId,
-      });
-    }
-    if (executionLeaseOwnerEpoch(tx, witness.workflowId, planId) !== tx.epoch) {
-      throw new ExecutionError(
-        "execution.stale-token",
-        `plan ${planId}'s released execution claim belongs to an earlier authority epoch`,
-        { workflow_id: witness.workflowId, plan_id: planId },
-      );
-    }
-    if (witness.session.role === "plan-pm" && witness.view.session?.sessionId !== witness.session.sessionId) {
-      throw new CoordinationError("coordination.session-mismatch", `release requires the caller's acquired plan binding`, {
-        plan_id: planId,
-      });
-    }
-    const coordination = witness.view.coordination ?? undefined;
-    if (coordination?.handoff !== undefined && coordination.handoff.state !== "returned") {
-      assertNoHandoffTransition(coordination, planId);
-    }
-    if (!["Todo", "Blocked"].includes(rowStatusOf(witness.view.plan as PlanRow))) {
-      throw new CoordinationError("coordination.plan-status", `plan ${planId} has no claimable released status`, {
-        plan_id: planId,
-        status: witness.view.plan.status,
-      });
-    }
-    return { data: witness.view, token: witness.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
 /* ------------------------------------------------------------------------ *
  * §3 `residual-add` / `residual-close` — the issue authority inside this
  * transaction
  * ------------------------------------------------------------------------ */
 
-/** §3 the `residual-add` member of the closed union, unchanged. */
-export type ResidualAddOperation = Extract<CoordinationOperation, { kind: "residual-add" }>;
-
-/** §3 the `residual-close` member of the closed union, unchanged. */
-export type ResidualCloseOperation = Extract<CoordinationOperation, { kind: "residual-close" }>;
-
-
 /**
  * §3.1 the plan-revision advance of one accepted plan operation whose body does
  * not otherwise write the addressed row. The plan row's revision IS the plan
  * CAS, so an operation with domain work in another authority (the residual
- * verbs' issue work) and an operation whose requested state is already the
- * accepted state (a re-verified `integration-start`, a `reconcile` of a
- * completed attempt) both advance it exactly once, in this transaction, before
- * the receipt's read. Without it the plan CAS and the frame's store/workflow
- * advance disagree, and a caller holding the pre-operation plan token could
- * submit the next mutation with it and pass the exact-token CAS.
- *
- * Neither stored block changed — the operation's domain state and the row's
- * coordination are exactly what this transaction read — so they are written
- * back unchanged beside the advanced revision: the row writer is the one place
- * a plan revision advances, and no operation opens a second path to the
- * revision column.
+ * verbs' issue work) advances it exactly once, in this transaction, before the
+ * receipt's read.
  */
 function advancePlanRowRevision(tx: ExecutionTransaction, witness: ExecutionPlanWitness): void {
   writePlanCoordinationRow(tx, {
@@ -1298,25 +1020,17 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
   return derived;
 }
 
-
 /**
- * §3 `residual-add` on the DB authority: the plan session that HOLDS the plan's
- * execution lease captures each residual and links it to this plan, in the SAME
- * transaction that commits the workflow/store revisions and the operation
- * receipt.
+ * §3 `residual-add` on the DB authority: the coordinator captures each residual
+ * and links it to this plan, in the SAME transaction that commits the
+ * workflow/store revisions and the operation receipt.
  *
- * The issue work is composed, never re-entered: `captureIssueOn` / `linkIssueOn`
- * take this transaction's own handle, so there is no nested `BEGIN`, no second
- * connection and no session-file lookup on this route. Any refusal anywhere in
- * the loop rolls back every entry, the receipt and the revision advance
- * together: an accepted operation is all-or-nothing, which the file route's
- * per-entry transactions cannot claim.
- * A plan session captures into ITS plan: the link target is the addressed plan
- * id, never a caller-supplied target, and the seat/address gates require this
- * session to be the addressed plan's own plan-pm. The plan row's state is
- * untouched (a residual lives in the issue authority) while its REVISION still
- * advances once: the plan token is the plan's CAS, so the receipt returns the
- * token this operation spent its own on.
+ * The issue work is composed, never re-entered: `captureIssueOn` /
+ * `linkIssueScopedOn` take this transaction's own handle, so there is no nested
+ * `BEGIN` and no second connection. Any refusal anywhere in the loop rolls back
+ * every entry, the receipt and the revision advance together. The plan row's
+ * state is untouched (a residual lives in the issue authority) while its
+ * REVISION still advances once.
  */
 export async function residualAddExecutionPlan(
   context: ExecutionContext,
@@ -1331,11 +1045,13 @@ export async function residualAddExecutionPlan(
   }
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
-    assertResidualAdmission(witness, tx);
-    // Project membership is the only capture field owned by the plan. Resolve
-    // and validate every entry before the first issue write; keep occurrence
-    // keys caller-owned because they are the stable identity of each event.
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
+    assertRunningWorkflow(witness);
+    assertIssueStoreActive(tx.db);
+    // §G2a the project bucket is the ADDRESSED ROW's own `metadata.project_id`
+    // (validated as a safe path component), falling back to `_default`, never the
+    // workflow header's: a residual captured on this row must keep its own
+    // project provenance even when the workflow declares another one.
     const projectId = projectBucketOf(witness.view.plan as unknown as PlanRow);
     const derivedEntries = deriveResidualEntries(entries, projectId);
     const { planId } = witness;
@@ -1349,10 +1065,7 @@ export async function residualAddExecutionPlan(
       const capture = captureIssueOn(
         tx.db,
         input,
-        {
-          operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey),
-          actor,
-        },
+        { operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey), actor },
         composed,
       );
       // Always link, never only on `created`: the plan link is the gate a later
@@ -1363,11 +1076,7 @@ export async function residualAddExecutionPlan(
         tx.db,
         capture.issueId,
         { kind: "plan", target: planId },
-        {
-          operationId: residualLinkOperationId(sessionId, planId, occurrenceKey),
-          actor,
-          expectedRevision: capture.revision,
-        },
+        { operationId: residualLinkOperationId(sessionId, planId, occurrenceKey), actor, expectedRevision: capture.revision },
         composed,
       );
     }
@@ -1378,18 +1087,16 @@ export async function residualAddExecutionPlan(
 }
 
 /**
- * §3 `residual-close` on the DB authority: the plan session that HOLDS the
- * plan's execution lease closes ONE finding linked to this plan, under the
- * issue revision the caller read, in the same transaction as the receipt and the
- * revision advance — the plan row's own CAS revision included, exactly as a
- * residual-add advances it.
+ * §3 `residual-close` on the DB authority: the coordinator closes ONE finding
+ * linked to this plan, under the issue revision the caller read, in the same
+ * transaction as the receipt and the revision advance — the plan row's own CAS
+ * revision included, exactly as a residual-add advances it.
  *
  * Two refusals protect the scope and the CAS: an issue that is not linked to
- * THIS plan refuses `issue.scope-refused` (a plan closes only its own findings —
- * the link is append-only, so the read cannot race an unlink), and an
- * `expectedIssueRevision` that is not the issue's current revision refuses
- * `issue.revision-conflict`. Both leave the issue, its history, the plan token
- * and the operation ledger untouched.
+ * THIS plan refuses `issue.scope-refused`, and an `expectedIssueRevision` that
+ * is not the issue's current revision refuses `issue.revision-conflict`. Both
+ * leave the issue, its history, the plan token and the operation ledger
+ * untouched.
  */
 export async function residualCloseExecutionPlan(
   context: ExecutionContext,
@@ -1414,8 +1121,9 @@ export async function residualCloseExecutionPlan(
   assertClosureAuthority(operation.disposition, operation.evidence);
   const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
   const actor = issueWriteSeat(context.caller.role);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx) => {
-    assertResidualAdmission(witness, tx);
+  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, undefined, (witness, tx) => {
+    assertRunningWorkflow(witness);
+    assertIssueStoreActive(tx.db);
     assertIssueLinkedToPlanOn(tx.db, operation.issueId, witness.planId);
     closeIssueOn(
       tx.db,
@@ -1438,23 +1146,36 @@ export async function residualCloseExecutionPlan(
 }
 
 /* ------------------------------------------------------------------------ *
- * §D/§E the lifecycle transitions: handoff, accept, return, integration and
- * completion, plus the crash-recovery `reconcile`
+ * §E the delivery route and completion proof rules
  * ------------------------------------------------------------------------ */
 
-type HandoffOperation = Extract<CoordinationOperation, { kind: "handoff" }>;
-type AcceptOperation = Extract<CoordinationOperation, { kind: "accept" }>;
-type ReturnOperation = Extract<CoordinationOperation, { kind: "return" }>;
-type IntegrationStartOperation = Extract<CoordinationOperation, { kind: "integration-start" }>;
-type IntegrationAcceptOperation = Extract<CoordinationOperation, { kind: "integration-accept" }>;
-type CompleteOperation = Extract<CoordinationOperation, { kind: "complete" }>;
-type ReconcileOperation = Extract<CoordinationOperation, { kind: "reconcile" }>;
+/**
+ * §E the delivery route one workflow snapshot declares, as the shared
+ * classifiers read it. `report-only` and `development` are the single-row
+ * standalone shapes; everything else is an iteration row that delivers through
+ * the workflow's own integration merge.
+ */
+export type DeliveryRoute = "report-only" | "development" | "integration";
+
+export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
+  if (isStandaloneReportOnlyWorkflow(snapshot)) return "report-only";
+  if (isStandaloneDevelopmentWorkflow(snapshot)) return "development";
+  return "integration";
+}
+
+/** §4.1 the route/policy pair a transition proved BEFORE its transaction pinned. */
+export type DeliveryRoutePin = { route: DeliveryRoute; completionPolicy: string | undefined };
+
+/** The pair one snapshot declares, as a caller pins it before taking ownership. */
+export function deliveryRoutePin(snapshot: WorkflowSnapshot): DeliveryRoutePin {
+  return { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
+}
 
 /**
  * §D/§E one plan's own scope as the addressed ROW records it: the plan worktree
- * and branch an authorized `prepare` sealed into `metadata`. The DB route has no
- * resolved file scope — the row IS the scope — so every Git proof below is taken
- * against what this plan recorded, never against a caller-supplied path.
+ * and branch an authorized `prepare` recorded into `metadata`. The DB route has
+ * no resolved file scope — the row IS the scope — so every Git proof below is
+ * taken against what this plan recorded, never against a caller-supplied path.
  */
 type PlanScope = { worktreePath: string; workingBranch: string };
 
@@ -1468,20 +1189,11 @@ function planScopeOf(view: ExecutionPlanView, planId: string): PlanScope {
     throw new CoordinationError(
       "coordination.scope-mismatch",
       `plan ${planId} records no plan worktree/branch scope (metadata.worktree_path must be an absolute path and ` +
-        `metadata.working_branch a non-empty branch), so its Git evidence cannot be proven`,
+        `metadata.working_branch a non-empty branch); record it with plan prepare, then retry`,
       { plan_id: planId, worktree_path: worktree ?? null, working_branch: branch ?? null },
     );
   }
   return { worktreePath: canonicalTarget(worktree), workingBranch: branch };
-}
-
-/** The plan's recorded worktree, or `undefined` when the row records none yet. */
-function planScopeOrUndefined(view: ExecutionPlanView, planId: string): string | undefined {
-  const metadata = isPlainObject((view.plan as Record<string, unknown>).metadata)
-    ? ((view.plan as Record<string, unknown>).metadata as Record<string, unknown>)
-    : {};
-  const worktree = metadata.worktree_path;
-  return isNonEmptyString(worktree) && isAbsolute(worktree) ? canonicalTarget(worktree) : undefined;
 }
 
 /**
@@ -1515,8 +1227,9 @@ function witnessSnapshot(witness: ExecutionPlanWitness): WorkflowSnapshot {
 
 /**
  * §E the workflow snapshot of one addressed plan, read BEFORE SQLite ownership:
- * the same projection from `readExecutionState`, which is how the pre-transaction
- * Git proofs and the route decision see the plan rows and the merge lease.
+ * the same projection from `readExecutionState`, which is how the
+ * pre-transaction Git proofs and the route decision see the plan rows and the
+ * merge lease.
  */
 async function readWorkflowSnapshot(context: ExecutionContext, workflowId: string): Promise<WorkflowSnapshot> {
   const state = await readExecutionState(context);
@@ -1533,694 +1246,11 @@ async function readWorkflowSnapshot(context: ExecutionContext, workflowId: strin
   });
 }
 
-/** The addressed row's own stored coordination block, or `undefined` when it carries none. */
-function coordinationOf(witness: ExecutionPlanWitness): RowCoordination | undefined {
-  return (witness.view.coordination ?? undefined) as RowCoordination | undefined;
-}
-
 /**
- * §2.2/§R5 the frame one row write runs through. It is exactly the addressed
- * row's own view plus the workflow facts the shared row rules read, so a
- * completion composed by the PLAN route (`complete`/`reconcile`) and one
- * composed by the WORKFLOW route (a terminal close, E10) write through the same
- * rule home instead of a second completion implementation.
- *
- * `releasedBy` is the session the transition acts as: the holder the row's own
- * execution lease is re-asserted against and the author its release records.
+ * §E the report-only route's completion evidence: the workflow must RECORD the
+ * fulfilment of its registered completion policy. `consultDeliveryEvidence`
+ * owns the completeness rule, so this route cannot invent a second one.
  */
-export type RowCompletionFrame = {
-  workflowId: string;
-  planId: string;
-  view: ExecutionPlanView;
-  state: ExecutionPlanView["workflow"];
-  siblings: readonly ExecutionPlanView[];
-  integrationLease: IntegrationMergeLease | null;
-  /** The addressed row's revision — the value its token carries (§3.1). */
-  revision: number;
-  sessionBound: boolean;
-  releasedBy: string;
-};
-
-/** The frame of one plan-route witness: the same facts, read from the row's own transaction. */
-function rowFrameOf(witness: ExecutionPlanWitness): RowCompletionFrame {
-  return {
-    workflowId: witness.workflowId,
-    planId: witness.planId,
-    view: witness.view,
-    state: witness.view.workflow,
-    siblings: witness.siblings,
-    integrationLease: witness.view.integrationLease,
-    revision: witness.revision,
-    sessionBound: witness.view.session !== null,
-    releasedBy: witness.session.sessionId,
-  };
-}
-
-/** The workflow snapshot one frame's shared rules read (header + rows + merge lease). */
-function frameSnapshot(frame: RowCompletionFrame): WorkflowSnapshot {
-  return workflowSnapshotOf({
-    state: frame.state,
-    plans: [frame.view, ...frame.siblings],
-    integrationLease: frame.integrationLease,
-  });
-}
-
-/**
- * §2.2/§D write the addressed plan's coordination block back in ONE statement
- * that also advances the plan row's revision — the plan token this operation
- * spends its own on. The block is validated by the SHARED rules first, with the
- * DB route's own session fact (the plan's session row) standing in for the
- * `coordination.session` binding this authority never stores.
- */
-function writeCoordinationBlock(
-  tx: ExecutionTransaction,
-  witness: ExecutionPlanWitness,
-  input: { block: Record<string, unknown>; state?: Record<string, unknown>; what: string },
-): void {
-  writeCoordinationFrame(tx, rowFrameOf(witness), input);
-}
-
-/** The same write for any frame: the shared implementation both routes call. */
-function writeCoordinationFrame(
-  tx: ExecutionTransaction,
-  frame: RowCompletionFrame,
-  input: { block: Record<string, unknown>; state?: Record<string, unknown>; what: string },
-): void {
-  const route = rowValidationRoute(frameSnapshot(frame), frame.view.plan as unknown as PlanRow);
-  const handoff = isPlainObject(input.block.handoff) ? input.block.handoff : undefined;
-  const submitterAssociated = handoff === undefined || (
-    typeof handoff.submitted_by === "string" &&
-    tx.db
-      .prepare("select 1 from execution_sessions where workflow_id = ? and role = 'plan-pm' and plan_id = ? and session_id = ?")
-      .get(frame.workflowId, frame.planId, handoff.submitted_by) !== undefined
-  );
-  const violations = storedCoordinationViolations(input.block, {
-    revision: frame.revision + 1,
-    route,
-    submitterAssociated,
-    activeSessionBound: frame.sessionBound,
-    what: input.what,
-  });
-  assertViolationFree(violations, input.what);
-  writePlanCoordinationRow(tx, {
-    workflowId: frame.workflowId,
-    planId: frame.planId,
-    state: input.state ?? (frame.view.plan as unknown as Record<string, unknown>),
-    coordination: input.block,
-    revision: frame.revision + 1,
-  });
-}
-
-/**
- * §D/§E the plan's execution lease moved to another holder (spec §D `accept`,
- * and `return` moving it back). The lease must be HELD by `from`: an absent,
- * released or foreign lease is a refusal, never a silent no-op that leaves the
- * row owned by nobody or by the wrong session. Ownership is the lease's own
- * identity — the DB route moves the row, it never re-claims or steals it.
- */
-function transferPlanLease(
-  tx: ExecutionTransaction,
-  witness: ExecutionPlanWitness,
-  input: { from: string; to: { sessionId: string; role: "coordinator" | "plan-pm" }; what: string; now: string },
-): void {
-  const row = planRowOf(witness.view);
-  assertExecutionHolder(row, input.from, witness.planId, input.what);
-  transferExecutionLease(tx, {
-    workflowId: witness.workflowId,
-    planId: witness.planId,
-    lease: requireExecutionLease(row, witness.planId, input.what),
-    to: input.to,
-    now: input.now,
-  });
-}
-
-/**
- * §E/§4.2 the workflow's merge-lease admission for ONE attempt, in the FILE
- * route's own order (`coordination.ts` `assertMergeLease`): the HOLDER decides
- * first — a claim held by another session is that session's claim, whoever it
- * names — and only a claim THIS session holds is judged against this attempt's
- * plan and source branch. The three cases are never collapsed:
- *
- * - a LIVE foreign holder refuses `coordination.session-mismatch`: a held claim
- *   is not stealable, and neither an old `claimed_at` nor a stale heartbeat
- *   makes it expirable (§4.2 — clocks authorize nothing);
- * - a holder whose session is not active at this epoch is a STOPPED owner
- *   (§2.3's post-recovery leftover: the lease retains its prior holder and must
- *   pass explicit reconcile). Only `reconcile` acts on it, and it does so by
- *   recording the prior holder and the decision; every other verb refuses;
- * - a claim this session holds for ANOTHER plan or source branch is a foreign
- *   claim — never reused, re-pinned or released by this attempt.
- */
-type MergeLeaseDecision =
-  | { kind: "unclaimed" }
-  | { kind: "own"; lease: IntegrationMergeLease }
-  | { kind: "stopped"; lease: IntegrationMergeLease };
-
-function decideMergeLease(
-  witness: ExecutionPlanWitness,
-  tx: ExecutionTransaction,
-  handoff: PlanHandoff,
-  what: string,
-): MergeLeaseDecision {
-  return decideMergeLeaseFor({
-    tx,
-    workflowId: witness.workflowId,
-    planId: witness.planId,
-    integrationLease: witness.view.integrationLease,
-    sessionId: witness.session.sessionId,
-    handoff,
-    what,
-  });
-}
-
-/** The same admission for any frame: the shared implementation both routes call. */
-function decideMergeLeaseFor(input: {
-  tx: ExecutionTransaction;
-  workflowId: string;
-  planId: string;
-  integrationLease: IntegrationMergeLease | null;
-  sessionId: string;
-  handoff: PlanHandoff;
-  what: string;
-}): MergeLeaseDecision {
-  const lease = input.integrationLease;
-  if (lease === null) return { kind: "unclaimed" };
-  if (lease.holder !== input.sessionId) {
-    if (readLiveSessionIdentities(input.tx, input.workflowId).has(lease.holder)) {
-      throw new CoordinationError(
-        "coordination.session-mismatch",
-        `plan ${input.planId} integration is held by ${lease.holder}, not ${input.sessionId}`,
-        { plan_id: input.planId, holder: lease.holder, session_id: input.sessionId, operation: input.what },
-      );
-    }
-    return { kind: "stopped", lease };
-  }
-  if (mergeLeaseOfAttempt(lease, input.planId, input.handoff.source_branch) === undefined) {
-    throw new CoordinationError(
-      "coordination.merge-lease-foreign",
-      `plan ${input.planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch}, not this attempt ` +
-        `(${input.planId} source ${input.handoff.source_branch}) \u2014 a foreign claim is never reused or released`,
-      {
-        plan_id: input.planId,
-        holder_plan_id: lease.plan_id,
-        holder_source_branch: lease.source_branch,
-        source_branch: input.handoff.source_branch,
-        operation: input.what,
-      },
-    );
-  }
-  return { kind: "own", lease };
-}
-
-/**
- * §E the merge-lease admission every transition except `reconcile` runs: this
- * attempt's own claim, or none. A stopped owner refuses here — the refusal names
- * `reconcile` as the transition that may act on it, so no lifecycle step takes
- * over a dead coordinator's claim by accident.
- */
-function assertMergeLeaseOwn(
-  witness: ExecutionPlanWitness,
-  tx: ExecutionTransaction,
-  handoff: PlanHandoff,
-  what: string,
-): void {
-  assertMergeLeaseOwnForFrame(rowFrameOf(witness), tx, handoff, what);
-}
-
-/** The same admission for any frame: the shared implementation both routes call. */
-function assertMergeLeaseOwnForFrame(
-  frame: RowCompletionFrame,
-  tx: ExecutionTransaction,
-  handoff: PlanHandoff,
-  what: string,
-): void {
-  const decision = decideMergeLeaseFor({
-    tx,
-    workflowId: frame.workflowId,
-    planId: frame.planId,
-    integrationLease: frame.integrationLease,
-    sessionId: frame.releasedBy,
-    handoff,
-    what,
-  });
-  if (decision.kind === "stopped") {
-    throw new CoordinationError(
-      "coordination.merge-lease-stopped-owner",
-      `plan ${frame.planId} merge lease is held by ${decision.lease.holder}, whose session is no longer active \u2014 ${what} does ` +
-        `not take over a stopped owner; reconcile records the prior holder and the decision`,
-      { plan_id: frame.planId, holder: decision.lease.holder, operation: what },
-    );
-  }
-}
-
-/**
- * §D/§E the findings cleanup gate of one prepared plan (spec §D/§E): handoff and
- * completion both demand it, so a plan returned for rework cannot complete while
- * the findings it was told to close are still open. The gate consumes the
- * authoritative open issues linked to the plan — never a legacy register — and
- * fails closed: a missing, corrupt or staged store refuses the lifecycle step
- * instead of reading as "no findings".
- *
- * It opens its own read handle, so it runs BEFORE this call takes SQLite
- * ownership (§4.1: no second connection inside the write transaction).
- */
-async function assertFindingsClosed(
-  context: ExecutionContext,
-  planId: string,
-  prepared: PreparedCoordination,
-  what: string,
-): Promise<void> {
-  let gate;
-  try {
-    gate = await findingsCleanupGate({ harnessDir: context.harnessDir }, planId, {
-      mode: prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual",
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new CoordinationError(
-      "coordination.store",
-      `plan ${planId} cannot ${what}: the issue store is unavailable and findings authority cannot be read \u2014 ${message}`,
-      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
-    );
-  }
-  if (!gate.ok) {
-    throw new CoordinationError(
-      "coordination.findings-open",
-      `plan ${planId} cannot ${what} while findings are open (${prepared.findings_cleanup}): ${summarize(gate.violations)}`,
-      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
-    );
-  }
-}
-
-/**
- * §D/§E the prepared Assignment of one lifecycle transition, or a refusal. The
- * block is the DURABLE fact this route reads; the Assignment's freshness is the
- * row admission's (`assertPlanOwnedWrite` for the plan's own verbs) and the QA
- * gate below is compared against the sealed `qa_gate`.
- */
-function requirePrepared(coordination: RowCoordination | undefined, planId: string, what: string): PreparedCoordination {
-  const prepared = coordination?.prepared;
-  if (prepared === undefined) {
-    throw new CoordinationError("coordination.not-prepared", `plan ${planId} is not prepared in this workflow \u2014 ${what} requires a prepared Assignment`, {
-      plan_id: planId,
-    });
-  }
-  return prepared;
-}
-
-/** §D the handoff's QA gate must be the Assignment's own (spec §D/§E). */
-function assertHandoffQaGate(handoff: { qa: { gate: string } }, prepared: PreparedCoordination, planId: string, what: string): void {
-  if (handoff.qa.gate !== prepared.qa_gate) {
-    throw new CoordinationError(
-      "coordination.assignment-stale",
-      `${what} qa.gate ${handoff.qa.gate} is not the Assignment's QA gate ${prepared.qa_gate}`,
-      { plan_id: planId, expected: prepared.qa_gate, actual: handoff.qa.gate },
-    );
-  }
-}
-
-/**
- * `handoff` records reviewed evidence paths, their digests as provenance,
- * the Assignment's QA gate and the independently observed Git proof. Evidence
- * paths and semantic QA constraints remain authoritative; later report byte
- * changes do not invalidate the recorded handoff. The execution lease stays
- * with the plan session: handoff is not release.
- */
-export async function handoffExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<HandoffOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "handoff");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "evidence"], "handoff operation");
-  const evidence = readHandoffEvidence(operation.evidence);
-  const { planId } = resolved.read;
-  assertEvidenceInsidePlanArea(planAreaRoots(controlHarnessRoot(context), planId), evidence.evidence_paths);
-  const before = await readExecutionPlan(context, request.session, planId);
-  const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "handoff");
-  assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, prepared, planId, "handoff");
-  // §R5 the entailed predecessor recording is decided BEFORE SQLite ownership
-  // and re-decided inside it: the row must be able to record InReview (already
-  // recorded, or InProgress under this session's own claim), and nothing is
-  // recorded here — the preflight only refuses an unclaimed row early.
-  entailedHandoffStatus(before.data.plan as unknown as PlanRow, planId);
-  assertHandoffGitProof(planScopeOf(before.data, planId).worktreePath, evidence, "handoff", planId);
-  await assertFindingsClosed(context, planId, prepared, "hand off");
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    assertPlanOwnedWrite(witness, "handoff");
-    const coordination = coordinationOf(witness);
-    const sealed = requirePrepared(coordination, planId, "handoff");
-    assertHandoffQaGate({ qa: { gate: evidence.qa_gate } }, sealed, planId, "handoff");
-    const entailed = entailedHandoffStatus(witness.view.plan as unknown as PlanRow, planId);
-    // §4.1 the reviewed bytes are re-read immediately before the commit.
-    const previous = coordination?.handoff;
-    const record: PlanHandoff = {
-      id: randomUUID(),
-      attempt: previous === undefined ? 1 : previous.attempt + 1,
-      state: "submitted",
-      submitted_by: witness.session.sessionId,
-      submitted_at: at,
-      source_branch: planScopeOf(witness.view, planId).workingBranch,
-      source_sha: evidence.source_sha,
-      worktree_path: planScopeOf(witness.view, planId).worktreePath,
-      review_base: evidence.review_base,
-      review_head: evidence.review_head,
-      qc: {
-        decision: evidence.qc_decision,
-        reports: evidence.qc_reports,
-        consolidated: evidence.qc_consolidated,
-      },
-      qa: { gate: evidence.qa_gate, decision: "pass", report: evidence.qa_report },
-    };
-    writeCoordinationBlock(tx, witness, {
-      block: { ...storedCoordinationOf(witness.view), handoff: record },
-      // §R5 the entailed recording commits with the seal, in this one statement:
-      // the row's InReview report and the handoff are one transition, one
-      // revision, and a row that already recorded InReview writes no status at
-      // all (A01).
-      ...(entailed === null
-        ? {}
-        : { state: { ...(witness.view.plan as unknown as Record<string, unknown>), status: entailed } }),
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/**
- * §3 `accept` on the DB authority: the workflow's coordinator takes the
- * submitted handoff and the plan's execution lease in ONE transaction — the
- * attempt's evidence is re-hashed, the feature checkout is re-proven and the
- * lease moves to the coordinator, while the row stays InReview because the
- * integration attempt has not happened yet.
- */
-export async function acceptExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<AcceptOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "accept");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "handoffId"], "accept operation");
-  if (!isNonEmptyString(operation.handoffId)) throw invalidPlanInput("accept requires the non-empty handoffId it names");
-  const { planId } = resolved.read;
-  const before = await readExecutionPlan(context, request.session, planId);
-  const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
-  requireHandoffState(named, ["submitted"], planId, "accept");
-  assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "accept", planId);
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
-    requireHandoffState(handoff, ["submitted"], planId, "accept");
-    requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "accept", { still: true });
-    transferPlanLease(tx, witness, {
-      from: handoff.submitted_by,
-      to: { sessionId: witness.session.sessionId, role: "coordinator" },
-      what: "accept",
-      now: at,
-    });
-    writeCoordinationBlock(tx, witness, {
-      block: {
-        ...storedCoordinationOf(witness.view),
-        handoff: { ...handoff, state: "accepted", accepted_by: witness.session.sessionId, accepted_at: at },
-      },
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/**
- * §3 `return` on the DB authority: the coordinator sends an attempt back, and
- * the lease follows the record — a return of a `submitted` handoff only proves
- * the plan session still holds its own lease, while a return of an `accepted`
- * one moves it back, because accept is what moved it away. The row becomes
- * InProgress again: the plan is being worked on.
- */
-export async function returnExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<ReturnOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "return");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "handoffId", "reason"], "return operation");
-  if (!isNonEmptyString(operation.handoffId)) throw invalidPlanInput("return requires the non-empty handoffId it names");
-  if (!isNonEmptyString(operation.reason)) throw invalidPlanInput("return requires the reason the attempt is sent back");
-  const { planId } = resolved.read;
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
-    requireHandoffState(handoff, ["submitted", "accepted"], planId, "return");
-    if (handoff.state === "accepted") {
-      // The receiving holder must be the plan's ACTIVE plan-pm session: moving
-      // the lease onto a session the store no longer holds would leave the row
-      // owned by nobody and the lease unreadable.
-      if (witness.view.session === null || witness.view.session.sessionId !== handoff.submitted_by) {
-        throw new CoordinationError(
-          "coordination.session-mismatch",
-          `return requires plan ${planId}'s handoff submitter ${handoff.submitted_by} to be the plan's active plan-pm session \u2014 ` +
-            `it is ${witness.view.session === null ? "unbound" : witness.view.session.sessionId}`,
-          { plan_id: planId, expected: handoff.submitted_by, actual: witness.view.session?.sessionId ?? null },
-        );
-      }
-      transferPlanLease(tx, witness, {
-        from: witness.session.sessionId,
-        to: { sessionId: handoff.submitted_by, role: "plan-pm" },
-        what: "return",
-        now: at,
-      });
-    } else {
-      assertExecutionHolder(planRowOf(witness.view), handoff.submitted_by, planId, "return");
-    }
-    writeCoordinationBlock(tx, witness, {
-      block: {
-        ...storedCoordinationOf(witness.view),
-        handoff: { ...handoff, state: "returned", returned_at: at, return_reason: operation.reason },
-      },
-      state: { ...(witness.view.plan as unknown as Record<string, unknown>), status: "InProgress" },
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/**
- * §3 `integration-start` on the DB authority: claim the workflow's merge lease,
- * record the attempt base and the source pin BEFORE any Git runs, and keep the
- * row InReview with the coordinator's execution ownership.
- *
- * The recorded base is the integration HEAD this call OBSERVED before it took
- * SQLite ownership (§4.1: Git evidence attests the observed instant; the claim's
- * exclusivity, not SQL, is what keeps one attempt at a time). A retry of an
- * already started attempt re-verifies every pin and re-pins nothing.
- */
-export async function integrationStartExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<IntegrationStartOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "integration-start");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "handoffId"], "integration-start operation");
-  if (!isNonEmptyString(operation.handoffId)) {
-    throw invalidPlanInput("integration-start requires the non-empty handoffId it names");
-  }
-  const { planId } = resolved.read;
-  const before = await readExecutionPlan(context, request.session, planId);
-  const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
-  requireHandoffState(named, ["accepted", "integrating"], planId, "integration-start");
-  assertFeatureCheckout(planScopeOf(before.data, planId).worktreePath, named.source_sha, "integration-start", planId);
-  const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
-  const checkout = assertIntegrationCheckout(anchors, planId);
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
-    requireHandoffState(handoff, ["accepted", "integrating"], planId, "integration-start");
-    assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-start");
-    assertMergeLeaseOwn(witness, tx, handoff, "integration-start");
-    if (handoff.state === "integrating") {
-      // A started attempt is never re-pinned: the recorded base stays the one
-      // the coordinator merged onto, so the row's domain state is unchanged —
-      // and the accepted operation still spends its own plan revision, so the
-      // token it returns is the post-advance CAS (§3.1).
-      advancePlanRowRevision(tx, witness);
-      const settled = readExecutionPlanWitness(tx, resolved.read);
-      return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
-    }
-    const claim: IntegrationMergeLease = {
-      holder: witness.session.sessionId,
-      claimed_at: at,
-      plan_id: planId,
-      source_branch: handoff.source_branch,
-      target_branch: anchors.targetBranch,
-    };
-    claimIntegrationMergeLease(tx, { workflowId: witness.workflowId, lease: claim });
-    writeCoordinationBlock(tx, witness, {
-      block: {
-        ...storedCoordinationOf(witness.view),
-        handoff: {
-          ...handoff,
-          state: "integrating",
-          integration: {
-            target_branch: anchors.targetBranch,
-            worktree_path: anchors.worktreePath,
-            base_sha: checkout.head,
-            started_at: at,
-          },
-        },
-      },
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/**
- * §3 `integration-accept` on the DB authority: prove the merge from the pinned
- * objects, record the observed result, and keep BOTH leases and InReview until
- * complete. Nothing is proven by the branch merely existing.
- *
- * The proof is taken against the integration checkout this call observed before
- * SQLite ownership; the recorded base, the source and the result are the pinned
- * objects, so a moved branch that no longer reaches the merge diverges instead
- * of being accepted.
- */
-export async function integrationAcceptExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<IntegrationAcceptOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "integration-accept");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "handoffId"], "integration-accept operation");
-  if (!isNonEmptyString(operation.handoffId)) {
-    throw invalidPlanInput("integration-accept requires the non-empty handoffId it names");
-  }
-  const { planId } = resolved.read;
-  const before = await readExecutionPlan(context, request.session, planId);
-  const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
-  requireHandoffState(named, ["integrating"], planId, "integration-accept");
-  const attempt = requireIntegration(named, planId);
-  const anchors = integrationAnchors(before.data.workflow as unknown as WorkflowSnapshot, planId);
-  const checkout = assertIntegrationCheckout(anchors, planId);
-  const proof = integrationProof(anchors.worktreePath, checkout.head, attempt.base_sha, named.source_sha);
-  const gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
-  if (proof.kind === "diverged") {
-    throw integrationDiverged(`plan ${planId} integration cannot be proven \u2014 ${proof.reason}`, {
-      plan_id: planId,
-      base: attempt.base_sha,
-      source: named.source_sha,
-    });
-  }
-  if (proof.kind === "pending") {
-    throw integrationUnresolved(
-      `plan ${planId} integration shows no merge of ${named.source_sha} onto ${attempt.base_sha} yet \u2014 run the coordinator merge, then accept`,
-      { plan_id: planId, base: attempt.base_sha, source: named.source_sha },
-    );
-  }
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
-    requireHandoffState(handoff, ["integrating"], planId, "integration-accept");
-    requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "integration-accept", { still: true });
-    assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "integration-accept");
-    assertMergeLeaseOwn(witness, tx, handoff, "integration-accept");
-    revalidateGitProofWitness(gitWitness);
-    const recorded = requireIntegration(handoff, planId);
-    writeCoordinationBlock(tx, witness, {
-      block: {
-        ...storedCoordinationOf(witness.view),
-        handoff: {
-          ...handoff,
-          state: "merged",
-          integration: { ...recorded, result_sha: proof.resultSha, verified_at: at },
-        },
-      },
-      what: `plan ${planId} coordination`,
-    });
-    const committed = readExecutionPlanWitness(tx, resolved.read);
-    return { data: committed.view, token: committed.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/**
- * §E the delivery identity of one standalone completion: the handoff, the row's
- * recorded scope and the plan's execution lease all name the SAME delivery
- * source branch and worktree, and that branch is the workflow's registered
- * source. The file route compares a resolved scope; this route compares the
- * same three facts from the row, the lease table and the sealed handoff.
- */
-function assertStandaloneBranchIdentity(
-  view: ExecutionPlanView,
-  planId: string,
-  handoff: PlanHandoff,
-  anchors: { source: string; target: string },
-  what: string,
-  requireLease = true,
-): void {
-  const scope = planScopeOf(view, planId);
-  const metadata = isPlainObject((view.plan as Record<string, unknown>).metadata)
-    ? ((view.plan as Record<string, unknown>).metadata as Record<string, unknown>)
-    : {};
-  if (handoff.source_branch !== anchors.source) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `${what} requires handoff.source_branch ${handoff.source_branch} to equal the registered delivery source ${anchors.source}`,
-      { plan_id: planId, expected: anchors.source, actual: handoff.source_branch },
-    );
-  }
-  if (requireLease) {
-    const lease = requireExecutionLease(planRowOf(view), planId, what);
-    if (scope.workingBranch !== anchors.source) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `${what} requires the prepared working branch ${scope.workingBranch} to equal the registered delivery source ${anchors.source}`,
-        { plan_id: planId, expected: anchors.source, actual: scope.workingBranch },
-      );
-    }
-    if (lease.working_branch !== anchors.source) {
-      throw new CoordinationError(
-        "coordination.scope-mismatch",
-        `${what} requires the execution lease working branch ${lease.working_branch} to equal the registered delivery source ${anchors.source}`,
-        { plan_id: planId, expected: anchors.source, actual: lease.working_branch },
-      );
-    }
-    if (canonicalTarget(String(lease.worktree_path)) !== scope.worktreePath) {
-      throw new CoordinationError(
-        "coordination.path-mismatch",
-        `${what} requires the execution lease worktree ${String(lease.worktree_path)} to equal the plan scope ${scope.worktreePath}`,
-        { plan_id: planId, expected: scope.worktreePath, actual: lease.worktree_path },
-      );
-    }
-  }
-  if (canonicalTarget(handoff.worktree_path) !== scope.worktreePath) {
-    throw new CoordinationError(
-      "coordination.path-mismatch",
-      `${what} requires the handoff worktree ${handoff.worktree_path} to equal the plan scope ${scope.worktreePath}`,
-      { plan_id: planId, expected: scope.worktreePath, actual: handoff.worktree_path },
-    );
-  }
-  if (isNonEmptyString(metadata.working_branch) && metadata.working_branch !== anchors.source) {
-    throw new CoordinationError(
-      "coordination.scope-mismatch",
-      `${what} requires row metadata.working_branch to equal the registered delivery source ${anchors.source}`,
-      { plan_id: planId, expected: anchors.source, actual: metadata.working_branch },
-    );
-  }
-  if (
-    isNonEmptyString(metadata.worktree_path) &&
-    canonicalTarget(String(metadata.worktree_path)) !== scope.worktreePath
-  ) {
-    throw new CoordinationError(
-      "coordination.path-mismatch",
-      `${what} requires row metadata.worktree_path to equal the plan scope ${scope.worktreePath}`,
-      { plan_id: planId, expected: scope.worktreePath, actual: metadata.worktree_path },
-    );
-  }
-}
-
 function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: string, what: string): void {
   const failure = consultDeliveryEvidence(snapshot).find((entry) => !entry.ok);
   if (failure !== undefined) {
@@ -2230,23 +1260,6 @@ function assertReportOnlyCompletionEvidence(snapshot: WorkflowSnapshot, planId: 
       { plan_id: planId, code: failure.code },
     );
   }
-}
-
-/** §E the delivery route one workflow snapshot declares, as the shared classifiers read it. */
-export type DeliveryRoute = "report-only" | "development" | "integration";
-
-export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
-  if (isStandaloneReportOnlyWorkflow(snapshot)) return "report-only";
-  if (isStandaloneDevelopmentWorkflow(snapshot)) return "development";
-  return "integration";
-}
-
-/** §4.1 the route/policy pair a transition proved BEFORE its transaction pinned. */
-export type DeliveryRoutePin = { route: DeliveryRoute; completionPolicy: string | undefined };
-
-/** The pair one snapshot declares, as a caller pins it before taking ownership. */
-export function deliveryRoutePin(snapshot: WorkflowSnapshot): DeliveryRoutePin {
-  return { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
 }
 
 /**
@@ -2282,183 +1295,735 @@ function requirePinnedDeliveryRoute(
   }
 }
 
+type CompletionEvidenceRefs = {
+  qc: CompletionRecord["qc"];
+  qa: CompletionRecord["qa"];
+};
+
 /**
- * §E the stored invariants and pinned digests of an already completed standalone
- * plan (spec §E): a COMPLETED handoff on a `Done` row with no lease and no merge
- * lease, whose recorded QC/QA bytes are still the ones its verdicts were sealed
- * against. Everything here is stored state or a file read and nothing launches a
- * process, so the reconcile transaction can re-run it at the commit boundary
- * (§4.1). Read-only: replay resurrects no ownership and rewrites no timestamp.
- *
- * The state is required HERE and not only by the caller's classification: the
- * stored handoff a replay is applied to is read again inside the transaction,
- * and a coordination block rewritten into an accepted/merged state without a
- * revision change would otherwise be replayed as if it were the completion the
- * decision was made for.
+ * §E the recorded evidence of one completion, hashed from disk. It runs BEFORE
+ * SQLite ownership because hashing reads files (§4.1), and the returned refs are
+ * the provenance the completion record commits.
  */
-function assertCompletedReplayInvariants(
-  view: ExecutionPlanView,
-  snapshot: WorkflowSnapshot,
-  planId: string,
-  handoff: PlanHandoff,
-  options: { what?: string; fulfilment?: "required" | "pending" } = {},
-): void {
-  const what = options.what ?? "reconcile";
-  requireHandoffState(handoff, ["completed"], planId, what);
-  const plan = planRowOf(view);
-  if (rowStatusOf(plan) !== "Done") {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires ${planId} to be Done for a standalone completed replay`,
-      { plan_id: planId, status: plan.status },
-    );
-  }
-  if (plan.execution_lease !== undefined) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires no execution lease on ${planId} for a standalone completed replay`,
-      { plan_id: planId },
-    );
-  }
-  if (snapshot.integration_merge_lease !== undefined) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `${what} requires no integration merge lease for a standalone completed replay of ${planId}`,
-      { plan_id: planId },
-    );
-  }
-  assertNoIntegrationContamination({ snapshot, planId, handoff, what });
-  const route = rowValidationRoute(snapshot, plan as unknown as PlanRow);
-  assertViolationFree(
-    storedCoordinationViolations(
-      { ...(view.coordination ?? {}) } as Record<string, unknown>,
-      {
-        revision: view.coordination?.revision ?? 0,
-        route,
-        // This replay follows a database read, which has already verified the
-        // historical submitted_by-to-plan-pm association.
-        submitterAssociated: true,
-        what: `plan ${planId} coordination`,
-      },
-    ),
-    `plan ${planId} coordination`,
-  );
-  if (isStandaloneReportOnlyWorkflow(snapshot)) {
-    // §R10 the ONE caller that does not require the recorded fulfilment here is
-    // a CLOSE repairing that very projection: the report-only completion is
-    // otherwise complete, and the close records the outstanding fulfilment in
-    // the same transaction rather than being refused by the state it repairs.
-    if (options.fulfilment !== "pending") assertReportOnlyCompletionEvidence(snapshot, planId, what);
-    return;
-  }
-  const anchors = standaloneDeliveryAnchors(snapshot, planId);
-  assertStandaloneBranchIdentity(view, planId, handoff, anchors, what, false);
+function completionEvidenceRefs(evidence: ValidatedCompletionEvidence): CompletionEvidenceRefs {
+  return {
+    qc: {
+      decision: evidence.qc_decision,
+      reports: evidence.qc_reports.map(evidenceRefOf),
+      consolidated: evidenceRefOf(evidence.qc_consolidated),
+    },
+    qa: { gate: evidence.qa_gate, decision: evidence.qa_decision, report: evidenceRefOf(evidence.qa_report) },
+  };
 }
 
 /**
- * §E the preflight half of that replay: the same invariants plus the one read
- * that needs a Git process — the pinned source still being an object of a
- * readable repository. A report-only plan owns no delivery source, so its
- * replay is the invariants alone and stays process-free.
- */
-function assertStandaloneCompletedReplay(
-  view: ExecutionPlanView,
-  snapshot: WorkflowSnapshot,
-  planId: string,
-  handoff: PlanHandoff,
-  harnessRoot: string,
-): void {
-  assertCompletedReplayInvariants(view, snapshot, planId, handoff);
-  if (isStandaloneReportOnlyWorkflow(snapshot)) return;
-  const repository = proofRepository([handoff.worktree_path, planScopeOrUndefined(view, planId), harnessRoot]);
-  if (repository !== undefined && !gitObjectExists(repository, handoff.source_sha)) {
-    throw gitProof(`reconcile cannot re-verify the pinned standalone source ${handoff.source_sha} for plan ${planId}`, {
-      plan_id: planId,
-      source_sha: handoff.source_sha,
-    });
-  }
-}
-
-/**
- * §E the completion delta shared by `complete` and a proven `reconcile`: `Done`,
- * the retained branch/worktree metadata and `track_branches`, the completed
- * handoff, and the release of this plan's execution lease and of this attempt's
- * own merge lease — in the SAME transaction, because a half-applied completion
- * is exactly the state a crash must never leave.
+ * §E the completion delta of one direct coordinator completion: `Done`, the
+ * retained branch/worktree metadata, the completion record and the release of
+ * this attempt's own merge claim — in the SAME transaction, because a
+ * half-applied completion is exactly the state a crash must never leave.
  *
  * No registry or catalog row is deleted or rewritten here: the plan stays a
- * member of its workflow (its own terminal close is the workflow transition's,
- * W6), and completion only changes membership in the PLAN's lifecycle.
+ * member of its workflow (its own terminal close is the workflow transition's),
+ * and completion only changes membership in the PLAN's lifecycle.
  */
 function applyCompletion(input: {
   tx: ExecutionTransaction;
   witness: ExecutionPlanWitness;
   planId: string;
-  handoff: PlanHandoff;
+  record: CompletionRecord;
+  scope: PlanScope | null;
   at: string;
-  resultSha: string | null;
   what: string;
 }): void {
-  applyCompletionFrame({
-    tx: input.tx,
-    frame: rowFrameOf(input.witness),
-    handoff: input.handoff,
-    at: input.at,
-    resultSha: input.resultSha,
-    what: input.what,
-  });
-}
-
-/** The same delta for any frame: the shared implementation both routes call. */
-function applyCompletionFrame(input: {
-  tx: ExecutionTransaction;
-  frame: RowCompletionFrame;
-  handoff: PlanHandoff;
-  at: string;
-  resultSha: string | null;
-  what: string;
-}): void {
-  const { tx, frame, handoff, at, what } = input;
-  const plan = frame.view.plan as unknown as Record<string, unknown>;
+  const { tx, witness, planId, record, at, what } = input;
+  const plan = witness.view.plan as unknown as Record<string, unknown>;
   const metadata = { ...(isPlainObject(plan.metadata) ? plan.metadata : {}) };
-  // The retained metadata is what authorizes cleanup afterwards: the leases
-  // release, the scope record does not.
-  metadata.working_branch = handoff.source_branch;
-  metadata.worktree_path = handoff.worktree_path;
-  const integration = handoff.integration;
-  const completed: PlanHandoff = {
-    ...handoff,
-    state: "completed",
-    completed_at: at,
-    ...(input.resultSha === null || integration === undefined
-      ? {}
-      : { integration: { ...integration, result_sha: input.resultSha, verified_at: at } }),
-  };
-  writeCoordinationFrame(tx, frame, {
-    block: { ...storedCoordinationOf(frame.view), handoff: completed },
+  // The retained metadata is what authorizes cleanup afterwards.
+  if (input.scope !== null) {
+    metadata.worktree_path = input.scope.worktreePath;
+    metadata.working_branch = input.scope.workingBranch;
+  }
+  writeCoordinationBlock(tx, witness, {
+    block: { ...storedCoordinationOf(witness.view), completion: record },
     state: { ...plan, status: "Done", metadata },
     what,
   });
-  releaseExecutionLease(tx, {
-    workflowId: frame.workflowId,
-    planId: frame.planId,
-    lease: requireExecutionLease(planRowOf(frame.view), frame.planId, what),
-    releasedBy: frame.releasedBy,
-    reason: what,
-    now: at,
-  });
-  // Only this attempt's own claim is released: a lease naming another plan or
-  // another source branch is not this completion's to drop (spec §E).
-  const claim = mergeLeaseOfAttempt(frame.integrationLease, frame.planId, handoff.source_branch);
+  // Only this attempt's own claim is released: a merge lease naming another plan
+  // or another source branch is not this completion's to drop (spec §E).
+  const lease = witness.view.integrationLease;
+  const claim =
+    lease !== null && lease.plan_id === planId && lease.source_branch === (record.source_branch ?? "") ? lease : undefined;
   if (claim !== undefined) {
     releaseIntegrationMergeLease(tx, {
-      workflowId: frame.workflowId,
+      workflowId: witness.workflowId,
       claim,
-      releasedBy: frame.releasedBy,
+      releasedBy: witness.session.sessionId,
       reason: what,
       now: at,
     });
   }
+}
+
+/**
+ * §E the recorded source proof of one plan's own delivery, from the ROW's
+ * recorded scope: the checkout is a clean Git worktree, its HEAD is the pinned
+ * source commit, it is on the recorded/registered source branch, that branch's
+ * tip is the same commit, and the reviewed range is an ancestry of it. Used by
+ * BOTH the standalone development route and the iteration (integration) route,
+ * so a row can never complete against a merge of a commit unrelated to its own
+ * feature branch or its reviewed commit. `worktreePath` is always the row's own
+ * recorded scope — never a caller-supplied path.
+ */
+function assertSourceReviewProof(
+  worktreePath: string,
+  shas: { source_sha: string | null; review_base: string | null; review_head: string | null },
+  sourceBranch: string,
+  planId: string,
+): { source_sha: string; review_base: string; review_head: string } {
+  const sourceSha = shas.source_sha;
+  const reviewBase = shas.review_base;
+  const reviewHead = shas.review_head;
+  if (sourceSha === null || reviewBase === null || reviewHead === null) {
+    throw invalidPlanInput("complete requires evidence.source_sha, review_base and review_head on this route");
+  }
+  assertFeatureCheckout(worktreePath, sourceSha, "complete", planId);
+  if (reviewHead !== sourceSha) {
+    throw gitProof(`complete requires review_head to be the pinned source ${sourceSha} \u2014 got ${reviewHead}`, {
+      plan_id: planId,
+      source_sha: sourceSha,
+      review_head: reviewHead,
+    });
+  }
+  const branch = gitRead(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== sourceBranch) {
+    throw gitProof(
+      `complete requires the plan worktree ${worktreePath} to be on ${sourceBranch} \u2014 got ${branch || "a detached HEAD"}`,
+      { plan_id: planId, expected: sourceBranch, actual: branch },
+    );
+  }
+  const refTip = gitRead(worktreePath, ["rev-parse", `refs/heads/${sourceBranch}`]);
+  if (refTip !== sourceSha) {
+    throw gitProof(
+      `complete requires refs/heads/${sourceBranch} to resolve to the pinned source ${sourceSha} \u2014 got ${refTip || "missing"}`,
+      { plan_id: planId, expected: sourceSha, actual: refTip },
+    );
+  }
+  if (!gitObjectExists(worktreePath, reviewBase)) {
+    throw gitProof(`complete review base ${reviewBase} is not a commit of ${worktreePath}`, {
+      plan_id: planId,
+      review_base: reviewBase,
+    });
+  }
+  const ancestry = gitRead(worktreePath, ["merge-base", "--is-ancestor", reviewBase, reviewHead]);
+  if (ancestry === undefined) {
+    throw gitProof(`complete review range ${reviewBase}..${reviewHead} is not an ancestry`, {
+      plan_id: planId,
+      review_base: reviewBase,
+      review_head: reviewHead,
+    });
+  }
+  return { source_sha: sourceSha, review_base: reviewBase, review_head: reviewHead };
+}
+
+/**
+ * §E the EXACT merge proof of one iteration completion (contract line 162): the
+ * named result commit exists in the recorded integration repository, its HEAD is
+ * that commit, its two parents are exactly `[base_sha, source_sha]` in that
+ * order, `base_sha` and `source_sha` are objects, and the result is reachable
+ * from the observed integration HEAD. `integrationProof`'s broader `proven`
+ * classification — which admits the base itself when the source is already an
+ * ancestor — is NOT sufficient here: the direct operation names the already
+ * performed serial merge, so a no-merge result is refused rather than accepted
+ * as an implicit exemption.
+ */
+function assertExactMergeResult(
+  path: string,
+  planId: string,
+  result: string,
+  baseSha: string,
+  sourceSha: string,
+  head: string,
+): string {
+  if (!gitObjectExists(path, result) || !gitObjectExists(path, baseSha) || !gitObjectExists(path, sourceSha)) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${result} is not an object of ${path} together with its base ${baseSha} and source ${sourceSha}`,
+      { plan_id: planId, result, base: baseSha, source: sourceSha, path },
+    );
+  }
+  if (!gitObjectExists(path, head)) {
+    throw integrationDiverged(`plan ${planId} integration HEAD ${head} is not an object of ${path}`, {
+      plan_id: planId,
+      head,
+      path,
+    });
+  }
+  const parentsLine = gitRead(path, ["rev-list", "--parents", "-n", "1", result]);
+  const parents =
+    parentsLine === undefined
+      ? undefined
+      : parentsLine
+          .trim()
+          .split(/\s+/)
+          .slice(1);
+  if (parents === undefined || parents.length !== 2 || parents[0] !== baseSha || parents[1] !== sourceSha) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${result} carries parents ${JSON.stringify(parents ?? null)}, expected the exact two-parent merge [${baseSha}, ${sourceSha}] \u2014 ` +
+        `a direct completion names the serial merge that was performed, so a no-merge base is refused`,
+      { plan_id: planId, result, base: baseSha, source: sourceSha, parents: parents ?? null },
+    );
+  }
+  if (gitRead(path, ["merge-base", "--is-ancestor", result, head]) === undefined) {
+    throw integrationDiverged(
+      `plan ${planId} recorded result ${result} is not reachable from the integration HEAD ${head}`,
+      { plan_id: planId, result, head, path },
+    );
+  }
+  return result;
+}
+
+/**
+ * §E the completion admission of one row (contract §Operation semantics
+ * `complete`): the reviewed state is `InReview`, or `InProgress` recorded as
+ * `InReview` by THIS SAME transaction — the entailed bookkeeping the completion
+ * delta already writes — so a complete coordinator never needs a separate
+ * `progress` call first. `Todo`, `Blocked` and `Done` are refused, and the
+ * refusal names the transition that reaches them.
+ */
+function requireCompletableStatus(row: PlanRow, planId: string): void {
+  const status = rowStatusOf(row);
+  if (status === "InReview" || status === "InProgress") return;
+  throw new CoordinationError(
+    "coordination.plan-status",
+    `complete requires plan ${planId} in InReview or InProgress (the completion records the entailed InReview itself), not ` +
+      `${status || "no status"}; move it with plan progress first`,
+    { plan_id: planId, status, allowed: ["InReview", "InProgress"] },
+  );
+}
+
+/**
+ * §4.1 the findings-cleanup gate of one row, on the transaction the caller
+ * ALREADY owns: the authoritative open issues linked to the plan are read
+ * through this transaction's own handle, so an issue captured after the
+ * preflight refuses the completion instead of being judged against a stale
+ * list. The mode is the row's effective configuration. Only the SHARED gate's
+ * decision table is reused; the read is this handle's, and it fails closed on a
+ * staged or unreadable store.
+ */
+function assertFindingsClosedOn(
+  tx: ExecutionTransaction,
+  planId: string,
+  prepared: PreparedCoordination,
+  what: string,
+): void {
+  const meta = tx.db.prepare("select authority_state as authorityState from store_meta where id = 1").get() as
+    | { authorityState?: unknown }
+    | undefined;
+  if (meta?.authorityState !== "active") {
+    throw new CoordinationError(
+      "coordination.store",
+      `plan ${planId} cannot ${what}: the issue store is ${
+        typeof meta?.authorityState === "string" ? meta.authorityState : "unreadable"
+      }, so findings authority cannot be read`,
+      { plan_id: planId, findings_cleanup: prepared.findings_cleanup },
+    );
+  }
+  const rows = tx.db
+    .prepare(
+      "select issues.id as id, issues.severity as severity from issues " +
+        "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? and provenance.origin = 'scoped' " +
+        "where issues.disposition = 'open' order by issues.id asc",
+    )
+    .all(planId) as Array<{ id: string; severity: string }>;
+  const mode = prepared.findings_cleanup === "zero-residual" ? "zero-residual" : "allow-residual";
+  const blocking = rows.filter((row) => normalizeSeverity(row.severity) === "critical" || mode === "zero-residual");
+  if (blocking.length === 0) return;
+  throw new CoordinationError(
+    "coordination.findings-open",
+    `plan ${planId} cannot ${what} while findings are open (${mode}): ${blocking.map((row) => `${row.id} (${row.severity})`).join("; ")}`,
+    { plan_id: planId, findings_cleanup: mode, findings: blocking.map((row) => row.id) },
+  );
+}
+
+/** Test-only hook to observe the preflight→commit gap of a DB completion. */
+let completeWitnessGapForTest: (() => void) | undefined;
+export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
+  completeWitnessGapForTest = callback;
+}
+
+/**
+ * §3 `complete` on the DB authority: a single direct coordinator operation. It
+ * re-proves the pinned evidence, the recorded result and the route, then applies
+ * the completion delta as ONE transaction — `Done`, the completion record and
+ * the released own merge claim commit together or not at all.
+ *
+ * §4.1 RECEIPT REPLAY runs FIRST, before any Git command or evidence hash: the
+ * frame's request fingerprint (published semantic selection, which excludes
+ * transport freshness) is compared against the committed operation ledger inside
+ * the write transaction, and an identical retry returns the RECORDED receipt
+ * verbatim — Git never re-runs, the reports are never re-hashed and
+ * `completed_at` is never rewritten, so a cleaned-up checkout or a moved HEAD
+ * cannot turn a success into a failure. Only a first attempt reaches the
+ * preflight below; the `completeWitnessGapForTest` seam still observes that
+ * preflight→commit gap.
+ *
+ * The route selects which proof is REQUIRED, and both the route/policy pair and
+ * the actual anchors are re-derived from the transaction's own snapshot so a
+ * workflow-header write in the window cannot leave completion judged against
+ * obsolete anchors:
+ *
+ * - a single-row `verification/report-only` workflow completes on its QC/QA
+ *   evidence plus the EXPLICITLY RECORDED fulfilment of its declared completion
+ *   policy, needs no source, integration or merge, and rejects integration input;
+ * - a single-row `development` workflow completes on its QC/QA evidence and its
+ *   registered source branch: the row worktree is clean, on that branch and at
+ *   the pinned source commit, with the review range an ancestry;
+ * - every other route additionally requires `integration: { base_sha, result_sha }`
+ *   naming the serial merge the coordinator ACTUALLY performed, proven as the
+ *   exact two-parent merge of base+source reachable from the observed
+ *   integration HEAD — and the row's OWN feature checkout, ref and reviewed
+ *   ancestry are proven in the same operation.
+ *
+ * §4.1/§7 every external Git read and every evidence hash happens before SQLite
+ * ownership, and the Git witnesses they produced are re-read immediately before
+ * the commit; `assertFindingsClosed` is re-run through this transaction's own
+ * handle so an issue opened in the window refuses instead of committing a stale
+ * decision.
+ */
+export async function completeExecutionPlan(
+  context: ExecutionContext,
+  request: ExecutionPlanRequest<CompleteOperation>,
+): Promise<ExecutionReceipt<ExecutionPlanView>> {
+  const resolved = resolvePlanOperationRequest(context.caller, request, "complete");
+  const operation = resolved.call.operation;
+  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "evidence", "integration"], "complete operation");
+  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
+  // §4.1/§4.2 (R6/A09/A12) RECEIPT-FIRST: a committed receipt for this exact
+  // semantic request is served on the READ route, before any Git command or
+  // evidence hash. An identical retry therefore never re-runs Git and never
+  // fails because the committed checkout, HEAD or report moved in the meantime.
+  const replayed = await readPlanOperationReplayBeforeProof<ExecutionPlanView>(context, resolved.read, {
+    operationId: resolved.call.operationId,
+    requestHash,
+  });
+  if (replayed !== null) return replayed;
+  // §4.1 the external half, FIRST ATTEMPT only: read the workflow snapshot and
+  // capture the Git witnesses before SQLite ownership. `completeWitnessGap`
+  // observes the gap between this captured proof and the commit, where the frame
+  // re-validates every witness, re-derives the route/policy pair from its own
+  // snapshot and re-checks the authoritative issues.
+  const witnesses = await captureCompletionWitnesses(context, resolved.read, operation);
+  // §4.1 the completion race seam fires HERE — after the external witnesses are
+  // captured and BEFORE the committing `BEGIN IMMEDIATE` opens — so a regression can
+  // land an independent workflow-header, issue-store or Git mutation in the real gap
+  // the write frame then re-reads and re-validates.
+  completeWitnessGapForTest?.();
+  return withExecutionPlanOperation<ExecutionPlanView>(
+    context,
+    resolved,
+    requestHash,
+    () => {
+      // §4.1 the commit-boundary re-check: every Git witness captured before the
+      // race seam is re-read here, inside the write transaction, so a checkout,
+      // ref or HEAD that moved in the gap refuses instead of committing a stale
+      // proof.
+      for (const captured of witnesses.git) revalidateGitProofWitness(captured);
+    },
+    (witness, tx, at) => completeInTransaction(witness, tx, at, resolved.read, operation, witnesses),
+  );
+}
+
+/** External proof and evidence observations reused by the first-attempt commit. */
+type CompletionWitnesses = {
+  git: readonly GitProofWitness[];
+  planAreas: readonly string[];
+  evidenceRefs: CompletionEvidenceRefs;
+};
+
+/**
+ * §4.1 the pre-transaction half of `complete`: the route/policy pair, the actual
+ * anchors and the Git witnesses, all read before SQLite ownership. Nothing here
+ * is authority on its own — the transaction re-derives the route and anchors from
+ * its own snapshot and re-validates each witness immediately before the commit,
+ * so a header write or a moved checkout in the window refuses rather than
+ * committing a stale proof.
+ */
+async function captureCompletionWitnesses(
+  context: ExecutionContext,
+  read: ResolvedPlanRead,
+  operation: CompleteOperation,
+): Promise<CompletionWitnesses> {
+  const before = await readExecutionPlan(context, read.planId);
+  const snapshot = await readWorkflowSnapshot(context, read.workflowId);
+  const route = deliveryRouteOf(snapshot);
+  if (route === "integration" && operation.integration === undefined) {
+    throw invalidPlanInput(
+      "complete on the integration route requires integration: { base_sha, result_sha } naming the serial merge that was performed",
+      { plan_id: read.planId, missing: "integration" },
+    );
+  }
+  assertNoIntegrationContamination({ snapshot, planId: read.planId, integration: operation.integration, what: "complete" });
+  const row = before.data.plan as unknown as PlanRow;
+  const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
+  const prepared = effectivePrepareConfig(before.data);
+  assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);
+  const planAreas = planAreaRoots(controlHarnessRoot(context), read.planId);
+  assertEvidenceInsidePlanArea(planAreas, evidence.evidence_paths);
+  const evidenceRefs = completionEvidenceRefs(evidence);
+  if (route === "report-only") {
+    assertReportOnlyCompletionEvidence(snapshot, read.planId, "complete");
+    return { git: [], planAreas, evidenceRefs };
+  }
+  const scope = planScopeOf(before.data, read.planId);
+  if (route === "development") {
+    const anchors = standaloneDeliveryAnchors(snapshot, read.planId);
+    if (scope.workingBranch !== anchors.sourceBranch) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `complete requires the recorded working branch ${scope.workingBranch} to equal the registered delivery source ${anchors.sourceBranch}`,
+        { plan_id: read.planId, expected: anchors.sourceBranch, actual: scope.workingBranch },
+      );
+    }
+    assertSourceReviewProof(scope.worktreePath, evidence, anchors.sourceBranch, read.planId);
+    return { git: [captureGitProofWitness(scope.worktreePath)], planAreas, evidenceRefs };
+  }
+  const anchors = integrationAnchors(snapshot, read.planId);
+  const checkout = assertIntegrationCheckout(anchors, read.planId);
+  const requested = operation.integration!;
+  const proven = assertSourceReviewProof(scope.worktreePath, evidence, scope.workingBranch, read.planId);
+  assertExactMergeResult(anchors.worktreePath, read.planId, requested.result_sha, requested.base_sha, proven.source_sha, checkout.head);
+  return {
+    planAreas,
+    evidenceRefs,
+    git: [
+      captureGitProofWitness(scope.worktreePath),
+      captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged"),
+    ],
+  };
+}
+
+/** The first-attempt body of `complete`: the frame has already replayed a committed receipt. */
+function completeInTransaction(
+  witness: ExecutionPlanWitness,
+  tx: ExecutionTransaction,
+  at: string,
+  read: ResolvedPlanRead,
+  operation: CompleteOperation,
+  witnesses: CompletionWitnesses,
+): ExecutionRead<ExecutionPlanView> {
+  const planId = witness.planId;
+  // §E admission: the reviewed state is already recorded (`InReview`) or the one
+  // this same write unit entails from `InProgress` (`InProgress → InReview → Done`
+  // is ONE delta, so no separate progress call is required). `Todo`, `Blocked`
+  // and `Done` refuse with the transition that reaches them.
+  requireCompletableStatus(witness.view.plan as unknown as PlanRow, planId);
+  const snapshot = witnessSnapshot(witness);
+  const route = deliveryRouteOf(snapshot);
+  if (route === "integration" && operation.integration === undefined) {
+    throw invalidPlanInput(
+      "complete on the integration route requires integration: { base_sha, result_sha } naming the serial merge that was performed",
+      { plan_id: planId, missing: "integration" },
+    );
+  }
+  assertNoIntegrationContamination({ snapshot, planId, integration: operation.integration, what: "complete" });
+  const row = witness.view.plan as unknown as PlanRow;
+  const evidence = readCompletionEvidence(operation.evidence, rowValidationRoute(snapshot, row));
+  const prepared = effectivePrepareConfig(witness.view);
+  assertCompletionReviewDecision(evidence, planId, prepared.qa_gate);
+  // Revalidate aliases/existence after the proof gap, before committing captured
+  // evidence. Body hashes stay outside SQLite ownership and committed replays.
+  assertEvidenceInsidePlanArea(witnesses.planAreas, evidence.evidence_paths);
+  const refs = witnesses.evidenceRefs;
+  const scope = route === "report-only" ? null : planScopeOf(witness.view, planId);
+  const record: CompletionRecord = {
+    source_branch: scope === null ? null : scope.workingBranch,
+    source_sha: evidence.source_sha,
+    worktree_path: scope === null ? null : scope.worktreePath,
+    review_base: evidence.review_base,
+    review_head: evidence.review_head,
+    qc: refs.qc,
+    qa: refs.qa,
+    completed_by: witness.session.sessionId,
+    completed_at: at,
+  };
+  if (route === "report-only") {
+    // §E no Git and no integration proof is invented here: the workflow must
+    // already RECORD the fulfilment of its registered completion policy.
+    assertReportOnlyCompletionEvidence(snapshot, planId, "complete");
+  } else if (route === "development") {
+    const anchors = standaloneDeliveryAnchors(snapshot, planId);
+    if (scope!.workingBranch !== anchors.sourceBranch) {
+      throw new CoordinationError(
+        "coordination.scope-mismatch",
+        `complete requires the recorded working branch ${scope!.workingBranch} to equal the registered delivery source ${anchors.sourceBranch}`,
+        { plan_id: planId, expected: anchors.sourceBranch, actual: scope!.workingBranch },
+      );
+    }
+    const proven = assertSourceReviewProof(scope!.worktreePath, evidence, anchors.sourceBranch, planId);
+    record.source_sha = proven.source_sha;
+    record.review_base = proven.review_base;
+    record.review_head = proven.review_head;
+  } else {
+    const anchors = integrationAnchors(snapshot, planId);
+    const checkout = assertIntegrationCheckout(anchors, planId);
+    const requested = operation.integration!;
+    const proven = assertSourceReviewProof(scope!.worktreePath, evidence, scope!.workingBranch, planId);
+    const resultSha = assertExactMergeResult(
+      anchors.worktreePath,
+      planId,
+      requested.result_sha,
+      requested.base_sha,
+      proven.source_sha,
+      checkout.head,
+    );
+    record.source_sha = proven.source_sha;
+    record.review_base = proven.review_base;
+    record.review_head = proven.review_head;
+    record.integration = {
+      target_branch: anchors.targetBranch,
+      worktree_path: anchors.worktreePath,
+      base_sha: requested.base_sha,
+      result_sha: resultSha,
+      verified_at: at,
+    };
+    // This completion releases only its current coordinator's matching attempt.
+    // A stopped predecessor's claim is settled by ordinary coordinator recovery,
+    // never inferred or discarded by completion.
+    requireOwnMergeClaim(tx, witness, planId, scope!.workingBranch, anchors.targetBranch);
+  }
+  // §4.1 the authoritative findings gate on THIS transaction's handle: an issue
+  // captured after the preflight refuses the completion instead of being judged
+  // against a stale list. (The Git witnesses were already re-validated by the
+  // frame's commit-boundary preflight, which runs after the race seam.)
+  assertFindingsClosedOn(tx, planId, prepared, "complete");
+  applyCompletion({ tx, witness, planId, record, scope, at, what: `plan ${planId} coordination` });
+  const settled = readExecutionPlanWitness(tx, read);
+  return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
+}
+
+/**
+ * Merge-mutex admission: only the current coordinator's exact attempt is this
+ * completion's to release. The recorded holder completes another active attempt;
+ * applicable explicit stop evidence goes through ordinary coordinator recovery.
+ */
+function requireOwnMergeClaim(
+  tx: ExecutionTransaction,
+  witness: ExecutionPlanWitness,
+  planId: string,
+  sourceBranch: string,
+  targetBranch: string,
+): void {
+  const lease = witness.view.integrationLease;
+  if (lease === null) return;
+  if (lease.plan_id !== planId || lease.source_branch !== sourceBranch || lease.target_branch !== targetBranch) {
+    throw new CoordinationError(
+      "coordination.merge-lease-foreign",
+      `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
+        `not this attempt (${planId} source ${sourceBranch} target ${targetBranch}); holder ${JSON.stringify(lease.holder)} ` +
+        `must complete its claimed plan through mstar plan complete --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
+        `with that holder's own current binding, actual recorded checkout, QC/QA evidence and verified integration result. ` +
+        `If the recorded source facts for that claimed plan are wrong, correct them through mstar plan prepare --workflow ` +
+        `${witness.workflowId} --plan ${lease.plan_id} --worktree-path <actual-source-checkout> --working-branch <actual-source-branch> before its holder completes it. ` +
+        `If the holder actually stopped, use mstar session recover --workflow ${witness.workflowId} --prior-session ` +
+        `${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> --expect <current-workflow-token> ` +
+        `--operation <fresh-id> under the independently acquired replacement; an already-current replacement needs its ` +
+        `recorded predecessor relationship and renewed applicable stop evidence. This caller cannot release a foreign attempt.`,
+      {
+        plan_id: planId,
+        workflow_id: witness.workflowId,
+        holder: lease.holder,
+        holder_plan_id: lease.plan_id,
+        holder_source_branch: lease.source_branch,
+        holder_target_branch: lease.target_branch,
+        source_branch: sourceBranch,
+        target_branch: targetBranch,
+      },
+    );
+  }
+  if (lease.holder === witness.session.sessionId) return;
+  if (readLiveSessionIdentities(tx, witness.workflowId).has(lease.holder)) {
+    // §4.2 a LIVE foreign holder is not this completion's to release: the claim
+    // belongs to the attempt its holder is executing, and only the holder's own
+    // session (or an authorized recovery that attests its stop) may move it. A
+    // completing caller can never eliminate another session's foreign ownership
+    // by completing a different row.
+    throw new CoordinationError(
+      "coordination.identity-mismatch",
+      `plan ${planId} merge lease is held by the LIVE coordinator ${JSON.stringify(lease.holder)}, not the completing session ` +
+        `${JSON.stringify(witness.session.sessionId)} \u2014 a live foreign claim is never released. The claim belongs to the attempt ` +
+        `its holder is executing: that holder completes plan ${JSON.stringify(lease.plan_id)} from its own recorded scope ` +
+        `(source ${lease.source_branch}, target ${lease.target_branch}) with ITS OWN session, or \u2014 when this row's recorded ` +
+        `scope is mistaken \u2014 correct it through mstar plan prepare --workflow ${witness.workflowId} --plan ${lease.plan_id} ` +
+        `--worktree-path <actual-source-checkout> --working-branch <actual-source-branch>. Only after that holder actually stopped, use mstar session recover --workflow ` +
+        `${witness.workflowId} --prior-session ${lease.holder} --reason <reason> --attestation <absolute-full-stop-document> ` +
+        `--expect <current-workflow-token> --operation <fresh-id> under the independently acquired replacement.`,
+      { plan_id: planId, holder: lease.holder, session_id: witness.session.sessionId },
+    );
+  }
+  // §4.2 the claim matches this attempt but names a session this epoch does NOT
+  // hold active. A merely non-active row is NOT authority to take it: the only
+  // recorded linkage that authorises replacing that holder is the workflow-wide
+  // recovery RENEWAL over this workflow's own history — the immutable previous
+  // recovery receipt (which records `prior_session_id`/`stopped_sessions`), the
+  // revoked prior session row, the exact held claim row, and a FRESH full stop
+  // document in which the CURRENT binding is not the stopped session, with
+  // `claimed_at <= stop <= now`. The current binding is not transferred; it is
+  // re-recognised as the replacement the recorded history already produced, and
+  // the recovery then settles the claim row it left behind.
+  throw new CoordinationError(
+    "coordination.merge-lease-stopped-owner",
+    `plan ${planId} merge lease claims plan ${lease.plan_id} source ${lease.source_branch} target ${lease.target_branch}, ` +
+      `held by ${JSON.stringify(lease.holder)} since ${String(lease.claimed_at ?? "an unknown instant")}; that holder's ` +
+      `coordinator session is not active at epoch ${tx.epoch}, and this completing coordinator ` +
+      `${JSON.stringify(witness.session.sessionId)} does not hold it. This completion does not take over or release another ` +
+      `holder's claim. The supported route is the coordinator recovery RENEWAL for this recorded relationship: ` +
+      `\`mstar session recover --workflow ${witness.workflowId} --prior-session ${lease.holder} --reason <reason> ` +
+      `--attestation <absolute-full-stop-document> --expect <current-workflow-token> --operation <fresh-id>\`, ` +
+      `with renewed evidence naming ${lease.holder} stopped after its claim and NOT naming the current binding, run under ` +
+      `the independently acquired replacement binding this caller already holds. ` +
+      `That recovery re-recognises the recorded prior\u2192replacement relationship (previous recovery receipt, revoked ` +
+      `prior session row, this exact held claim row), keeps the current binding, settles this claim row, and then this completion ` +
+      `retries as the same recovered coordinator.`,
+    {
+      plan_id: planId,
+      session_id: witness.session.sessionId,
+      claim_plan_id: lease.plan_id,
+      claim_source_branch: lease.source_branch,
+      claim_target_branch: lease.target_branch,
+      claim_holder: lease.holder,
+      claim_taken_at: lease.claimed_at ?? null,
+      supported_route: "mstar session recover (--workflow, --prior-session, --reason, --attestation, --expect, --operation)",
+    },
+  );
+}
+
+/* ------------------------------------------------------------------------ *
+ * §R5/§R10 the fulfilment a CLOSE records
+ * ------------------------------------------------------------------------ */
+
+/**
+ * §R5/§R10 one owned row's outstanding obligation, derived BEFORE a close takes
+ * SQLite ownership and re-verified inside it. `fulfilment` is the report-only
+ * completion-policy fulfilment the close still has to RECORD (null when the
+ * workflow already records it).
+ *
+ * A close composes no row completion: `complete` is the ONE row-completion
+ * operation, so an owned row that is not `Done` is refused with the decision the
+ * close cannot supply instead of demanding a route's fields.
+ */
+export type EntailedRowCompletion = {
+  planId: string;
+  fulfilment: { policy: string; evidence: string } | null;
+};
+
+/**
+ * §R5/§R10 the close reports only what the workflow ALREADY records: whether the
+ * registered report-only completion policy is still unfulfilled. It never
+ * synthesizes a fulfilment — a QA pass is not the fulfilment of a registered
+ * policy — so an unrecorded policy is reported as outstanding and the close's
+ * own caller must refuse with the ordinary `workflow evidence` action that
+ * records it. An imported/Done row is held to exactly the same rule.
+ */
+function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: string): boolean {
+  const policy = snapshot.completion_policy;
+  if (!isNonEmptyString(policy)) {
+    throw missingDecision({
+      planId,
+      what: "close",
+      component: "workflow-delivery",
+      field: "completion_policy",
+      source: "workflow snapshot delivery_kind verification/report-only",
+      message:
+        `close requires report-only plan ${planId}'s lifecycle to declare the completion_policy its report is accepted against, ` +
+        `and this workflow records none \u2014 declare the policy through workflow registration, then retry`,
+    });
+  }
+  const recorded = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.completion)
+    ? (snapshot.delivery.completion as Record<string, unknown>)
+    : undefined;
+  if (recorded === undefined) {
+    throw missingDecision({
+      planId,
+      what: "close",
+      component: "workflow-delivery",
+      field: "delivery.completion",
+      source: "workflow snapshot delivery evidence",
+      message:
+        `close requires the workflow to RECORD the fulfilment of its registered completion policy ${JSON.stringify(policy)}, and ` +
+        `nothing is recorded \u2014 record it through the ordinary \`mstar workflow evidence\` action (which records its explicit ` +
+        `fulfilment), then retry; a QA pass alone is not the fulfilment of a policy`,
+    });
+  }
+  if (recorded.policy !== policy) {
+    throw new CoordinationError(
+      "coordination.invalid-transition",
+      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
+        `while the lifecycle registers ${JSON.stringify(policy)} \u2014 a re-pointed completion is never the basis of a Done`,
+      { plan_id: planId, recorded: recorded.policy, registered: policy },
+    );
+  }
+  return false;
+}
+
+/**
+ * §R5/§R10 one owned row's outstanding obligation, or `null` when the row
+ * records `Done` and the workflow already records everything the terminal close
+ * needs. The development and integration routes own no close-time row work:
+ * their rows complete through the ordinary `complete` operation.
+ */
+export async function readEntailedRowCompletion(
+  _context: ExecutionContext,
+  snapshot: WorkflowSnapshot,
+  row: ExecutionPlanView,
+): Promise<EntailedRowCompletion | null> {
+  const planId = String(row.plan.id);
+  const status = rowStatusOf(row.plan as unknown as PlanRow);
+  if (deliveryRouteOf(snapshot) === "report-only") {
+    if (status !== "Done") {
+      throw missingDecision({
+        planId,
+        what: "close",
+        component: "plan-completion",
+        field: "coordination.completion",
+        source: "plan row coordination block",
+        message:
+          `close requires plan ${planId} to record Done, and this row records ${status || "no status"} \u2014 ` +
+          `complete it with the ordinary plan complete operation, then retry the close`,
+      });
+    }
+    return reportOnlyFulfilmentOutstanding(snapshot, planId) ? { planId, fulfilment: null } : null;
+  }
+  if (status === "Done") return null;
+  throw missingDecision({
+    planId,
+    what: "close",
+    component: "plan-completion",
+    field: "coordination.completion",
+    source: "plan row coordination block",
+    message:
+      `close requires every owned row to record Done, and plan ${planId} records ${status || "no status"} \u2014 ` +
+      `complete it with the ordinary plan complete operation, then retry the close`,
+  });
+}
+
+/**
+ * §R5/§R10 the same derivation for every owned row of one ACTIVE workflow, in
+ * row order: the fulfilments a terminal `completed` close records.
+ */
+export async function readEntailedCompletions(
+  context: ExecutionContext,
+  workflow: ExecutionState["workflows"][number],
+): Promise<{ completions: readonly EntailedRowCompletion[]; pinned: DeliveryRoutePin }> {
+  const snapshot = workflowSnapshotOf({
+    state: workflow.state,
+    plans: workflow.plans,
+    integrationLease: workflow.integrationLease,
+  });
+  const completions: EntailedRowCompletion[] = [];
+  for (const row of workflow.plans) {
+    const proof = await readEntailedRowCompletion(context, snapshot, row);
+    if (proof !== null) completions.push(proof);
+  }
+  return { completions, pinned: deliveryRoutePin(snapshot) };
 }
 
 /* ------------------------------------------------------------------------ *
@@ -2466,114 +2031,12 @@ function applyCompletionFrame(input: {
  * ------------------------------------------------------------------------ */
 
 /**
- * §R11/A21 the execution-lease half of one failed/stopped close's cleanup:
- * every HELD execution lease of ONE workflow whose holder ownership identity is
- * not active at this epoch is released as a retained tombstone that records the
- * stopped owner. Two rules are the whole rule:
- *
- * - OWNED means this workflow's own `execution_leases` rows; a claim of another
- *   workflow is not reachable here at all;
- * - a LIVE holder's claim is never released. Liveness is the holder's own
- *   session row at this epoch — the only evidence a stopped owner is decided by
- *   (§4.2: a stale heartbeat, an old `claimed_at` and a caller's assertion
- *   authorize nothing) — so no close infers another session's stop, and the
- *   terminal decision refuses on exactly the claims this leaves held.
- *
- * It reads the NARROW held-lease view on purpose: this half runs before the
- * close's whole-view witness, and a held lease whose holder stopped is precisely
- * the state that reader refuses (`assertLeaseOwnership` cannot represent it), so
- * settling it first is what makes the terminal outcome reachable instead of
- * forcing an unguarded operation.
- */
-export function releaseStoppedExecutionLeases(
-  tx: ExecutionTransaction,
-  input: { workflowId: string; releasedBy: string; at: string },
-): void {
-  const holders = holderRowsByRole(tx, input.workflowId);
-  for (const held of readHeldExecutionLeases(tx, input.workflowId)) {
-    const holder = held.lease.holder_session_id;
-    const role = held.lease.holder_role;
-    // A held lease whose ownership identity is missing is the same corrupt pair
-    // the whole-view reader refuses: it is refused here too, never released as a
-    // claim that names nobody.
-    if (!isNonEmptyString(holder) || (role !== "coordinator" && role !== "plan-pm")) {
-      throw new StoreError(
-        "store.corrupt",
-        `execution_leases(${input.workflowId},${held.planId}).lease_json is held without the holder session identity and role ` +
-          `it must agree with; the execution authority cannot be verified`,
-      );
-    }
-    if (heldLeaseHolderIsLive(tx, holders, role, holder, held.planId)) continue;
-    releaseExecutionLease(tx, {
-      workflowId: input.workflowId,
-      planId: held.planId,
-      lease: held.lease,
-      releasedBy: input.releasedBy,
-      reason: `stopped-owner:${holder}`,
-      now: input.at,
-    });
-  }
-}
-
-/**
- * §3.1 the session rows of this workflow by role, ACTIVE or NOT: a holder's stop
- * is one row's own state, so the reader that decides it must see the suspended
- * and revoked rows too — exactly what `readLiveSessionIdentities` cannot serve.
- */
-function holderRowsByRole(
-  tx: ExecutionTransaction,
-  workflowId: string,
-): Readonly<Record<"coordinator" | "plan-pm", readonly SessionRow[]>> {
-  return {
-    coordinator: readWorkflowSessionRows(tx, workflowId, "coordinator"),
-    "plan-pm": readWorkflowSessionRows(tx, workflowId, "plan-pm"),
-  };
-}
-
-/**
- * §3.1/§4.2 whether a held execution lease's OWNERSHIP IDENTITY — the holder
- * role and session id it names, plus the plan a `plan-pm` holder holds — is the
- * ACTIVE session row of this epoch. This is the whole-view reader's own lookup
- * (`assertLeaseOwnership` resolves a holder by role + session + plan
- * association), and a session id alone is not that identity: `execution_sessions`
- * is keyed by `(workflow_id, role, session_id)`, so one session id can carry an
- * ACTIVE `coordinator` row and a stopped `plan-pm` row at the same time. An
- * active row of another role, another plan or another epoch is a DIFFERENT owner:
- * it does not keep a stopped holder's lease held, and leaving that lease held
- * would make the very state this cleanup exists to settle unreadable.
- */
-function heldLeaseHolderIsLive(
-  tx: ExecutionTransaction,
-  rowsByRole: Readonly<Record<"coordinator" | "plan-pm", readonly SessionRow[]>>,
-  role: "coordinator" | "plan-pm",
-  sessionId: string,
-  planId: string,
-): boolean {
-  return rowsByRole[role].some(
-    (row) =>
-      row.ref.sessionId === sessionId &&
-      row.state === "active" &&
-      row.ref.epoch === tx.epoch &&
-      (row.ref.planId === null || row.ref.planId === planId),
-  );
-}
-
-/**
- * §R11/A21 the integration-claim half of the same cleanup, under the same two
- * rules: this workflow's OWN merge claim is released when its holder's session
- * is not active at this epoch, and left exactly where it is when that holder IS
- * live — the terminal decision then refuses on it, because a running holder's
- * claim needs that holder's own stop or transfer. It reports whether the claim
- * was released, which is the caller's cue that the ownership it is about to
- * judge changed.
- *
- * It is read from the caller's own witness rather than the narrow held-lease
- * view: the whole-view reader carries a merge claim whatever its holder's state,
- * so this half settles after that witness exists, in the same transaction. The
- * claim names no holder ROLE (`IntegrationMergeLease` carries a holder and the
- * plan it merges), so the identity this half decides against is the workflow's
- * active session carrying that session id — the strongest identity the record
- * itself has.
+ * §R11/A21 the integration-claim half of a failed/stopped close's cleanup: this
+ * workflow's OWN merge claim is released when its holder's session is not active
+ * at this epoch, and left exactly where it is when that holder IS live — the
+ * terminal decision then refuses on it, because a running holder's claim needs
+ * that holder's own recovery. It reports whether the claim was released, which
+ * is the caller's cue that the ownership it is about to judge changed.
  */
 export function releaseStoppedMergeClaim(
   tx: ExecutionTransaction,
@@ -2592,615 +2055,7 @@ export function releaseStoppedMergeClaim(
 }
 
 /* ------------------------------------------------------------------------ *
- * §R5/§R10 the completion a CLOSE composes for the rows it owns
- * ------------------------------------------------------------------------ */
-
-/**
- * §R5/§R10 one owned row's completion, derived BEFORE a close takes SQLite
- * ownership and re-verified inside it. `fulfilment` is the report-only
- * completion-policy fulfilment the close still has to RECORD (null when the
- * workflow already records it); `completesRow` is false for a row that already
- * records `Done` and only needed that recording, and `resultSha` is the
- * already-proven merge result the route reuses instead of merging.
- */
-export type EntailedRowCompletion = {
-  planId: string;
-  /** The recorded handoff the composition completes. */
-  handoffId: string;
-  completesRow: boolean;
-  fulfilment: { policy: string; evidence: string } | null;
-  resultSha: string | null;
-  /** Current source/result checkout facts, not filesystem content seals. */
-  gitWitness?: GitProofWitness;
-};
-
-/**
- * §1/§R10 whether a report-only workflow still OWES the fulfilment of its
- * registered completion policy: true when nothing is recorded, false when the
- * recorded fulfilment names that policy. A recorded fulfilment of a DIFFERENT
- * policy is a re-pointed completion — the exact state the post-Done freeze
- * refuses — and is refused here rather than accepted as the basis of a Done.
- */
-function reportOnlyFulfilmentOutstanding(snapshot: WorkflowSnapshot, planId: string): boolean {
-  const policy = snapshot.completion_policy;
-  const recorded = isPlainObject(snapshot.delivery) && isPlainObject(snapshot.delivery.completion)
-    ? (snapshot.delivery.completion as Record<string, unknown>)
-    : undefined;
-  if (recorded === undefined) return true;
-  if (!isNonEmptyString(policy) || recorded.policy !== policy) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `close cannot complete report-only plan ${planId}: the recorded fulfilment names policy ${JSON.stringify(recorded.policy)} ` +
-        `while the lifecycle registers ${JSON.stringify(policy ?? null)} \u2014 a re-pointed completion is never the basis of a Done`,
-      { plan_id: planId, recorded: recorded.policy, registered: policy ?? null },
-    );
-  }
-  return false;
-}
-
-/**
- * §R5/§R10 the fulfilment of a report-only completion policy, RESOLVED from the
- * facts the workflow already records: the policy it registered at registration
- * (§1) and the acceptance report its accepted decision was recorded against
- * (the handoff's own QA report reference). Nothing is
- * invented — a workflow that registered no policy, or recorded a fulfilment of
- * a DIFFERENT policy (a re-pointed completion), is refused with that fact.
- */
-function entailedFulfilment(
-  snapshot: WorkflowSnapshot,
-  planId: string,
-  handoff: PlanHandoff,
-): { policy: string; evidence: string } | null {
-  if (!reportOnlyFulfilmentOutstanding(snapshot, planId)) {
-    // Already recorded: the fulfilment is a fact, not a recording this close owes.
-    return null;
-  }
-  const policy = snapshot.completion_policy;
-  if (!isNonEmptyString(policy)) {
-    throw missingDecision({
-      planId,
-      what: "close",
-      component: "workflow-delivery",
-      path: "completion_policy",
-      currentFacts: [
-        `workflow ${String(snapshot.id)} declares delivery_kind verification/report-only`,
-        "no completion_policy is recorded and no fulfilment is recorded",
-      ],
-      needed:
-        `close records report-only plan ${planId}'s fulfilment of the policy the lifecycle declared at registration, and this ` +
-        "workflow records no completion_policy \u2014 declare the policy the report is accepted against, then retry",
-      availableWork: [
-        `read plan ${planId} and its recorded accepted report`,
-        "independent operations on other rows, plans and workflows continue",
-      ],
-    });
-  }
-  return { policy, evidence: handoff.qa.report.path };
-}
-
-/**
- * §R5/§R10 the completion ONE owned row's recorded evidence entails, or `null`
- * when the row records `Done` and the workflow already records everything the
- * terminal close needs. This is the pre-transaction half: every external read
- * (the report-only policy resolution, the findings gate, the development
- * source proof and the integration merge proof) happens here, and the
- * transaction re-verifies what it can (`applyEntailedCompletion`).
- *
- * A row whose handoff is genuinely absent, or which records no completion
- * decision, is refused with E09's §6.2 report — the close names the ONE
- * decision it cannot supply instead of demanding a route's fields (A18).
- */
-export async function readEntailedRowCompletion(
-  context: ExecutionContext,
-  snapshot: WorkflowSnapshot,
-  row: ExecutionPlanView,
-): Promise<EntailedRowCompletion | null> {
-  const planId = String(row.plan.id);
-  const coordination = (row.coordination ?? undefined) as RowCoordination | undefined;
-  const handoff = coordination?.handoff;
-  const done = rowStatusOf(row.plan as unknown as PlanRow) === "Done";
-  const route = deliveryRouteOf(snapshot);
-  if (handoff === undefined) {
-    // A Done row that records no coordination block is a legitimate closed
-    // shape (the standalone completed-coherence rule accepts it), so a
-    // development/integration close has nothing to compose and nothing to
-    // repair — and a report-only close owes nothing once its fulfilment is
-    // recorded. A row that still has to be completed, and a report-only row
-    // whose fulfilment is outstanding, ask for that decision instead.
-    const owesFulfilment = route === "report-only" && reportOnlyFulfilmentOutstanding(snapshot, planId);
-    if (done && !owesFulfilment) return null;
-    throw missingDecision({
-      planId,
-      what: "close",
-      component: "plan-handoff",
-      path: "handoff",
-      currentFacts: [
-        `plan ${planId} records no handoff`,
-        `its row status is ${rowStatusOf(row.plan as unknown as PlanRow) || "unstatused"}`,
-        `the lifecycle declares the ${route} delivery route`,
-      ],
-      needed:
-        `close composes plan ${planId}'s completion from its recorded accepted report/development evidence, and this row records ` +
-        "no handoff at all \u2014 obtain the reviewed evidence (the submission, the accepted QC verdict and the passing QA decision), then retry",
-    });
-  }
-  const prepared = requirePrepared(coordination, planId, "close");
-  if (route === "report-only") {
-    assertNoIntegrationContamination({ snapshot, planId, handoff, what: "close" });
-    const fulfilment = entailedFulfilment(snapshot, planId, handoff);
-    if (done) {
-      // The row already records the completion; only the workflow's own
-      // fulfilment projection is outstanding (R10). Nothing is written to the
-      // row, so the completed shape and the absence of ownership are asserted
-      // rather than composed.
-      assertCompletedReplayInvariants(row, snapshot, planId, handoff, { what: "close", fulfilment: "pending" });
-      return { planId, handoffId: handoff.id, completesRow: false, fulfilment, resultSha: null };
-    }
-    requireHandoffState(handoff, ["accepted"], planId, "close");
-    assertAcceptedReviewDecision(handoff, planId, "close");
-    assertHandoffQaGate(handoff, prepared, planId, "close");
-    assertPreparedFresh(prepared.assignment_path, prepared);
-    await assertFindingsClosed(context, planId, prepared, "close");
-    assertExecutionHolder(planRowOf(row), context.caller.sessionId, planId, "close");
-    return { planId, handoffId: handoff.id, completesRow: true, fulfilment, resultSha: null };
-  }
-  if (done) return null;
-  if (route === "development") {
-    assertNoIntegrationContamination({ snapshot, planId, handoff, what: "close" });
-    assertAcceptedReviewDecision(handoff, planId, "close");
-    assertHandoffQaGate(handoff, prepared, planId, "close");
-    const anchors = standaloneDeliveryAnchors(snapshot, planId);
-    assertStandaloneBranchIdentity(row, planId, handoff, anchors, "close");
-    const worktree = planScopeOf(row, planId).worktreePath;
-    assertStandaloneSourceGitProof(worktree, handoff, anchors.source, "close", planId);
-    const gitWitness = captureGitProofWitness(worktree);
-    await assertFindingsClosed(context, planId, prepared, "close");
-    assertExecutionHolder(planRowOf(row), context.caller.sessionId, planId, "close");
-    return {
-      planId,
-      handoffId: handoff.id,
-      completesRow: true,
-      fulfilment: null,
-      resultSha: null,
-      gitWitness,
-    };
-  }
-  // The integration route: a PROVEN merge is reused, never re-run. The attempt
-  // whose merge ran is recorded `merged` by E09's seam (`integration-accept`
-  // finishes the recording from the observed merge); an attempt that records no
-  // result asks for that decision instead of merging here.
-  requireHandoffState(handoff, ["merged"], planId, "close");
-  const attempt = requireIntegration(handoff, planId);
-  const anchors = integrationAnchors(snapshot, planId);
-  const checkout = assertIntegrationCheckout(anchors, planId);
-  const resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, handoff.source_sha, checkout.head);
-  const gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
-  await assertFindingsClosed(context, planId, prepared, "close");
-  assertExecutionHolder(planRowOf(row), context.caller.sessionId, planId, "close");
-  return {
-    planId,
-    handoffId: handoff.id,
-    completesRow: true,
-    fulfilment: null,
-    resultSha,
-    gitWitness,
-  };
-}
-
-/**
- * §R5/§R10 the same derivation for every owned row of one ACTIVE workflow, in
- * row order: the completions a terminal `completed` close composes. A row that
- * already records `Done` yields a proof only while the report-only fulfilment
- * is still outstanding, and a workflow whose every row is Done composes
- * nothing.
- */
-export async function readEntailedCompletions(
-  context: ExecutionContext,
-  workflow: ExecutionState["workflows"][number],
-): Promise<{ completions: readonly EntailedRowCompletion[]; pinned: DeliveryRoutePin }> {
-  const snapshot = workflowSnapshotOf({
-    state: workflow.state,
-    plans: workflow.plans,
-    integrationLease: workflow.integrationLease,
-  });
-  const completions: EntailedRowCompletion[] = [];
-  for (const row of workflow.plans) {
-    const proof = await readEntailedRowCompletion(context, snapshot, row);
-    if (proof !== null) completions.push(proof);
-  }
-  // The route/policy pair every proof was derived against, computed from the
-  // SAME snapshot: the close re-checks it at the commit boundary, so the
-  // derivation and the commit judge one pair (§4.1).
-  return { completions, pinned: deliveryRoutePin(snapshot) };
-}
-
-/**
- * The concrete plan-row completion adapter: one transition owns the
- * coordinator's lease, the actual Git delivery facts, then the completion
- * delta — `Done`, the completed handoff and the released ownership. Nothing
- * here merges, closes a workflow or advances a counter twice: the caller's
- * frame owns those.
- */
-export function applyEntailedCompletion(input: {
-  tx: ExecutionTransaction;
-  frame: RowCompletionFrame;
-  snapshot: WorkflowSnapshot;
-  pinned: DeliveryRoutePin;
-  handoffId: string;
-  proof: EntailedRowCompletion;
-  at: string;
-  what: string;
-}): void {
-  const { tx, frame, snapshot, pinned, at, what } = input;
-  const planId = frame.planId;
-  requirePinnedDeliveryRoute(snapshot, pinned, planId, what);
-  const handoff = requirePlanHandoff(frame.view.coordination ?? undefined, planId, input.handoffId);
-  if (!input.proof.completesRow) {
-    // §R10 the row already records its completion: only the workflow's own
-    // fulfilment projection is being repaired, so the completed shape and the
-    // sealed evidence are re-asserted and NO row byte is rewritten (the
-    // terminal identity the lifecycle records stays exactly as it was).
-    requireHandoffState(handoff, ["completed"], planId, what);
-    return;
-  }
-  const row = frame.view.plan as unknown as PlanRow;
-  if (rowStatusOf(row) !== "InReview") {
-    // §R5 the reviewed state the completion composes is either already recorded
-    // or exactly the one the sealed handoff entails (E09's own rule); anything
-    // else is ownership, and it is refused rather than inferred.
-    entailedHandoffStatus(row, planId);
-  }
-  if (input.proof.resultSha !== null) {
-    // §E the integration route's merge-lease admission, in the file route's
-    // holder-first order: a claim this attempt holds (or none) is admitted, a
-    // foreign or stopped holder is refused — the close never takes over a
-    // claim it does not own and never re-merges what is already proven.
-    assertMergeLeaseOwnForFrame(frame, tx, handoff, what);
-  }
-  assertExecutionHolder(planRowOf(frame.view), frame.releasedBy, planId, what);
-  applyCompletionFrame({ tx, frame, handoff, at, resultSha: input.proof.resultSha, what });
-}
-
-/**
- * §R5 the frame one OWNED ROW of a workflow-level transition completes through:
- * the row's own view plus the workflow facts, read from the workflow witness
- * inside the transaction that composes the completion.
- */
-export function completionFrameFor(input: {
-  workflow: ExecutionState["workflows"][number];
-  planId: string;
-  sessionId: string;
-}): RowCompletionFrame {
-  const view = input.workflow.plans.find((candidate) => candidate.plan.id === input.planId);
-  const token = input.workflow.planTokens[input.planId];
-  if (view === undefined || token === undefined) {
-    throw new CoordinationError(
-      "coordination.plan-not-found",
-      `workflow ${String(input.workflow.state.id)} holds no plan ${input.planId}`,
-      { workflow_id: String(input.workflow.state.id), plan_id: input.planId },
-    );
-  }
-  return {
-    workflowId: String(input.workflow.state.id),
-    planId: input.planId,
-    view,
-    state: input.workflow.state,
-    siblings: input.workflow.plans.filter((candidate) => candidate.plan.id !== input.planId),
-    integrationLease: input.workflow.integrationLease,
-    revision: parseExecutionToken(token).revision,
-    sessionBound: view.session !== null,
-    releasedBy: input.sessionId,
-  };
-}
-
-/**
- * §3 `complete` on the DB authority: re-prove the pinned evidence and the
- * recorded result, then apply the completion delta as ONE transaction — `Done`,
- * the completed handoff, the released execution lease and the released merge
- * lease commit together or not at all.
- *
- * The route decides which proof is required, and it is re-checked with the
- * registered completion policy INSIDE the transaction, because the plan's CAS
- * guards the row and not the workflow header:
- *
- * - a single-row `verification/report-only` workflow completes on its accepted
- *   handoff plus the recorded policy's fulfilment evidence, needs no source,
- *   integration or merge and drops only its own execution lease;
- * - a standalone development workflow completes on its accepted handoff, its
- *   delivery anchors and a source checkout that still carries the pinned commit;
- * - every other route requires a MERGED attempt whose recorded result is the
- *   pinned two-parent merge and is still reachable from the observed integration
- *   HEAD.
- *
- * A report-only completion is never accepted for another route and vice versa,
- * and no completion of any kind is iteration integration: nothing here merges,
- * and the workflow's own terminal close is a separate transition (W6).
- *
- * §4.1/§7 the external Git read happens before SQLite ownership and the SEALED
- * Git proof it produced is re-read from the filesystem immediately before the
- * commit, so a worktree, index, object store or ref that moved in the window
- * refuses instead of committing a stale proof. A refs-only witness cannot prove
- * an unchanged index or worktree (R10).
- */
-
-/** Test-only hook to observe the preflight→commit gap of a DB completion. */
-let completeWitnessGapForTest: (() => void) | undefined;
-export function setCompleteWitnessGapForTest(callback: (() => void) | undefined): void {
-  completeWitnessGapForTest = callback;
-}
-
-/**
- * The same observation point for `reconcile`: its classification is a
- * pre-transaction read too, so a regression needs to move the evidence or the
- * header in that window.
- */
-let reconcileWitnessGapForTest: (() => void) | undefined;
-export function setReconcileWitnessGapForTest(callback: (() => void) | undefined): void {
-  reconcileWitnessGapForTest = callback;
-}
-
-export async function completeExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<CompleteOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "complete");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "handoffId"], "complete operation");
-  if (!isNonEmptyString(operation.handoffId)) throw invalidPlanInput("complete requires the non-empty handoffId it names");
-  const { planId } = resolved.read;
-  const before = await readExecutionPlan(context, request.session, planId);
-  const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
-  const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "complete");
-  const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
-  const standalone = isStandaloneDevelopmentWorkflow(snapshot);
-  const reportOnly = isStandaloneReportOnlyWorkflow(snapshot);
-  // §4.1 the route/policy pair this preflight proved; the transaction below
-  // re-reads the header and refuses if either moved in the window.
-  const pinned = { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
-  let resultSha: string | null = null;
-  let gitWitness: GitProofWitness | undefined;
-  if (reportOnly) {
-    assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
-    requireHandoffState(named, ["accepted"], planId, "complete");
-    assertReportOnlyCompletionEvidence(snapshot, planId, "complete");
-    assertAcceptedReviewDecision(named, planId, "complete");
-    assertHandoffQaGate(named, prepared, planId, "complete");
-    assertPreparedFresh(prepared.assignment_path, prepared);
-  } else if (standalone) {
-    assertNoIntegrationContamination({ snapshot, planId, handoff: named, what: "complete" });
-    assertAcceptedReviewDecision(named, planId, "complete");
-    assertHandoffQaGate(named, prepared, planId, "complete");
-    const anchors = standaloneDeliveryAnchors(snapshot, planId);
-    assertStandaloneBranchIdentity(before.data, planId, named, anchors, "complete");
-    const worktree = planScopeOf(before.data, planId).worktreePath;
-    assertStandaloneSourceGitProof(worktree, named, anchors.source, "complete", planId);
-    gitWitness = captureGitProofWitness(worktree);
-  } else {
-    requireHandoffState(named, ["merged"], planId, "complete");
-    const attempt = requireIntegration(named, planId);
-    const anchors = integrationAnchors(snapshot, planId);
-    const checkout = assertIntegrationCheckout(anchors, planId);
-    resultSha = assertRecordedResult(anchors.worktreePath, planId, attempt, named.source_sha, checkout.head);
-    gitWitness = captureGitProofWitness(anchors.worktreePath, "coordination.integration-diverged");
-  }
-  await assertFindingsClosed(context, planId, prepared, "complete");
-  assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "complete");
-  completeWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
-    const sealed = requirePrepared(coordinationOf(witness), planId, "complete");
-    requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "complete", { still: true });
-    const committed = witnessSnapshot(witness);
-    requirePinnedDeliveryRoute(committed, pinned, planId, "complete");
-    if (isStandaloneReportOnlyWorkflow(committed)) {
-      assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
-      requireHandoffState(handoff, ["accepted"], planId, "complete");
-      assertReportOnlyCompletionEvidence(committed, planId, "complete");
-      assertAcceptedReviewDecision(handoff, planId, "complete");
-      assertHandoffQaGate(handoff, sealed, planId, "complete");
-      assertPreparedFresh(sealed.assignment_path, sealed);
-      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
-    } else if (isStandaloneDevelopmentWorkflow(committed)) {
-      assertNoIntegrationContamination({ snapshot: committed, planId, handoff, what: "complete" });
-      assertAcceptedReviewDecision(handoff, planId, "complete");
-      assertHandoffQaGate(handoff, sealed, planId, "complete");
-      assertStandaloneBranchIdentity(witness.view, planId, handoff, standaloneDeliveryAnchors(committed, planId), "complete");
-      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
-    } else {
-      requireHandoffState(handoff, ["merged"], planId, "complete");
-      assertMergeLeaseOwn(witness, tx, handoff, "complete");
-      assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "complete");
-    }
-    if (gitWitness !== undefined) revalidateGitProofWitness(gitWitness);
-    applyCompletion({ tx, witness, planId, handoff, at, resultSha, what: "complete" });
-    const settled = readExecutionPlanWitness(tx, resolved.read);
-    return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/** §E what `reconcile` decided for one crash-interrupted attempt. */
-type ReconcileDecision =
-  | { outcome: "already-completed" }
-  | { outcome: "completed"; resultSha: string }
-  | { outcome: "retry-ready" };
-
-/**
- * §3 `reconcile` on the DB authority: classify one crash-interrupted attempt
- * from the pinned objects and apply the decision in one transaction. It never
- * merges, never re-pins and never guesses:
- *
- * - `integrating` with the base unmoved and the source unmerged is `retry-ready`:
- *   back to `accepted`, the abandoned attempt block released, the row still
- *   InReview with its execution lease;
- * - `integrating` with a proven result, and `merged` with a still-valid recorded
- *   proof, complete normally (the same one-transaction delta);
- * - `completed` with a valid recorded proof is a domain no-op: replay never
- *   resurrects ownership or rewrites timestamps; the accepted operation still
- *   advances the addressed plan's CAS and records its own receipt. A standalone
- *   replay re-runs its stored invariants, its registered policy and its pinned
- *   QC/QA digests inside the transaction, so a report edited in the window still
- *   refuses;
- * - an unfinished/dirty integration checkout is `integration-unresolved`, and a
- *   moved branch, an unexpected parent graph, several matching merges or
- *   unavailable objects are `integration-diverged`.
- *
- * Ownership (§4.2): the caller must be the coordinator that owns the attempt —
- * or the stopped owner's claim must be taken over explicitly. A holder whose
- * session is no longer active at this epoch is the ONLY case where a claim is
- * moved without the holder agreeing, and the release records the prior holder,
- * the new holder and the decision. Clock age and heartbeats authorize nothing:
- * a claim held by a live session refuses, however old it is.
- */
-export async function reconcileExecutionPlan(
-  context: ExecutionContext,
-  request: ExecutionPlanRequest<ReconcileOperation>,
-): Promise<ExecutionReceipt<ExecutionPlanView>> {
-  const resolved = resolvePlanOperationRequest(context.caller, request, "reconcile");
-  const operation = resolved.call.operation;
-  assertExactKeys(operation as unknown as Record<string, unknown>, ["kind", "handoffId"], "reconcile operation");
-  if (!isNonEmptyString(operation.handoffId)) throw invalidPlanInput("reconcile requires the non-empty handoffId it names");
-  const { planId } = resolved.read;
-  const before = await readExecutionPlan(context, request.session, planId);
-  const named = requirePlanHandoff(before.data.coordination ?? undefined, planId, operation.handoffId);
-  const prepared = requirePrepared(before.data.coordination ?? undefined, planId, "reconcile");
-  const snapshot = await readWorkflowSnapshot(context, resolved.read.workflowId);
-  const repository = controlHarnessRoot(context);
-  const reportOnly = isStandaloneReportOnlyWorkflow(snapshot);
-  // §4.1 the route/policy pair this classification proved; the completed replay
-  // below re-reads the header before it advances anything.
-  const pinned = { route: deliveryRouteOf(snapshot), completionPolicy: snapshot.completion_policy };
-  let decision: ReconcileDecision;
-  if (named.state === "completed") {
-    if (deliveryRouteOf(snapshot) !== "integration") {
-      assertStandaloneCompletedReplay(before.data, snapshot, planId, named, repository);
-    } else {
-      const integration = requireIntegration(named, planId);
-      const target = proofRepository([integration.worktree_path, named.worktree_path, repository]);
-      if (target === undefined) {
-        throw integrationDiverged(
-          `plan ${planId} has no readable integration repository to re-verify ${String(integration.result_sha)}`,
-          { plan_id: planId, worktree_path: integration.worktree_path },
-        );
-      }
-      const head = gitRead(target, ["rev-parse", integration.target_branch]);
-      assertRecordedResult(target, planId, integration, named.source_sha, head);
-    }
-    decision = { outcome: "already-completed" };
-  } else if (reportOnly) {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `reconcile refuses report-only handoff ${named.state} for ${planId} because integration contamination is not permitted`,
-      { plan_id: planId, state: named.state },
-    );
-  } else if (named.state === "integrating" || named.state === "merged") {
-    const attempt = requireIntegration(named, planId);
-    const anchors = integrationAnchors(snapshot, planId);
-    const checkout = assertIntegrationCheckout(anchors, planId);
-    // Every remaining path completes the row, so the coordinator must still hold
-    // the execution lease it received at accept (spec §E — nothing is replayed
-    // into ownership). The merge lease is admitted INSIDE the transaction, in
-    // the file route's holder-first order, because only there is the holder's
-    // liveness at this epoch readable.
-    assertExecutionHolder(planRowOf(before.data), context.caller.sessionId, planId, "reconcile");
-    if (named.state === "merged") {
-      decision = {
-        outcome: "completed",
-        resultSha: assertRecordedResult(anchors.worktreePath, planId, attempt, named.source_sha, checkout.head),
-      };
-    } else {
-      const proof = integrationProof(anchors.worktreePath, checkout.head, attempt.base_sha, named.source_sha);
-      if (proof.kind === "diverged") {
-        throw integrationDiverged(`plan ${planId} integration cannot be reconciled \u2014 ${proof.reason}`, {
-          plan_id: planId,
-          base: attempt.base_sha,
-          source: named.source_sha,
-        });
-      }
-      if (proof.kind === "proven") {
-        decision = { outcome: "completed", resultSha: proof.resultSha };
-      } else if (checkout.head !== attempt.base_sha) {
-        throw integrationDiverged(
-          `plan ${planId} integration HEAD ${checkout.head} moved past the attempt base ${attempt.base_sha} without a merge of ${named.source_sha}`,
-          { plan_id: planId, base: attempt.base_sha, head: checkout.head },
-        );
-      } else {
-        decision = { outcome: "retry-ready" };
-      }
-    }
-  } else {
-    throw new CoordinationError(
-      "coordination.invalid-transition",
-      `plan ${planId} handoff is ${named.state} \u2014 reconcile recovers only integrating, merged or completed attempts`,
-      { plan_id: planId, state: named.state },
-    );
-  }
-  if (decision.outcome !== "already-completed") {
-    await assertFindingsClosed(context, planId, prepared, "complete");
-  }
-  reconcileWitnessGapForTest?.();
-  const requestHash = planOperationRequestHash(context.caller, resolved.read, operation);
-  return withExecutionPlanOperation<ExecutionPlanView>(context, resolved, requestHash, (witness, tx, at) => {
-    const handoff = requirePlanHandoff(coordinationOf(witness), planId, operation.handoffId);
-    if (decision.outcome === "already-completed") {
-      // The DOMAIN replay is read-only: no lease, block or timestamp is
-      // rewritten. The accepted operation itself is not a replay — this
-      // authority records it and advances the addressed plan's CAS exactly once
-      // (§3.1), so its receipt and the token it returns are one operation's.
-      const committed = witnessSnapshot(witness);
-      requirePinnedDeliveryRoute(committed, pinned, planId, "reconcile");
-      if (deliveryRouteOf(committed) !== "integration") {
-        // §4.1 the replay re-runs the stored invariants and the pinned QC/QA
-        // digests here, not only before ownership: the row token cannot see a
-        // report rewritten inside the window, and neither can the header.
-        assertCompletedReplayInvariants(witness.view, committed, planId, handoff);
-      }
-      advancePlanRowRevision(tx, witness);
-      const settled = readExecutionPlanWitness(tx, resolved.read);
-      return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
-    }
-    requireRowStatus(witness.view.plan as unknown as PlanRow, "InReview", planId, "reconcile", { still: true });
-    assertExecutionHolder(planRowOf(witness.view), witness.session.sessionId, planId, "reconcile");
-    const lease = decideMergeLease(witness, tx, handoff, "reconcile");
-    if (decision.outcome === "retry-ready") {
-      const returned: PlanHandoff = { ...handoff, state: "accepted" };
-      delete returned.integration;
-      writeCoordinationBlock(tx, witness, {
-        block: { ...storedCoordinationOf(witness.view), handoff: returned },
-        what: `plan ${planId} coordination`,
-      });
-      if (lease.kind !== "unclaimed") {
-        releaseIntegrationMergeLease(tx, {
-          workflowId: witness.workflowId,
-          claim: lease.lease,
-          releasedBy: witness.session.sessionId,
-          reason: lease.kind === "stopped" ? `stopped-owner:${lease.lease.holder}` : "retry-ready",
-          now: at,
-        });
-      }
-      const settled = readExecutionPlanWitness(tx, resolved.read);
-      return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
-    }
-    requireHandoffState(handoff, ["integrating", "merged"], planId, "reconcile");
-    if (lease.kind === "stopped") {
-      // §4.2 the explicit takeover: the prior holder is recorded on the release
-      // that ends its claim, together with the decision and the new owner.
-      releaseIntegrationMergeLease(tx, {
-        workflowId: witness.workflowId,
-        claim: lease.lease,
-        releasedBy: witness.session.sessionId,
-        reason: `stopped-owner:${lease.lease.holder}`,
-        now: at,
-      });
-    }
-    applyCompletion({ tx, witness, planId, handoff, at, resultSha: decision.resultSha, what: "reconcile" });
-    const settled = readExecutionPlanWitness(tx, resolved.read);
-    return { data: settled.view, token: settled.token, storeId: tx.storeId, epoch: tx.epoch };
-  });
-}
-
-/* ------------------------------------------------------------------------ *
- * §3 `mutateExecutionPlan` — the published coordinator/plan verb surface
+ * §3 `mutateExecutionPlan` — the published coordinator plan verb surface
  * ------------------------------------------------------------------------ */
 
 /**
@@ -3217,11 +2072,10 @@ export async function reconcileExecutionPlan(
  * never a prerequisite.
  *
  * It is published HERE and only here, because the union is complete: every
- * implemented member has exactly one DB transition, and the legacy-only
- * `repair-delivery-source` — absent from primary spec §3's eleven operations —
- * is refused rather than stubbed. The dispatcher adds no permission of its own:
- * each verb re-runs the shared seat/scope gate, and the frame re-runs the CAS,
- * the running-lifecycle admission and the receipt bookkeeping.
+ * implemented member has exactly one DB transition, and a kind outside it is
+ * refused rather than stubbed. The dispatcher adds no permission of its own:
+ * each verb re-runs the shared seat gate, and the frame re-runs the CAS, the
+ * running-lifecycle admission and the receipt bookkeeping.
  */
 export async function mutateExecutionPlan(
   context: ExecutionContext,
@@ -3242,38 +2096,13 @@ export async function mutateExecutionPlan(
       return residualAddExecutionPlan(context, { ...resolved, operation: strict });
     case "residual-close":
       return residualCloseExecutionPlan(context, { ...resolved, operation: strict });
-    case "release":
-      return releaseExecutionPlan(context, { ...resolved, operation: strict });
-    case "handoff":
-      return handoffExecutionPlan(context, { ...resolved, operation: strict });
-    case "accept":
-      return acceptExecutionPlan(context, { ...resolved, operation: strict });
-    case "return":
-      return returnExecutionPlan(context, { ...resolved, operation: strict });
-    case "integration-start":
-      return integrationStartExecutionPlan(context, { ...resolved, operation: strict });
-    case "integration-accept":
-      return integrationAcceptExecutionPlan(context, { ...resolved, operation: strict });
     case "complete":
       return completeExecutionPlan(context, { ...resolved, operation: strict });
-    case "reconcile":
-      return reconcileExecutionPlan(context, { ...resolved, operation: strict });
-    default: {
-      // The union is exhaustive, so this is reachable only by a caller whose
-      // request is not the typed union: the legacy-only repair, an unknown verb
-      // or a staged store's older vocabulary all refuse here instead of being
-      // dispatched to something that is not theirs.
-      const kind = "kind" in operation && typeof operation.kind === "string" ? operation.kind : String(operation);
-      if (LEGACY_ONLY_OPERATIONS[kind] === true) {
-        throw new CoordinationError(
-          "coordination.legacy-only-operation",
-          `${kind} is available only through the file-backed plan route; run \`mstar plan ${kind}\` against the file-backed workflow.`,
-          { operation: kind },
-        );
-      }
-      throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
-        operation: kind,
-      });
-    }
+    default:
+      throw new CoordinationError(
+        "coordination.unknown-operation",
+        `${String(operation.kind)} is not a coordination operation`,
+        { operation: String(operation.kind) },
+      );
   }
 }

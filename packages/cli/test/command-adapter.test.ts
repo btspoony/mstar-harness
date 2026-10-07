@@ -72,34 +72,6 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
-  test("plan bind reports the valued option when a flag is mistaken for a value", async () => {
-    const result = await run(["plan", "bind", "--plan", "--workflow", "w"]);
-    const body = JSON.parse(result.stdout) as {
-      message: string;
-      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string; helpRoute?: string };
-    };
-    const diagnostic = body.details?.diagnostics?.[0];
-    // The primary surface must carry the identified option facts, not just the
-    // metadata: the first line names the option, its expected arity and the
-    // received token.
-    const firstLine = body.message.split("\n")[0] ?? "";
-    expect(firstLine).toBe("Rejected --plan: expected option value; received --plan");
-    expect(diagnostic?.path).toBe("--plan");
-    expect(diagnostic?.usage).toContain("--plan <value>");
-    expect(diagnostic?.usage).toContain("--execution");
-    expect(body.details?.recovery).toContain("Correct usage:");
-    expect(body.details?.helpRoute).toBe("mstar plan bind --help");
-  });
-  test("plan bind does not attribute option-like positionals after the terminator", async () => {
-    const result = await run(["plan", "bind", "--", "--plan", "--workflow", "w"]);
-    const body = JSON.parse(result.stdout) as {
-      details?: { diagnostics?: Array<{ path?: string; usage?: string }>; recovery?: string };
-    };
-    const diagnostic = body.details?.diagnostics?.[0];
-    expect(diagnostic).not.toHaveProperty("path");
-    expect(diagnostic?.usage).toContain("--plan <value>");
-    expect(body.details?.recovery).toContain("Correct usage:");
-  });
 
 
   test("issue show positional parse errors retain their diagnostic shape", () => {
@@ -561,7 +533,7 @@ test("generated CLI adapter decodes schema-typed numeric options and registers b
 
 describe("generated CLI adapter — minted identity transport", () => {
   const minted = (overrides: Record<string, unknown> = {}): string =>
-    serializeExecutionValue({ source: "local", sessionId: "minted-adapter", workflowId: "wf-adapter", role: "coordinator", planId: null, ...overrides });
+    serializeExecutionValue({ source: "local", sessionId: "minted-adapter", workflowId: "wf-adapter", role: "coordinator", ...overrides });
 
   /**
    * One envelope field read by name. The parsed JSON is our own adapter's
@@ -583,7 +555,7 @@ describe("generated CLI adapter — minted identity transport", () => {
     const priorHost = process.env.MSTAR_HOST_SESSION_ID;
     try {
       process.env.MSTAR_HOST_SESSION_ID = "ambient-host";
-      for (const malformed of ["not json", "[]", '"scalar"', minted({ sessionId: "" })]) {
+      for (const malformed of ["not json", "[]", '"scalar"', minted({ sessionId: "" }), minted({ planId: null })]) {
         process.env.MSTAR_EXECUTION_IDENTITY = malformed;
         const result = await run(["plan", "bind", "--execution", "--workflow", "wf-adapter", "--coordinator"]);
         const envelope: unknown = JSON.parse(result.stdout);
@@ -614,29 +586,21 @@ describe("generated CLI adapter — minted identity transport", () => {
   });
 
 
-  test("sparse ACTIVE close preserves the minted plan-pm seat instead of reinterpreting it as coordinator", async () => {
-    const prior = process.env.MSTAR_EXECUTION_IDENTITY;
-    try {
-      process.env.MSTAR_EXECUTION_IDENTITY = minted({ role: "plan-pm", planId: "plan-adapter" });
-      const result = await run(["status", "workflow-close", "--workflow", "wf-adapter", "--reason", "synthetic close"]);
-      const envelope: unknown = JSON.parse(result.stdout);
-      expect(result.status).toBe(2);
-      expect(field(envelope, "code")).toBe("command.invalid-input");
-      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
-    } finally {
-      if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
-    }
+  test("a retired plan transfer verb is absent from the CLI surface", async () => {
+    const result = await run(["plan", "release", "--workflow", "wf-adapter", "--plan", "plan-foreign"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("plan.release.ok");
   });
 
-  test("sparse plan operation rejects an explicit plan selector outside the minted own plan", async () => {
+  test("a plan operation without --plan states the addressing fact it requires", async () => {
     const prior = process.env.MSTAR_EXECUTION_IDENTITY;
     try {
-      process.env.MSTAR_EXECUTION_IDENTITY = minted({ role: "plan-pm", planId: "plan-own" });
-      const result = await run(["plan", "release", "--workflow", "wf-adapter", "--plan", "plan-foreign"]);
+      process.env.MSTAR_EXECUTION_IDENTITY = minted({ workflowId: "wf-adapter" });
+      const result = await run(["plan", "progress", "--workflow", "wf-adapter", "--progress", JSON.stringify({ status: "InProgress", summary: "s", evidence_paths: [] })]);
       const envelope: unknown = JSON.parse(result.stdout);
       expect(result.status).toBe(2);
       expect(field(envelope, "code")).toBe("command.invalid-input");
-      expect(identityCode(envelope)).toBe("command.identity-scope-mismatch");
+      expect(String(field(envelope, "message"))).toContain("--plan");
     } finally {
       if (prior === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY; else process.env.MSTAR_EXECUTION_IDENTITY = prior;
     }

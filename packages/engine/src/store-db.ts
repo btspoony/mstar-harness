@@ -15,12 +15,36 @@
  * Issue-domain verbs (capture/disposition/relations) are NOT implemented
  * here — they arrive with later tasks on top of this boundary.
  */
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
+// Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
+// import of the activation validator must be loaded at call time (see
+// validatedActivationAttestation below) because store-activation.ts reads
+// MIGRATIONS from this module during its own module evaluation.
+import type { ActivationAttestation } from "./store-activation.js";
+
+/**
+ * The existing operator stop evidence, run through the existing activation
+ * validator. Loaded at call time because `store-activation.ts` reads
+ * `MIGRATIONS` from this module during its own module evaluation — a static
+ * import from there would read an uninitialized binding before this module's
+ * exported consts are initialised.
+ */
+async function validatedActivationAttestation(value: unknown): Promise<ActivationAttestation> {
+  const { validateActivationAttestation } = await import("./store-activation.js");
+  return validateActivationAttestation(value);
+}
+
+/** A validated instant: `Date.parse` finite, so offset spellings compare chronologically. */
+function parsedInstant(value: unknown): number | null {
+  if (typeof value !== "string" || value === "") return null;
+  const instant = Date.parse(value);
+  return Number.isFinite(instant) ? instant : null;
+}
 
 /** Minimum Bun runtime floor (contract §8). */
 export const MIN_BUN_VERSION = "1.4.0";
@@ -40,6 +64,7 @@ export type StoreErrorCode =
   | "store.schema-drift"
   | "store.corrupt"
   | "store.busy"
+  | "store.upgrade-attestation-missing"
   | "store.upgrade-state-changed"
   | "store.upgrade-staged-record-missing"
   | "store.upgrade-staged-record-malformed"
@@ -180,22 +205,13 @@ function loadSqliteDriverSync(): SqliteModule {
   }
 }
 
-/** `{resolved process/control harness root}/store.db` via
- * `resolveProcessHarnessDir` for Git worktrees. A supplied non-Git harness
- * directory is already an explicit root; do not mistake its own `plans/`
- * child for a nested harness. */
+/** The caller's selected harness root, not a process-discovery starting address.
+ * Process/FILE callers discover through `resolveProcessHarnessDir` first; its
+ * explicit override keeps even a missing or empty selected root authoritative. */
 export function storeDbPath(context: { harnessDir: string }): string {
   if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const start = resolve(context.harnessDir);
-  // Keep the linked-checkout failure closed; the resolver throws when Git's
-  // main worktree cannot be determined from a linked worktree.
-  const resolved = resolveProcessHarnessDir(start);
-  // The resolver's legacy `plans/` fallback mis-reads an explicitly supplied
-  // non-git root that merely CONTAINS a plans/ directory (its own child) as
-  // the harness root. The explicit root wins there. Standard harness
-  // selections (.mstar/.agents children, ancestor walks) stay authoritative.
-  const hijackedPlansFallback = resolved !== null && resolved === join(start, "plans");
-  return join(hijackedPlansFallback ? start : resolved ?? start, "store.db");
+  const root = resolve(context.harnessDir);
+  return join(resolveProcessHarnessDir(root, root) ?? root, "store.db");
 }
 
 /** Bounded wait is fixed at 5000ms in production (contract §2). The
@@ -813,6 +829,8 @@ values (1, null, 1, null, null, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'unavailab
  * plan that does not exist (no dangling lease), one plan-pm identity cannot
  * silently move between plans (session primary key), and at most one ACTIVE
  * coordinator per workflow / one ACTIVE plan-pm per plan can exist at a time.
+ * Migration 9 removes the per-plan-lease and plan-PM half of this; the block
+ * stays verbatim as the recorded history of what version 4 created.
  */
 export const MIGRATION_4_SQL = `
 create table execution_meta(
@@ -918,7 +936,23 @@ export const MIGRATION_5_SQL = `
 alter table execution_migrations add column coverage_json text;
 `;
 
-export type Migration = { version: number; name: string; sql: string };
+/**
+ * One append-only migration. `normalize`, when present, performs the JSON
+ * transformation the version's SQL cannot express (the members it removes or
+ * rewrites live inside stored JSON), running in the SAME exclusive transaction
+ * as this version's row. Its context carries the operator facts the upgrade was
+ * invoked with — the one supported authorization a cutover may act on.
+ */
+export type MigrationContext = {
+  /**
+   * The operator's FULL validated activation attestation, when the upgrade
+   * supplied one. It is the one supported authorization a cutover may act on:
+   * a migration never treats an unattested stopped id as authority.
+   */
+  attestation?: ActivationAttestation;
+};
+
+export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
 
 /** Migration 6 — durable roadmap content authority; never import disposable projection rows. */
 export const MIGRATION_6_SQL = `
@@ -990,6 +1024,350 @@ alter table provenance add column origin text not null default 'scoped' check (o
 `;
 
 
+/**
+ * Migration 9 — coordinator-only execution sessions, and no per-plan lease,
+ * with the retained business JSON normalized into the target shape.
+ *
+ * The removed plan-PM seat left three storage artefacts behind: per-plan
+ * session rows, per-plan write leases, and — in every store that reached schema
+ * 8 through the old protocol — a sealed `prepared` and a `handoff` inside each
+ * plan's `coordination_json` plus `self_amendments` in the workflow header.
+ * None of them has a producer any more, and the store's own JSON cannot be
+ * transformed by SQL alone, so the migration runner performs one
+ * `normalizeExecutionState` pass over `execution_plans` / `execution_workflows`
+ * in the SAME exclusive transaction that records this version.
+ *
+ * The per-plan lease is the ONE place a schema-8 store records a plan's source
+ * checkout and branch (the plan row itself never carries it — the old producer
+ * deletes `execution_lease` before writing `state_json`). SQL cannot read a
+ * value and copy it into JSON, so the capture of `execution_leases` is a
+ * TEMPORARY table the normalizer reads after this SQL and the runner drops
+ * after the normalizer returns: the lease facts are reconciled into ordinary
+ * row metadata BEFORE their table is gone.
+ *
+ * `execution_sessions` keeps only coordinator rows, so the `plan_id` column and
+ * the role check that admitted `plan-pm` go with them — a column's CHECK cannot
+ * be dropped in place, hence the table rewrite.
+ *
+ * Migrations 1–8 stay byte-identical: every applied store keeps its recorded
+ * checksum, and the historical DDL that once created these rows remains
+ * readable provenance rather than a second live authority.
+ */
+export const MIGRATION_9_SQL = `
+create table execution_session_cutover as
+  select workflow_id, plan_id, session_id from execution_sessions where role = 'plan-pm';
+create table execution_lease_cutover as
+  select workflow_id, plan_id, owner_epoch, lease_json from execution_leases;
+create table execution_integration_cutover as
+  select workflow_id, lease_json from execution_integration_leases;
+delete from execution_sessions where role = 'plan-pm';
+create table execution_sessions_coordinator(
+  workflow_id text not null references execution_workflows(workflow_id),
+  role text not null check (role = 'coordinator'),
+  session_id text not null,
+  epoch integer not null check (epoch > 0),
+  revision integer not null check (revision > 0),
+  state text not null check (state in ('active','suspended','revoked')),
+  bound_at text not null,
+  primary key (workflow_id, role, session_id)
+);
+insert into execution_sessions_coordinator(workflow_id, role, session_id, epoch, revision, state, bound_at)
+  select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions;
+drop table execution_sessions;
+alter table execution_sessions_coordinator rename to execution_sessions;
+create unique index execution_sessions_active_coordinator
+  on execution_sessions(workflow_id) where role = 'coordinator' and state = 'active';
+drop table execution_leases;
+`;
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseStoredRecord(text: unknown, what: string): JsonRecord {
+  const parsed: unknown = typeof text === "string" ? JSON.parse(text) : undefined;
+  if (!isRecord(parsed)) throw new StoreError("store.corrupt", `${what} is not a stored JSON object; the store was left unchanged`);
+  return parsed;
+}
+
+/**
+ * Normalize one legacy row-coordination block: the removed seat's sealed
+ * `prepared` becomes the contracted ordinary configuration, its `progress` is
+ * carried over, a `completed` attempt becomes a contracted `CompletionRecord`
+ * (the row's real QC/QA and integration evidence — never rewritten), and every
+ * other protocol member is dropped. The result carries NO revision: that value
+ * belongs to the `execution_plans.revision` column alone.
+ */
+function normalizeLegacyCoordination(legacy: JsonRecord): JsonRecord {
+  const out: JsonRecord = {};
+  const prepared = legacy.prepared;
+  if (isRecord(prepared)) {
+    const qaGate = prepared.qa_gate;
+    const findings = prepared.findings_cleanup;
+    if (
+      typeof prepared.prepared_by === "string" && prepared.prepared_by !== "" &&
+      typeof prepared.prepared_at === "string" && prepared.prepared_at !== "" &&
+      (qaGate === "mandatory" || qaGate === "pm-acceptance") &&
+      (findings === "zero-residual" || findings === "allow-residual")
+    ) {
+      out.prepared = { qa_gate: qaGate, findings_cleanup: findings, prepared_by: prepared.prepared_by, prepared_at: prepared.prepared_at };
+    }
+  }
+  if (isRecord(legacy.progress)) out.progress = legacy.progress;
+  const handoff = legacy.handoff;
+  if (isRecord(handoff) && handoff.state === "completed") {
+    const qc = handoff.qc;
+    const qa = handoff.qa;
+    const integration = handoff.integration;
+    const mapped: JsonRecord = {
+      source_branch: typeof handoff.source_branch === "string" && handoff.source_branch !== "" ? handoff.source_branch : null,
+      source_sha: typeof handoff.source_sha === "string" && handoff.source_sha !== "" ? handoff.source_sha : null,
+      worktree_path: typeof handoff.worktree_path === "string" && handoff.worktree_path !== "" ? handoff.worktree_path : null,
+      review_base: typeof handoff.review_base === "string" && handoff.review_base !== "" ? handoff.review_base : null,
+      review_head: typeof handoff.review_head === "string" && handoff.review_head !== "" ? handoff.review_head : null,
+      qc: isRecord(qc) ? qc : { decision: "", reports: [], consolidated: { path: "", sha256: "" } },
+      qa: isRecord(qa) ? qa : { gate: "", decision: "", report: { path: "", sha256: "" } },
+      completed_by: typeof handoff.accepted_by === "string" && handoff.accepted_by !== "" ? handoff.accepted_by : "",
+      completed_at: typeof handoff.completed_at === "string" && handoff.completed_at !== "" ? handoff.completed_at : "",
+    };
+    if (isRecord(integration)) {
+      mapped.integration = {
+        target_branch: typeof integration.target_branch === "string" ? integration.target_branch : "",
+        worktree_path: typeof integration.worktree_path === "string" ? integration.worktree_path : "",
+        base_sha: typeof integration.base_sha === "string" ? integration.base_sha : "",
+        result_sha: typeof integration.result_sha === "string" ? integration.result_sha : "",
+        verified_at: typeof integration.verified_at === "string" ? integration.verified_at : "",
+      };
+    }
+    out.completion = mapped;
+  }
+  return out;
+}
+
+/**
+ * Map the source/cleanup ownership a removed per-plan lease carried onto the
+ * ordinary row metadata the target shape uses.
+ *
+ * The plan's own metadata is the authoritative, ORDINARY and revisable record
+ * of its checkout/branch: the target contract keeps scope on
+ * `plans[].metadata`, and the coordinator revises it through ordinary `prepare`.
+ * The removed lease is the superseded protocol's copy, so it only FILLS a member
+ * metadata does not already record. A member the two disagree on is never a hard
+ * gate: metadata wins (it is the live config an operator can revise), and the
+ * stale lease value is dropped with its table.
+ */
+function reconcileLeaseScope(metadata: JsonRecord, lease: JsonRecord): JsonRecord | null {
+  const worktree = typeof lease.worktree_path === "string" && lease.worktree_path !== ""
+    ? lease.worktree_path
+    : typeof lease.plan_worktree_path === "string" && lease.plan_worktree_path !== ""
+      ? lease.plan_worktree_path
+      : undefined;
+  const branch = typeof lease.working_branch === "string" && lease.working_branch !== ""
+    ? lease.working_branch
+    : typeof lease.plan_branch === "string" && lease.plan_branch !== ""
+      ? lease.plan_branch
+      : undefined;
+  if (worktree === undefined && branch === undefined) return null;
+  const out: JsonRecord = { ...metadata };
+  const recordedWorktree = metadata.worktree_path;
+  const recordedBranch = metadata.working_branch;
+  if (worktree !== undefined && (typeof recordedWorktree !== "string" || recordedWorktree === "")) {
+    out.worktree_path = worktree;
+  }
+  if (branch !== undefined && (typeof recordedBranch !== "string" || recordedBranch === "")) {
+    out.working_branch = branch;
+  }
+  return out;
+}
+
+function readLeaseCutover(db: StoreDb): Map<string, JsonRecord> {
+  const table = db
+    .prepare("select name from sqlite_master where type = 'table' and name = 'execution_lease_cutover'")
+    .get() as { name?: unknown } | undefined;
+  const leases = new Map<string, JsonRecord>();
+  if (table === undefined) return leases;
+  const rows = db
+    .prepare("select workflow_id, plan_id, lease_json from execution_lease_cutover")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; lease_json?: unknown }>;
+  for (const row of rows) {
+    const raw = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
+    if (!isRecord(raw)) {
+      throw new StoreError(
+        "store.corrupt",
+        `execution_leases(${String(row.workflow_id)},${String(row.plan_id)}).lease_json is not a stored JSON object; the ` +
+          `recorded source/cleanup ownership cannot be reconciled. Nothing was modified.`,
+      );
+    }
+    leases.set(`${String(row.workflow_id)}/${String(row.plan_id)}`, raw);
+  }
+  return leases;
+}
+
+/**
+ * Rewrite the retained business JSON of an upgraded store into the target
+ * shape. Runs inside the migration runner's own exclusive transaction: either
+ * the whole schema + JSON cutover commits, or nothing does. Rows it does not
+ * recognize are left exactly as they are — never guessed at, never edited by
+ * hand — so a store that needs operator attention refuses through the normal
+ * read/validation path instead of being silently mangled.
+ */
+function normalizeExecutionState(db: StoreDb, context: MigrationContext): void {
+  const tables = new Set(
+    (db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>)
+      .map((row) => (typeof row.name === "string" ? row.name : ""))
+      .filter((name) => name !== ""),
+  );
+  if (!tables.has("execution_plans") || !tables.has("execution_workflows")) return;
+  const leaseCutover = readLeaseCutover(db);
+
+  const plans = db
+    .prepare("select workflow_id, plan_id, state_json, coordination_json from execution_plans")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; state_json?: unknown; coordination_json?: unknown }>;
+  const updatePlan = db.prepare("update execution_plans set state_json = ?, coordination_json = ? where workflow_id = ? and plan_id = ?");
+  for (const row of plans) {
+    const workflowId = String(row.workflow_id ?? "");
+    const planId = String(row.plan_id ?? "");
+    const what = `execution_plans(${workflowId},${planId})`;
+    const state = parseStoredRecord(row.state_json, `${what}.state_json`);
+    const legacy = parseStoredRecord(row.coordination_json, `${what}.coordination_json`);
+    const coordination = normalizeLegacyCoordination(legacy);
+    // The removed seat's plan row never carried `execution_lease` (the old
+    // producer deleted it before insert), so the authoritative source/cleanup
+    // scope is the keyed lease captured from `execution_leases` above.
+    const lease = leaseCutover.get(`${workflowId}/${planId}`);
+    const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const scope = lease === undefined ? null : reconcileLeaseScope(metadata, lease);
+    const nextState: JsonRecord = { ...state };
+    if (scope !== null) nextState.metadata = scope;
+    if (isRecord(coordination.completion) && (!(typeof nextState.status === "string") || nextState.status === "Todo")) {
+      nextState.status = "Done";
+    }
+    delete nextState.coordination;
+    delete nextState.execution_lease;
+    updatePlan.run(JSON.stringify(nextState), JSON.stringify(coordination), workflowId, planId);
+  }
+
+  const workflows = db
+    .prepare("select workflow_id, state_json from execution_workflows")
+    .all() as Array<{ workflow_id?: unknown; state_json?: unknown }>;
+  const updateWorkflow = db.prepare("update execution_workflows set state_json = ? where workflow_id = ?");
+  for (const row of workflows) {
+    const workflowId = String(row.workflow_id ?? "");
+    const state = parseStoredRecord(row.state_json, `execution_workflows(${workflowId}).state_json`);
+    // The header keeps its identity and promotes the coordinator recovery
+    // history; the removed per-workflow coordination block and the removed
+    // self-amendment audit go, exactly as the file import writes it.
+    const coordination = isRecord(state.coordination) ? state.coordination : undefined;
+    const next: JsonRecord = { ...state };
+    delete next.coordination;
+    delete next.self_amendments;
+    if (coordination !== undefined && coordination.identity_recoveries !== undefined) {
+      next.identity_recoveries = coordination.identity_recoveries;
+    }
+    updateWorkflow.run(JSON.stringify(next), workflowId);
+  }
+  settleRetiredPlanPmIntegrationClaims(db, context);
+}
+
+/**
+ * The per-plan integration merges the removed plan-PM seat left held are an
+ * UNSUPPORTED orphan once their holder rows retire: they can never be released
+ * through the surviving API. This pass settles exactly those claims in the SAME
+ * cutover that retires the holder rows.
+ *
+ * The safe basis is the staged REAL retired plan-PM session's exact
+ * (workflow_id, session_id) pair matched against the held claim's own
+ * `workflow_id`/`holder` — never a globally unique session-id assumption, and
+ * never a claim whose plan does not actually exist in that workflow. The
+ * operator's FULL validated attestation must name that holder as stopped at or
+ * after the claim, and at or before this cutover.
+ *
+ * A missing or plan-mismatched legacy lease is a REPORTED historical
+ * disposition, not a blocker: the retired seat's authority is what this cutover
+ * withdraws, and the surviving ordinary metadata/prepare path remains the
+ * revisable record of scope. A foreign workflow, a non-retired session, a
+ * current live holder, and a claim newer than the attested stop are all left
+ * exactly where they are.
+ */
+function settleRetiredPlanPmIntegrationClaims(db: StoreDb, context: MigrationContext): void {
+  // Retired plan-PM sessions, keyed by (workflow, session) so the same session
+  // id recorded under another workflow is never cross-matched.
+  const retiredByWorkflowSession = new Map<string, string>();
+  for (const row of db
+    .prepare("select workflow_id, plan_id, session_id from execution_session_cutover")
+    .all() as Array<{ workflow_id?: unknown; plan_id?: unknown; session_id?: unknown }>) {
+    if (typeof row.session_id !== "string" || row.session_id === "") continue;
+    retiredByWorkflowSession.set(`${String(row.workflow_id ?? "")}/${row.session_id}`, String(row.plan_id ?? ""));
+  }
+  const attestation = context.attestation;
+  const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+  const cutoverInstant = parsedInstant(new Date().toISOString());
+  const claims = db
+    .prepare("select workflow_id, lease_json from execution_integration_cutover")
+    .all() as Array<{ workflow_id?: unknown; lease_json?: unknown }>;
+  const update = db.prepare("update execution_integration_leases set revision = revision + 1, lease_json = ? where workflow_id = ?");
+  for (const row of claims) {
+    const workflowId = String(row.workflow_id ?? "");
+    const raw: unknown = typeof row.lease_json === "string" ? (JSON.parse(row.lease_json) as unknown) : undefined;
+    if (!isRecord(raw)) {
+      throw new StoreError("store.corrupt", `execution_integration_leases(${workflowId}).lease_json is not a stored JSON object; the store was left unchanged`);
+    }
+    const claim = raw;
+    if (claim.status === "released") continue;
+    const holder = claim.holder;
+    if (typeof holder !== "string" || holder === "") continue;
+    const seatPlanId = retiredByWorkflowSession.get(`${workflowId}/${holder}`);
+    // Not a retired plan-PM holder's claim in THIS workflow: a coordinator's, a
+    // foreign workflow's or a live claim is left exactly where it is.
+    if (seatPlanId === undefined) continue;
+    // The claim must name a plan that actually exists in this workflow; a claim
+    // pointing at a missing business row is registry corruption handled through
+    // the supported backup/restore API, not something an attestation can rewrite.
+    const planRow = db.prepare("select 1 as present from execution_plans where workflow_id = ? and plan_id = ?").get(workflowId, typeof claim.plan_id === "string" ? claim.plan_id : "");
+    if (planRow === undefined) {
+      throw new StoreError(
+        "store.corrupt",
+        `execution_integration_leases(${workflowId}) holds a claim for plan ${JSON.stringify(claim.plan_id)}, which no longer exists in ` +
+          `this workflow's registry. Recover the store from its supported backup/restore recovery point: ` +
+          `run \`store execution restore-preview --backup <absolute-valid-pre-corruption-backup> --out <absolute-preview-path>\`, ` +
+          `then \`store execution restore --preview <absolute-preview-path> --operator <name> --authorization <ref>\` ` +
+          `(add \`--harness\` when needed). Nothing was modified.`,
+      );
+    }
+    const attested = attestation?.stoppedSessions.find((session) => session.sessionId === holder);
+    const attestedInstant = attestation === undefined ? null : parsedInstant(attestation.attestedAt);
+    const claimedInstant = parsedInstant(claim.claimed_at);
+    const settled =
+      attestation !== undefined &&
+      attested !== undefined &&
+      (attested.state === "stopped" || attested.state === "reloaded") &&
+      claimedInstant !== null &&
+      attestedInstant !== null &&
+      cutoverInstant !== null &&
+      claimedInstant <= attestedInstant &&
+      attestedInstant <= cutoverInstant;
+    if (!settled) {
+      throw new StoreError(
+        "store.upgrade-attestation-missing",
+        `workflow ${workflowId} holds an integration claim for the retired plan-PM holder ${holder}, and this cutover has no valid, current ` +
+          `stop attestation for it; the store was left at schema 8 unchanged. Rerun the same \`store upgrade\` with the operator's full activation ` +
+          `attestation (version, operator authorization, a current consumer) naming ${holder} as stopped at or after the claim.`,
+      );
+    }
+    const tombstone = {
+      ...claim,
+      status: "released",
+      prior_holder: holder,
+      released_by: "store-upgrade",
+      released_at: attestation!.attestedAt,
+      release_reason: `retired-plan-pm-seat:${holder}`,
+    };
+    update.run(JSON.stringify(tombstone), workflowId);
+  }
+}
+
 /** Ordered immutable migrations. Never mutate an applied entry — append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1000,16 +1378,22 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: "roadmap-content-authority", sql: MIGRATION_6_SQL },
   { version: 7, name: "project-milestones", sql: MIGRATION_7_SQL },
   { version: 8, name: "issue-provenance-origin", sql: MIGRATION_8_SQL },
+  { version: 9, name: "execution-coordinator-only", sql: MIGRATION_9_SQL, normalize: normalizeExecutionState },
 ];
 
-/** Execution tables created by migration 4 — the executable form of §2.2. */
+/**
+ * Execution tables the migrated schema must carry — the executable form of
+ * §2.2 after migration 9. Migration 4 created `execution_leases`; migration 9
+ * removed it with the plan-PM seat, so it is deliberately absent here: a store
+ * at the current version that still held it would be drift, not a state to
+ * reinterpret.
+ */
 const EXECUTION_TABLE_NAMES = [
   "execution_meta",
   "execution_workflows",
   "execution_registry",
   "execution_plans",
   "execution_sessions",
-  "execution_leases",
   "execution_integration_leases",
   "execution_inputs",
   "execution_operations",
@@ -1097,10 +1481,19 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
 
 /**
  * Apply pending migrations inside ONE exclusive write transaction, record
- * each version row only as it applies, verify the final set, and roll the
- * whole batch back on any failure — no dirty partial schema (contract §2).
+ * each version row only as it applies, normalize the retained business JSON the
+ * newly applied version requires, verify the final set, and roll the whole
+ * batch back on any failure — no dirty partial schema (contract §2).
+ *
+ * The normalization is not SQL: the members the removed protocol wrote live in
+ * `execution_plans`/`execution_workflows` JSON, so a version that changes their
+ * vocabulary declares it here and the pass runs in the SAME transaction as its
+ * version row.
  */
-function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: boolean } = {}): number {
+function applyPendingMigrations(
+  db: StoreDb,
+  options: { alreadyInTransaction?: boolean; attestation?: MigrationContext["attestation"] } = {},
+): number {
   const own = !options.alreadyInTransaction;
   const prior = readAppliedMigrations(db, true);
   const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
@@ -1110,6 +1503,13 @@ function applyPendingMigrations(db: StoreDb, options: { alreadyInTransaction?: b
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
       db.exec(migration.sql);
+      if (migration.normalize !== undefined) migration.normalize(db, { attestation: options.attestation });
+      // A migration's temporary staging tables are the normalizer's input only:
+      // they never survive the batch, so a rolled-back or committed store holds
+      // exactly the version's declared schema.
+      db.exec("drop table if exists execution_lease_cutover");
+      db.exec("drop table if exists execution_session_cutover");
+      db.exec("drop table if exists execution_integration_cutover");
       db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
         migration.version,
         migration.name,
@@ -1186,12 +1586,18 @@ function readStoreMeta(db: StoreDb): StoreMeta {
 // Public interface (contract §5)
 // ---------------------------------------------------------------------------
 
+/** Selected harness directory; process callers resolve discovery before
+ * constructing this context. FILE guards separately discover from targets. */
 export type StoreContext = { harnessDir: string };
 
 /**
  * Execution-domain authority state (primary spec §2.1). This is its own
  * namespace: `store_meta.authority_state` covers issue/catalog only, so an
  * active issue/catalog store is NOT an active execution authority.
+ *
+ * The execution authority is coordinator-only: migration 9 removed the
+ * plan-PM session rows and the per-plan `execution_leases` table, so nothing
+ * here reads or writes a second seat's identity or a per-plan claim.
  */
 export type ExecutionAuthorityState = "legacy" | "staged" | "active";
 
@@ -1360,11 +1766,31 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
   return db;
 }
 
+/** FILE guards receive target directories, including not-yet-created workflow
+ * directories. Keep their existing process/control discovery separate from
+ * selected StoreContexts: otherwise a future target could bypass an ACTIVE
+ * parent store. The resolver retains main-worktree and linked-fail-closed rules. */
+function executionFileStorePath(context: StoreContext): string {
+  if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
+  const target = resolve(context.harnessDir);
+  // Git cannot use a future directory as cwd. Probe its existing ancestor
+  // before any writer mkdir/lock, while retaining the original null fallback.
+  let start = target;
+  while (!existsSync(start)) {
+    const parent = dirname(start);
+    if (parent === start) break;
+    start = parent;
+  }
+  const root = resolveProcessHarnessDir(start);
+  // A non-Git harness may contain its own plans/ child; it is not a new root.
+  return join(root === join(start, "plans") ? start : root ?? target, "store.db");
+}
+
 /**
- * The execution authority state of the control harness that owns `context`'s
- * path, `{kind: "state", state: null}` when no store exists there, and
+ * The execution authority state at the caller's selected database path,
+ * `{kind: "state", state: null}` when no store exists there, and
  * `{kind: "unreadable"}` when a store file exists there but cannot be read. It
- * shares the path (`storeDbPath`), runtime (`assertStoreRuntimeSupported`),
+ * shares the runtime (`assertStoreRuntimeSupported`),
  * schema (`readAppliedMigrations` / `validateAppliedMigrations`) and metadata
  * (`readStoreMeta` / `readExecutionMeta`) checks with `openStore`, and opens
  * the SAME `node:sqlite` driver read-only through the synchronous loader.
@@ -1388,8 +1814,7 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
  * database is removed, so absence is not an authority verdict either (the
  * durable installed binding that closes this is an explicit 2b obligation).
  */
-function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe {
-  const dbPath = storeDbPath(context);
+function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
   // The same no-link discrimination the open makes: a dangling symlink or other
   // non-regular final path is an existing store that cannot be read, never "no
   // store", so the retired file route cannot answer for it.
@@ -1437,7 +1862,7 @@ function probeExecutionAuthority(context: StoreContext): ExecutionAuthorityProbe
  * at all keeps the legacy route (there is no authority to establish).
  */
 export function assertExecutionFileWriteAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(context);
+  const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") return;
   throw new StoreError(
@@ -1478,7 +1903,7 @@ export function assertExecutionFileWriteAllowed(context: StoreContext): void {
  * this guard as well.
  */
 export function assertExecutionFileReadAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(context);
+  const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") return;
   throw new StoreError(
@@ -1497,7 +1922,7 @@ export function withExecutionReadGuard<T>(
   context: StoreContext,
   body: (db: StoreDb, authority: { storeId: string; epoch: number }) => T,
 ): T {
-  const probe = probeExecutionAuthority(context);
+  const probe = probeExecutionAuthority(storeDbPath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
   if (probe.state !== "active") {
     throw new StoreError(
@@ -1561,8 +1986,10 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
   if (!existsSync(dbPath)) {
     throw new StoreError(
       "store.not-initialized",
-      `No issue store exists at ${dbPath}. Run "mstar store init" for a genuinely empty workspace ` +
-        `(or the staged migration for an existing workspace). Nothing was created.`,
+      `No issue store exists at ${dbPath}. For a genuinely empty workspace, run ` +
+        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" ` +
+        `to create and activate the selected store (or "mstar store init" with the same --harness ` +
+        `when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`,
     );
   }
   let db: StoreDb;
@@ -1597,8 +2024,15 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
  * path this process did not create refuses `store.already-exists` and is not
  * touched; a failed init cleans up only the file this process created.
  */
-export async function initializeStore(context: StoreContext): Promise<StoreHandle> {
+export async function initializeStore(
+  context: StoreContext,
+  options: { attestation?: unknown } = {},
+): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
+  // The operator's stop evidence is validated by the existing activation
+  // validator before any file is created: a thin or malformed document is never
+  // accepted as authority for a cutover.
+  const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
   const dbPath = storeDbPath(context);
   const alreadyExists = (): StoreError =>
     new StoreError(
@@ -1636,7 +2070,7 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
         db.exec("rollback");
         throw alreadyExists();
       }
-      applyPendingMigrations(db, { alreadyInTransaction: true });
+      applyPendingMigrations(db, { alreadyInTransaction: true, attestation });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
     } catch (error) {
@@ -1692,7 +2126,10 @@ export async function initializeStore(context: StoreContext): Promise<StoreHandl
  * this function itself is atomic: the whole pending batch commits or rolls
  * back together. Idempotent when the store is already current.
  */
-export async function upgradeStore(context: StoreContext): Promise<{ schemaVersion: number }> {
+export async function upgradeStore(
+  context: StoreContext,
+  options: { attestation?: unknown } = {},
+): Promise<{ schemaVersion: number }> {
   assertStoreRuntimeSupported();
   const dbPath = storeDbPath(context);
   if (!existsSync(dbPath)) {
@@ -1702,6 +2139,10 @@ export async function upgradeStore(context: StoreContext): Promise<{ schemaVersi
         `genuinely empty workspace. Nothing was created.`,
     );
   }
+  // The operator's stop evidence is validated by the existing activation
+  // validator before the schema is touched: a thin or malformed document is
+  // never accepted as authority for a cutover.
+  const attestation = options.attestation === undefined ? undefined : await validatedActivationAttestation(options.attestation);
   let db: StoreDb;
   try {
     db = await connect(dbPath, "write");
@@ -1709,7 +2150,7 @@ export async function upgradeStore(context: StoreContext): Promise<{ schemaVersi
     refuseOpenFailure(error, dbPath);
   }
   try {
-    const schemaVersion = applyPendingMigrations(db);
+    const schemaVersion = applyPendingMigrations(db, { attestation });
     readStoreMeta(db);
     // The migration is atomic, so an upgraded store must carry the complete
     // execution schema; a recorded-but-incomplete one is drift, not progress.
