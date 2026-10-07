@@ -1,7 +1,7 @@
-import fs from "node:fs";
+import fs, { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { SddScriptError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
+import { SddScriptError, WorkflowSnapshotValidationError, checkSddAction, pickReviewBranchName, preflightChangeset, resolveProcessHarnessDir, resolveSddExecutionContext, readExecutionCleanupState, readMainWorktree, readWorkflowSnapshot, planWorktreeCleanup, resolveExecutionReadRoute, resolveWorkflowDir, WORKFLOW_SNAPSHOT_FILE, type CleanupFacts, type CleanupTarget, type SddExecutionContext, type WorkflowSnapshot } from "@mstar-harness/engine";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
@@ -134,15 +134,10 @@ async function setupReviewWorktree(input: Input, invocation: InvocationContext):
   const existing = new Set((await git(invocation, ["for-each-ref", "--format=%(refname:short)", "refs/heads"], repoRoot)).split(/\r?\n/).filter(Boolean));
   const seed = mode === "pr" ? prNumber : Math.abs([...headSpec].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) % 1_000_003, 7)) || 1;
   const reviewBranch = pickReviewBranchName(existing, seed, new Date().toISOString().slice(0, 10).replace(/-/g, ""));
-  const worktreePath = path.resolve(input.targetPath ?? path.join(repoRoot, ".worktrees", `review-${reviewBranch}${mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`}`));
-  if (input.targetPath === undefined) {
-    fs.mkdirSync(path.join(repoRoot, ".worktrees"), { recursive: true });
-    if (await gitProbe(invocation, ["check-ignore", ".worktrees/"], repoRoot) === "") {
-      const exclude = path.resolve(repoRoot, await git(invocation, ["rev-parse", "--git-path", "info/exclude"], repoRoot));
-      const contents = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
-      if (!contents.split("\n").some((line) => line.trim() === ".worktrees/")) fs.appendFileSync(exclude, `${contents === "" || contents.endsWith("\n") ? "" : "\n"}.worktrees/\n`);
-    }
-  }
+  const repoReal = realpathSync(repoRoot);
+  const defaultRoot = path.join(path.dirname(repoReal), `${path.basename(repoReal)}.worktrees`);
+  const worktreePath = path.resolve(input.targetPath ?? path.join(defaultRoot, `review-${reviewBranch}${mode === "pr" ? "" : `-${headSpec.slice(0, 8)}`}`));
+  if (input.targetPath === undefined) fs.mkdirSync(defaultRoot, { recursive: true });
   const origin = await gitProbe(invocation, ["remote", "get-url", "origin"], repoRoot);
   let fetched = true;
   if (origin) {
@@ -233,16 +228,11 @@ function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", val
   if (field === "branch" && snapshot.branch?.integration === value) claims.push({ workflowId: snapshot.id });
   if (field === "path" && [snapshot.integration_worktree_path, (snapshot as WorkflowSnapshot & { control_worktree_path?: string }).control_worktree_path].some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value))) claims.push({ workflowId: snapshot.id });
   for (const row of snapshot.plans as unknown as Record<string, unknown>[]) {
-    const lease = row.execution_lease as Record<string, unknown> | undefined;
     const meta = row.metadata as Record<string, unknown> | undefined;
-    const handoff = (row.coordination as Record<string, unknown> | undefined)?.handoff as Record<string, unknown> | undefined;
-    const handedOff = row.status === "Done" && handoff?.state === "completed" && typeof handoff.source_branch === "string" && handoff.source_branch !== "" && typeof handoff.worktree_path === "string" && handoff.worktree_path !== "";
     const matches = field === "branch"
-      ? lease?.working_branch === value || meta?.working_branch === value || (Array.isArray(meta?.track_branches) && meta.track_branches.includes(value)) || (handedOff && handoff!.source_branch === value)
-      : (typeof lease?.worktree_path === "string" && pathKey(lease.worktree_path) === pathKey(value)) ||
-        (typeof meta?.worktree_path === "string" && pathKey(meta.worktree_path) === pathKey(value)) ||
-        (Array.isArray(meta?.cleanup_protective_worktree_paths) && meta.cleanup_protective_worktree_paths.some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value))) ||
-        (handedOff && pathKey(handoff!.worktree_path as string) === pathKey(value));
+      ? meta?.working_branch === value || (Array.isArray(meta?.track_branches) && meta.track_branches.includes(value))
+      : (typeof meta?.worktree_path === "string" && pathKey(meta.worktree_path) === pathKey(value)) ||
+        (Array.isArray(meta?.cleanup_protective_worktree_paths) && meta.cleanup_protective_worktree_paths.some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value)));
     if (matches) {
       const planId = typeof row.id === "string" ? row.id : typeof row.plan_id === "string" ? row.plan_id : undefined;
       claims.push({ workflowId: snapshot.id, ...(planId ? { planId } : {}) });
@@ -318,7 +308,16 @@ async function cleanupWorktrees(input: Input, invocation: InvocationContext, ret
     snapshots = [...read.workflows];
   } else {
     const root = resolveWorkflowDir(harness, { harnessDir: harness });
-    selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
+    try {
+      selected = readWorkflowSnapshot(path.join(root, input.workflow)).snapshot;
+    } catch (error) {
+      if (error instanceof WorkflowSnapshotValidationError && error.violations.some((violation) =>
+        violation.code === "coordination.row.field" &&
+        (violation.message.endsWith("unexpected key: handoff") || violation.message.endsWith("unexpected key: session")))) {
+        throw new SddScriptError(`${error.message}. Historical coordination state requires the supported public cutover: stop the workspace's writers, then run mstar store upgrade --harness ${JSON.stringify(harness)} --operator <name> (see mstar store upgrade --help for applicable stop attestation), and retry this cleanup. No state was changed.`, 1);
+      }
+      throw error;
+    }
     snapshots = [selected];
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name === input.workflow) continue;

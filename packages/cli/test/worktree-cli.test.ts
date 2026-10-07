@@ -6,10 +6,10 @@
  * A sibling `worktree qc-alignment` group verifies assignment alignment
  * fields independently of worktree isolation and topology.
  *
- * L1 input in v3 comes from the workflow snapshot through the canonical
- * reader (`readWorkflowSnapshot` — the v1 `control_worktree_path` key is
- * accepted as an in-memory alias with a medium migration advisory): plan
- * rows (with `plans[].execution_lease`), `integration_worktree_path` +
+ * L1 input comes from the workflow snapshot through the canonical reader
+ * (`readWorkflowSnapshot` — the v1 `control_worktree_path` key is accepted as
+ * an in-memory alias with a medium migration advisory): prepared plan metadata
+ * (`worktree_path`, `working_branch`), `integration_worktree_path` +
  * `branch.integration`, and the Git-derived main worktree. `--integration`
  * overrides the snapshot integration path; `--control` is the deprecated
  * one-release alias (stderr notice; both flags together are usage exit 2).
@@ -23,7 +23,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runCli as runOwnerCli, withTempDir } from "./harness";
@@ -215,19 +215,12 @@ function standaloneSnapshotDoc(mainBranch: string, plans: unknown[], extra: Reco
   return snapshotDoc(plans, { type: "plan", branch: { base: mainBranch }, ...extra });
 }
 
-const LEASE = (worktreePath: string, workingBranch = "feature/plan-a") => ({
-  holder: "worktree-cli-test",
-  claimed_at: "2026-08-08",
-  worktree_path: worktreePath,
-  working_branch: workingBranch,
-});
-
 const PLAN_A = (worktreePath: string, workingBranch = "feature/plan-a") => ({
   id: "plan-a",
   title: "Plan A",
   file: "plans/plan-a.md",
   status: "InProgress",
-  execution_lease: LEASE(worktreePath, workingBranch),
+  metadata: { worktree_path: worktreePath, working_branch: workingBranch },
 });
 
 describe("mstar worktree check — L1 (main residency + integration + feature isolation)", () => {
@@ -373,7 +366,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     }
   });
 
-  test("lease worktree is the main worktree → worktree.l1.lease-equals-main, exit 1", () => {
+  test("feature worktree is the main worktree → worktree.l1.feature-equals-main, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-eqmain-");
     try {
       const topo = topologyFixture(root);
@@ -382,7 +375,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", topo.mainBranch],
         root,
       );
-      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
+      const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -485,8 +479,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         root,
         snapshotDoc(
           [
-            { id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress", execution_lease: LEASE(root) },
-            { plan_id: "plan-a", title: "Plan A (legacy)", file: "plans/plan-a.md", status: "InProgress", execution_lease: LEASE(root) },
+            PLAN_A(root),
+            { plan_id: "plan-a", title: "Plan A (legacy)", file: "plans/plan-a.md", status: "InProgress", metadata: PLAN_A(root).metadata },
           ],
           { control_worktree_path: root },
         ),
@@ -514,7 +508,7 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
     }
   });
 
-  test("plain subdirectory of the main checkout as lease → worktree.l1.lease-equals-main, exit 1", () => {
+  test("plain subdirectory of the main checkout as feature → worktree.l1.feature-equals-main, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-subdir-");
     try {
       git(["init", "-q"], root);
@@ -531,13 +525,14 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
+      const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("symlink alias of the main checkout as lease → worktree.l1.lease-equals-main, exit 1", () => {
+  test("symlink alias of the main checkout as feature → worktree.l1.feature-equals-main, exit 1", () => {
     const root = tmpRoot("mstar-wt-l1-symlink-");
     try {
       git(["init", "-q"], root);
@@ -554,7 +549,8 @@ describe("mstar worktree check — L1 (main residency + integration + feature is
         ["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root, "--main-branch", mainBranch],
         root,
       );
-      expectOutput(result, "refused", "worktree.l1.lease-equals-main", 1);
+      const output = expectOutput(result, "refused", "worktree.l1.feature-equals-main", 1);
+      expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.l1.feature-equals-main", severity: "critical" }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -796,16 +792,43 @@ describe("mstar worktree check — L2 (parallel writable tracks)", () => {
 });
 
 
-test("retained track ownership prevents main from carrying an active track", () => {
+test("retained track ownership refuses main and ordinary progress repairs retired tracks", () => {
   const root = tmpRoot("mstar-retained-track-");
   try {
     const linked = worktreeFixture(root);
     const mainBranch = git(["branch", "--show-current"], root);
-    const row = { ...PLAN_A(linked), metadata: { track_branches: [mainBranch] } };
-    writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
+    const row = { ...PLAN_A(linked), metadata: { ...PLAN_A(linked).metadata, track_branches: [mainBranch] } };
+    const snapshot = writeSnapshot(root, standaloneSnapshotDoc(mainBranch, [row]));
+    const register = writeRegister(root, [WORKFLOW_ID]);
+    const beforeSnapshot = readFileSync(snapshot, "utf8");
+    const beforeRegister = readFileSync(register, "utf8");
     const result = runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root);
     const output = expectOutput(result, "refused", "worktree.main.residency-switched", 1);
-    expect(output.message).toContain("owned by an active lifecycle");
+    expect(output.details?.violations).toContainEqual(expect.objectContaining({ code: "worktree.main.residency-switched", severity: "high" }));
+    expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
+    expect(readFileSync(register, "utf8")).toBe(beforeRegister);
+
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "plan-a.md"), `# Plan A\n\n**plan_id:** plan-a\n**Main worktree branch:** ${mainBranch}\n**Working branch:** feature/plan-a\n`);
+    const bound = commandOutput(runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", root, "--session-id", "retained-track-coordinator"], root));
+    if (bound.status !== "ok" || typeof bound.data?.session_file !== "string") throw new Error(`coordinator bind failed: ${JSON.stringify(bound)}`);
+    const session = bound.data.session_file;
+    const shown = commandOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", root], root));
+    if (shown.status !== "ok" || typeof shown.data?.revision !== "number") throw new Error(`plan show failed: ${JSON.stringify(shown)}`);
+    const foreignRoot = join(root, "foreign-control");
+    mkdirSync(foreignRoot);
+    const beforeForeignRead = readFileSync(snapshot, "utf8");
+    expectOutput(runCli(["plan", "show", "--session", session, "--plan", "plan-a", "--harness", foreignRoot], root), "refused", "coordination.scope-mismatch", 1, "plan.show");
+    expect(readFileSync(snapshot, "utf8")).toBe(beforeForeignRead);
+    expect(existsSync(join(foreignRoot, "store.db"))).toBe(false);
+    const corrected = commandOutput(runCli([
+      "plan", "progress", "--session", session, "--plan", "plan-a", "--harness", root, "--expect", String(shown.data.revision),
+      "--progress", JSON.stringify({ status: "InProgress", summary: "retire the mistaken main track", evidence_paths: [], track_branches: [] }),
+    ], root));
+    if (corrected.status !== "ok") throw new Error(`track correction failed: ${JSON.stringify(corrected)}`);
+    const repairedRow = (JSON.parse(readFileSync(snapshot, "utf8")).plans as Array<{ id: string; metadata: Record<string, unknown> }>).find((plan) => plan.id === "plan-a")!;
+    expect(repairedRow.metadata).toMatchObject({ worktree_path: linked, working_branch: "feature/plan-a", track_branches: [] });
+    expectOutput(runCli(["worktree", "check", "plan-a", "--workflow", WORKFLOW_ID, "--harness", root], root), "ok", "worktree.check.ok", 0);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

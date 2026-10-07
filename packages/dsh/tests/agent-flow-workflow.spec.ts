@@ -50,7 +50,7 @@ import {
   setWorkflowLedgerLogger,
 } from '../src/gates/workflow-ledger.ts'
 import type { WorkflowLedgerTarget } from '../src/gates/workflow-ledger.ts'
-import { seedHarness, seedV2Tree, v2Root, v2Snapshot, v2WorkflowEntry } from './harness.ts'
+import { seedFileWorkflow, seedHarness, seedV2Tree, v2Root, v2Snapshot, v2WorkflowEntry } from './harness.ts'
 import { readWorkflowSessionBinding, updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import {
   agentEnd,
@@ -591,9 +591,9 @@ class FakeSessionRegistry extends Service {
 }
 
 /**
- * Minimal in-memory `agents` service for the workflow-ledger lease tests:
- * the ONE contract the consumer reads — `get(sessionId)` → the session's live
- * Agent (a structural fake: `{ id, session: { header } }`, the shape
+ * Minimal in-memory `agents` service the real composition mounts: the ONE
+ * contract a structural reader consumes — `get(sessionId)` → the session's
+ * live Agent (a structural fake: `{ id, session: { header } }`, the shape
  * `agentIdOf` / `sessionHeaderIdOf` / `sessionCwdOf` read).
  */
 class FakeAgentRegistry extends Service {
@@ -608,13 +608,13 @@ class FakeAgentRegistry extends Service {
     this.live.set(sessionId, agent)
   }
 
-  /** The session's live Agent (the consumer's lease-holder read). */
+  /** The session's live Agent. */
   get(id: string): unknown {
     return this.live.get(id)
   }
 }
 
-/** One live Agent handle for one session (the lease holder `Agent.id`). */
+/** One live Agent handle for one session. */
 function fakeAgent(id: string, sessionId: string, cwd: string): Record<string, unknown> {
   return { id, session: { header: { id: sessionId, cwd } } }
 }
@@ -1662,17 +1662,12 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
     return { root, harnessDir, dirs: { 'wf-a': join(harnessDir, 'workflows/wf-a'), 'wf-b': join(harnessDir, 'workflows/wf-b') } }
   }
 
-  /** One engine-valid `execution_lease` row (the resolver's lease rung). */
-  function lease(holder: string, worktreePath: string): Record<string, unknown> {
-    return { holder, claimed_at: '2026-09-11', worktree_path: worktreePath, working_branch: `feature/${holder}` }
-  }
-
   /**
-   * Two active lifecycles on ONE shared control worktree, where only a lease
-   * HOLDER can decide: the cwd rung matches both entries, and `wf-b`'s lease
-   * worktree sits OUTSIDE the control tree, so the lease rung matches neither
-   * by path. The session's workspace is a real directory under the shared
-   * control worktree (the containment rule compares realpaths).
+   * Two active lifecycles on ONE shared control worktree, where the cwd rung
+   * matches both entries: the session's workspace is a real directory under the
+   * shared control worktree (the containment rule compares realpaths). Only a
+   * recorded plan-row source scope — or the session's own durable pick — can
+   * decide which lifecycle owns the session.
    */
   async function sharedControlHarness(): Promise<{
     root: string
@@ -1681,33 +1676,49 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
     dirs: Record<string, string>
     workspace: string
   }> {
-    const leaseRoot = await mkdtemp(join(tmpdir(), 'dsh-ledger-lease-holder-root-'))
+    const leaseRoot = await mkdtemp(join(tmpdir(), 'dsh-ledger-shared-control-root-'))
     const control = join(leaseRoot, 'repo')
     await mkdir(join(control, 'src'), { recursive: true })
-    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-lease-holder-', {
+    const { root, harnessDir, dirs } = await tempMultiHarness('dsh-ledger-shared-control-', {
       'wf-a': { control_worktree_path: control },
-      'wf-b': {
-        control_worktree_path: control,
-        plans: [{ id: 'p-b', status: 'InProgress', execution_lease: lease('agent-b', join(leaseRoot, 'worktrees/wf-b')) }],
-      },
+      'wf-b': { control_worktree_path: control, plans: [{ id: 'p-b', status: 'InProgress' }] },
     })
     return { root, leaseRoot, harnessDir, dirs, workspace: join(control, 'src') }
   }
 
-  it('a session whose cwd rung is ambiguous records under the lifecycle its VERIFIED lease holder owns', async () => {
-    const { root, leaseRoot, harnessDir, dirs, workspace } = await sharedControlHarness()
+  it('a session whose cwd rung is ambiguous records under the lifecycle whose recorded row scope contains its workspace', async () => {
+    const leaseRoot = await mkdtemp(join(tmpdir(), 'dsh-ledger-row-scope-root-'))
+    const control = join(leaseRoot, 'repo')
+    await mkdir(join(control, 'src'), { recursive: true })
+    const root = await mkdtemp(join(tmpdir(), 'dsh-ledger-row-scope-'))
+    const harnessDir = join(root, 'harness')
+    await mkdir(harnessDir, { recursive: true })
+    // Both lifecycles share the control worktree (the cwd rung matches both);
+    // only `wf-b` records a plan row whose own source scope contains the
+    // session workspace, so the row-scope rung — not position or recency —
+    // decides the owner. The plan rows and the register go through the public
+    // producers, never counterfeited bytes.
+    const scopedRow = {
+      id: 'p-b',
+      title: 'p-b title',
+      file: 'plans/p-b.md',
+      status: 'InProgress',
+      metadata: { worktree_path: control, working_branch: 'feature/wf-b' },
+    }
+    await seedFileWorkflow(harnessDir, 'wf-a', [], { integration_worktree_path: control })
+    await seedFileWorkflow(harnessDir, 'wf-b', [scopedRow], { integration_worktree_path: control })
+    const dirs = { 'wf-a': join(harnessDir, 'workflows/wf-a'), 'wf-b': join(harnessDir, 'workflows/wf-b') }
+    const workspace = join(control, 'src')
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
-    const agents = new FakeAgentRegistry(ctx)
     sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-b' }) }], { id: 'sess-shared', header: { cwd: workspace } }))
-    agents.register('sess-shared', fakeAgent('agent-b', 'sess-shared', workspace))
     const priorSink = setWorkflowLedgerLogger(() => {})
     try {
       registerWorkflowLedger(ctx, new HarnessResolver(harnessDir))
 
       expect(readAgentFlow(dirs['wf-b'])!.events.map((e) => e.runId)).toEqual(['run-b'])
       expect(readAgentFlow(dirs['wf-a'])!.events).toEqual([])
-      // Bound, not excluded: the resolver's lease rung decided, so no
+      // Bound, not excluded: the resolver's row-scope rung decided, so no
       // exclusion floor was ever observed for this session.
       expect(readWorkflowSessionBinding(harnessDir, 'sess-shared', workspace)).toEqual({ kind: 'ok' })
     } finally {
@@ -1718,15 +1729,17 @@ describe('workflow-ledger consumer — D4 session binding + exclusion floor', ()
     }
   })
 
-  it('an Agent whose own session header names another session never supplies a lease holder', async () => {
+  it('an ambiguous cwd with no recorded row scope and no pick leaves the session unbound — the row is excluded, never backfilled', async () => {
     const { root, leaseRoot, harnessDir, dirs, workspace } = await sharedControlHarness()
     const ctx = new Context()
     const sessions = new FakeSessionRegistry(ctx)
     const agents = new FakeAgentRegistry(ctx)
     sessions.register(fakeSession([{ type: 'tool-workflow/run-start', data: runStart({ runId: 'run-weird' }) }], { id: 'sess-shared', header: { cwd: workspace } }))
-    // SAME workspace (so only the identity check can reject it) but the handle
-    // belongs to a different session: an unverified holder must never bind the
-    // row — the session stays unbound and the row is excluded.
+    // A live agent handle the real composition does supply, but which the
+    // selection never consults: with no recorded row scope inside either
+    // lifecycle and no durable pick, the cwd rung matches both, so the session
+    // stays unbound and the row is excluded (floor n+1) rather than attributed
+    // to whichever lifecycle happens to match.
     agents.register('sess-shared', fakeAgent('agent-b', 'sess-other', workspace))
     const priorSink = setWorkflowLedgerLogger(() => {})
     try {

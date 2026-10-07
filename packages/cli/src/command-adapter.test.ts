@@ -13,7 +13,7 @@ afterEach(() => {
 
 /** The canonical tuple a launcher writes, exactly as `session.run` serializes it. */
 function mintedIdentity(overrides: Partial<ExecutionIdentity> = {}): ExecutionIdentity {
-  return { source: "local", sessionId: "minted-session", workflowId: "wf-launched", role: "coordinator", planId: null, ...overrides };
+  return { source: "local", sessionId: "minted-session", workflowId: "wf-launched", role: "coordinator", ...overrides };
 }
 
 test("CLI session identity accepts an explicit override without parsing a malformed launched identity", () => {
@@ -65,9 +65,9 @@ test("CLI session identity refuses a malformed minted transport instead of downg
     "not json",
     "[]",
     '"scalar"',
-    serializeExecutionValue({ source: "local", sessionId: "", workflowId: "wf-launched", role: "coordinator", planId: null }),
-    serializeExecutionValue({ source: "local", sessionId: "minted", workflowId: "wf-launched", role: "coordinator", planId: "plan-x" }),
-    serializeExecutionValue({ source: "local", sessionId: "../escape", workflowId: "wf-launched", role: "coordinator", planId: null }),
+    serializeExecutionValue({ source: "local", sessionId: "", workflowId: "wf-launched", role: "coordinator" }),
+    serializeExecutionValue({ source: "local", sessionId: "minted", workflowId: "wf-launched", role: "worker" }),
+    serializeExecutionValue({ source: "local", sessionId: "../escape", workflowId: "wf-launched", role: "coordinator" }),
   ]) {
     process.env.MSTAR_EXECUTION_IDENTITY = malformed;
     // A broken launch refuses; it never silently binds the ambient host session
@@ -81,7 +81,7 @@ test("CLI scope gate constrains a minted identity to the scope it declares", () 
   // The same workflow as a sessionRef, an active bind and an active token route
   // is accepted; only a genuinely different declared scope is refused.
   const sameWorkflowRef = encodeExecutionSessionRef({
-    storeId: "stores/scope", epoch: 1, workflowId: identity.workflowId, role: "coordinator", sessionId: "s", planId: null,
+    storeId: "stores/scope", epoch: 1, workflowId: identity.workflowId, role: "coordinator", sessionId: "s",
   });
   expect(mintedIdentityScopeProblem(identity, { sessionRef: sameWorkflowRef, operation: "op" }, "plan.progress")).toBeUndefined();
   expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: identity.workflowId, coordinator: true }, "plan.bind")).toBeUndefined();
@@ -92,21 +92,18 @@ test("CLI scope gate constrains a minted identity to the scope it declares", () 
   // A reference whose declared workflow differs is refused, and so is an active
   // bind to another workflow — the refusal is a presence, not a prose match.
   const otherRef = encodeExecutionSessionRef({
-    storeId: "stores/scope", epoch: 1, workflowId: "wf-elsewhere", role: "coordinator", sessionId: "s", planId: null,
+    storeId: "stores/scope", epoch: 1, workflowId: "wf-elsewhere", role: "coordinator", sessionId: "s",
   });
   expect(mintedIdentityScopeProblem(identity, { sessionRef: otherRef }, "plan.progress")).toBeDefined();
   expect(mintedIdentityScopeProblem(identity, { execution: true, workflow: "wf-elsewhere", coordinator: true }, "plan.bind")).toBeDefined();
 
   // A coordinator-seat registration addresses the coordinator seat regardless of
-  // its registered plan selector: a same-workflow plan-pm minted tuple is
-  // refused (the registered plan is a row, not the caller seat), while a
-  // coordinator tuple passes.
-  const planPm = { ...identity, role: "plan-pm" as const, planId: "plan-registered" };
-  expect(mintedIdentityScopeProblem(planPm, { workflow: identity.workflowId, planId: "plan-registered", expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeDefined();
+  // its registered plan selector: the registered plan is a row, not the caller
+  // seat, so a selector the identity does not declare is never reinterpreted.
   expect(mintedIdentityScopeProblem(identity, { workflow: identity.workflowId, planId: "plan-registered", expect: "exec-v1:plan:x:1:k:1" }, "workflow.register")).toBeUndefined();
-  // The explicit active bind's seat is part of the declared scope.
-  expect(mintedIdentityScopeProblem(planPm, {
-    execution: true, workflow: identity.workflowId, coordinator: true,
+  // An active bind to another workflow states a seat the identity does not declare.
+  expect(mintedIdentityScopeProblem(identity, {
+    execution: true, workflow: "wf-elsewhere", coordinator: true,
   }, "plan.bind")).toBeDefined();
 
   // A legacy route that ignores the identity is not constrained by this gate.

@@ -1,6 +1,6 @@
 ---
 name: mstar-engine-legacy
-description: Morning Star 条件契约档案（engine-absent fallback）。宿主无 engine 能力（无 `mstar` CLI、无 engine import、engine 约束未激活）时需要被 engine 校验接管的 contract 全文时使用：status v1→v2 字段历史、lease claim 协议全文、各宿主 QC 座次 N=3/N=1 重述、反递归完整清单、Engine-check 样板说明。engine 约束激活（或宿主含 engine 能力）时不加载；运行时 skills 的 engine-check 指针为权威契约。
+description: "Morning Star engine-absent safety and historical-field archive. Use only when the host has no CLI/engine capability and needs field history, checkout/atomic-safety guidance or dispatch/QC invariants. Not a fallback implementation of removed plan identity, claim, Assignment seal or transfer protocols; engine-present hosts use current domain operations."
 ---
 
 # mstar-engine-legacy（条件契约档案 / Engine-absent fallback）
@@ -15,7 +15,7 @@ description: Morning Star 条件契约档案（engine-absent fallback）。宿�
 
 - 归档**被承接的完整契约散文**（Task 2 displaced prose 的单一收容处）：
   1. `status.json` v1→v2 字段历史表（字段、severity、lifecycle、jq/flock 示例）
-  2. lease claim 协议全文（claim-before-InProgress、hold/release/override、integration merge、orphan recovery、waiver）
+  2. Concurrent-write and checkout safety without recreated claim/bind/transfer APIs
   3. 各宿主 QC 座次 N=3/N=1 重述（omp / opencode / cursor / codex / kimi / zcode / dsh）
   4. 反递归完整清单（leaf executor checklist、红线、NEVER 规则）
   5. Engine-check 样板含义（运行时 skills 中 `Engine check (when available)` blockquote 的语义与 fallback 规则）
@@ -30,7 +30,7 @@ description: Morning Star 条件契约档案（engine-absent fallback）。宿�
 | 需要 | 打开 |
 |------|------|
 | status 字段 / severity / lifecycle / 迁移 / jq-flock 示例 | `references/status-field-history.md` |
-| lease claim 协议全文（claim / hold / merge / orphan / waiver） | `references/lease-protocol.md` |
+| Checkout/atomic safety; no supported writer means report capability, never edit protected state | `references/lease-protocol.md` |
 | 各宿主 QC 座次 N=3/N=1 重述 | `references/qc-seat-n-restatements.md` |
 | 反递归完整清单（leaf checklist + 红线） | `references/anti-recursion-checklists.md` |
 | Engine-check 样板含义与 fallback 规则 | `references/engine-check-boilerplate.md` |

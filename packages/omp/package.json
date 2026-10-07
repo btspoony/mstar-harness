@@ -50,18 +50,6 @@
         ],
         "default": "@default",
         "description": "Coordinator model after a completed Phase 1. Used only when modelHandoff is enabled."
-      },
-      "phase2PlanInstances": {
-        "type": "boolean",
-        "default": false,
-        "description": "Allow Phase-2 coordinators to launch additional plan-scoped primary sessions up to maxPlanInstances. Off by default; native background tasks and bounded scheduling reminders are independent."
-      },
-      "maxPlanInstances": {
-        "type": "number",
-        "default": 2,
-        "min": 1,
-        "step": 1,
-        "description": "Maximum concurrently active plan-scoped primary sessions (owned pending launches included; iteration coordinator and task subagents excluded). Lowering it stops new launches without killing active work."
       }
     },
     "extensions": [

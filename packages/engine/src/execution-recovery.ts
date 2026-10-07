@@ -577,18 +577,9 @@ const AUTHORITY_TABLES: readonly AuthorityTable[] = [
   {
     domain: "execution",
     table: "execution_sessions",
-    columns: ["workflow_id", "role", "session_id", "plan_id", "epoch", "revision", "state", "bound_at"],
+    columns: ["workflow_id", "role", "session_id", "epoch", "revision", "state", "bound_at"],
     orderBy: "workflow_id, role, session_id",
     key: (row) => `session:${text(row, "workflow_id")}/${text(row, "role")}/${text(row, "session_id")}`,
-    revisionColumn: "revision",
-    requires: "execution",
-  },
-  {
-    domain: "execution",
-    table: "execution_leases",
-    columns: ["workflow_id", "plan_id", "revision", "owner_epoch", "lease_json"],
-    orderBy: "workflow_id, plan_id",
-    key: (row) => `lease:${text(row, "workflow_id")}/${text(row, "plan_id")}`,
     revisionColumn: "revision",
     requires: "execution",
   },
@@ -2032,6 +2023,10 @@ const REDACTED_KEYS: Record<string, true> = {
   creator_session_id: true,
   submitted_by: true,
   accepted_by: true,
+  /** The coordinator identity the contracted `PreparedCoordination` records. */
+  prepared_by: true,
+  /** The coordinator identity the contracted `CompletionRecord` records. */
+  completed_by: true,
   bound_by: true,
   token: true,
   workflowToken: true,
@@ -2111,15 +2106,15 @@ type DiagnosticPlan = {
   state: unknown;
   coordination: unknown;
   input: { inputJson: unknown; inputHash: string; catalogPin: unknown };
-  lease: unknown;
 };
 
 /**
  * §8: canonical sorted data with the store/execution identity, the recorded
- * migrations and their source status, and workflow/plan/lease/frozen-input
- * state — with every session identity, CAS token and credential path removed.
- * There is no import verb: this artifact can describe an authority, never
- * reconstitute one, and no writer accepts it (proved in the module's tests).
+ * migrations and their source status, and workflow/plan/frozen-input state plus
+ * the workflow-wide integration claim — with every session identity, CAS token
+ * and credential path removed. There is no import verb: this artifact can
+ * describe an authority, never reconstitute one, and no writer accepts it
+ * (proved in the module's tests).
  */
 export async function exportExecutionState(context: StoreContext): Promise<ExecutionDiagnosticExport> {
   const root = controlRootOf(context);
@@ -2144,14 +2139,8 @@ export async function exportExecutionState(context: StoreContext): Promise<Execu
       const sessions =
         handle.schemaVersion >= EXECUTION_MIGRATION_VERSION
           ? (handle.db
-              .prepare("select workflow_id, role, plan_id, epoch, revision, state, bound_at from execution_sessions order by workflow_id, role, plan_id, session_id")
+              .prepare("select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions order by workflow_id, role, session_id")
               .all() as Array<Record<string, unknown>>)
-          : [];
-      const leases =
-        handle.schemaVersion >= EXECUTION_MIGRATION_VERSION
-          ? (handle.db.prepare("select workflow_id, plan_id, lease_json from execution_leases order by workflow_id, plan_id").all() as Array<
-              Record<string, unknown>
-            >)
           : [];
       const integrationLeases =
         handle.schemaVersion >= EXECUTION_MIGRATION_VERSION
@@ -2221,7 +2210,6 @@ export async function exportExecutionState(context: StoreContext): Promise<Execu
               .map((plan): DiagnosticPlan => {
                 const planId = text(plan, "plan_id");
                 const sealed = inputs.find((input) => text(input, "workflow_id") === workflowId && text(input, "plan_id") === planId);
-                const lease = leases.find((row) => text(row, "workflow_id") === workflowId && text(row, "plan_id") === planId);
                 return {
                   planId,
                   revision: number(plan, "revision"),
@@ -2239,10 +2227,6 @@ export async function exportExecutionState(context: StoreContext): Promise<Execu
                         ? null
                         : parseStoredJson(sealed.catalog_pin_json, `execution_inputs(${workflowId},${planId}).catalog_pin_json`, redacted),
                   },
-                  lease:
-                    lease === undefined
-                      ? null
-                      : parseStoredJson(lease.lease_json, `execution_leases(${workflowId},${planId}).lease_json`, redacted),
                 };
               }),
             integrationLease: (() => {
@@ -2256,7 +2240,6 @@ export async function exportExecutionState(context: StoreContext): Promise<Execu
         sessions: sessions.map((session) => ({
           workflowId: text(session, "workflow_id"),
           role: text(session, "role"),
-          planId: session.plan_id === null || session.plan_id === undefined ? null : String(session.plan_id),
           state: text(session, "state"),
           epoch: number(session, "epoch"),
           revision: number(session, "revision"),

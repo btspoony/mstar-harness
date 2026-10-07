@@ -479,7 +479,7 @@ export async function scaffoldHarness(root: string): Promise<string> {
   // not a mandate to create or register a Markdown roadmap.
   const defaultProjectDir = join(projectDir, _DEFAULT_PROJECT);
   mkdirSync(defaultProjectDir, { recursive: true });
-  await registerScaffoldCatalog(root);
+  await registerScaffoldCatalog(harnessDir);
   return harnessDir;
 }
 /**
@@ -487,18 +487,15 @@ export async function scaffoldHarness(root: string): Promise<string> {
  * boundary. The project directory is the canonical location; the roadmap
  * body is explicit project content and remains outside scaffold ownership.
  *
- * The store context is the scaffold ROOT (what the caller passed), not the
- * resolved harness dir: `storeDbPath` re-resolves its context, and a harness
- * dir that already owns a `plans/` child would resolve to `plans/store.db` —
- * the scaffold root resolves to the harness marker itself, stably, which is
- * the same store the documented `{HARNESS_DIR}` resolution names.
+ * The store context uses the already-resolved scaffold harness directory.
+ * Its own plans/ child must not cause a second round of root discovery.
  *
  * Catalog registration is not a scaffold precondition: workspaces without an
  * active store defer registration to store activation. Existing `_default`
  * catalog identity and location win unchanged.
  */
-async function registerScaffoldCatalog(root: string): Promise<void> {
-  const context: StoreContext = { harnessDir: root };
+async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
+  const context: StoreContext = { harnessDir };
   const operation: CatalogOperation = { operationId: `scaffold:project:${_DEFAULT_PROJECT}`, actor: "scaffold" };
   try {
     await getCatalog(context, { kind: "project", id: _DEFAULT_PROJECT });

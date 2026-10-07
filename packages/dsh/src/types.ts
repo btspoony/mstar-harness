@@ -217,10 +217,10 @@ export interface StoreFactsView {
   readonly diagnostic: string | null
 }
 
-/** One active plan execution lease of the harness-state digest. */
-export interface HarnessLeaseView {
+/** One plan row's own recorded writable scope (worktree + branch). */
+export interface HarnessRowScopeView {
   readonly planId: string
-  readonly holder: string
+  readonly workingBranch: string
   readonly worktreePath: string | null
 }
 
@@ -247,8 +247,8 @@ export interface MstarHarnessProject {
 /**
  * The catalog's workflow selection result (compass v3.0.0 § Catalog
  * selection rule): the lifecycle the state section aggregates, resolved by
- * the locked binding order — lease (an `execution_lease` holder match or a
- * `worktree_path` containing the session cwd) → cwd (a
+ * the locked binding order — row scope (a plan row's `metadata.worktree_path`
+ * containing the session cwd) → cwd (a
  * `control_worktree_path` containing it) → the session's durable
  * `selectedWorkflowId` → the only active entry. `terminal` = the latest
  * terminal snapshot by mtime (history view; reachable only when the active
@@ -346,8 +346,8 @@ export interface MstarHarnessState {
   readonly worktreeMode: string | null
   /** `integration_worktree_path`, null when absent. */
   readonly integrationWorktreePath: string | null
-  /** Active plan execution leases (holder + worktree). */
-  readonly leases: readonly HarnessLeaseView[]
+  /** Plan rows' own recorded writable scope (worktree + branch). */
+  readonly rowScopes: readonly HarnessRowScopeView[]
   /** Knowledge catalog digest (docs count + categories) from the DB catalog, null when the store could not be read. */
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
   /**

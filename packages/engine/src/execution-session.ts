@@ -6,7 +6,7 @@ import { assertSafeSessionId, validateExecutionIdentity, type ExecutionIdentity,
 
 const SESSION_WIRE_PREFIX = "exec-session-v1:";
 const SESSION_DECODER = new TextDecoder("utf-8", { fatal: true });
-const SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId", "planId"] as const;
+const SESSION_KEYS = ["storeId", "epoch", "workflowId", "role", "sessionId"] as const;
 
 type SessionScope = Omit<ExecutionCaller, "sessionId">;
 
@@ -23,7 +23,7 @@ export type ExecutionBinding = Readonly<{
 }>;
 
 function scopeOf(scope: SessionScope): ExecutionIdentityScope {
-  return { workflowId: scope.workflowId, role: scope.role, planId: scope.planId };
+  return { workflowId: scope.workflowId, role: scope.role };
 }
 
 function assertRefShape(value: unknown): asserts value is ExecutionSessionRef {
@@ -41,16 +41,10 @@ function assertRefShape(value: unknown): asserts value is ExecutionSessionRef {
   if (typeof record.epoch !== "number" || !Number.isSafeInteger(record.epoch) || record.epoch <= 0) {
     throw new ExecutionError("execution.canonical-value", "an execution session reference has an invalid epoch");
   }
-  if (record.role !== "coordinator" && record.role !== "plan-pm") {
+  if (record.role !== "coordinator") {
     throw new ExecutionError("execution.canonical-value", "an execution session reference has an unknown role");
   }
   assertSafeSessionId(record.sessionId, "execution session reference session id");
-  if (record.role === "coordinator" && record.planId !== null) {
-    throw new ExecutionError("execution.canonical-value", "a coordinator session reference must carry a null plan id");
-  }
-  if (record.role === "plan-pm" && (typeof record.planId !== "string" || record.planId.length === 0)) {
-    throw new ExecutionError("execution.canonical-value", "a plan-pm session reference needs a plan id");
-  }
 }
 
 /** Mint one independent local identity; callers must retain it for the launch lifetime. */
@@ -68,12 +62,9 @@ export function executionContextFor(
   options: ExecutionIdentityOptions = {},
 ): ExecutionContext {
   const caller = {
-    // An unset id normalizes to the empty string: the one spelling the create
-    // path records as a NULL creator and every session-scoped gate refuses.
     sessionId: isNonEmptyString(identity.sessionId) ? identity.sessionId : "",
     workflowId: identity.workflowId,
     role: identity.role,
-    planId: identity.planId,
   };
   validateExecutionIdentity({ ...identity, sessionId: caller.sessionId }, scopeOf(identity), options);
   if (caller.sessionId !== "") assertSafeSessionId(caller.sessionId);
@@ -136,8 +127,7 @@ export async function resumeExecutionSession(
   if (
     context.caller.sessionId !== ref.sessionId ||
     context.caller.workflowId !== ref.workflowId ||
-    context.caller.role !== ref.role ||
-    context.caller.planId !== ref.planId
+    context.caller.role !== ref.role
   ) {
     throw new ExecutionError("execution.scope-mismatch", "the independently acquired caller does not match the session reference");
   }
@@ -150,8 +140,7 @@ export function assertExecutionSessionCurrent(context: ExecutionContext, session
   if (
     context.caller.sessionId !== session.sessionId ||
     context.caller.workflowId !== session.workflowId ||
-    context.caller.role !== session.role ||
-    context.caller.planId !== session.planId
+    context.caller.role !== session.role
   ) {
     throw new ExecutionError("execution.scope-mismatch", "the current caller does not match the execution session");
   }
@@ -159,12 +148,12 @@ export function assertExecutionSessionCurrent(context: ExecutionContext, session
     if (authority.storeId !== session.storeId || authority.epoch !== session.epoch) {
       throw new ExecutionError("store.stale-epoch", "the execution session reference is not current");
     }
-    const row = db.prepare("select epoch, state, plan_id from execution_sessions where workflow_id = ? and role = ? and session_id = ?").get(
+    const row = db.prepare("select epoch, state from execution_sessions where workflow_id = ? and role = ? and session_id = ?").get(
       session.workflowId,
       session.role,
       session.sessionId,
-    ) as { epoch?: unknown; state?: unknown; plan_id?: unknown } | undefined;
-    if (row?.state !== "active" || row.epoch !== session.epoch || row.plan_id !== session.planId) {
+    ) as { epoch?: unknown; state?: unknown } | undefined;
+    if (row?.state !== "active" || row.epoch !== session.epoch) {
       throw new ExecutionError("execution.session-unavailable", "the execution session is not the active current binding");
     }
   });

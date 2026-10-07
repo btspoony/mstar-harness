@@ -263,9 +263,8 @@ type ActiveWorkflowView = ExecutionState["workflows"][number];
 /**
  * Structural guard for the §3.1 binding value a host supplies or a record
  * persists. Its rules are the engine's own reference shape
- * (`execution-session.ts` `assertRefShape`), including the **cross-field** role
- * pairing — a `coordinator` reference carries a null plan id and a `plan-pm`
- * reference a non-empty one — so a value admitted here is one the engine could
+ * (`execution-session.ts` `assertRefShape`): the workflow's coordinator seat,
+ * with no per-plan scope — so a value admitted here is one the engine could
  * accept, never a shape it must refuse later.
  */
 function isExecutionBindingValue(value: unknown): value is ExecutionBinding {
@@ -275,9 +274,7 @@ function isExecutionBindingValue(value: unknown): value is ExecutionBinding {
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) {
     return false;
   }
-  if (session.role === "coordinator" && session.planId !== null) return false;
-  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return false;
-  if (session.role !== "coordinator" && session.role !== "plan-pm") return false;
+  if (session.role !== "coordinator") return false;
   return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
 }
 
@@ -321,7 +318,6 @@ async function adoptActiveHandoffBinding(
   if (
     session.workflowId !== workflowId ||
     session.role !== "coordinator" ||
-    session.planId !== null ||
     session.sessionId !== host.sessionId
   ) {
     return bindingRefusal(
@@ -336,7 +332,6 @@ async function adoptActiveHandoffBinding(
     sessionId: host.sessionId,
     workflowId,
     role: "coordinator",
-    planId: null,
   };
   const context = { harnessDir: harnessRoot };
   try {
@@ -374,9 +369,8 @@ async function adoptActiveHandoffBinding(
     coordinator.storeId !== session.storeId ||
     coordinator.epoch !== session.epoch ||
     coordinator.workflowId !== session.workflowId ||
-    coordinator.role !== session.role ||
-    coordinator.sessionId !== session.sessionId ||
-    coordinator.planId !== session.planId
+    coordinator.role !== "coordinator" ||
+    coordinator.sessionId !== session.sessionId
   ) {
     return bindingRefusal(
       "not-coordinator",
@@ -1140,8 +1134,6 @@ export async function inspectPhase1Readiness(
   let integrationWorktree: string | null = null;
   let rows: readonly unknown[] = [];
   let compassRef: string | null = null;
-  /** DB plan ids whose coordination records a Prepare; `null` on the FILE arm. */
-  let preparedPlanIds: ReadonlySet<string> | null = null;
 
   if (adopted === null) {
     const statusPath = join(harnessRoot, STATUS_FILE);
@@ -1300,8 +1292,7 @@ export async function inspectPhase1Readiness(
     if (
       !isExecutionBindingValue(binding.executionBinding) ||
       session.workflowId !== binding.workflowId ||
-      session.role !== "coordinator" ||
-      session.planId !== null
+      session.role !== "coordinator"
     ) {
       fail("binding-invalid");
       diagnose({
@@ -1319,7 +1310,6 @@ export async function inspectPhase1Readiness(
       sessionId: binding.sessionId,
       workflowId: binding.workflowId,
       role: "coordinator",
-      planId: null,
     };
     const context = { harnessDir: harnessRoot };
     try {
@@ -1403,8 +1393,8 @@ export async function inspectPhase1Readiness(
       seat.storeId !== session.storeId ||
       seat.epoch !== session.epoch ||
       seat.workflowId !== session.workflowId ||
-      seat.role !== session.role ||
-      seat.planId !== session.planId
+      seat.role !== "coordinator" ||
+      seat.sessionId !== session.sessionId
     ) {
       fail("binding-invalid");
       diagnose({
@@ -1428,17 +1418,6 @@ export async function inspectPhase1Readiness(
       : null;
     rows = workflow.plans.map((view) => view.plan);
     compassRef = isNonEmptyString(workflow.state.compass_ref) ? workflow.state.compass_ref : null;
-    preparedPlanIds = new Set(
-      workflow.plans
-        .filter((view) => {
-          const coordination = view.coordination;
-          if (coordination === null) return false;
-          const prepared = coordination.prepared;
-          return isPlainObject(prepared) && isNonEmptyString(prepared.assignment_path);
-        })
-        .map((view) => rowId(view.plan))
-        .filter((id): id is string => id !== null),
-    );
   }
 
   const compassFile = sample(binding.compassPath, "binding-invalid", [iterationDir]);
@@ -1537,13 +1516,6 @@ export async function inspectPhase1Readiness(
     for (const plan of receiptPlans) {
       const row = rows.find((candidate) => rowId(candidate) === plan.planId);
       const registeredFile = isPlainObject(row) && isNonEmptyString(row.file) ? row.file : null;
-      // ACTIVE arm only: the DB plan row's own coordination record is the
-      // authority's plan-level Prepare proof — the ACTIVE analogue of the FILE
-      // arm's locked compass + registered row. A plan whose DB row records no
-      // Prepare is not a prepared plan however complete its files look.
-      if (preparedPlanIds !== null && !preparedPlanIds.has(plan.planId)) {
-        fail("prepare-not-locked");
-      }
       // §4: the ONE registered-plan path contract resolves every row pointer.
       // Readiness never normalizes or repairs a stored row — a stale spelling is
       // a readable refusal carrying its own §5 path detail, and the guarded

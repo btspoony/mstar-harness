@@ -68,7 +68,7 @@
  * fail-loud path agreement, exactly as they do today.
  */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
 import { promotedAuditSnapshot, promoteAuditPlans, promotedAuditPlanRows, type PromoteAuditPlansOptions } from "./audit.js";
 import {
@@ -91,6 +91,7 @@ import {
   findRegisteredWorkflow,
   registerWorkflowEntryLocked,
   rowPlanIds,
+  withWorkflowPurgeLocks,
   validateWorkflowEntry,
   type WorkflowEntry,
 } from "./status.js";
@@ -221,7 +222,11 @@ export type CatalogRegistrationErrorCode =
   | "catalog.registration-pending"
   | "catalog.registration-aborted"
   | "catalog.registration-terminal-lifecycle"
-  | "catalog.reconcile-conflict";
+  | "catalog.reconcile-conflict"
+  | "catalog.purge-not-found"
+  | "catalog.purge-identity-mismatch"
+  | "catalog.purge-binding-present"
+  | "catalog.purge-root-entry-mismatch";
 
 export class CatalogRegistrationError extends Error {
   readonly code: CatalogRegistrationErrorCode;
@@ -895,13 +900,13 @@ function requestHash(request: CatalogExecutionRequest): string {
  * a writer, and the read-only open path adds nothing (P2 recorded a
  * long-lived-process read-open flake on an idle store).
  */
-async function withJournalWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
+async function withJournalWrite<T>(context: StoreContext, fn: (db: StoreDb) => T | Promise<T>): Promise<T> {
   const handle = await openStore(context, "write");
   try {
     assertStoreActive(handle.db);
     handle.db.exec("begin immediate");
     try {
-      const result = fn(handle.db);
+      const result = await fn(handle.db);
       handle.db.exec("commit");
       return result;
     } catch (error) {
@@ -1106,63 +1111,84 @@ type ExecutionWrite = FileVersions & { recovered: boolean };
  * refuse anything that is not this reviewed request. Nothing foreign is ever
  * replaced, re-pointed or deleted (contract §3 step 2/step 4).
  */
-async function ensureExecutionRegistration(plan: CatalogExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> {
-  const conflictError = (detail: string): CatalogRegistrationError => {
-    const suffix = " \u2014 nothing was replaced or deleted";
-    return mode === "reconcile"
-      ? new CatalogRegistrationError("catalog.reconcile-conflict", `${detail}${suffix}`)
-      : new CatalogRegistrationError("catalog.registration-conflict", `${detail}${suffix}`);
-  };
-  const rootEntry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
-  const existing = readSnapshotIfPresent(plan.dir);
+async function ensureExecutionRegistration(context: StoreContext, plan: CatalogExecutionPlan, mode: "register" | "reconcile"): Promise<ExecutionWrite> { const conflictError = (detail: string): CatalogRegistrationError => {
+  const suffix = " \u2014 nothing was replaced or deleted";
+  return mode === "reconcile"
+    ? new CatalogRegistrationError("catalog.reconcile-conflict", `${detail}${suffix}`)
+    : new CatalogRegistrationError("catalog.registration-conflict", `${detail}${suffix}`);
+};
+const rootEntry = findRegisteredWorkflow(plan.harnessDir, plan.workflowId);
+const existing = readSnapshotIfPresent(plan.dir);
 
-  if (existing !== undefined) {
-    if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
-      throw conflictError(
-        `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
-          "whose identity is NOT this reviewed request" +
-          " -- Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
-      );
-    }
-    if (rootEntry === undefined) {
-      await writeRootEntry(plan, existing.snapshot);
-      return { ...readFileVersions(plan), recovered: true };
-    }
-    if (mode === "register") {
-      throw conflictError(
-        `workflow ${JSON.stringify(plan.workflowId)} is already registered (snapshot + root entry); registration is create-only \u2014 ` +
-          "remove that workflow before registering again, or reconcile an operation you already started",
-      );
-    }
+if (existing !== undefined) {
+  if (existing.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, existing.snapshot, plan.identity)) {
+    throw conflictError(
+      `workflow ${JSON.stringify(plan.workflowId)} already has an execution registration at ${plan.snapshotPath} ` +
+        "whose identity is NOT this reviewed request" +
+        " -- Re-run `mstar workflow register` or `mstar iteration register` with a FRESH `--workflow` id; reconcile cannot adopt foreign bytes.",
+    );
+  }
+  if (rootEntry === undefined) {
+    await writeRootEntry(plan, existing.snapshot);
     return { ...readFileVersions(plan), recovered: true };
   }
-
-  if (rootEntry !== undefined) {
+  if (mode === "register") {
     throw conflictError(
-      `the root register shows workflow ${JSON.stringify(plan.workflowId)} but its snapshot ${plan.snapshotPath} is missing; ` +
-        "a stale root entry is never repaired or re-pointed" +
-        " -- Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
+      `workflow ${JSON.stringify(plan.workflowId)} is already registered (snapshot + root entry); registration is create-only \u2014 ` +
+        "remove that workflow before registering again, or reconcile an operation you already started",
     );
   }
-
-  const created = await createExecution(plan);
-  const written = readSnapshotIfPresent(plan.dir);
-  if (written === undefined) {
-    throw new CatalogRegistrationError(
-      "catalog.registration-invalid",
-      `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}. Verify via mstar status validate <snapshotPath>; re-drive via mstar catalog reconcile --list and mstar catalog reconcile --operation-id <op>; record via mstar issue add.`,
-    );
-  }
-  if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
-    throw conflictError(`the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity`);
-  }
-  if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
-    // The producer writes the root entry itself; reaching here means it was
-    // removed between the two steps. Finish the write we own.
-    await writeRootEntry(plan, written.snapshot);
-  }
-  return { ...readFileVersions(plan), recovered: created.recovered };
+  return { ...readFileVersions(plan), recovered: true };
 }
+
+if (rootEntry !== undefined) {
+  throw conflictError(
+    `the root register shows workflow ${JSON.stringify(plan.workflowId)} but its snapshot ${plan.snapshotPath} is missing; ` +
+      "a stale root entry is never repaired or re-pointed" +
+      " -- Re-run with a FRESH `--workflow` id; there is no CLI verb to remove or repair the stale root entry.",
+  );
+}
+
+const created = await createExecution(plan);
+const written = readSnapshotIfPresent(plan.dir);
+if (written === undefined) {
+  throw new CatalogRegistrationError(
+    "catalog.registration-invalid",
+    `the producer reported success but no readable snapshot exists at ${plan.snapshotPath}. Verify via mstar status validate <snapshotPath>; re-drive via mstar catalog reconcile --list and mstar catalog reconcile --operation-id <op>; record via mstar issue add.`,
+  );
+}
+if (written.snapshot.id !== plan.workflowId || !migrationIdentityMatches(plan.kind, written.snapshot, plan.identity)) {
+  const snapshotContentSha256 = createHash("sha256").update(readFileSync(plan.snapshotPath)).digest("hex");
+  const recordedAt = nowRfc3339();
+  await withJournalWrite(context, (db) => {
+    const row = readRow(db, plan.request.operationId);
+    if (row === undefined) {
+      throw new CatalogError("catalog.not-found", `Registration operation ${plan.request.operationId} is not recorded.`);
+    }
+    db.prepare("update catalog_operations set after_versions_json = ?, updated_at = ? where operation_id = ?").run(
+      JSON.stringify({
+        failure: {
+          workflow_id: plan.workflowId,
+          snapshot_path: plan.snapshotPath,
+          snapshot_content_sha256: snapshotContentSha256,
+          reviewed_identity: plan.identity,
+          recorded_at: recordedAt,
+        },
+      }),
+      recordedAt,
+      plan.request.operationId,
+    );
+  });
+  throw conflictError(
+    `the snapshot written at ${plan.snapshotPath} does not carry this reviewed request's identity -- recover with mstar catalog purge-registration --workflow ${plan.workflowId} --operation ${plan.request.operationId} --expect ${plan.request.expectedCatalogRevision} --actor ${plan.request.actor}.`,
+  );
+}
+if (findRegisteredWorkflow(plan.harnessDir, plan.workflowId) === undefined) {
+  // The producer writes the root entry itself; reaching here means it was
+  // removed between the two steps. Finish the write we own.
+  await writeRootEntry(plan, written.snapshot);
+}
+return { ...readFileVersions(plan), recovered: created.recovered }; }
 
 /** The one authorized root write: the entry for a snapshot this operation owns. */
 async function writeRootEntry(plan: CatalogExecutionPlan, snapshot: WorkflowSnapshot): Promise<void> {
@@ -1509,7 +1535,7 @@ export async function registerCatalogExecution(
 
   // Step 2 — the file primitives. A failure here leaves the prepared row as
   // the recovery record (and any partial bytes it produced), never a receipt.
-  const write = await ensureExecutionRegistration(plan, "register");
+  const write = await ensureExecutionRegistration(context, plan, "register");
   await withJournalWrite(context, (db) => recordExecutionWritten(db, validated.operationId, { ...write, ...readJournalVersions(db) }, plan.identity));
 
   // Step 3 — verify + publish + commit.
@@ -1673,7 +1699,7 @@ export async function reconcileCatalogExecution(
 
   let write: ExecutionWrite;
   try {
-    write = await ensureExecutionRegistration(plan, "reconcile");
+    write = await ensureExecutionRegistration(context, plan, "reconcile");
   } catch (error) {
     if (error instanceof CatalogRegistrationError) throw error;
     // A re-drive failure (IO, a store-root mismatch, a producer refusal) is NOT
@@ -1816,26 +1842,25 @@ export function refusePendingRegistration(
 }
 
 /**
- * The SAME registration gate through a handle the caller ALREADY owns: a
- * root-visible workflow whose catalog operation is recorded but not committed
- * refuses `catalog.registration-pending`. The execution transaction opens one
- * handle on the same `store.db`, so a DB `prepare` enforces its registration
- * admission under its own write lock through this function instead of opening
- * a second connection — exactly as `catalogPinFactsOn` reads a pin — and the
- * "pending" verdict stays defined once, by `pendingRegistrationOf`.
+ * The registration gate for an ACTIVE execution transaction through its own
+ * handle: registry visibility and pending catalog operations are read from the
+ * same store.db under the caller's lock. A registered workflow whose catalog
+ * operation is not committed refuses `catalog.registration-pending`. No retired
+ * file register is consulted; the FILE route retains its separate gate above.
+ * The pending verdict stays defined once, by `pendingRegistrationOf`.
  *
  * Store-state tolerances stay with the handle owner: a missing store never gets
  * here (the opener refuses `store.not-initialized`), and a `store_meta` that is
  * not ACTIVE keeps the pre-activation exclusion (§7) — a staged store is not a
  * catalog verdict, so it passes through and is never retro-refused here.
  */
-export function assertCatalogExecutionCommittedOn(db: StoreDb, harnessDir: string, workflowId: string): void {
+export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: string): void {
   const id = requireText(workflowId, "workflowId");
   const meta = db.prepare("select authority_state from store_meta where id = 1").get() as
     | { authority_state?: unknown }
     | undefined;
   if (meta?.authority_state !== "active") return;
-  if (findRegisteredWorkflow(resolve(harnessDir), id) === undefined) return;
+  if (db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(id) === undefined) return;
   const pending = pendingRegistrationOf(db, id);
   if (pending === null) return;
   refusePendingRegistration(id, pending);
@@ -1901,4 +1926,111 @@ function receiptOfRow(row: JournalRow): CatalogExecutionReceipt {
     catalogRevision: parsed.catalogRevision,
     recovered: parsed.recovered === true,
   };
+}
+
+export type PurgeCatalogRegistrationReceipt = {
+  workflowId: string;
+  purgedDigest: string;
+  actor: string;
+  timestamp: string;
+};
+
+/** Purge only the exact producer-written bytes recorded at the identity refusal. */
+export async function purgeCatalogRegistration(
+  context: StoreContext,
+  input: {
+    workflowId: string;
+    operationId: string;
+    expectedCatalogRevision: number;
+    actor: string;
+    testHooks?: {
+      afterEligibility?: () => Promise<void>;
+      beforeRootAbsentSnapshotLock?: () => void;
+    };
+  },
+): Promise<PurgeCatalogRegistrationReceipt> {
+  const workflowId = requireText(input.workflowId, "workflowId");
+  const operationId = requireText(input.operationId, "operationId");
+  const actor = requireText(input.actor, "actor");
+  const recorded = await withJournalWrite(context, (db) => {
+    const row = readRow(db, operationId);
+    if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
+      throw new CatalogRegistrationError("catalog.purge-not-found", `no failed registration record exists for workflow ${JSON.stringify(workflowId)}`);
+    }
+    if (readJournalVersions(db).catalogRevision !== input.expectedCatalogRevision) {
+      throw new CatalogError("catalog.revision-conflict", `expected catalog revision ${input.expectedCatalogRevision}; current revision differs`);
+    }
+    let after: unknown;
+    try { after = JSON.parse(row.after_versions_json); } catch { after = undefined; }
+    const failure = isPlainObject(after) ? after.failure : undefined;
+    if (!isPlainObject(failure) ||
+      failure.workflow_id !== workflowId ||
+      typeof failure.snapshot_path !== "string" ||
+      typeof failure.snapshot_content_sha256 !== "string" ||
+      typeof failure.reviewed_identity !== "string") {
+      throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow`);
+    }
+    const binding = db.prepare("select workflow_id from catalog_execution_bindings where workflow_id = ?").get(workflowId);
+    if (binding !== undefined) throw new CatalogRegistrationError("catalog.purge-binding-present", `workflow ${JSON.stringify(workflowId)} has a catalog binding`);
+    return {
+      snapshotPath: failure.snapshot_path,
+      recordedDigest: failure.snapshot_content_sha256,
+    };
+  });
+  const timestamp = nowRfc3339();
+  return await withWorkflowPurgeLocks(
+    join(context.harnessDir, "status.json"),
+    workflowId,
+    recorded.snapshotPath,
+    async (_snapshot, rootPresent, removeRoot) => await withJournalWrite(context, async (db) => {
+      const row = readRow(db, operationId);
+      if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
+        throw new CatalogRegistrationError("catalog.purge-not-found", `failed registration record disappeared for ${JSON.stringify(workflowId)}`);
+      }
+      const current = readJournalVersions(db).catalogRevision;
+      if (current !== input.expectedCatalogRevision) {
+        throw new CatalogError(
+          "catalog.revision-conflict",
+          `expected catalog revision ${input.expectedCatalogRevision}; current revision is ${current}`,
+        );
+      }
+      let after: unknown;
+      try { after = JSON.parse(row.after_versions_json); } catch { after = undefined; }
+      const failure = isPlainObject(after) ? after.failure : undefined;
+      if (!isPlainObject(failure) ||
+        failure.workflow_id !== workflowId ||
+        failure.snapshot_path !== recorded.snapshotPath ||
+        failure.snapshot_content_sha256 !== recorded.recordedDigest ||
+        typeof failure.reviewed_identity !== "string") {
+        throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no matching identity-failure record`);
+      }
+      const binding = db.prepare("select workflow_id from catalog_execution_bindings where workflow_id = ?").get(workflowId);
+      if (binding !== undefined) throw new CatalogRegistrationError("catalog.purge-binding-present", `workflow ${JSON.stringify(workflowId)} has a catalog binding`);
+      if (rootPresent && !existsSync(recorded.snapshotPath)) {
+        throw new CatalogRegistrationError("catalog.purge-identity-mismatch", "snapshot is missing while its root entry is still registered");
+      }
+      if (existsSync(recorded.snapshotPath)) {
+        const observedDigest = createHash("sha256").update(readFileSync(recorded.snapshotPath)).digest("hex");
+        if (observedDigest !== recorded.recordedDigest) {
+          throw new CatalogRegistrationError(
+            "catalog.purge-identity-mismatch",
+            `snapshot digest changed (observed ${observedDigest}, recorded ${recorded.recordedDigest}); human disposition required`,
+          );
+        }
+      }
+      await input.testHooks?.afterEligibility?.();
+      await removeRoot();
+      rmSync(recorded.snapshotPath, { force: true });
+      const receipt: PurgeCatalogRegistrationReceipt = {
+        workflowId,
+        purgedDigest: recorded.recordedDigest,
+        actor,
+        timestamp,
+      };
+      db.prepare("update catalog_operations set phase = 'aborted', result_json = ?, updated_at = ? where operation_id = ?")
+        .run(JSON.stringify(receipt), timestamp, operationId);
+      return receipt;
+    }),
+    { beforeRootAbsentSnapshotLock: input.testHooks?.beforeRootAbsentSnapshotLock },
+  );
 }

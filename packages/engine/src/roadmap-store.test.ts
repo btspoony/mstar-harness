@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { historicalStore } from "./store-migration-fixtures.js";
 import {
   importRoadmapAuthority,
   initializeStore,
@@ -18,14 +19,16 @@ const fixtures: string[] = [];
 const content = (projectId: string, description: string): string =>
   `---\nproject_id: ${projectId}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\ncustom_field: preserved\n---\n\n## Direction\n\n${description}\n\n## Goals\n\n- [ ] Parent goal\n  - [x] Nested goal\n\n`;
 
-async function freshProject(projectId: string): Promise<StoreContext> {
+async function freshProject(projectId: string, historicalVersion?: number): Promise<StoreContext> {
   const harnessDir = mkdtempSync(join(tmpdir(), "roadmap-authority-"));
   fixtures.push(harnessDir);
-  const initialized = await initializeStore({ harnessDir });
-  initialized.db.prepare(
+  const initialized = historicalVersion === undefined ? await initializeStore({ harnessDir }) : undefined;
+  const db = initialized?.db ?? historicalStore(harnessDir, historicalVersion!);
+  db.prepare(
     "insert into catalog_entities(kind,id,title,root_kind,relative_path,revision,registered_at,updated_at) values('project',?,'Synthetic project','projects',?,1,?,?)",
   ).run(projectId, projectId, new Date().toISOString(), new Date().toISOString());
-  initialized.close();
+  if (initialized === undefined) db.close();
+  else initialized.close();
   return { harnessDir };
 }
 
@@ -104,21 +107,9 @@ describe("roadmap-authority transactional domain", () => {
   });
 
   test("migration is explicit, removes only disposable roadmap projection, and missing stores refuse", async () => {
-    const context = await freshProject("project-migration");
+    const context = await freshProject("project-migration", 5);
     const handle = await openStore(context, "write");
-    handle.db.exec("begin immediate; create table prior_fixture(value text); insert into prior_fixture values('preserved');");
-    handle.db.exec("delete from schema_version where version=6; drop table project_roadmaps; create table projection_roadmaps(generation integer, project_id text, direction text, goals_json text, milestones_json text, primary key(generation,project_id));");
-    // Migration 7 artifacts must go too, or the replay fails on "duplicate
-    // column/table" — the downgrade targets a genuine schema-5 store.
-    handle.db.exec("drop table if exists project_milestones");
-    const v7Residue = handle.db
-      .prepare("select type, name from sqlite_master where name like 'issues_milestone%'")
-      .all() as { type: string; name: string }[];
-    for (const artifact of v7Residue) handle.db.exec(`drop ${artifact.type} if exists ${artifact.name}`);
-    handle.db.exec("alter table issues drop column milestone_id");
-    handle.db.exec("alter table provenance drop column origin");
-    handle.db.prepare("delete from schema_version where version>5").run();
-    handle.db.exec("commit");
+    handle.db.exec("begin immediate; create table prior_fixture(value text); insert into prior_fixture values('preserved'); commit;");
     handle.close();
     await expect(readRoadmapAuthority(context, "project-migration")).rejects.toMatchObject({ code: "roadmap.schema-outdated" });
     await upgradeStore(context);

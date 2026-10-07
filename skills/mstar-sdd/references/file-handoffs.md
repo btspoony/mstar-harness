@@ -6,7 +6,7 @@ PM and subagents move artifacts as **files**, not pasted text. Pasted content st
 
 **PM owns helper execution and shared coordination writes.** Keep one canonical per-plan `{SDD_DIR}` root; only PM writes its `context.json` and `progress.md`. Subdirectories namespace artifacts, not a second SDD root. Scheduling → `mstar-sdd` § Ready-task scheduling.
 
-PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-package` helpers serially for the corresponding assigned checkout/branch. These helpers may update shared context; parallel hosted leaves never invoke them. Before each dispatch, PM fixes absolute task-specific brief/report/diff destinations and copies `Worktree path` / branch into the Assignment. Updating context for another task must not change an already-dispatched leaf's inputs.
+The primary coordinator runs context-dependent workspace/task-brief/review-package helpers serially for their assigned checkout/branch. Before dispatch, it fixes absolute artifact paths and copies the registered row metadata.worktree_path/metadata.working_branch, or an explicitly assigned isolated L2 track, into the leaf Assignment; verify actual Git checkout facts. Missing/corrected row source facts use ordinary revisable prepare, never a per-row lease or Assignment seal. Context updates for another task never alter dispatched inputs; parallel leaves do not invoke shared-context helpers.
 
 1. `export SDD_DIR=$(mstar sdd workspace <plan-id>)`
    - Iteration L1 (implementer cwd = feature worktree):
@@ -35,7 +35,7 @@ PM runs context-dependent `mstar sdd workspace`, `task-brief`, and `review-packa
    - Interfaces / decisions brief cannot know
    - Absolute report path: `$SDD_DIR/task-N-report.md` — the implementer's own output slot and L2's **input**; the reviewer's separate output is `$SDD_DIR/task-N-review.md`
    - Absolute control root, feature cwd, branch and plan paths, plus task-specific brief/report/diff paths fixed for this dispatch; the context path is PM coordination metadata, not a leaf checkout selector
-   - **Inherited plan scope, no credentials**: the handoff restates the inherited plan id + absolute destinations only. The PM alone runs the public progress/handoff intent and reads its receipt; a leaf neither selects a plan nor repairs binding, snapshot, register, or lease state. Never include session JSON/path/reference, revision/execution token, or operation id in a leaf prompt.
+   - **Inherited plan scope, no credentials:** artifact handoffs contain inherited plan id and absolute destinations only. The primary coordinator alone records ordinary progress and eventual direct complete and reads receipts; a leaf never selects/prepares rows, mutates workflow/root/shared ledger or releases integration exclusion. Never include session JSON/path/reference, revision/execution token or operation id in a leaf prompt.
    - **`SDD implementer session`**: `fresh` (new subagent) or `sticky` (resume — see **`sticky-implementer-session.md`**)
 
 ## Implementer report file
@@ -111,7 +111,7 @@ PM reads that named report before marking the task complete, and the ledger entr
 mstar sdd exec --context "$SDD_DIR/context.json" -- <argv...>
 ```
 
-- Resolves and re-validates the context (identity/branch/lease/nesting), then spawns the argv directly with cwd = `featureCwd`, `shell: false`, stdio and environment inherited unchanged. Exits: 1 = context/gate refusal (no child started), 2 = usage, 127 = spawn not found, child exit preserved, signal termination 128+n.
+- Resolves/revalidates coordinator authority, recorded source metadata, actual checkout/branch and nesting, then spawns literal argv in featureCwd with shell:false and inherited stdio/environment. No per-row identity/lease is required. Exits remain 1=context/gate refusal without child, 2=usage, 127=spawn not found, child exit preserved, signal 128+n.
 - This binds the child's **starting cwd only** — it is not a sandbox. A child that later `chdir`s, passes an overriding cwd flag, writes an absolute path elsewhere, or uses host-native edit tooling (`apply_patch`, native-session edits) is **not blocked**; no arbitrary-shell interception is claimed.
 
 ## Native hosted subagents — destination contract
@@ -137,6 +137,8 @@ Task N: complete (<base>..<head>, review clean, review: task-N-review.md)
 
 The entry names the L2 report path the review closed on. Minor findings: append under `## Minor (for plan QC)` in same file.
 
+Task-complete here records earned task review only. Row progress and direct complete remain the primary coordinator's ordinary domain calls; no artifact handoff transfers workflow ownership. Completion fields → mstar-artifacts/references/status-and-residuals.md; iteration execution → mstar-iteration/references/phase-2-worktree-lease.md; distinct row/outer-delivery obligations → mstar-artifacts/references/plan-workflow-lifecycle-contract.md.
+
 ## Plan-level QC package
 
 After all tasks, PM generates the package serially from the integrated checkout with its corresponding context:
@@ -147,7 +149,7 @@ mkdir -p "$SDD_DIR/review"
 mstar sdd review-package "$MERGE_BASE" HEAD --context "$SDD_DIR/context.json" "$SDD_DIR/review/branch-review-....diff"
 ```
 
-Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in **local** plan / workflow snapshot + project register (`workflows/<id>/snapshot.json`, `projects/<id>/residuals.json` — session SSOT) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-conventions` git policy.
+Pass **branch** diff path and bundle report paths (`$SDD_DIR/review/qc1.md` …) to QC dispatch — not task-level diffs. Raw QC/QA files stay in the gitignored review bundle; PM records durable summary and open residuals in authored main plan / store.db-backed plan row through public plan verbs, and captures open findings as store.db issues (`mstar plan issue-add` / `mstar issue add`; snapshot files only pre-activation, project register only migration history) and promotes cross-clone decisions into tracked knowledge/specs/`AGENTS.md` per `mstar-conventions` git policy.
 
 ## PM context hygiene
 

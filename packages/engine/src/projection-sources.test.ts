@@ -57,15 +57,14 @@ type Fixture = {
 
 /**
  * A fresh workspace with a real `.mstar` harness marker and an initialized
- * (active) store. The same shape the catalog/store suites use: the marker
- * keeps `resolveHarnessDir` from moving the store and catalog roots once a
- * `plans/` or `iterations/` child appears.
+ * (active) store. The context selects that harness directly, even once its
+ * plans/ or iterations/ child appears.
  */
 async function fixture(name: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, name));
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: workspace };
+  const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
   return {
@@ -105,14 +104,7 @@ function snapshotDoc(id: string, overrides: Record<string, unknown> = {}): strin
           file: `/plans/${id}.md`,
           status: "InProgress",
           coordination: { revision: 1, progress: { status: "InProgress", summary: "half way", evidence_paths: [] } },
-          metadata: { catalog_pin: { entity_revision: 4 } },
-          execution_lease: {
-            holder: "session-1",
-            claimed_at: STARTED_AT,
-            worktree_path: `/wt/${id}`,
-            working_branch: `feature/${id}`,
-            session_label: "must-never-be-projected",
-          },
+          metadata: { catalog_pin: { entity_revision: 4 }, worktree_path: `/wt/${id}`, working_branch: `feature/${id}` },
         },
       ],
       integration_merge_lease: {

@@ -118,7 +118,7 @@ function dataOf(result: RunResult): Record<string, unknown> {
 }
 
 function coordinatorIdentity(workflowId = WORKFLOW_ID, sessionId = COORDINATOR_ID): ExecutionIdentity {
-  return { source: "local", sessionId, workflowId, role: "coordinator", planId: null };
+  return { source: "local", sessionId, workflowId, role: "coordinator" };
 }
 
 async function activeFixture(label: string): Promise<Fixture> {
@@ -610,7 +610,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
       foreign,
     );
     expect(wrongScope.exitCode).toBe(1);
-    expect(String(jsonOf(wrongScope).code)).toMatch(/^coordination\./);
+    expect(jsonOf(wrongScope).code).toBe("execution.scope-mismatch");
     expect((await storedHeader(fixture)).status).toBe("running");
 
     // The grammar verbs are ACTIVE-ONLY: `--session` is not one of their flags,
@@ -694,6 +694,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
   test("the retired pre-activation registration path is refused while the authority is active", async () => {
     const fixture = await activeFixture("mstar-workflow-legacy");
     const identity = coordinatorIdentity();
+    const before = await readExecutionAuthority(fixture.context);
     const legacy = runCli(
       [
         "workflow",
@@ -703,7 +704,7 @@ describe("mstar workflow \u2014 documented invocation", () => {
         "--plan-id",
         PLAN_ID,
         "--plan-title",
-        "Legacy form",
+        "Active workflow transport plan",
         "--plan-file",
         `plans/${PLAN_ID}.md`,
         "--delivery-kind",
@@ -723,6 +724,9 @@ describe("mstar workflow \u2014 documented invocation", () => {
     // No file-route bytes were created by the refusal.
     expect(existsSync(join(fixture.harnessDir, "workflows", "wf-legacy-form", "snapshot.json"))).toBe(false);
     expect(existsSync(join(fixture.harnessDir, "status.json"))).toBe(false);
+    const after = await readExecutionAuthority(fixture.context);
+    expect(after.token).toBe(before.token);
+    expect(after.data).toEqual(before.data);
   });
   test("session recover --unowned accepts empty stoppedSessions only for a workflow with no coordinator", async () => {
     const fixture = await activeFixture("mstar-session-recover-unowned");
@@ -752,7 +756,6 @@ describe("mstar workflow \u2014 documented invocation", () => {
       sessionId: "coord-unowned-recovered",
       workflowId: WORKFLOW_ID,
       role: "coordinator",
-      planId: null,
     };
     const recovered = runCli([
       "session", "recover",

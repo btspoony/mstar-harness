@@ -15,7 +15,7 @@ This repository contains the Morning Star runtime skills, workflow engine, CLI, 
 
 ## Git and local artifacts
 
-- Develop in a task worktree under `.worktrees/`. Keep the primary checkout on `main`: skills and commands may be symlinked to it. Changes reach `main` through PRs; never make direct feature commits there.
+- Develop in a task worktree under the sibling root `<parent-of-repo-root>/{repo-basename}.worktrees/`, where repo root is the realpath of the Git top-level. Keep the primary checkout on `main`: skills and commands may be symlinked to it. Changes reach `main` through PRs; never make direct feature commits there.
 - Reuse the assigned worktree when continuing a task. For new maintenance work without an assigned branch, create a worktree from `main` using the host's branch naming convention. Keep commits scoped to one concern.
 - Remove a worktree and prune its metadata after merge only when it contains no unmerged or uncommitted work that must be retained.
 - Use `.tmp/` for disposable probes and logs; clean up your own scratch files when no longer needed. Keep resumable work until its task is complete.

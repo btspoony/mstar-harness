@@ -37,7 +37,7 @@ import { catalogRootDir, type CatalogRootKind } from "./catalog.js";
 import { isPlainObject } from "./coordination-write.js";
 import type { ValidationResult } from "./core.js";
 import { parseCompassFrontmatterText, validateCompassFrontmatter } from "./iteration.js";
-import { validateExecutionLease, validateIntegrationMergeLease, type ExecutionLease, type IntegrationMergeLease } from "./lease.js";
+import { validateIntegrationMergeLease, type IntegrationMergeLease } from "./lease.js";
 import { readExecutionState, type ExecutionState } from "./execution-store.js";
 import { rowPlanId, validatePlanRow, validateWorkflowEntry, validateStatus, type PlanRow, type StatusV2Doc } from "./status.js";
 import { resolveCurrentAuthority } from "./store-read.js";
@@ -120,8 +120,8 @@ export type ProjectedPlan = {
 
 export type ProjectedLease = {
   workflowId: string;
-  planId: string;
-  kind: "execution" | "integration-merge";
+  planId: string | null;
+  kind: "integration-merge";
   holder: string | null;
   worktreePath: string | null;
   expiresAt: string | null;
@@ -494,17 +494,6 @@ function deriveWorkflowRows(
       doneAt: text(row.done_at),
       catalogPinRevision: typeof pin.entity_revision === "number" ? pin.entity_revision : null,
     });
-    if (isPlainObject(row.execution_lease)) {
-      const lease = row.execution_lease as ExecutionLease;
-      leases.push({
-        workflowId: snapshot.id,
-        planId,
-        kind: "execution",
-        holder: text(lease.holder),
-        worktreePath: text(lease.worktree_path),
-        expiresAt: text(lease.expires_at),
-      });
-    }
   }
   if (isPlainObject(snapshot.integration_merge_lease)) {
     const lease = snapshot.integration_merge_lease as IntegrationMergeLease;
@@ -743,7 +732,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
     }
     const workflowPhases = new Map(rows.workflows.map((workflow) => [workflow.id, workflow.phase]));
     const servedPlanIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.map((plan) => plan.plan.id))]));
-    const servedLeaseIdsByWorkflow = new Map(graphWorkflows.map((workflow) => [workflow.state.id, new Set(workflow.plans.filter((plan) => plan.executionLease !== null).map((plan) => plan.plan.id))]));
     const servedIntegrationLeaseIds = new Set(graphWorkflows.filter((workflow) => workflow.integrationLease !== null).map((workflow) => workflow.state.id));
     const plans = servedWorkflowIds.length === 0
       ? []
@@ -788,36 +776,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
       const mappedCoordination = authorityPlanView.coordination;
       const progressSummary = isPlainObject(mappedCoordination) && isPlainObject(mappedCoordination.progress) ? mappedCoordination.progress.summary : null;
       rows.plans.push({ workflowId: row.workflow_id, planId, status: text(authorityPlanView.plan.status), progress: text(progressSummary), phase: workflowPhases.get(row.workflow_id) ?? null, doneAt: text(authorityPlanView.plan.done_at), catalogPinRevision: typeof pinRevision === "number" ? pinRevision : null });
-    }
-    const leases = servedWorkflowIds.length === 0
-      ? []
-      : selectWhereIn<{ workflow_id: string; plan_id: string; lease_json: string }>(
-          db,
-          (placeholders) => `select workflow_id, plan_id, lease_json from execution_leases where workflow_id in (${placeholders}) order by workflow_id, plan_id`,
-          servedWorkflowIds,
-          (id) => [id],
-        );
-    for (const lease of leases) {
-      if (!servedLeaseIdsByWorkflow.get(lease.workflow_id)?.has(lease.plan_id)) continue;
-      const leaseSpec = spec("workflow", `execution/leases/${lease.workflow_id}/${lease.plan_id}`);
-      let value: unknown;
-      try { value = JSON.parse(lease.lease_json); } catch {
-        recordInvalid(leaseSpec, lease.lease_json, "invalid: execution lease is not valid JSON", "invalid");
-        continue;
-      }
-      const validation = validateExecutionLease(value);
-      if (!isPlainObject(value) || !validation.ok) {
-        recordInvalid(leaseSpec, lease.lease_json, `invalid: execution lease failed validation (${validation.violations.map((item) => item.code).join(", ")})`);
-        continue;
-      }
-      const servedLease = servedWorkflowById.get(lease.workflow_id)?.plans.find((plan) => plan.plan.id === lease.plan_id)?.executionLease;
-      // A released lease row is a retained tombstone the authority keeps for
-      // ABA/holder rules; the dashboard must not show past ownership as a
-      // current lease, so released rows are projection-invisible (the same
-      // treatment the authority applies to released integration leases).
-      if (!servedLease || servedLease.status === "released") continue;
-      record(leaseSpec, lease.lease_json);
-      rows.leases.push({ workflowId: lease.workflow_id, planId: lease.plan_id, kind: "execution", holder: text(servedLease.holder), worktreePath: text(servedLease.worktree_path), expiresAt: text(servedLease.expires_at) });
     }
     for (const doc of inputs.compassDocs) {
       const fspec: SourceSpec = { source: "file", sourceKey: sourceKeyOf("compass", doc.rootKind, doc.relativePath), kind: "compass", rootKind: doc.rootKind, relativePath: doc.relativePath, absolutePath: join(catalogRootDir(context, doc.rootKind), doc.relativePath), declared: true };

@@ -229,9 +229,9 @@ export function workflowPolicy(config: Config, cache: WorkflowAskCache, input: W
   // The gate short-circuits `off` before the policy — kept for a total
   // policy (a caller that skips the short-circuit still cannot block).
   if (mode === 'off') return { decision: 'allow' }
-  // P-b lease attribution  — FIRST, a workspace-level red line that
+  // P-b row-scope attribution — FIRST, a workspace-level red line that
   // applies to workflow AND ralph (no `meta.name` needed): the calling
-  // workspace has an `InProgress` plan without `execution_lease` coverage.
+  // workspace has an `InProgress` plan without a recorded row scope.
   // It preempts the name-based policies — an orphan plan means NO writable
   // fan-out should start children until the plan is recovered, regardless of
   // allowlist identity (same red line as the Assignment-keyed lease gate).
@@ -240,7 +240,7 @@ export function workflowPolicy(config: Config, cache: WorkflowAskCache, input: W
       return {
         decision: 'deny',
         code: WORKFLOW_LEASE_UNCOVERED_CODE,
-        reason: `workflow gate (${input.tool}) vetoed: plan "${input.uncoveredPlanId}" is InProgress without execution_lease coverage (workflowGate: hard — no writable fan-out until the plan is recovered)`,
+        reason: `workflow gate (${input.tool}) vetoed: plan "${input.uncoveredPlanId}" is InProgress without a recorded row scope (workflowGate: hard — record it through \`mstar plan prepare --worktree-path <abs> --working-branch <name>\` before writable fan-out)`,
       }
     }
     // warn / ask: allowed with an advisory verdict + one warn. The ask
@@ -250,7 +250,7 @@ export function workflowPolicy(config: Config, cache: WorkflowAskCache, input: W
     return {
       decision: 'warn',
       code: WORKFLOW_LEASE_UNCOVERED_CODE,
-      reason: `plan "${input.uncoveredPlanId}" is InProgress without execution_lease coverage (workflowGate: warn — advisory only)`,
+      reason: `plan "${input.uncoveredPlanId}" is InProgress without a recorded row scope (workflowGate: warn — advisory only; record it through \`mstar plan prepare\`)`,
     }
   }
   if (input.metaName === undefined) {

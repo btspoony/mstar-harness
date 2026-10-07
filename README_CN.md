@@ -117,23 +117,15 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 | `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→6。 |
 | `/iteration-loop [direction] [scale]` | Phase 1→6 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
 
-### Plan 级 scoped 会话
+### 直接计划协调
 
-同一条命令可带上 scope，在独立终端里只驱动**一个**已 prepare 的 plan，而不是整个迭代：
+唯一 primary coordinator 通过普通 `mstar plan prepare`、`progress` 与 `complete` 推进选定 workflow 的所有行。Leaf 任务保留常规 SDD、独立 worktree、QC 三审与 QA 门禁。配置可修订；默认 mandatory QA 与 allow-residual cleanup，不要求 sealed Assignment 或逐行 bind。
 
-| 命令 | 何时 |
-|------|------|
-| `/iteration-drive --assignment <绝对 assignment md 路径>` | 全新 scoped 入口，按 coordinator 准备好的 Assignment 寻址。 |
-| `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | 全新 scoped 入口，直接寻址已 prepare 的那一行。 |
-| `/iteration-drive --resume <绝对 session json 路径>` | 显式恢复已绑定的会话——唯一的恢复形态。 |
+`/iteration-drive` 只接受无参数调用。旧 scoped 或其他非空参数在 boot 前被拒绝，不会改为启动整个迭代。独立终端 PM 与所有权转交完成路线已移除。
 
-scoped 会话只绑定一个 plan，按其任务走常规 per-plan 门禁，止于一次可持久化的 **handoff**：该行保持 `InReview`，仅由 coordinator 写入 `Done`——迭代路线是在验证合并之后，standalone development 路线则直接从已接受的 handoff 完成。同一 plan 的第二次 fresh 入口会以重复持有被拒绝——只有对原会话的显式 `--resume` 才能继续。其他任何非空参数形态一律 fail closed；无参数则走上方的整迭代路线。
+完成仍有三种不同义务：迭代行证明实际串行集成合并并保留父级交付；standalone development 证明登记的 source 后继续 compound/PR/核实合并/close；standalone report-only 在 Done 前消费明确记录的策略履行，再凭证据 close，不虚构 Git/PR。
 
-第二个终端只是传输方式，不是依赖：任意终端均可，Herdr 或 tmux 之类的多路复用器是可选的——所有权不读 pane 状态、TTL 或终端标签。
-
-coordinator 一侧——`prepare`，随后 `accept`，再按路线走：迭代路线 `integration-start` → 固定 pin 的合并 → `integration-accept` → `complete`，standalone development 路线直接从已接受的 handoff 执行 `complete`，崩溃走 `reconcile`——由 `mstar plan` 动词执行；标志、JSON 报文与退出码：**`mstar-use-cli`** → `references/plan-and-workflow.md`。
-
-配方：[`docs/commands.md`](docs/commands.md#iteration-drive)。
+标志、JSON 与恢复 → `mstar-use-cli/references/plan-and-workflow.md`；配方 → [`docs/commands.md`](docs/commands.md#iteration-drive)。
 
 ### 审计、Review 与验证
 

@@ -6,9 +6,9 @@
 
 每个 plan 的详细内容（任务清单、决策、Sign-off）。
 
-**命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。snapshot plan 行的 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径。
+**命名（推荐）**：`<plan-id>-<plan-name>.md`（例：`01-data-infrastructure.md`）。执行 plan 行的 `file` 字段填相对仓库根或 `{PLAN_DIR}` 下的实际路径（pre-activation：snapshot 行）。
 
-**身份与路径权威**：plan 的 id / title / 文档路径 / project-iteration 归属与 spec/knowledge 关系是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1；读法 `mstar catalog show plan <plan-id>`）。snapshot plan 行的 `id/title/file` 是 **prepare 时从某个 catalog revision 复制来的冻结执行输入**（`catalog_pin`），**不是**可独立编辑的第二份 catalog：catalog 路径/关系变更需经显式 prepare/rebind 才进入新的在途执行，进度更新不会改写在途输入。从 tracked 正文发现 plan 候选用 `mstar catalog discover`（只读提案，含显式 `unknowns`），review 后 `mstar catalog import` 登记。
+**身份与路径权威**：plan 的 id / title / 文档路径 / project-iteration 归属与 spec/knowledge 关系是 **`{HARNESS_DIR}/store.db`** 的 catalog 行（contract §1；读法 `mstar catalog show plan <plan-id>`）。ACTIVE 的 `execution_plans` 行承载 **prepare 时从某个 catalog revision 复制来的冻结执行输入** `id/title/file`（`catalog_pin`；pre-activation：snapshot plan 行），**不是**可独立编辑的第二份 catalog。catalog 变更不静默刷新在途输入，进度更新也不改写它。从 tracked 正文发现候选用 `mstar catalog discover`（只读提案，含显式 `unknowns`），review 后 `mstar catalog import` 登记。
 
 ## Edit attribution (process-local SSOT)
 
@@ -54,24 +54,24 @@ Raw bundle files may disappear after the working context is gone. Before Done, P
   - `QC inputs`: `qc1.md` / `qc2.md` / `qc3.md` or `qc.md`
   - `Task reviews`: compact per completed task — task number + review range + earned `Task quality` + report pointer (`task-N-review.md` → `{SDD_DIR}/task-N-review.md`); required for handoff once `{SDD_DIR}` is unavailable. The L2 report file lives at the SDD root (outside `{SDD_DIR}/review/`); bundle cleanup removes only the ephemeral `review/` artifacts. The pointer names the L2 report, never the implementer's `task-N-report.md`
   - `Blocking result`: fixed / none / deferred with reason
-  - `Residual findings`: each open R# — id + short title + severity + tracking location (register `entries[<plan-id>]`) + owner/target + blocker-defer flag (`N/A — none open` when none)
+  - `Residual findings`: each open issue — id + short title + issue severity + store tracking location + owner/target + blocker-defer flag (`N/A — none open` when none)
 - Main plan `## QA Gate Summary` when QA applies:
   - `QA gate` / `QA mode`
   - acceptance trace: compact AC → evidence → result mapping + coverage/gap disclosure + exact report pointer (`qa.md` → `{SDD_DIR}/review/qa.md`)
   - evidence reused vs newly run checks
   - related R# closure recommendations
-- `{PROJECT_DIR}/<id>/residuals.json` (default `{HARNESS_DIR}/projects/<id>/`): open R# machine SSOT — `entries[<plan-id>]`.
+- `{HARNESS_DIR}/store.db` linked issues: open-item machine SSOT (`mstar issue list` / `mstar issue show`); `{PROJECT_DIR}/<id>/residuals.json` is migration history only.
 
 The durable summary is not a paste of raw reports. It is a small gate record sufficient for handoff after `{SDD_DIR}` is unavailable.
 
 ## Residual findings（R#）：权威在哪、和主 plan 谁先谁后？
 
-- **Open 条目的单一事实来源（SSOT）**是 **`{PROJECT_DIR}/<id>/residuals.json`**（默认 `{HARNESS_DIR}/projects/<id>/`；无项目流程用 `_default`）的 **`entries[<plan-id>]`**（canonical 见 `mstar-artifacts` **SKILL.md** 开篇；字段见 `mstar-artifacts/references/status-and-residuals.md`）。**同一工作副本内**的会话 handoff、关闭流程**以该数组为准**（本地 SSOT，默认 gitignored）；**跨 clone** 须持久的 residual 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等（见 `mstar-conventions`「Git 跟踪策略」）。
-- **推荐操作顺序**（避免 plan 与 JSON 两套 ID 漂移）：
-  1. `project-manager` 读完 review bundle 并完成「QC 三审轻量汇总」：对 finding **去重合并**，为每条待跟踪项分配**稳定 `id`**（如 `R1`、`R2`，全 plan 内唯一）。
-  2. **立即**将上述条目写入 register **`entries[<plan-id>]`**（含 `source` 指向 reviewer seat + bundle basename + finding id + review range，便于回溯；`source_plan` = plan id，`registered_at` = 当日）；v1 根级 `residual_findings` 仅 legacy 只读，**勿**双写。
-  3. **可选**：在主 plan 中增加 **「Residual findings（索引）」** 小节，**仅复述** `id` + 短标题 + 决策摘要，并写明「**权威列表见** `projects/<id>/residuals.json` `entries[<plan-id>]`（见 `mstar-conventions` **SKILL.md** 开篇）」。**不要**只在主 plan 里「发明」R# 而不写回 SSOT。
-- **不要**反过来把主 plan 当作唯一登记处：若仅更新 plan、register 未同步，下一任 agent **无法**依赖 SSOT 继承债务状态。
+- **Open 条目的单一事实来源（SSOT）**是 **`{HARNESS_DIR}/store.db` 的 plan-linked issues**（canonical → `mstar-artifacts` SKILL.md；字段 → `references/status-and-residuals.md`）。会话 handoff、关闭流程以 issue 状态为准；project register 数组仅作迁移历史，任何 authority 状态下都不是写目标。**跨 clone** 须持久的 finding 须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 等。
+- **推荐操作顺序**（避免报告与 store 两套身份漂移）：
+  1. PM 读完 review bundle 并完成去重合并；已有 issue 复用身份，重复出现追加 occurrence。
+  2. **立即**经 `mstar plan issue-add`（计划内）或 `mstar issue add` 捕获，保留 reviewer seat、bundle basename、finding id 与 review range 等来源证据；以回执 issue id 追踪，不写 register。
+  3. **可选**：主 plan 增加「Residual findings（索引）」，仅复述 issue id + 短标题 + 决策摘要，注明「**权威列表见 store 的 plan-linked issues（`mstar issue list` / `mstar issue show`）**」。
+- **不要**把主 plan 当作唯一登记处：仅更新散文而未捕获 issue，下一任 agent 无法继承权威债务状态。
 
 ## QC 三审触发时机（单 plan · 多 batch）
 
@@ -89,23 +89,23 @@ The durable summary is not a paste of raw reports. It is a small gate record suf
 - **并行 vs 串行**：不同 `plan_id` **相互独立**时，可 **并行**派发多组三审（每组各自的 Assignment 与 `{SDD_DIR}/review/`）；若有真实依赖需串行，须在 Status Update 写明依赖与顺序——**每组仍须完整三审 + QA**，不是「一个大 QC」混审。
 - **读 skill**：书写或派发 QC 相关 Assignment 前，PM **必须** Read **`mstar-review-qc`**（编排与 residual）；leaf `qc-specialist*` → **`mstar-roles/references/qc-specialist/`**。见 `mstar-conventions` SKILL.md **QC pre-dispatch gate**。
 
-**QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上（如 OpenCode 的 **`permission.edit`**），默认 **仅可** Write/Edit Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。全局 agent 提示词应允许 `.mstar/sdd/**`、`.agents/sdd/**` 及 `.worktrees/**`。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
+**QC 落盘与宿主权限**：`qc-specialist` / `qc-specialist-2` / `qc-specialist-3` 在支持路径白名单的宿主上，默认 **仅可** 写入或编辑 Assignment 指定的 **`{SDD_DIR}/review/`** 下 **`.md`**。权限范围应按 Assignment 的绝对报告路径配置；worktree 默认根为 `<parent-of-repo-root>/{repo-basename}.worktrees/`（repo root 为 Git top-level 的 realpath），不据此假定任何相对权限 glob 的解析基准或覆盖范围。报告文件**必须**以 YAML **frontmatter** 开头（键见各 QC agent 提示词）。
 
-**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（本地会话 SSOT；默认 gitignored）并在当轮更新 project register 的 open residuals（本地 SSOT，默认 gitignored）。**跨 clone 须持久的** residual 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md`（见 `mstar-conventions`「Git 跟踪策略」）— **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
+**QC 报告与 Git**：默认 raw QC/QA bundle **不**执行 `git add` / `git commit`。PM 将 durable gate summary 写入主 plan（authored artifact；默认 gitignored），并在当轮捕获/关闭 store 中的 plan-linked issues。**跨 clone 须持久的** finding 或决策须提升入 tracked `{KNOWLEDGE_DIR}/` / `{SPECS_DIR}/` 或 `{HARNESS_DIR}/AGENTS.md` — **勿**默认 `git add` `status.json` / `workflows/` / `projects/` / `plans/`。若项目显式 opt-in 跟踪审计报告，在 Assignment 写 `Review archive mode: tracked reports` 并使用项目 allow rules。
 
 ## 主 plan 内任务清单（Markdown checkbox）
 
 - **谁应更新**：`fullstack-dev` / `frontend-dev` / `fullstack-dev-2`、`qa-engineer`、`ops-engineer`、`architect`、`product-manager` 在**完成本人 Assignment 范围内的工作后**，须在主 plan（`<plan-id>-<plan-name>.md`）中把**对应条目**的 Markdown 任务标记为已完成（常见：`- [ ]` → `- [x]`；若项目用其它清单记号，保持同文件内一致）。与 Completion Report **并列**，作为跨会话可核对的**落盘痕迹**。
 - **范围**：**只勾选与当前任务直接对应、且已由本角色交付证据支撑的条目**；不得代为勾选他人负责或未完工项。若正文用分段、Owner 或角色标签区分任务，以 Assignment 与文内约定为准。
-- **与 snapshot / frontmatter 的关系**：勾选任务**不**等于整条计划收口。snapshot `plans[].status` 及主 plan frontmatter 的 **`Done`** 仍**仅** `project-manager` / `qa-engineer`（见「状态更新权限」）。`architect` / `product-manager` **不得**擅自将整条计划标为 `Done`；是否将 snapshot 推进为 `InReview` 等仍按下文「状态更新权限」与 Assignment。
+- **与执行行 / frontmatter 的关系**：勾选任务**不**等于整条计划收口。store 执行 plan 行（pre-activation：snapshot `plans[].status`）及主 plan frontmatter 的 **`Done`** 仍**仅** PM / QA；是否推进 `InReview` 等按状态权限与 Assignment。
 - **`qc-specialist*`**：**不得**修改主 plan（宿主仅允许 Assignment 指定的 review bundle `.md`）；审查结论落在 `{SDD_DIR}/review/` 内。若主 plan 需新增或勾选与审查相关的条目，由 `project-manager` 或 Assignment 明确授权的角色据报告回写。
 - **只读角色**：不直接改主 plan；将建议交给 `project-manager` 代为更新清单。
 
-Plan 正文与 snapshot 行必须保持一致；不一致时以 snapshot `plans[].status` 为准并尽快纠正正文或登记 notes（`workflows/<id>/notes.jsonl`）。
+Plan 正文与执行行必须保持一致；不一致时以 store plan 行状态为准（pre-activation：snapshot `plans[].status`），尽快纠正正文或经公共动词追加 notes（`workflows/<id>/notes.jsonl`）。
 
 ## Done 标记方式
 
 1. **Frontmatter**（首选）：添加 `status: Done` 和可选的 `done_at: YYYY-MM-DD`。
 2. **文件名**（备选）：重命名为 `DONE__<name>.md` 或 `<name>.done.md`。
 
-同时更新 snapshot 对应 plan 行（`workflows/<id>/snapshot.json` → `plans[]`）与根 `status.json` `workflows[]` 登记。
+执行状态经 `mstar plan complete` 等公共 plan 动词写入 store；完成交付尾段后由 `mstar status workflow-close` 收口 root register。不要手写 root/snapshot 文件；其文件路由仅 pre-activation / engine-absent，ACTIVE 下读写被拒。主 plan 标记不是执行状态权威。

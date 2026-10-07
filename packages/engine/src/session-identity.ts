@@ -2,7 +2,7 @@
  * Adapter-only execution identity (prerequisite contract §3.1 / phase2b
  * execution contract §3.1).
  *
- * The tuple `(source, sessionId, workflowId, role, planId)` is how one adapter
+ * The tuple `(source, sessionId, workflowId, role)` is how one adapter
  * hands an **already acquired** identity to the engine. It is never a
  * model-request field: nothing here reads the global environment, the latest
  * workflow or a path name to choose it. `source` is the adapter's provenance —
@@ -18,11 +18,11 @@
  * a missing one refuses. It never synthesizes an id and never accepts an
  * inherited environment value as authorization.
  */
-import { CoordinationError, isNonEmptyString, isPlainObject } from "./coordination-write.js";
+import { CoordinationError, assertExactKeys, isNonEmptyString, isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent } from "./path.js";
 
-/** The two coordination seats a workflow's identity can name. */
-export type ExecutionIdentityRole = "coordinator" | "plan-pm";
+/** The sole execution identity role: a workflow coordinator. */
+export type ExecutionIdentityRole = "coordinator";
 
 /** Longest session id the identity/envelope contract accepts. */
 export const SESSION_ID_MAX_LENGTH = 128;
@@ -72,15 +72,14 @@ export function assertSafeSessionId(value: unknown, what = "session id"): string
 }
 
 /**
- * One acquired identity: provenance + workflow/role/plan scope + session id.
+ * One acquired identity: provenance + workflow coordinator + session id.
  * This is the §3.1 type SSOT the DB session task imports — not a second shape.
  */
 export type ExecutionIdentity = Readonly<{
   source: "host" | "local";
   sessionId: string;
   workflowId: string;
-  role: ExecutionIdentityRole;
-  planId: string | null;
+  role: "coordinator";
 }>;
 
 /** Per-call relaxations of the acquired-identity rule; default is strict. */
@@ -94,15 +93,14 @@ export type ExecutionIdentityOptions = Readonly<{
   allowUnsetSessionId?: boolean;
 }>;
 
-/** The scope an identity is validated against (the workflow/role/plan it addresses). */
+/** Scope is workflow-wide; plans are explicit operation addresses. */
 export type ExecutionIdentityScope = Readonly<{
   workflowId: string;
-  role: ExecutionIdentityRole;
-  planId: string | null;
+  role: "coordinator";
 }>;
 
 function isRole(value: unknown): value is ExecutionIdentityRole {
-  return value === "coordinator" || value === "plan-pm";
+  return value === "coordinator";
 }
 
 function isSource(value: unknown): value is "host" | "local" {
@@ -112,10 +110,9 @@ function isSource(value: unknown): value is "host" | "local" {
 /**
  * Validate one adapter-supplied identity against the scope it addresses.
  *
- * Refuses (never repairs) a missing/blank session id or workflow id, a missing
- * or unknown provenance source, a non-coordination role, a coordinator carrying
- * a plan scope, a plan-pm without one, and any workflow/role/plan disagreement
- * with `scope`. Canonical-root equality is the caller's explicit check, not
+ * Refuses a missing/blank session id or workflow id, unknown provenance,
+ * non-coordinator role, and workflow/role disagreement with `scope`.
+ * Canonical-root equality is the caller's explicit check, not
  * this function's: the root is not a member of the identity.
  *
  * `allowUnsetSessionId` is the ACTIVE registration exception: the empty string
@@ -131,6 +128,7 @@ export function validateExecutionIdentity(
     throw new CoordinationError("coordination.identity-missing", "an execution identity tuple is required");
   }
   const value = identity as unknown as Record<string, unknown>;
+  assertExactKeys(value, ["source", "sessionId", "workflowId", "role"], "execution identity");
 
   if (!isSource(value.source)) {
     // An absent provenance is identity-missing; a present but unknown value is
@@ -161,26 +159,15 @@ export function validateExecutionIdentity(
       );
     }
   }
+  if (isNonEmptyString(value.sessionId)) assertSafeSessionId(value.sessionId);
   if (!isRole(value.role)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
       `the execution identity role ${JSON.stringify(value.role)} is not a coordination role`,
-      { expected: "coordinator|plan-pm", actual: value.role },
+      { expected: "coordinator", actual: value.role },
     );
   }
   const role = value.role;
-  const planId = value.planId;
-  if (role === "coordinator" && planId !== null) {
-    throw new CoordinationError("coordination.identity-mismatch", "a coordinator identity carries no plan scope", {
-      role,
-      plan_id: planId,
-    });
-  }
-  if (role === "plan-pm" && !isNonEmptyString(planId)) {
-    throw new CoordinationError("coordination.identity-missing", "a plan-pm identity carries a non-empty plan id", {
-      role,
-    });
-  }
   if (value.workflowId !== scope.workflowId) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
@@ -193,13 +180,6 @@ export function validateExecutionIdentity(
       "coordination.identity-mismatch",
       `the identity role ${role} does not address the ${scope.role} seat`,
       { expected: scope.role, actual: role },
-    );
-  }
-  if (planId !== scope.planId) {
-    throw new CoordinationError(
-      "coordination.identity-mismatch",
-      `the identity plan ${JSON.stringify(planId)} does not address plan ${JSON.stringify(scope.planId)}`,
-      { expected: scope.planId, actual: planId },
     );
   }
 }

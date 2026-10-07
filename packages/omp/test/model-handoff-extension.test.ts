@@ -690,7 +690,7 @@ function isPromiseLike(value: unknown): boolean {
 /* ----------------------------------------------------------------- tests ---- */
 
 describe("new coordinator start only", () => {
-  test("new coordinator start only: ordinary chat, unrelated commands, task and scoped-plan PM sessions and mid-flight enable cause no model action", async () => {
+  test("new coordinator start only: ordinary chat, unrelated commands and task sessions and mid-flight enable cause no model action", async () => {
     const repo = buildControlRepo();
     const harness = await createHarness({
       cwd: repo.main,
@@ -722,7 +722,7 @@ describe("new coordinator start only", () => {
     expect(harness.records()).toHaveLength(0);
     expect(harness.notices()).toHaveLength(0);
     expect(harness.attempts).toHaveLength(0);
-    // `/iteration-drive` never creates a reservation, and none of these did.
+    // None of these entries starts an iteration, so none creates a reservation.
     expect(JSON.parse(readFileSync(join(repo.harness, "status.json"), "utf8"))).toEqual(JSON.parse(before.register));
     expect(readdirSync(join(repo.harness, "workflows")).sort()).toEqual(before.workflows);
     expect(readdirSync(join(repo.harness, "iterations")).sort()).toEqual(before.iterations);
@@ -733,33 +733,6 @@ describe("new coordinator start only", () => {
     await harness.emitInput("continue", "interactive");
     expect(harness.records()).toHaveLength(0);
     expect(harness.attempts).toHaveLength(0);
-
-    // An *explicitly* scoped-plan PM session: the host observed that route, and
-    // the start is refused from host facts alone — the caller supplies no
-    // authority field it could have lied in.
-    const scoped = await createHarness({
-      cwd: repo.main,
-      sessionDir: scratchDir("unused-"),
-      sessionManager: newSession(repo.main),
-    });
-    await scoped.emitInput("/iteration-drive --assignment .mstar/assignments/a.md", "interactive");
-    const scopedRefusal = await scoped.runTool(startParams("scoped-iteration"));
-    expect(codeOf(scopedRefusal)).toBe("scoped-plan-route");
-    expect(scopedRefusal.isError).toBe(true);
-    expect(scoped.records()).toHaveLength(0);
-    expect(scoped.attempts).toHaveLength(0);
-    expect(scoped.notices().some((line) => line.includes("start refused"))).toBe(true);
-
-    // `/iteration-drive` with no arguments is the restore-only form: it must
-    // never retro-arm either.
-    const restore = await createHarness({
-      cwd: repo.main,
-      sessionDir: scratchDir("unused-"),
-      sessionManager: newSession(repo.main),
-    });
-    await restore.emitInput("/iteration-drive", "interactive");
-    expect(codeOf(await restore.runTool(startParams("restore-iteration")))).toBe("scoped-plan-route");
-    expect(restore.attempts).toHaveLength(0);
 
     // A native task/focused-agent session (`session_init` in its own ledger).
     const taskSession = newSession(repo.main);
@@ -988,44 +961,36 @@ describe("new coordinator start only", () => {
     });
     expect(codeOf(await control.runTool(startParams("authority-control")))).toBe("armed");
 
-    // A plan-pm envelope for this session refuses the start.
-    const planPmRepo = buildControlRepo();
-    writePluginOverrides(planPmRepo.main, { modelHandoff: true, handoffTarget: "@default" });
-    const planPmSession = newSession(planPmRepo.main);
-    const planPm = await createHarness({
-      cwd: planPmRepo.main,
+    // A session whose named workflow the authority does not hold refuses the
+    // start from the DB's own view — never from a registered plan selector.
+    const missingRepo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const missingStore = await initializeStore({ harnessDir: missingRepo.harness });
+    missingStore.close();
+    await initializeExecutionAuthority({ harnessDir: missingRepo.harness });
+    writePluginOverrides(missingRepo.main, { modelHandoff: true, handoffTarget: "@default" });
+    const missing = await createHarness({
+      cwd: missingRepo.main,
       sessionDir: scratchDir("unused-"),
-      sessionManager: planPmSession,
+      sessionManager: newSession(missingRepo.main),
     });
-    const planPmDir = sessionsDirOf(planPmRepo, "plan-pm-iteration");
-    mkdirSync(planPmDir, { recursive: true });
-    writeJson(join(planPmDir, `${planPmSession.getSessionId()}.json`), {
-      schema_version: 1,
-      role: "plan-pm",
-      session_id: planPmSession.getSessionId(),
-      workflow_id: "plan-pm-iteration",
-      plan_id: "some-plan",
-      harness_root: planPmRepo.harness,
-    });
-    const planPmRefusal = await planPm.runTool(startParams("plan-pm-iteration"));
-    expect(codeOf(planPmRefusal)).toBe("plan-pm-session");
-    expect(planPm.attempts).toHaveLength(0);
-    expect(statesOf(planPm)).toHaveLength(0);
-    expect(planPm.notices().some((line) => line.includes("plan-pm-session"))).toBe(true);
+    const missingRefusal = await missing.runTool(startParams("unregistered-iteration"));
+    expect(codeOf(missingRefusal)).toBe("register-invalid");
+    expect(missing.attempts).toHaveLength(0);
+    expect(statesOf(missing)).toHaveLength(0);
+    expect(missing.notices().some((line) => line.includes("start refused"))).toBe(true);
 
     // Forgery probe: even a *raw* call that bypasses schema validation and
     // carries every former authority claim cannot arm — the adapter never reads
     // those fields, so the host derivation still decides.
-    const forged = await planPm.runRawTool({
+    const forged = await missing.runRawTool({
       operation: "start",
-      workflowId: "plan-pm-iteration",
+      workflowId: "unregistered-iteration",
       authority: "coordinator",
       intent: "new-iteration",
       entry: "iteration-start",
     });
-    expect(codeOf(forged)).toBe("plan-pm-session");
-    expect(planPm.attempts).toHaveLength(0);
-    expect(statesOf(planPm)).toHaveLength(0);
+    expect(codeOf(forged)).toBe("register-invalid");
+    expect(missing.attempts).toHaveLength(0);
 
     // The same forged call in a session with no disqualifying host fact still
     // arms, so the refusal above is caused by the derivation and not by the
@@ -2416,14 +2381,14 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     expect(existsSync(envelopePath)).toBe(true);
     expect(JSON.parse(readFileSync(envelopePath, "utf8"))).toMatchObject({ role: "coordinator", session_id: hostId });
 
-    // Duplicate-holder refusal is preserved: the second bind mutates nothing.
+    // Rebinding an existing coordinator envelope is refused without mutation.
     const bytesBefore = readFileSync(join(repo.harness, "workflows", workflowId, "snapshot.json"), "utf8");
     const again = await harness.runCoordinatorTool({ operation: "bind", workflowId });
-    expect(coordinatorCodeOf(again)).toBe("coordination.duplicate-holder");
+    expect(again.isError).toBe(true);
     expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(bytesBefore));
   }, 60_000);
 
-  test("leaf, scoped-plan, id-less and caller-forged calls cannot cross-bind", async () => {
+  test("leaf, id-less and caller-forged calls cannot cross-bind", async () => {
     const repo = buildControlRepo();
     const workflowId = "fixture-guard-iteration";
     createBindableWorkflow(repo, workflowId);
@@ -2442,17 +2407,6 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     });
     expect(coordinatorCodeOf(await taskHarness.runCoordinatorTool({ operation: "bind", workflowId }))).toBe(
       "leaf-session",
-    );
-
-    // The scoped-plan route restores a binding; it never bootstraps one.
-    const scoped = await createHarness({
-      cwd: repo.main,
-      sessionDir: scratchDir("unused-"),
-      sessionManager: newSession(repo.main),
-    });
-    await scoped.emitInput("/iteration-drive", "interactive");
-    expect(coordinatorCodeOf(await scoped.runCoordinatorTool({ operation: "bind", workflowId }))).toBe(
-      "scoped-plan-route",
     );
 
     // A host session with no native id has no identity to acquire.
@@ -2864,17 +2818,17 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     const workflowId = "fixture-recovery-foreign-iteration";
     createRecoverableWorkflow(repo, workflowId, RECOVERY_PRIOR_SESSION);
     setArtifactStore(createFsStore(repo.harness));
-    // The recorded holder's envelope is replaced by one that is not the
-    // coordinator seat. It still exists and still names the recorded session id,
-    // so the engine refuses it as `foreign-owner` rather than as a missing file —
-    // the refusal path whose message once interpolated both envelope paths.
+    // The recorded holder's envelope is replaced by one that is not this
+    // workflow's coordinator seat. It still exists and still names the recorded
+    // session id, so the engine refuses it as `foreign-owner` rather than as a
+    // missing file — the refusal path whose message once interpolated both
+    // envelope paths.
     const priorEnvelope = join(repo.harness, "workflows", workflowId, "sessions", `coordinator-${RECOVERY_PRIOR_SESSION}.json`);
     writeJson(priorEnvelope, {
       schema_version: 1,
-      role: "plan-pm",
-      plan_id: "some-plan",
+      role: "coordinator",
       session_id: RECOVERY_PRIOR_SESSION,
-      workflow_id: workflowId,
+      workflow_id: "some-foreign-workflow",
       harness_root: repo.harness,
     });
     const harness = await createHarness({
@@ -2911,37 +2865,6 @@ type ActiveHandoffState = Readonly<{
   plans: readonly Readonly<{ planId: string; planPath: string; prepareEvidencePath: string }>[];
 }>;
 
-/** The scoped Assignment header block `parseAssignmentFile` accepts. */
-function activeAssignmentText(input: {
-  harness: string;
-  workflowId: string;
-  planId: string;
-  planPath: string;
-  worktreePath: string;
-  sddDir: string;
-  branch: string;
-}): string {
-  return [
-    `# Assignment — ${input.planId} independent slice`,
-    "",
-    `**Control harness root**: ${input.harness}`,
-    `**Workflow id**: ${input.workflowId}`,
-    `**Plan id**: ${input.planId}`,
-    `**Plan Path**: ${input.planPath}`,
-    `**Worktree Path**: ${input.worktreePath}`,
-    `**Working branch**: ${input.branch}`,
-    `**SDD dir**: ${input.sddDir}`,
-    "**Execute as**: project-manager",
-    "**Execution scope**: plan",
-    "**Delegation**: allowed (plan-local subagents only)",
-    "**Prepare gate**: go",
-    "**QA gate**: mandatory",
-    "**Findings cleanup**: allow-residual",
-    "",
-    "Prepared plan for the ACTIVE-route handoff fixtures.",
-    "",
-  ].join("\n");
-}
 
 /** A canonical plain copy of an engine-returned session reference. */
 function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
@@ -2951,7 +2874,6 @@ function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
     workflowId: ref.workflowId,
     role: ref.role,
     sessionId: ref.sessionId,
-    planId: ref.planId,
   };
 }
 
@@ -2960,7 +2882,7 @@ function plainRef(ref: ExecutionSessionRef): ExecutionSessionRef {
  * an execution authority, the plan registered in the catalog, one running
  * workflow with its branch anchors, compass reference, integration checkout and
  * plan row, the coordinator bound under `coordinatorSessionId`, the plan
- * PREPARED from a real Assignment, and the real artifact/Git witnesses the
+ * configured through ordinary prepare, and the real artifact/Git witnesses the
  * readiness checkpoint samples. No root register and no workflow snapshot exist
  * anywhere on this route.
  */
@@ -2984,19 +2906,6 @@ async function seedActiveHandoffAuthority(
   reportPaths.forEach((path, index) => writeFileSync(path, `returned payload — ${SPECIALISTS[index]}\n`));
   const planWorktree = join(repo.root, `${workflowId}-plan-worktree`);
   git(["worktree", "add", "-q", "-b", `feature/${planId}`, planWorktree], repo.main);
-  const assignmentPath = join(sddDir, "assignment.md");
-  writeFileSync(
-    assignmentPath,
-    activeAssignmentText({
-      harness,
-      workflowId,
-      planId,
-      planPath,
-      worktreePath: planWorktree,
-      sddDir,
-      branch: `feature/${planId}`,
-    }),
-  );
   writeFileSync(
     join(iterationDir, "delivery-compass.md"),
     [
@@ -3028,7 +2937,7 @@ async function seedActiveHandoffAuthority(
   );
   const context: ExecutionContext = {
     harnessDir: harness,
-    caller: { sessionId: coordinatorSessionId, role: "coordinator", workflowId, planId: null } satisfies ExecutionCaller,
+    caller: { sessionId: coordinatorSessionId, role: "coordinator", workflowId } satisfies ExecutionCaller,
   };
   await createExecutionWorkflow(context, {
     entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
@@ -3050,7 +2959,6 @@ async function seedActiveHandoffAuthority(
   });
   const bound = await bindExecutionSession(context, {
     workflowId,
-    planId: null,
     role: "coordinator",
     expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token,
     operationId: `bind-${coordinatorSessionId}`,
@@ -3060,7 +2968,7 @@ async function seedActiveHandoffAuthority(
     session: plainRef(bound.data),
     expected: (await readExecutionAuthority({ harnessDir: harness }, { workflowId, planId })).token,
     planId,
-    operation: { kind: "prepare", assignmentPath } as never,
+    operation: { kind: "prepare", config: { worktreePath: planWorktree, workingBranch: `feature/${planId}` } },
   });
   return {
     planId,
@@ -3120,14 +3028,7 @@ describe("model handoff on the ACTIVE route", () => {
     const adopted = record.binding.executionBinding;
     expect(adopted).toBeDefined();
     expect(adopted?.harnessRoot).toBe(realpathSync(repo.harness));
-    expect(adopted?.session).toEqual({
-      storeId: state.coordinator.storeId,
-      epoch: state.coordinator.epoch,
-      workflowId: state.workflowId,
-      role: "coordinator",
-      sessionId: session.getSessionId(),
-      planId: null,
-    });
+    expect(adopted?.session).toEqual(state.coordinator);
     expect(Object.getPrototypeOf(adopted?.session)).toBe(Object.prototype);
 
     // The completion checkpoint runs the ACTIVE readiness arm: no envelope path
@@ -3173,7 +3074,6 @@ describe("model handoff on the ACTIVE route", () => {
       workflowId: state.workflowId,
       sessionId: session.getSessionId(),
       role: "coordinator",
-      planId: null,
     });
   }, 120_000);
 

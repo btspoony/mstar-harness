@@ -8,8 +8,8 @@
  * category-mapping.md (problem_type → category directory),
  * mstar-compound SKILL.md Phase 6 (the knowledge index duty is now the
  * catalog-completeness query, state-projection contract §4), and
- * mstar-compound-refresh SKILL.md (scope SSOT: knowledge/**, README.md,
- * CONCEPTS.md, status.json).
+ * mstar-compound-refresh SKILL.md (scope SSOT: knowledge/**,
+ * knowledge/README.md, and CONCEPTS.md).
  */
 import * as fs from "node:fs";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -25,7 +25,8 @@ import {
   validateSchemaYaml,
 } from "../src/compound.js";
 import { registerCatalogEntity } from "../src/catalog.js";
-import { initializeStore, type StoreContext } from "../src/store-db.js";
+import { createFsStore } from "../src/store.js";
+import { initializeStore, openStore, type StoreContext } from "../src/store-db.js";
 
 const hasCode = (g: { violations: { code: string }[] }, code: string) =>
   g.violations.some((v) => v.code === code);
@@ -343,7 +344,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
       mkdirSync(dirname(join(harness, "knowledge", relative)), { recursive: true });
       writeFileSync(join(harness, "knowledge", relative), "# doc\n");
     }
-    const context: StoreContext = { harnessDir: root };
+    const context: StoreContext = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
     return { root, context };
@@ -375,7 +376,7 @@ describe("knowledge catalog completeness — the DB query that replaced the READ
 
   test("catalog discovery: a symlink cycle inside the knowledge dir cannot hang the walk", async () => {
     const { context } = await knowledgeWorkspace("knowledge-cycle-", ["logic-errors/cycle-a.md"]);
-    const harness = join(context.harnessDir, ".mstar");
+    const harness = context.harnessDir;
     // Two cycle shapes: a dir → root loop and a self-loop. Both must be skipped
     // as symlinks (bounded walk — the test itself would hang on a
     // follow-everything walker).
@@ -406,11 +407,25 @@ describe("scopeGuard", () => {
   const harness = join(tmp, ".mstar");
   const roots = compoundRefreshScope(harness, tmp);
 
-  test("accepts knowledge/**, knowledge/README.md, CONCEPTS.md, status.json", () => {
-    expect(scopeGuard(join(harness, "knowledge", "logic-errors", "x.md"), roots).ok).toBe(true);
-    expect(scopeGuard(join(harness, "knowledge", "README.md"), roots).ok).toBe(true);
-    expect(scopeGuard(join(tmp, "CONCEPTS.md"), roots).ok).toBe(true);
-    expect(scopeGuard(join(harness, "status.json"), roots).ok).toBe(true);
+  test("refresh scope excludes status.json", () => {
+    expect(scopeGuard(join(harness, "status.json"), roots).ok).toBe(false);
+  });
+
+  test("ACTIVE execution authority refuses status.json-class writes through the write port", async () => {
+    const context: StoreContext = { harnessDir: tmp };
+    const initialized = await initializeStore(context);
+    initialized.close();
+    const handle = await openStore(context, "write");
+    try {
+      handle.db.prepare("update execution_meta set authority_state = 'active' where id = 1").run();
+    } finally {
+      handle.close();
+    }
+
+    const store = createFsStore(tmp);
+    await expect(store.put({ kind: "status", key: "root", payload: {} })).rejects.toMatchObject({
+      code: "execution.direct-write-refused",
+    });
   });
 
   test("rejects docs/, plans/, iterations/, specs/ and arbitrary paths", () => {
@@ -443,12 +458,4 @@ describe("scopeGuard", () => {
     expect(scopeGuard(join(harness, "knowledge", "sub", "..", "README.md"), roots3).ok).toBe(true);
   });
 
-  test("compoundRefreshScope returns the four documented paths", () => {
-    expect(roots).toEqual([
-      join(harness, "knowledge"),
-      join(harness, "knowledge", "README.md"),
-      join(tmp, "CONCEPTS.md"),
-      join(harness, "status.json"),
-    ]);
-  });
 });

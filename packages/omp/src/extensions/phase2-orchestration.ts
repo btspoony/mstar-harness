@@ -3,13 +3,11 @@
  * bounded host lifecycle adapter for Phase-2 opportunity reminders.
  *
  * Primary spec: `mstar-host/references/omp.md` § Phase-2 plan instances (native
- * observation, reminder event/latch and capacity/reservation). The two decisions this module consumes
- * live next to it and are not re-implemented here:
+ * observation and reminder event/latch). The one decision this module consumes
+ * lives next to it and is not re-implemented here:
  *
- * - `./phase2-orchestration` (T1) owns the native settings decode and
- *   `decidePhase2Reminder`, the once-per-changed-state latch.
- * - `./phase2-launches` (T2) owns the transport-intent journal, capacity
- *   admission and the observed transport transitions.
+ * - `./phase2-orchestration` owns `decidePhase2Reminder`, the
+ *   once-per-changed-state latch.
  *
  * What this adapter adds is exactly the host half: one registered tool whose
  * operations are the frozen `Phase2Request` union, the identity pointer that
@@ -44,13 +42,12 @@
  * `ctx.sessionManager`, the control harness root from the real envelope, the
  * workflow directory from the engine's own resolver under that root, and the
  * ownership/phase projection from the named snapshot. A leaf/task session
- * (`session_init` in its own ledger), a `plan-pm` envelope, an envelope naming
- * another workflow, and a snapshot bound to a different coordinator envelope
- * are all refused before anything is written. So is a caller that does not sit
- * in the main worktree or the recorded integration worktree — the engine's own
- * coordinator-residency rule, re-read read-only, which is what keeps an extra
- * primary running in its plan's feature checkout out of the coordinator's
- * observation.
+ * (`session_init` in its own ledger), an envelope naming another workflow, and a
+ * snapshot bound to a different coordinator envelope are all refused before
+ * anything is written. So is a caller that does not sit in the main worktree or
+ * the recorded integration worktree — the engine's own coordinator-residency
+ * rule, re-read read-only, which is what keeps a leaf implementer running in its
+ * own feature checkout out of the coordinator's observation.
  *
  * The engine's coordinator envelope id and the host's session id are different
  * identities (a CLI `plan bind --coordinator` adopts the explicitly supplied
@@ -115,13 +112,10 @@
  * and digest returned to the caller, no file written and no authority granted.
  *
  * Not here, by contract: no process spawn, no screen parsing, no multiplexer
- * execution, no engine-row mutation, no lease release, no job-label plan
- * inference, no timer and no stop-loop continuation. The optional Herdr/tmux
- * transport is PM-executed skill work (plan T4); this module only admits and
- * records its intents through T2.
+ * execution, no engine-row mutation, no plan-launch transport or journal, no
+ * job-label plan inference, no timer and no stop-loop continuation.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
@@ -150,13 +144,11 @@ import type {
 } from "@mstar-harness/engine";
 import {
   decidePhase2Reminder,
-  readPhase2Settings,
   type CheckpointReason,
   type Phase2Observation,
   type Phase2Request,
   type ReminderState,
 } from "../phase2-orchestration";
-import { recordPlanLaunch, reservePlanLaunch, type ExecutionLaunchAuthority, type PlanLaunchResult } from "../phase2-launches";
 import { executionBindingOf } from "../coordinator-identity";
 import {
   buildExecutionHostInventory,
@@ -182,8 +174,6 @@ const RECORD_VERSION = 1;
 const BIND_RECORD_VERSION = 2;
 /** The pre-activation binding generation, kept readable as legacy history. */
 const LEGACY_BIND_RECORD_VERSION = 1;
-/** Plugin-owned transport journal written by T2 (`phase2-launches.ts`). */
-const JOURNAL_FILE = "omp-launches.json";
 
 /** The advisory body: a pointer to the shared checkpoint, and nothing more. */
 const ADVISORY_TEXT = [
@@ -295,29 +285,29 @@ function engineCodeOf(error: unknown, fallback: string): string {
 
 /**
  * Structural guard for the §3.1 binding value a record persists. Its rules are
- * the engine's own reference shape (`execution-session.ts` `assertRefShape`),
- * including the **cross-field** role pairing — a `coordinator` reference carries
- * a null plan id and a `plan-pm` reference a non-empty one — so an "ACTIVE"
- * binding this guard admits is one the engine could actually accept; a record
- * whose declared pairing is impossible is history, not a binding.
+ * the engine's own reference shape (`execution-session.ts` `assertRefShape`):
+ * the workflow's coordinator seat — its role, and no per-plan scope at all — so
+ * an "ACTIVE" binding this guard admits is one the engine could actually accept;
+ * a record whose declared shape is impossible is history, not a binding. A
+ * `planId` member is rejected outright rather than normalized away: silently
+ * dropping it would re-home the removed scoped seat as coordinator history.
  */
 function isExecutionBinding(value: unknown): value is ExecutionBinding {
   if (!isPlainObject(value) || value.version !== 1 || !isNonEmptyString(value.harnessRoot)) return false;
   const session = value.session;
   if (!isPlainObject(session)) return false;
   if (!isNonEmptyString(session.storeId) || !isNonEmptyString(session.sessionId) || !isNonEmptyString(session.workflowId)) return false;
-  if (session.role === "coordinator" && session.planId !== null) return false;
-  if (session.role === "plan-pm" && !isNonEmptyString(session.planId)) return false;
-  if (session.role !== "coordinator" && session.role !== "plan-pm") return false;
+  if (session.role !== "coordinator") return false;
+  if ("planId" in session) return false;
   return typeof session.epoch === "number" && Number.isSafeInteger(session.epoch) && session.epoch > 0;
 }
 
 /**
  * The same adopted execution binding, compared on its real §3.1 fields rather
  * than a serialized envelope: version, the canonical control root, and the
- * session reference's store/epoch/workflow/role/session/plan identity. Every
- * field is a value fact, so two bindings are equal exactly when they describe
- * the same stored row — the idempotent same-bind check needs no byte rendering.
+ * session reference's store/epoch/workflow/role/session identity. Every field is
+ * a value fact, so two bindings are equal exactly when they describe the same
+ * stored row — the idempotent same-bind check needs no byte rendering.
  */
 function sameExecutionBinding(a: ExecutionBinding, b: ExecutionBinding): boolean {
   return (
@@ -327,8 +317,7 @@ function sameExecutionBinding(a: ExecutionBinding, b: ExecutionBinding): boolean
     a.session.epoch === b.session.epoch &&
     a.session.workflowId === b.session.workflowId &&
     a.session.role === b.session.role &&
-    a.session.sessionId === b.session.sessionId &&
-    a.session.planId === b.session.planId
+    a.session.sessionId === b.session.sessionId
   );
 }
 
@@ -438,10 +427,8 @@ export type Phase2ObservationFacts = Readonly<{
   workflowId: string;
   hostSessionId: string;
   running: readonly Phase2RunningJob[];
-  /** Engine plan facts, already reduced to `id/status/revision/prepared/session/handoff/lease-holder`. */
+  /** Engine plan facts, already reduced to `id/status/coordination-revision`. */
   planFacts: readonly string[];
-  /** Transport-journal byte version + latest valid capacity; `""` when launch mode is off. */
-  launchFacts: string;
 }>;
 
 /** Stable, sorted projection digest: the observation identity compared and latched. */
@@ -450,47 +437,27 @@ export function phase2ObservationKey(facts: Phase2ObservationFacts): string {
     `workflow:${facts.workflowId}`,
     `session:${facts.hostSessionId}`,
     ...facts.running.map((job) => `job:${job.id}:${job.type}:${job.status}`).sort(),
-    ...facts.planFacts.slice().sort(),
-    facts.launchFacts === "" ? "launch:off" : `launch:${facts.launchFacts}`,
+    ...facts.planFacts.slice().sort()
   ];
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 
-/** Per-plan stable facts: identity, status, coordination revision, prepared pin, bound session, handoff state, lease holder. */
+/** Per-plan stable facts: identity, status and coordination revision. */
 function planFactsOf(snapshot: WorkflowSnapshot): readonly string[] {
   const facts: string[] = [];
   for (const row of snapshot.plans as readonly PlanRow[]) {
     const planId = isNonEmptyString(row.id) ? row.id : isNonEmptyString(row.plan_id) ? row.plan_id : "";
     if (planId === "") continue;
     const coordination = isPlainObject(row.coordination) ? row.coordination : null;
-    const prepared = isPlainObject(coordination?.prepared) ? coordination.prepared : null;
-    const session = isPlainObject(coordination?.session) ? coordination.session : null;
-    const handoff = isPlainObject(coordination?.handoff) ? coordination.handoff : null;
-    const lease = isPlainObject(row.execution_lease) ? row.execution_lease : null;
     facts.push(
       [
         `plan:${planId}`,
         isNonEmptyString(row.status) ? row.status : "",
         coordination !== null && typeof coordination.revision === "number" ? String(coordination.revision) : "",
-        prepared !== null && isNonEmptyString(prepared.assignment_sha256) ? prepared.assignment_sha256 : "",
-        session !== null && isNonEmptyString(session.session_id) ? session.session_id : "",
-        handoff !== null && isNonEmptyString(handoff.state) ? handoff.state : "",
-        lease !== null && isNonEmptyString(lease.holder) ? lease.holder : "",
       ].join(":"),
     );
   }
   return facts;
-}
-
-/** `sha256:` of the journal bytes (its byte version), or `absent` / `unreadable`. */
-function journalFactsOf(workflowDir: string): string {
-  const path = join(workflowDir, JOURNAL_FILE);
-  if (!existsSync(path)) return "absent";
-  try {
-    return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
-  } catch {
-    return "unreadable";
-  }
 }
 
 /* ------------------------------------------------------------------------- *
@@ -542,17 +509,11 @@ function planFactsOfView(views: readonly ExecutionPlanView[]): readonly string[]
     const planId = isNonEmptyString(view.plan.id) ? view.plan.id : isNonEmptyString(view.plan.plan_id) ? view.plan.plan_id : "";
     if (planId === "") continue;
     const coordination = isPlainObject(view.coordination) ? view.coordination : null;
-    const prepared = isPlainObject(coordination?.prepared) ? coordination.prepared : null;
-    const handoff = isPlainObject(coordination?.handoff) ? coordination.handoff : null;
     facts.push(
       [
         `plan:${planId}`,
         isNonEmptyString(view.plan.status) ? view.plan.status : "",
         coordination !== null && typeof coordination.revision === "number" ? String(coordination.revision) : "",
-        prepared !== null && isNonEmptyString(prepared.assignment_sha256) ? prepared.assignment_sha256 : "",
-        view.session === null ? "" : view.session.sessionId,
-        handoff !== null && isNonEmptyString(handoff.state) ? handoff.state : "",
-        view.executionLease === null || !isNonEmptyString(view.executionLease.holder) ? "" : view.executionLease.holder,
       ].join(":"),
     );
   }
@@ -728,8 +689,7 @@ async function probeActiveWorkflow(
     source: "host",
     sessionId: adopted.session.sessionId,
     workflowId: adopted.session.workflowId,
-    role: adopted.session.role,
-    planId: adopted.session.planId,
+    role: "coordinator",
   };
   try {
     await resumeExecutionSession(executionContextFor({ harnessDir: adopted.harnessRoot }, identity), adopted.session);
@@ -821,16 +781,6 @@ function refuse(code: string, message: string): ToolOutcome {
 
 /** An empty observation, used only together with `snapshotAvailable: false`. */
 const NO_OBSERVATION: Phase2Observation = { key: "", hasRunningJobs: false, nativeDeliveryPending: false, recentTerminalIds: [] };
-
-/**
- * Test seam for the awaited settings read, following this package's own
- * precedent (the model-handoff adapter's readiness seam). The read sits between
- * the snapshot a decision is taken against and the moment its ids are consumed,
- * so a test can hold it open and settle a job inside that window.
- */
-export const phase2Seams = {
-  readSettings: readPhase2Settings,
-};
 
 export default function phase2Orchestration(pi: ExtensionAPI): void {
   const z = pi.zod;
@@ -951,8 +901,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
 
   /**
    * Sample the current opportunity from an already-taken workflow probe: the
-   * host snapshot, the settings that decide whether launch facts are part of the
-   * projection, and the engine facts the key is computed from. Every failure
+   * host snapshot and the engine facts the key is computed from. Every failure
    * yields `observation: null` — never a key derived from a partial read.
    */
   const sample = async (
@@ -983,28 +932,14 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       };
     }
 
-    const settings = await phase2Seams.readSettings(ctx.cwd);
-    if (!settings.ok) {
-      return {
-        ownedPhase2: true,
-        observation: null,
-        refusal: { code: `phase2.${settings.reason}`, message: settings.message, observed },
-        terminalIds: [],
-      };
-    }
-
     const running = snapshot.running.map((job) => ({ id: job.id, type: job.type, status: job.status }));
     const terminalIds = snapshot.recent.filter((job) => job.status !== "running").map((job) => job.id);
     const recentTerminalIds = terminalIds.filter((id) => !consumedTerminalIds.has(id));
-    const launchFacts = settings.value.phase2PlanInstances
-      ? `${journalFactsOf(probe.workflowDir)}:${settings.value.maxPlanInstances}`
-      : "";
     const key = phase2ObservationKey({
       workflowId: terms.workflowId,
       hostSessionId: terms.hostSessionId,
       running,
       planFacts: probe.planFacts,
-      launchFacts,
     });
     return {
       ownedPhase2: true,
@@ -1119,7 +1054,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     // The adopted reference is resumed against the current epoch/root before it
     // is recorded: a stale, revoked or foreign row is never persisted as a
     // binding (and no envelope stands in for it).
-    const identity: ExecutionIdentity = { source: "host", sessionId: hostSessionId, workflowId, role: "coordinator", planId: null };
+    const identity: ExecutionIdentity = { source: "host", sessionId: hostSessionId, workflowId, role: "coordinator" };
     try {
       await resumeExecutionSession(executionContextFor({ harnessDir: harnessRoot }, identity), coordinator);
     } catch (error) {
@@ -1202,9 +1137,6 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       envelope = readSessionEnvelope(sessionPath);
     } catch (error) {
       return refuse("phase2.envelope-unreadable", `the recorded coordinator envelope ${sessionPath} can no longer be read: ${String(error)}`);
-    }
-    if (envelope.role !== "coordinator") {
-      return refuse("phase2.plan-pm-session", `session ${envelope.session_id} is a ${envelope.role} session; a scoped-plan PM never binds the Phase-2 observation`);
     }
     if (envelope.workflow_id !== workflowId || envelope.session_id !== coordinator.session_id) {
       return refuse(
@@ -1338,71 +1270,6 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
     });
   };
 
-  /** `reserve-launch` / `record-launch` — the T2 journal, with authority from this session's ACTIVE binding. */
-  const launch = async (
-    request: Extract<Phase2Request, { operation: "reserve-launch" } | { operation: "record-launch" }>,
-    ctx: ExtensionContext,
-  ): Promise<ToolOutcome> => {
-    const state = derivePhase2State(ctx.sessionManager.getEntries(), ctx.sessionManager.getSessionId());
-    const terms = bindingTermsOf(state);
-    if (terms === null) {
-      return refuse("phase2.not-bound", "this session holds no Phase-2 observation binding; call {operation:\"bind\", workflowId} first.");
-    }
-    if (state.binding === null) {
-      // The launch journal is adopted under the ACTIVE authority (§6): a legacy
-      // envelope binding never carries launch authority, and the file route is
-      // migration history for this surface.
-      return refuse(
-        "phase2.binding-legacy",
-        `this session's observation binding for ${terms.workflowId} is the pre-activation envelope record; the launch journal requires the ACTIVE execution authority. Re-bind through {operation:"bind", workflowId} once the execution authority is active.`,
-      );
-    }
-    const probe = await probeOwnership(ctx, state, true);
-    if (!probe.ok) return refuse(probe.code, `${probe.message}. No launch bookkeeping was written.${staleHint()}`);
-
-    const authority: ExecutionLaunchAuthority = {
-      cwd: ctx.cwd,
-      identity: {
-        source: "host",
-        sessionId: state.binding.hostSessionId,
-        workflowId: state.binding.workflowId,
-        role: "coordinator",
-        planId: null,
-      },
-      binding: state.binding.executionBinding,
-    };
-    let result: PlanLaunchResult;
-    try {
-      result =
-        request.operation === "reserve-launch"
-          ? await reservePlanLaunch(request, authority)
-          : await recordPlanLaunch(request, authority);
-    } catch (error) {
-      return refuse("phase2.journal-failed", `the transport-intent journal refused this call: ${String(error)}`);
-    }
-    if (!result.ok) return refuse(result.code, result.message);
-
-    const intent = result.intent;
-    const action = request.operation === "reserve-launch" ? "reserved" : "recorded";
-    const applied = result.applied;
-    const text = applied
-      ? `${action} launch intent ${intent.id} for plan ${intent.planId} as ${intent.state}${intent.target === undefined ? "" : ` in ${intent.target}`}; the recorded transition authorizes the matching PM action.`
-      : `launch intent ${intent.id} for plan ${intent.planId} is already ${intent.state}; this call wrote nothing and authorizes no side effect.`;
-    return outcome(true, false, text, {
-      code: applied ? action : "replayed",
-      applied,
-      intent: {
-        id: intent.id,
-        planId: intent.planId,
-        state: intent.state,
-        transport: intent.transport,
-        target: intent.target ?? null,
-        preparedHash: intent.preparedHash,
-        evidencePaths: intent.evidencePaths,
-      },
-    });
-  };
-
   /**
    * `export-history` — the §4.2 read-only bounded evidence operation (H2's
    * producer amendment). It exports THIS carrying session's own hidden history as
@@ -1452,8 +1319,6 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
 
   /* ---------------------------------------------------------------- tool --- */
 
-  const skillRef = z.object({ name: z.string(), source: z.string() }).strict();
-  const capabilityRef = z.object({ executable: z.string(), version: z.string(), target: z.string() }).strict();
   const bindRequest = z.object({ operation: z.literal("bind"), workflowId: z.string() }).strict();
   const exportHistoryRequest = z.object({ operation: z.literal("export-history"), workflowId: z.string() }).strict();
   const checkpointRequest = z
@@ -1464,40 +1329,13 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
       note: z.string(),
     })
     .strict();
-  const reserveRequest = z
-    .object({
-      operation: z.literal("reserve-launch"),
-      planId: z.string(),
-      transport: z.enum(["herdr", "tmux"]),
-      skill: skillRef,
-      capability: capabilityRef,
-    })
-    .strict();
-  const recordRequest = z
-    .object({
-      operation: z.literal("record-launch"),
-      intentId: z.string(),
-      observation: z.enum(["starting", "created", "submitting", "submitted", "refused", "uncertain"]),
-      target: z.string().optional(),
-      evidencePath: z.string(),
-    })
-    .strict()
-    // The same rule T2's validator enforces, refused one layer earlier so a
-    // malformed transition never reaches the journal at all. The predicate form
-    // (`refine`) is the one both supported host type surfaces declare, so this
-    // schema compiles against the pinned host regardless of which copy of its
-    // type declarations a tree happens to resolve.
-    .refine(
-      (value) => value.observation !== "created" || (value.target !== undefined && value.target !== ""),
-      "record-launch created requires the returned opaque target",
-    );
 
   pi.registerTool({
     name: TOOL_NAME,
     label: "Phase-2 orchestration",
     description:
-      'Morning Star Phase-2 host observation. `{operation:"bind"}` adopts this session\'s identity pointer for one explicitly named workflow from whatever authority the control root has (the active DB session binding, or the recorded coordinator envelope pre-activation) \u2014 never from the call. `{operation:"checkpoint"}` acknowledges a run of the shared rescheduling checkpoint against the sample taken at that moment and can assert a block. `{operation:"reserve-launch"}` and `{operation:"record-launch"}` admit and record one extra plan-primary launch intent in the plugin\'s local transport journal under the ACTIVE execution authority; the optional Herdr/tmux skill performs every CLI call. `{operation:"export-history"}` returns THIS session\'s bounded hidden-history evidence bytes for one workflow (no file is written and no authority is granted). Not a user activation command: nothing is spawned, merged, leased or written to engine state.',
-    parameters: z.union([bindRequest, exportHistoryRequest, checkpointRequest, reserveRequest, recordRequest]),
+      'Morning Star Phase-2 host observation. `{operation:"bind"}` adopts this session\'s identity pointer for one explicitly named workflow from whatever authority the control root has (the active DB session binding, or the recorded coordinator envelope pre-activation) \u2014 never from the call. `{operation:"checkpoint"}` acknowledges a run of the shared rescheduling checkpoint against the sample taken at that moment and can assert a block. `{operation:"export-history"}` returns THIS session\'s bounded hidden-history evidence bytes for one workflow (no file is written and no authority is granted). Not a user activation command: nothing is spawned, merged or written to engine state.',
+    parameters: z.union([bindRequest, exportHistoryRequest, checkpointRequest]),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
         const request = params as unknown as Phase2Request;
@@ -1506,9 +1344,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
             ? await bind(request, ctx)
             : request.operation === "export-history"
               ? await exportHistory(request, ctx)
-              : request.operation === "checkpoint"
-                ? await checkpoint(request, ctx)
-                : await launch(request, ctx);
+              : await checkpoint(request, ctx);
         return {
           content: [{ type: "text", text: result.text }],
           details: { mstarPhase2: result.details, ok: result.ok },
@@ -1516,7 +1352,7 @@ export default function phase2Orchestration(pi: ExtensionAPI): void {
         };
       } catch (error) {
         return {
-          content: [{ type: "text", text: `the phase-2 tool failed without touching engine, journal or model state: ${String(error)}` }],
+          content: [{ type: "text", text: `the phase-2 tool failed without touching engine or model state: ${String(error)}` }],
           details: { mstarPhase2: { code: "tool-error" }, ok: false },
           isError: true,
         };

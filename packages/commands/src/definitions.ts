@@ -298,19 +298,25 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   if (!parsed.success) {
     const sanitize = issueMessageSanitizer(input);
     const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, sanitize));
-    const joinedMessage = parsed.error.issues.map((entry) => entry.message).join("; ");
+    const hasMoreIssues = parsed.error.issues.length > 20;
+    const joinedMessage = hasMoreIssues
+      ? `${parsed.error.issues.slice(0, 20).map((entry) => entry.message).join("; ")}\n…and ${parsed.error.issues.length - 20} more issues — full diagnostics in details.diagnostics.`
+      : parsed.error.issues.map((entry) => entry.message).join("; ");
     const issue = parsed.error.issues[0];
     const facts = rejectionFacts(issue, input);
     const optionKey = issue.path.map(String).join(".");
     const option = definition.cli.options.find((entry) => entry.key === optionKey);
-    const rejected = facts.path === "" ? undefined : {
+    const rejected = !hasMoreIssues && facts.path !== "" ? {
       path: option?.flags.split(/[ <]/)[0] ?? facts.path,
       expected: facts.expected,
       received: facts.received,
-    };
+    } : undefined;
+    const message = hasMoreIssues
+      ? `Rejected ${option?.flags.split(/[ <]/)[0] ?? facts.path}: expected ${facts.expected}; received ${facts.received}\n${sanitize(joinedMessage)}`
+      : sanitize(joinedMessage);
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: sanitize(joinedMessage),
+      message,
       diagnostics,
       ...(rejected === undefined ? {} : { rejected }),
     });

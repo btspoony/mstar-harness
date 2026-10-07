@@ -205,7 +205,7 @@ message: the watermark (unified mstar version, harness dir, enforcement),
 the iteration phase-gate section when a steering compass resolved, and the
 workspace-state digest section (plan registry, open issues from the store rollup,
 branch/policy anchors, active leases, knowledge digest, compass direction)
-when the workspace has a `status.json`. The row is digest-gated (once per
+when the workspace has harness authority (store.db registry or pre-activation `status.json`). The row is digest-gated (once per
 turn, re-injected only when it changed) over one per-workspace TTL-cached
 build (`catalogTtlMs`, default 60 s).
 
@@ -244,12 +244,12 @@ model tool and never a fence:
   refuses:
   `{operation:"adopt", sessionRef}` (only those two keys; `sessionRef` the
   canonical `exec-session-v1:` wire), `{operation:"clear"}` (no extra fields), or
-  `{operation:"run", workflowId, role:"coordinator"|"plan-pm", planId, argv}`
-  (exactly five keys, non-empty `argv` of non-empty strings, `planId` `null` or a
-  non-empty string). A malformed, mixed or extra-field payload throws
+  `{operation:"run", workflowId, role:"coordinator", argv}`
+  (exactly four keys, non-empty argv of non-empty strings). Row scope is never
+  a launch identity. A malformed, mixed or extra-field payload throws
   (`execution command input must be JSON` / `… must be a closed JSON object` /
   `adopt requires only a canonical sessionRef` / `clear does not accept extra
-  fields` / `run requires workflowId, role, planId, and a non-empty argv` /
+  fields` / `run requires workflowId, coordinator role, and a non-empty argv` /
   `unknown execution operation`). The command's returned text goes to the
   operator, not into the model's context: the payload is an operator intent, and
   no model tool path can reach this entry.
@@ -286,7 +286,7 @@ model tool and never a fence:
   (`MSTAR_EXECUTION_IDENTITY`, `MSTAR_EXECUTION_SESSION_ID`,
   `MSTAR_HOST_SESSION_ID`, `MSTAR_HARNESS_DIR`, `MSTAR_SESSION_ID`,
   `MSTAR_CALLER_ID`) and then sets `MSTAR_EXECUTION_IDENTITY` to
-  `serializeExecutionValue({source:"host", sessionId, workflowId, role, planId})` —
+  `serializeExecutionValue({source:"host", sessionId, workflowId, role:"coordinator"})` —
   the engine's canonical identity serialization. The child inherits the session's
   native id (no local identity is minted), cancellation aborts it (`SIGTERM`),
   and the result is `success` on exit 0 (text = stdout) or `error` otherwise
@@ -537,11 +537,7 @@ the correct action for work a running child already owns — never open another
 unit of work **against the same worktree**. Procedure (and its frozen reason
 vocabulary) → `mstar-iteration/references/phase-2-worktree-lease.md` §2.4.
 
-The **scoped plan route** changes none of this: `/iteration-drive --assignment |
---workflow --plan | --resume` still never arms a goal on dsh, and its
-progression stays the plan-scoped native workflow (`mstar plan bind → progress →
-handoff`, coordinator `accept` / `integration-*` / `complete`) —
-`mstar-iteration/references/plan-scoped-pm.md`.
+No-argument iteration-drive resumes the primary coordinator's workflow; nonempty arguments refuse. It still never arms a goal here. The coordinator advances rows directly through ordinary prepare/progress/complete, with native leaf scheduling and real serial integration.
 
 ### QC default
 

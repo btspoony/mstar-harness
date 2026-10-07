@@ -116,23 +116,15 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration. |
 | `/iteration-loop [direction] [scale]` | Full Phase 1→6 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
 
-### Scoped plan session
+### Direct plan coordination
 
-The same command takes a scope, to drive **one** prepared plan from an independent terminal instead of the whole iteration:
+One primary coordinator drives all rows of its selected workflow through ordinary `mstar plan prepare`, `progress` and `complete`. Leaf tasks retain normal SDD, isolated worktrees, QC tri and QA gates. Configuration is revisable; defaults are mandatory QA and allow-residual cleanup, with no sealed Assignment or per-row bind.
 
-| Command | When |
-|---------|------|
-| `/iteration-drive --assignment <absolute-assignment-md-path>` | Fresh scoped entry, addressed by the coordinator's prepared Assignment. |
-| `/iteration-drive --workflow <workflow-id> --plan <plan-id>` | Fresh scoped entry, addressing the prepared row directly. |
-| `/iteration-drive --resume <absolute-session-json-path>` | Explicit resume of the already bound session — the only resume form. |
+`/iteration-drive` accepts no arguments. Unsupported scoped/extra arguments are rejected before boot; they never start the whole iteration instead. Independent terminal PMs and ownership-transfer completion are removed.
 
-The scoped session binds exactly one plan, drives its tasks through the normal per-plan gates, and stops at a durable **handoff**: the row keeps `InReview`, and the coordinator alone records `Done` — after a verified merge on the iteration route, or straight from the accepted handoff on the standalone development route. A second fresh entry for the same plan is rejected as a duplicate holder — only explicit `--resume` of the original session continues. Any other nonempty argument shape fails closed; no arguments keep the whole-iteration route above.
+Completion keeps three distinct obligations: iteration rows prove the actual serial integration merge and leave parent delivery intact; standalone development proves its registered source and continues through compound/PR/verified-merge/close; standalone report-only consumes explicit policy fulfilment recorded before Done, then evidence-backed close without invented Git/PR.
 
-The second terminal is transport, not a dependency: any terminal works, and a multiplexer such as Herdr or tmux is optional — nothing reads pane state, TTL or terminal labels for ownership.
-
-The coordinator's half — `prepare`, then `accept`, and from there the iteration route (`integration-start` → pinned merge → `integration-accept` → `complete`) or the standalone development route (`complete` straight from the accepted handoff), with `reconcile` as the crash path — runs the `mstar plan` verbs; flags, JSON envelopes and exit codes: **`mstar-use-cli`** → `references/plan-and-workflow.md`.
-
-Recipe: [`docs/commands.md`](docs/commands.md#iteration-drive).
+Flags, JSON and recovery → `mstar-use-cli/references/plan-and-workflow.md`; recipe → [`docs/commands.md`](docs/commands.md#iteration-drive).
 
 ### Audit, review & verification
 

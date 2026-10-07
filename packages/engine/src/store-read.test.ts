@@ -63,7 +63,7 @@ async function workspace(name: string): Promise<Fixture> {
   const dir = mkdtempSync(join(ROOT, name));
   const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: dir };
+  const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
   return { dir, harness, context };
@@ -168,14 +168,7 @@ function snapshotDoc(id: string, pinRevision: number): string {
           file: "/plans/wf-read.md",
           status: "InProgress",
           coordination: { revision: 1, progress: { status: "InProgress", summary: "half way", evidence_paths: [] } },
-          metadata: { catalog_pin: { entity_revision: pinRevision } },
-          execution_lease: {
-            holder: "session-1",
-            claimed_at: STARTED_AT,
-            worktree_path: "/wt/wf-read",
-            working_branch: `feature/${id}`,
-            session_label: "must-never-be-projected",
-          },
+          metadata: { catalog_pin: { entity_revision: pinRevision }, worktree_path: `/wt/${id}`, working_branch: `feature/${id}` },
         },
       ],
       integration_merge_lease: {
@@ -734,7 +727,7 @@ describe("read envelope and transaction", () => {
   test("a missing store fails instead of returning empty findings", async () => {
     const dir = mkdtempSync(join(ROOT, "no-store-"));
     mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const context: StoreContext = { harnessDir: dir };
+    const context: StoreContext = { harnessDir: join(dir, ".mstar") };
     await expect(withStoreRead(context, queryDashboard("issues"))).rejects.toMatchObject({ code: "store.not-initialized" });
     await expect(withStoreRead(context, queryDashboard("workflows"))).rejects.toMatchObject({ code: "store.not-initialized" });
     await expect(withStoreRead(context, queryIssueFlow())).rejects.toMatchObject({ code: "store.not-initialized" });
@@ -1019,10 +1012,7 @@ describe("projection views", () => {
     expect(workflow.plans[0]?.progress).toBe("half way");
     expect(workflow.plans[0]?.catalogPinRevision).toBe(planRevision);
     expect(workflow.plans[0]?.badges).toEqual([]);
-    expect(workflow.plans[0]?.leases.map((lease) => lease.kind)).toEqual(["execution", "integration-merge"]);
-    expect(workflow.plans[0]?.leases[0]?.worktreePath).toBe("/wt/wf-read");
-    expect(JSON.stringify(envelope)).not.toContain("must-never-be-projected");
-    expect(JSON.stringify(envelope)).not.toContain("session_label");
+    expect(workflow.plans[0]?.leases.map((lease) => lease.kind)).toEqual(["integration-merge"]);
 
     const detail = await withStoreRead(context, queryDashboard("workflow-detail", { id: "wf-read" }));
     expect(detail.data).toEqual(workflow);
@@ -1156,14 +1146,7 @@ describe("projection views", () => {
               file: "/plans/wf-dup.md",
               status: "InProgress",
               coordination: { revision: 1, progress: { status: "InProgress", summary: "plan-workflow progress", evidence_paths: [] } },
-              metadata: { catalog_pin: { entity_revision: 7 } },
-              execution_lease: {
-                holder: "session-plan",
-                claimed_at: STARTED_AT,
-                worktree_path: "/wt/wf-dup",
-                working_branch: "feature/wf-dup",
-                session_label: "must-never-be-projected",
-              },
+              metadata: { catalog_pin: { entity_revision: 7 }, worktree_path: "/wt/wf-dup", working_branch: "feature/wf-dup" },
             },
           ],
         },
@@ -1189,13 +1172,7 @@ describe("projection views", () => {
               title: "Plan wf-dup",
               file: "/plans/wf-dup.md",
               status: "Blocked",
-              metadata: { catalog_pin: { entity_revision: 9 } },
-              execution_lease: {
-                holder: "session-iter",
-                claimed_at: STARTED_AT,
-                worktree_path: "/wt/iter-dup",
-                working_branch: "integrate/iter-dup",
-              },
+              metadata: { catalog_pin: { entity_revision: 9 }, worktree_path: "/wt/iter-dup", working_branch: "integrate/iter-dup" },
             },
           ],
         },
@@ -1209,19 +1186,15 @@ describe("projection views", () => {
     const planWorkflow = envelope.data.items.find((item) => item.id === "wf-dup") as WorkflowDTO;
     const iterationWorkflow = envelope.data.items.find((item) => item.id === "iter-dup") as WorkflowDTO;
 
-    // Each workflow's plan row shows only its own workflow's lease, status and
-    // pin revision -- never the other's.
+    // Each workflow keeps its own row state and pin revision.
     expect(planWorkflow.plans[0]?.status).toBe("InProgress");
     expect(planWorkflow.plans[0]?.progress).toBe("plan-workflow progress");
     expect(planWorkflow.plans[0]?.catalogPinRevision).toBe(7);
-    expect(planWorkflow.plans[0]?.leases.map((lease) => lease.holder)).toEqual(["session-plan"]);
-    expect(planWorkflow.plans[0]?.leases.map((lease) => lease.workflowId)).toEqual(["wf-dup"]);
+    expect(planWorkflow.plans[0]?.leases).toEqual([]);
 
     expect(iterationWorkflow.plans[0]?.status).toBe("Blocked");
     expect(iterationWorkflow.plans[0]?.catalogPinRevision).toBe(9);
-    expect(iterationWorkflow.plans[0]?.leases.map((lease) => lease.holder)).toEqual(["session-iter"]);
-    expect(iterationWorkflow.plans[0]?.leases.map((lease) => lease.workflowId)).toEqual(["iter-dup"]);
-    expect(JSON.stringify(envelope)).not.toContain("must-never-be-projected");
+    expect(iterationWorkflow.plans[0]?.leases).toEqual([]);
 
     // The iteration view resolves the plan's execution from the iteration's
     // own row, never from the same-id plan workflow's row.
@@ -1288,5 +1261,48 @@ describe("projection views", () => {
     expect(envelope.projection.diagnostics.some((diagnostic) => diagnostic.reason === "missing")).toBe(true);
     // The view answers from the retained generation, whose bytes on disk are
     // already gone: no source read could have produced this data.
+  });
+});
+
+describe("projects view", () => {
+  test("projects returns every project in deterministic title/id order with identity and open issue counts", async () => {
+    const { context } = await workspace("projects-");
+    await registerCatalogEntity(context, { kind: "project", id: "z-project", title: "Same", rootKind: "projects", relativePath: "z" }, op("project-z"));
+    await registerCatalogEntity(context, { kind: "project", id: "a-project", title: "Same", rootKind: "projects", relativePath: "a" }, op("project-a"));
+    for (let i = 0; i < 53; i++) {
+      await registerCatalogEntity(context, {
+        kind: "project", id: `project-${String(i).padStart(2, "0")}`, title: `Project ${String(i).padStart(2, "0")}`,
+        rootKind: "projects", relativePath: `project-${i}`,
+      }, op(`project-${i}`));
+    }
+    await registerCatalogEntity(context, { kind: "plan", id: "plan-only", title: "Plan", rootKind: "plans", relativePath: "plan" }, op("plan-only"));
+    await registerCatalogEntity(context, { kind: "iteration", id: "iteration-only", title: "Iteration", rootKind: "plans", relativePath: "iteration" }, op("iteration-only"));
+    await registerCatalogEntity(context, { kind: "document", id: "document-only", title: "Document", rootKind: "projects", relativePath: "document", documentKind: "spec" }, op("document-only"));
+    await withWrite(context, (db) => {
+      seedIssue(db, { id: "project-issue-open", title: "Open", projectId: "a-project" });
+      seedIssue(db, { id: "project-issue-open-2", title: "Open 2", projectId: "a-project" });
+      seedIssue(db, { id: "project-issue-closed", title: "Resolved", projectId: "a-project", disposition: "resolved" });
+    });
+    const first = await withStoreRead(context, queryDashboard("projects", { limit: 1, offset: 3 }));
+    const second = await withStoreRead(context, queryDashboard("projects"));
+    expect(first.data.items).toHaveLength(55);
+    expect(first.data.total).toBe(55);
+    expect(first.data.items.map(({ project }) => project.id)).toEqual(second.data.items.map(({ project }) => project.id));
+    expect(first.data.items.filter(({ project }) => project.title === "Same").map(({ project }) => project.id)).toEqual(["a-project", "z-project"]);
+    expect(first.data.items.find(({ project }) => project.id === "a-project")).toEqual({
+      project: expect.objectContaining({
+        kind: "project", id: "a-project", title: "Same", description: null, rootKind: "projects",
+        relativePath: "a", documentKind: null, lifecycle: "active", revision: expect.any(Number),
+        registeredAt: expect.any(String), updatedAt: expect.any(String),
+      }),
+      openIssues: 2,
+    });
+    expect(first.data.items.find(({ project }) => project.id === "z-project")?.openIssues).toBe(0);
+    expect(first.data.items.some(({ project }) => ["plan-only", "iteration-only", "document-only"].includes(project.id))).toBe(false);
+  });
+
+  test("projects empty catalog returns an empty successful list", async () => {
+    const { context } = await workspace("projects-empty-");
+    expect((await withStoreRead(context, queryDashboard("projects"))).data).toEqual({ items: [], total: 0 });
   });
 });

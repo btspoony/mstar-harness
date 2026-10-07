@@ -36,14 +36,15 @@
  *   authoritative read and never serves the retired file route's leftover bytes
  *   or a projection derived from them.
  * - `retained evidence …`: SDD evidence bodies stay FILES under the configured
- *   roots with provenance recorded in the handoff, across a fixture authority
+ *   roots with provenance recorded at direct completion, across an authority
  *   switch and with no copy in the store. Missing bodies and symlink escapes
  *   refuse; content edits do not act as an integrity gate.
- * - `retained evidence at the acceptance consumer …`: the same properties at
- *   the real DB `handoff` / `accept` verbs of a real Git control harness.
+ * - `retained evidence at the completion consumer …`: the same properties at
+ *   the real DB `complete` operation of a real Git control harness.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -58,13 +59,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { registerCatalogEntity } from "./catalog.js";
-import { assertEvidenceInsidePlanArea, planAreaRoots, type HandoffEvidence } from "./coordination.js";
-import { readHandoffEvidence } from "./coordination-transitions.js";
+import { assertEvidenceInsidePlanArea, planAreaRoots } from "./coordination.js";
+import type { CompletionEvidence } from "./coordination-write.js";
+import { readCompletionEvidence } from "./coordination-transitions.js";
 import {
-  acceptExecutionPlan,
-  handoffExecutionPlan,
+  completeExecutionPlan,
   prepareExecutionPlan,
   progressExecutionPlan,
+  setCompleteWitnessGapForTest,
 } from "./execution-coordination.js";
 import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
@@ -80,9 +82,7 @@ import {
   type ExecutionPlanView,
   type ExecutionSessionRef,
   type ExecutionState,
-  type ExecutionToken,
 } from "./execution-store.js";
-import * as engineIndex from "./index.js";
 import { resolveSddDir } from "./path.js";
 import { backupStore } from "./store-activation.js";
 import { initializeStore, type StoreContext } from "./store-db.js";
@@ -118,7 +118,7 @@ function domainContext(context: StoreContext, caller: ExecutionCaller): Executio
 }
 
 function callerOf(workflowId: string): ExecutionCaller {
-  return { sessionId: `host-${workflowId}`, role: "coordinator", workflowId, planId: null };
+  return { sessionId: `host-${workflowId}`, role: "coordinator", workflowId };
 }
 
 /** One create request: the root entry plus the snapshot its plan rows come from. */
@@ -140,7 +140,7 @@ function creationInput(workflowId: string, planIds: string[]): { entry: Workflow
       })),
       delivery_kind: "development",
       branch: { source: `feature/${workflowId}`, target: "main" },
-    } as unknown as WorkflowSnapshot,
+    },
   };
 }
 
@@ -153,7 +153,7 @@ async function activeGraph(label: string): Promise<StoreContext> {
   for (const planId of [PLAN_A1, PLAN_A2, PLAN_B1]) {
     await registerCatalogEntity(
       context,
-      { kind: "plan", id: planId, title: `${planId} title`, rootKind: "plans", relativePath: `plans/${planId}.md` },
+      { kind: "plan", id: planId, title: `${planId} title`, rootKind: "plans", relativePath: `${planId}.md` },
       { operationId: `register-${planId}`, actor: "execution-consumers.test" },
     );
   }
@@ -237,8 +237,6 @@ describe("execution-authority-read \u2014 one exact read of the committed author
       WORKFLOW_B,
     ]);
     expect((read.data as ExecutionState).root.workflows.map((entry) => entry.id)).toEqual([WORKFLOW_A, WORKFLOW_B]);
-    // The published surface is this adapter, not a private copy of it.
-    expect(engineIndex.readExecutionAuthority).toBe(readExecutionAuthority);
   });
 
   test("a workflow selection returns that workflow's token and scope, never a sibling's", async () => {
@@ -286,8 +284,6 @@ describe("execution-authority-read \u2014 one exact read of the committed author
     expect(view.plan.id).toBe(PLAN_A2);
     expect(view.workflow.id).toBe(WORKFLOW_A);
     expect(view.coordination).toBeNull();
-    expect(view.session).toBeNull();
-    expect(view.executionLease).toBeNull();
     expect(view.integrationLease).toBeNull();
     expect(view.frozenInput).toBeNull();
     // The sibling plan of the same workflow is a different address, and a plan
@@ -486,7 +482,7 @@ async function registeredStore(label: string): Promise<StoreContext> {
             id: CROSS_PLAN,
             title: "Cross-domain accepted plan",
             rootKind: "plans",
-            relativePath: `plans/${CROSS_PLAN}.md`,
+            relativePath: `${CROSS_PLAN}.md`,
           },
         ],
         binding: { catalogKind: "plan", catalogId: CROSS_PLAN },
@@ -572,7 +568,7 @@ const QC_BODY = "reviewed QC body\n";
 const CONSOLIDATED_BODY = "consolidated QC body\n";
 const QA_BODY = "QA verdict body\n";
 
-/** The three handoff evidence bodies of one plan, under the CONFIGURED SDD
+/** The three completion evidence bodies of one plan, under the CONFIGURED SDD
  * resolution — the same resolution the containment boundary derives its roots
  * from. */
 function retainedBodies(harnessDir: string): { qc: string; consolidated: string; qa: string } {
@@ -586,13 +582,12 @@ function writeBody(path: string, text: string): void {
   writeFileSync(path, text, "utf8");
 }
 
-/** The plan session's handoff evidence request: paths and decisions only.
- * `revisions` default to placeholder SHAs the helper-level cases do not use;
- * the handoff consumer's fixture passes the Git revisions it pinned. */
-function handoffRequest(
+/** Ordinary completion evidence; helper-only checks use synthetic revisions,
+ * while the consumer fixture supplies the actual reviewed Git commits. */
+function completionRequest(
   bodies: { qc: string; consolidated: string; qa: string },
   revisions: { sourceSha: string; baseSha: string } = { sourceSha: "a".repeat(40), baseSha: "b".repeat(40) },
-): HandoffEvidence {
+): CompletionEvidence {
   return {
     source_sha: revisions.sourceSha,
     review_base: revisions.baseSha,
@@ -620,7 +615,7 @@ function refusalCodeOf(action: () => unknown): string {
  * recorded digests are provenance, not content seals.
  */
 describe("retained evidence path checks across the authority switch", () => {
-  test("handoff evidence stays in files and path containment remains enforced", async () => {
+  test("completion evidence stays in files and path containment remains enforced", async () => {
     // A store that holds an issue/catalog authority and no execution authority
     // yet: the evidence bodies are created before activation.
     const context = await legacyStore("retained-evidence-switch");
@@ -633,9 +628,8 @@ describe("retained evidence path checks across the authority switch", () => {
     await initializeExecutionAuthority(context);
     expect(await resolveExecutionReadRoute(context)).toBe("execution");
 
-    // The handoff route's own boundary: containment and existence against the
-    // plan's own areas, derived from the configured resolution.
-    const input = readHandoffEvidence(handoffRequest(bodies));
+    // The direct completion boundary checks the plan's own configured areas.
+    const input = readCompletionEvidence(completionRequest(bodies));
     expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_paths)).not.toThrow();
 
 
@@ -661,9 +655,10 @@ describe("retained evidence path checks across the authority switch", () => {
 
     // Evidence must exist when it is submitted.
     expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(roots, [bodies.qc]))).toBe("coordination.invalid-input");
-    // The request itself refuses a path with nothing behind it, so a missing
-    // report never reaches an accepted approval.
-    expect(refusalCodeOf(() => readHandoffEvidence(handoffRequest(bodies)))).toBe("coordination.invalid-input");
+    // Validated completion paths still go through the real existence boundary.
+    expect(refusalCodeOf(() => assertEvidenceInsidePlanArea(
+      roots, readCompletionEvidence(completionRequest(bodies)).evidence_paths,
+    ))).toBe("coordination.invalid-input");
   });
 
   test("retained evidence path containment refuses a symlink escape", async () => {
@@ -687,66 +682,28 @@ describe("retained evidence path checks across the authority switch", () => {
 });
 
 /* ------------------------------------------------------------------------ *
- * Retained SDD evidence at the acceptance consumer (S9)
+ * Retained SDD evidence at the completion consumer (S9)
  * ------------------------------------------------------------------------ */
 
 const RETAINED_WORKFLOW = "wf-consumers-retained";
 
-type RetainedSeat = { caller: ExecutionCaller; session: ExecutionSessionRef };
+type RetainedCoordinator = { caller: ExecutionCaller; session: ExecutionSessionRef };
 
-type RetainedHandoffFixture = {
+type RetainedCompletionFixture = {
   context: StoreContext;
   harnessRoot: string;
   worktreePath: string;
   sourceSha: string;
   baseSha: string;
-  coordinator: RetainedSeat;
-  plan: RetainedSeat;
+  coordinator: RetainedCoordinator;
 };
 
-/** One git command in a fixture repository; returns its trimmed stdout. */
+/** One git command in a disposable fixture repository. */
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
-/** The reviewed Assignment's C1 header block declares this store's harness,
- * workflow, plan and worktree. Prepare retains that semantic scope. */
-function writeRetainedAssignment(harnessRoot: string, worktreePath: string): string {
-  const planPath = join(harnessRoot, "plans", `${RETAINED_PLAN}.md`);
-  const sddDir = join(harnessRoot, "sdd", RETAINED_PLAN);
-  mkdirSync(dirname(planPath), { recursive: true });
-  mkdirSync(sddDir, { recursive: true });
-  writeFileSync(planPath, `# ${RETAINED_PLAN}\n`, "utf8");
-  const headers: Record<string, string> = {
-    "Execution scope": "plan",
-    "Execute as": "project-manager",
-    Delegation: "allowed",
-    "Control harness root": harnessRoot,
-    "Workflow id": RETAINED_WORKFLOW,
-    "Plan id": RETAINED_PLAN,
-    "Plan Path": planPath,
-    "Worktree path": worktreePath,
-    "Working branch": `feature/${RETAINED_PLAN}`,
-    "SDD dir": sddDir,
-    "QA gate": "mandatory",
-    "Findings cleanup": "allow-residual",
-    "Prepare gate": "go",
-  };
-  const assignmentPath = join(harnessRoot, "assignments", `${RETAINED_PLAN}.md`);
-  mkdirSync(dirname(assignmentPath), { recursive: true });
-  writeFileSync(
-    assignmentPath,
-    `${Object.entries(headers)
-      .map(([header, value]) => `**${header}**: ${value}`)
-      .join("\n")}\n`,
-    "utf8",
-  );
-  return assignmentPath;
-}
-
-/** The three handoff evidence bodies of the retained plan, under the CONFIGURED
- * SDD resolution of the fixture's control harness. */
-function retainedHandoffBodies(harnessRoot: string): { qc: string; consolidated: string; qa: string } {
+function retainedCompletionBodies(harnessRoot: string): { qc: string; consolidated: string; qa: string } {
   const sddDir = resolveSddDir(harnessRoot, RETAINED_PLAN);
   mkdirSync(join(sddDir, "review"), { recursive: true });
   return {
@@ -756,27 +713,24 @@ function retainedHandoffBodies(harnessRoot: string): { qc: string; consolidated:
   };
 }
 
-/** The plan token one seat reads right now (the CAS every call pins). */
-async function retainedPlanToken(context: StoreContext, seat: RetainedSeat): Promise<ExecutionToken> {
-  const read = await readExecutionPlan(domainContext(context, seat.caller), seat.session, RETAINED_PLAN);
-  return read.token;
+async function retainedPlanRead(fixture: RetainedCompletionFixture) {
+  return readExecutionPlan(
+    domainContext(fixture.context, fixture.coordinator.caller),
+    fixture.coordinator.session,
+    RETAINED_PLAN,
+  );
 }
 
-/**
- * A real Git control harness in its own temporary control root: the retained
- * plan is registered, prepared from its reviewed Assignment, bound to its plan
- * session (which claims the execution lease) and reported InReview — the state
- * the DB handoff acceptance transition starts from. Nothing here is a stub: the
- * authority is ACTIVE, the checkout is a real worktree and the evidence lives
- * under the configured SDD dir.
- */
-async function retainedHandoffFixture(label: string): Promise<RetainedHandoffFixture> {
+/** A real standalone checkout, configured and started by its sole coordinator. */
+async function retainedCompletionFixture(label: string): Promise<RetainedCompletionFixture> {
   const repoRoot = realpathSync(mkdtempSync(join(ROOT, `${label}-`)));
   git(repoRoot, ["init", "-q", "-b", "main"]);
   git(repoRoot, ["-c", "user.email=mstar@example.com", "-c", "user.name=mstar", "commit", "-q", "--allow-empty", "-m", "init"]);
   const harnessRoot = join(repoRoot, ".mstar");
-  mkdirSync(harnessRoot, { recursive: true });
-  const context: StoreContext = { harnessDir: repoRoot };
+  const planPath = join(harnessRoot, "plans", `${RETAINED_PLAN}.md`);
+  mkdirSync(dirname(planPath), { recursive: true });
+  writeFileSync(planPath, `# ${RETAINED_PLAN}\n`);
+  const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
@@ -787,12 +741,11 @@ async function retainedHandoffFixture(label: string): Promise<RetainedHandoffFix
       id: RETAINED_PLAN,
       title: `${RETAINED_PLAN} title`,
       rootKind: "plans",
-      relativePath: `plans/${RETAINED_PLAN}.md`,
+      relativePath: `${RETAINED_PLAN}.md`,
     },
     { operationId: `register-${label}`, actor: "execution-consumers.test" },
   );
 
-  // The plan's own checkout: the source_sha a handoff pins is this HEAD.
   const worktreePath = join(repoRoot, "wt-retained");
   git(repoRoot, ["worktree", "add", "-q", "-b", `feature/${RETAINED_PLAN}`, worktreePath]);
   writeFileSync(join(worktreePath, "slice.txt"), "reviewed slice\n", "utf8");
@@ -805,7 +758,6 @@ async function retainedHandoffFixture(label: string): Promise<RetainedHandoffFix
     sessionId: "host-retained-coordinator",
     role: "coordinator",
     workflowId: RETAINED_WORKFLOW,
-    planId: null,
   };
   const created = await createExecutionWorkflow(domainContext(context, coordinatorCaller), {
     entry: { id: RETAINED_WORKFLOW, type: "plan", started_at: TS, dir: `workflows/${RETAINED_WORKFLOW}` },
@@ -819,140 +771,160 @@ async function retainedHandoffFixture(label: string): Promise<RetainedHandoffFix
       plans: [{ id: RETAINED_PLAN, title: `${RETAINED_PLAN} title`, file: `plans/${RETAINED_PLAN}.md`, status: "Todo" }],
       delivery_kind: "development",
       branch: { base: "main", source: `feature/${RETAINED_PLAN}`, target: "main" },
-    } as unknown as WorkflowSnapshot,
+    },
     expected: initialized.token,
     operationId: `create-${label}`,
   });
-  const workflow = created.data.workflows[0]!;
   const bound = await bindExecutionSession(domainContext(context, coordinatorCaller), {
     workflowId: RETAINED_WORKFLOW,
-    planId: null,
-    role: "coordinator",
-    expected: workflow.workflowToken,
+    expected: created.data.workflows[0]!.workflowToken,
     operationId: `bind-coordinator-${label}`,
   });
-  // The plan's own token, read at the state the prepare runs against (the bind
-  // above moved the workflow revision, not the plan's).
-  const planTokenAtPrepare = (await readExecutionState(context)).data.workflows[0]!.planTokens[RETAINED_PLAN]!;
-  const coordinator: RetainedSeat = { caller: coordinatorCaller, session: bound.data };
+  const fixture: RetainedCompletionFixture = {
+    context, harnessRoot, worktreePath, sourceSha, baseSha,
+    coordinator: { caller: coordinatorCaller, session: bound.data },
+  };
   await prepareExecutionPlan(domainContext(context, coordinatorCaller), {
     operationId: `prepare-${label}`,
-    session: coordinator.session,
-    expected: planTokenAtPrepare,
+    session: bound.data,
+    expected: (await retainedPlanRead(fixture)).token,
     planId: RETAINED_PLAN,
-    operation: { kind: "prepare", assignmentPath: writeRetainedAssignment(harnessRoot, worktreePath) },
+    operation: {
+      kind: "prepare",
+      config: { worktreePath, workingBranch: `feature/${RETAINED_PLAN}`, qaGate: "mandatory" },
+    },
   });
-
-  // The plan session's bind claims the execution lease of the plan's own scope.
-  const planCaller: ExecutionCaller = {
-    sessionId: "host-retained-plan",
-    role: "plan-pm",
-    workflowId: RETAINED_WORKFLOW,
-    planId: RETAINED_PLAN,
-  };
-  const planSession = await bindExecutionSession(domainContext(context, planCaller), {
-    workflowId: RETAINED_WORKFLOW,
-    planId: RETAINED_PLAN,
-    role: "plan-pm",
-    expected: await retainedPlanToken(context, coordinator),
-    operationId: `bind-plan-${label}`,
-  });
-  const plan: RetainedSeat = { caller: planCaller, session: planSession.data };
-  await progressExecutionPlan(domainContext(context, planCaller), {
-    operationId: `progress-${label}`,
-    session: plan.session,
-    expected: await retainedPlanToken(context, plan),
-    planId: RETAINED_PLAN,
-    operation: { kind: "progress", progress: { status: "InReview", summary: "reviewed", evidence_paths: [] } },
-  });
-  return { context, harnessRoot, worktreePath, sourceSha, baseSha, coordinator, plan };
+  for (const status of ["InProgress", "InReview"] as const) {
+    await progressExecutionPlan(domainContext(context, coordinatorCaller), {
+      operationId: `progress-${status}-${label}`,
+      session: bound.data,
+      expected: (await retainedPlanRead(fixture)).token,
+      planId: RETAINED_PLAN,
+      operation: { kind: "progress", progress: { status, summary: "reviewed", evidence_paths: [] } },
+    });
+  }
+  return fixture;
 }
 
-/** One plan-session `handoff` of the retained fixture's plan. */
-async function retainedHandoff(
-  fixture: RetainedHandoffFixture,
+/** Direct completion, with no plan identity or ownership-transfer ceremony. */
+async function retainedComplete(
+  fixture: RetainedCompletionFixture,
   bodies: { qc: string; consolidated: string; qa: string },
   operationId: string,
 ) {
-  return handoffExecutionPlan(domainContext(fixture.context, fixture.plan.caller), {
+  return completeExecutionPlan(domainContext(fixture.context, fixture.coordinator.caller), {
     operationId,
-    session: fixture.plan.session,
-    expected: await retainedPlanToken(fixture.context, fixture.plan),
+    session: fixture.coordinator.session,
+    expected: (await retainedPlanRead(fixture)).token,
     planId: RETAINED_PLAN,
     operation: {
-      kind: "handoff",
-      evidence: handoffRequest(bodies, { sourceSha: fixture.sourceSha, baseSha: fixture.baseSha }),
+      kind: "complete",
+      evidence: completionRequest(bodies, { sourceSha: fixture.sourceSha, baseSha: fixture.baseSha }),
     },
   });
 }
 
-/** One coordinator `accept` of the named handoff attempt. */
-async function retainedAccept(fixture: RetainedHandoffFixture, handoffId: string, operationId: string) {
-  return acceptExecutionPlan(domainContext(fixture.context, fixture.coordinator.caller), {
-    operationId,
-    session: fixture.coordinator.session,
-    expected: await retainedPlanToken(fixture.context, fixture.coordinator),
-    planId: RETAINED_PLAN,
-    operation: { kind: "accept", handoffId },
-  });
-}
-
-/**
- * The acceptance transition, not the helpers: these cases drive the real DB
- * `handoff` / `accept` verbs of a real fixture and assert what they RECORD and
- * what they REFUSE.
- */
-describe("retained evidence at the acceptance consumer", () => {
-  test("retained evidence: handoff records configured SDD paths and accepts after report edits", async () => {
-    const fixture = await retainedHandoffFixture("retained-evidence-consumer-ok");
+describe("retained evidence at the completion consumer", () => {
+  test("retained evidence: complete records current configured SDD bodies and replay keeps frozen provenance after edits", async () => {
+    const fixture = await retainedCompletionFixture("retained-evidence-consumer-ok");
     try {
-      const bodies = retainedHandoffBodies(fixture.harnessRoot);
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
-      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited before completion\n`);
       writeBody(bodies.qa, QA_BODY);
+      const reviewedDigest = createHash("sha256").update(readFileSync(bodies.consolidated)).digest("hex");
 
-      const handed = await retainedHandoff(fixture, bodies, "handoff-retained-ok");
-      const handoff = handed.data.coordination!.handoff!;
-      expect(handoff.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
-      expect(handoff.state).toBe("submitted");
-
-      writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited\n`);
-      const accepted = await retainedAccept(fixture, handoff.id, "accept-retained-ok");
-      expect(accepted.data.coordination!.handoff!.state).toBe("accepted");
+      const completed = await retainedComplete(fixture, bodies, "complete-retained-ok");
+      const completion = completed.data.coordination?.completion;
+      if (completion === undefined) throw new Error("direct completion did not record its evidence");
+      expect(completed.data.plan.status).toBe("Done");
+      expect(completion).toMatchObject({
+        source_branch: `feature/${RETAINED_PLAN}`,
+        source_sha: fixture.sourceSha,
+        worktree_path: fixture.worktreePath,
+        review_base: fixture.baseSha,
+        review_head: fixture.sourceSha,
+        completed_by: fixture.coordinator.caller.sessionId,
+        qc: {
+          decision: "Approve",
+          consolidated: { path: bodies.consolidated, sha256: reviewedDigest },
+        },
+        qa: { gate: "mandatory", decision: "pass", report: { path: bodies.qa } },
+      });
+      expect(completion.qc.reports.map((ref) => ref.path)).toEqual([bodies.qc]);
+      expect(completion.integration).toBeUndefined();
+      expect(completed.data.plan.metadata).toMatchObject({
+        working_branch: `feature/${RETAINED_PLAN}`, worktree_path: fixture.worktreePath,
+      });
+      const committed = await retainedPlanRead(fixture);
+      writeBody(bodies.consolidated, `${CONSOLIDATED_BODY}edited after completion\n`);
+      const replay = await retainedComplete(fixture, bodies, "complete-retained-ok");
+      expect(replay.data).toEqual(completed.data);
+      expect(replay.data.coordination?.completion?.completed_at).toBe(completion.completed_at);
+      expect(await retainedPlanRead(fixture)).toEqual(committed);
     } finally {
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }
   });
 
-  test("retained evidence: missing and escaped bodies cannot be handed off", async () => {
-    const fixture = await retainedHandoffFixture("retained-evidence-consumer-refusals");
+  test("retained evidence: missing and escaped bodies refuse without row changes; corrected evidence completes", async () => {
+    const fixture = await retainedCompletionFixture("retained-evidence-consumer-refusals");
     try {
-      const bodies = retainedHandoffBodies(fixture.harnessRoot);
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
       writeBody(bodies.qc, QC_BODY);
       writeBody(bodies.consolidated, CONSOLIDATED_BODY);
       writeBody(bodies.qa, QA_BODY);
-
-      // (1) A body symlinked OUT of the plan's own areas is refused by the
-      // consumer's containment boundary, even though the link resolves to real
-      // bytes the digest step would happily read.
+      const before = await retainedPlanRead(fixture);
       const outside = join(fixture.context.harnessDir, "outside-body.md");
       writeBody(outside, "a body outside every plan area\n");
       const escaped = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "escaped.md");
       symlinkSync(outside, escaped);
-      const escapedRefusal = await refusalOf(() =>
-        retainedHandoff(fixture, { ...bodies, qa: escaped }, "handoff-retained-escaped"),
-      );
-      expect(escapedRefusal.code).toBe("coordination.path-mismatch");
+      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, qa: escaped }, "complete-retained-escaped")))
+        .toEqual({ code: "coordination.path-mismatch" });
+      expect(await retainedPlanRead(fixture)).toEqual(before);
       rmSync(escaped);
-
-      // (2) A missing body never reaches the acceptance work: the request gate
-      // refuses the path with nothing behind it.
       rmSync(bodies.qa);
-      const missingRefusal = await refusalOf(() => retainedHandoff(fixture, bodies, "handoff-retained-missing"));
-      expect(missingRefusal.code).toBe("coordination.invalid-input");
+      expect(await refusalOf(() => retainedComplete(fixture, bodies, "complete-retained-missing")))
+        .toEqual({ code: "coordination.invalid-input" });
+      expect(await retainedPlanRead(fixture)).toEqual(before);
       writeBody(bodies.qa, QA_BODY);
-
+      const completed = await retainedComplete(fixture, bodies, "complete-retained-missing");
+      expect(completed.data.plan.status).toBe("Done");
+      expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
     } finally {
+      rmSync(fixture.context.harnessDir, { recursive: true, force: true });
+    }
+  });
+
+  test("retained evidence: an alias moved outside the plan area during the proof gap refuses and can be corrected", async () => {
+    const fixture = await retainedCompletionFixture("retained-evidence-gap-alias");
+    try {
+      const bodies = retainedCompletionBodies(fixture.harnessRoot);
+      writeBody(bodies.qc, QC_BODY);
+      writeBody(bodies.consolidated, CONSOLIDATED_BODY);
+      writeBody(bodies.qa, QA_BODY);
+      const outside = join(fixture.context.harnessDir, "outside-gap-body.md");
+      writeBody(outside, "outside the declared evidence areas\n");
+      const alias = join(resolveSddDir(fixture.harnessRoot, RETAINED_PLAN), "qa-alias.md");
+      symlinkSync(bodies.qa, alias);
+      const before = await retainedPlanRead(fixture);
+      setCompleteWitnessGapForTest(() => {
+        rmSync(alias);
+        symlinkSync(outside, alias);
+      });
+      expect(await refusalOf(() => retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap")))
+        .toEqual({ code: "coordination.path-mismatch" });
+      expect(await retainedPlanRead(fixture)).toEqual(before);
+      setCompleteWitnessGapForTest(undefined);
+      rmSync(alias);
+      symlinkSync(bodies.qa, alias);
+      const completed = await retainedComplete(fixture, { ...bodies, qa: alias }, "complete-retained-gap");
+      expect(completed.data.plan.status).toBe("Done");
+      expect(completed.data.coordination?.completion?.qa.report.path).toBe(bodies.qa);
+      expect(completed.data.coordination?.completion?.qa.report.sha256)
+        .toBe(createHash("sha256").update(QA_BODY).digest("hex"));
+    } finally {
+      setCompleteWitnessGapForTest(undefined);
       rmSync(fixture.context.harnessDir, { recursive: true, force: true });
     }
   });

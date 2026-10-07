@@ -104,7 +104,7 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
   const findings = Array.isArray(state?.residualFindings) ? state.residualFindings : null
   const visibleFindings = findings === null ? null : findings.slice(0, FINDINGS_CAP)
   const hiddenFindings = findings === null ? 0 : Math.max(0, findings.length - FINDINGS_CAP)
-  const leases = Array.isArray(state?.leases) ? state.leases : []
+  const rowScopes = Array.isArray(state?.rowScopes) ? state.rowScopes : []
   const knowledge = state?.knowledge ?? null
   // The served binding outranks the last emission's own record; an
   // acknowledged pick outranks a served binding that has not caught up yet
@@ -230,17 +230,17 @@ export function StateSection({ t, state, enforcement, selection, pick, select }:
         <dd className={css.defValue} data-field="integration-worktree-path">{str(state?.integrationWorktreePath) ?? t('state.none')}</dd>
       </dl>
 
-      <h3 className={css.subTitle}>{t('state.leases')}</h3>
-      {leases.length === 0
-        ? <p className={css.empty} data-mstar-empty="no-leases">{t('state.none')}</p>
+      <h3 className={css.subTitle}>{t('state.rowScope')}</h3>
+      {rowScopes.length === 0
+        ? <p className={css.empty} data-mstar-empty="no-row-scope">{t('state.none')}</p>
         : (
           <ul className={css.leaseList}>
-            {leases.map((lease, i) => (
-              <li key={str(lease.planId) ?? `lease-${i}`} data-lease-plan={str(lease.planId) ?? 'unknown'}>
-                <span className={css.leasePlan}>{str(lease.planId) ?? t('panel.unknown')}</span>
-                <span className={css.leaseHolder}>{str(lease.holder) ?? t('panel.unknown')}</span>
-                {str(lease.worktreePath) !== null
-                  ? <span className={css.leaseWorktree}>{lease.worktreePath}</span>
+            {rowScopes.map((scope, i) => (
+              <li key={str(scope.planId) ?? `scope-${i}`} data-row-scope-plan={str(scope.planId) ?? 'unknown'}>
+                <span className={css.leasePlan}>{str(scope.planId) ?? t('panel.unknown')}</span>
+                <span className={css.leaseHolder}>{str(scope.workingBranch) ?? t('panel.unknown')}</span>
+                {str(scope.worktreePath) !== null
+                  ? <span className={css.leaseWorktree}>{scope.worktreePath}</span>
                   : null}
               </li>
             ))}

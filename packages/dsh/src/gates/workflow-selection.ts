@@ -4,8 +4,8 @@
  *
  * The ACTIVE-SET resolver (`resolveActiveWorkflow`) picks the lifecycle a
  * session writes under, from ONE registry (`status.json` `workflows[]`) by
- * the locked order: lease (an `execution_lease` whose opaque `holder` equals
- * the hint's, or whose `worktree_path` contains its cwd) → cwd (a
+ * the locked order: row scope (a plan row whose `metadata.worktree_path`
+ * contains the hint's cwd) → cwd (a
  * `control_worktree_path` containing it) → the session's durable
  * `selectedWorkflowId` → the only active entry. Each automatic rung needs
  * EXACTLY ONE distinct match; zero or several fall through, and nothing
@@ -48,7 +48,6 @@ import {
   resolveHarnessDir,
   executionContextFor,
   resumeExecutionSession,
-  validateExecutionLease,
   validateWorkflowEntry,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
@@ -66,7 +65,7 @@ export type ActiveWorkflowSelection = WorkflowSelectionView
  * What the carrying session can tell the resolver (structural — no
  * dsh-session import, so cold/raw Session consumers can build one too).
  * `sessionId` is the durable picker key (`session.header.id`), NEVER a
- * holder fallback; `leaseHolder` is the dispatching dsh `Agent.id` when an
+ * scope fallback;
  * Agent exists; `selectedWorkflowId` is the session's durable pick (loaded
  * by the caller from the engine-status store). Every field is optional —
  * an omitted hint just misses the corresponding rung.
@@ -74,7 +73,6 @@ export type ActiveWorkflowSelection = WorkflowSelectionView
 export interface SessionHint {
   cwd?: string
   sessionId?: string
-  leaseHolder?: string
   selectedWorkflowId?: string
 }
 
@@ -223,16 +221,19 @@ function within(root: string, cwd: string): boolean {
   return rel !== '' && !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)
 }
 
-/** The structurally valid `execution_lease` rows of one snapshot (invalid ones are no evidence). */
-function validLeases(snapshot: Record<string, unknown>): Record<string, unknown>[] {
+/** The structurally valid row scopes of one snapshot (unrecorded rows are no evidence). */
+function validRowScopes(snapshot: Record<string, unknown>): Array<{ worktreePath: string; workingBranch: string }> {
   if (!Array.isArray(snapshot.plans)) return []
-  const leases: Record<string, unknown>[] = []
+  const scopes: Array<{ worktreePath: string; workingBranch: string }> = []
   for (const row of snapshot.plans) {
-    const lease = asRecord(asRecord(row)?.execution_lease)
-    if (lease === undefined || !validateExecutionLease(lease).ok) continue
-    leases.push(lease)
+    const metadata = asRecord(asRecord(row)?.metadata)
+    const worktreePath = typeof metadata?.worktree_path === 'string' ? metadata.worktree_path : undefined
+    const workingBranch = typeof metadata?.working_branch === 'string' ? metadata.working_branch : undefined
+    if (worktreePath === undefined || worktreePath.trim() === '') continue
+    if (workingBranch === undefined || workingBranch.trim() === '') continue
+    scopes.push({ worktreePath, workingBranch })
   }
-  return leases
+  return scopes
 }
 
 /**
@@ -264,33 +265,29 @@ function soleEntry(matches: Map<string, ActiveEntry>): ActiveEntry | undefined {
 }
 
 /**
- * The two automatic rungs (lease → cwd), each requiring EXACTLY ONE distinct
- * workflow: `undefined` means the rung did not decide (zero or several
- * matches, an omitted hint field, or no automatic evidence) and the caller
- * proceeds to explicit/unique. The two candidate sets are collected
- * independently in ONE pass: an entry that matched the lease rung is still
- * evaluated for the cwd rung, so an ambiguous lease rung (two holders, or a
- * holder plus a lease-worktree match) can still be decided by a unique
+ * The two automatic rungs (row scope → cwd), each requiring EXACTLY ONE
+ * distinct workflow: `undefined` means the rung did not decide (zero or
+ * several matches, an omitted hint field, or no automatic evidence) and the
+ * caller proceeds to explicit/unique. The two candidate sets are collected
+ * independently in ONE pass: an entry that matched the row-scope rung is still
+ * evaluated for the cwd rung, so an ambiguous row-scope rung (two recorded
+ * scopes containing the cwd) can still be decided by a unique
  * `integration_worktree_path`. Each entry's snapshot is read at most once per
  * call, and only when a hint field could actually use it.
  */
 function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWorkflowSelection | undefined {
   const cwd = hint.cwd === '' ? undefined : hint.cwd
-  const holder = hint.leaseHolder === '' ? undefined : hint.leaseHolder
-  if (cwd === undefined && holder === undefined) return undefined
-  const leaseMatches = new Map<string, ActiveEntry>()
+  if (cwd === undefined) return undefined
+  const scopeMatches = new Map<string, ActiveEntry>()
   const cwdMatches = new Map<string, ActiveEntry>()
   for (const entry of source.entries) {
     const snapshot = source.snapshotOf(entry)
     if (snapshot === undefined) continue
-    const leases = validLeases(snapshot)
-    if (
-      (holder !== undefined && leases.some((lease) => lease.holder === holder)) ||
-      (cwd !== undefined && leases.some((lease) => within(String(lease.worktree_path), cwd)))
-    ) {
-      leaseMatches.set(entry.id, entry)
+    const scopes = validRowScopes(snapshot)
+    if (cwd !== undefined && scopes.some((scope) => within(scope.worktreePath, cwd))) {
+      scopeMatches.set(entry.id, entry)
     }
-    // Rung 2 is collected independently: a lease match never removes the
+    // Rung 2 is collected independently: a row-scope match never removes the
     // entry from the cwd candidate set.
     const integrationWorktree = snapshot.integration_worktree_path
     if (cwd !== undefined && typeof integrationWorktree === 'string' && within(integrationWorktree, cwd)) {
@@ -299,8 +296,8 @@ function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWor
   }
   // Several matches at a rung are ambiguous — never arbitrated by array
   // order or the longest prefix; the next rung decides.
-  const byLease = soleEntry(leaseMatches)
-  if (byLease !== undefined) return { kind: 'active', workflowId: byLease.id, dir: byLease.dir }
+  const byScope = soleEntry(scopeMatches)
+  if (byScope !== undefined) return { kind: 'active', workflowId: byScope.id, dir: byScope.dir }
   const byCwd = soleEntry(cwdMatches)
   return byCwd === undefined ? undefined : { kind: 'active', workflowId: byCwd.id, dir: byCwd.dir }
 }
@@ -308,7 +305,7 @@ function automaticBinding(source: ActiveSetSource, hint: SessionHint): ActiveWor
 /**
  * The normalized ACTIVE-SET source the binding order below runs on: the
  * validated registry rows plus each entry's materialized state (the plan rows
- * with their `execution_lease` and the lifecycle's integration topology). The
+ * with their own recorded scope and the lifecycle's integration topology). The
  * FILE route assembles it from `status.json` + the workflow snapshots; the
  * execution DB route normalizes `readExecutionAuthority`'s state into the SAME
  * shape (primary spec §5: source consumers normalize into the existing pure
@@ -507,7 +504,7 @@ export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): A
  * - `active` — the execution authority is ACTIVE. The state comes from
  *   `readExecutionAuthority` in ONE read transaction and is normalized into
  *   the SAME active-set input the file route builds (registry rows, plan rows
- *   with their `execution_lease`, integration topology), so the binding order
+ *   with their own recorded scope, integration topology), so the binding order
  *   is shared and can never disagree between the routes. The retired
  *   `status.json` / snapshots are NOT read: the DB registry is the whole
  *   active set, its ids are addressed exactly (no newest/unique guess), and a
@@ -551,11 +548,11 @@ export function refusalOf(error: unknown): { code: string; message: string } {
 }
 
 /** One DB plan view as the plan-row shape the binding rule and the gate
- * readers consume (`id`/`status`/`metadata` + the row's `execution_lease`).
- * The DB stores the lease beside the row, never inside it (§2.2), so the
- * adapter re-joins them here — the normalization §5 asks for. */
+ * readers consume (`id`/`status`/`metadata`). The DB stores the row's
+ * worktree/branch scope in its metadata, so the adapter consumes it there —
+ * the normalization §5 asks for. */
 function planRowOf(view: ExecutionPlanView): Record<string, unknown> {
-  return { ...(view.plan as Record<string, unknown>), execution_lease: view.executionLease }
+  return { ...(view.plan as Record<string, unknown>) }
 }
 
 /** One DB lifecycle's materialized state as the snapshot shape the file route
@@ -729,8 +726,7 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
       source: 'host',
       sessionId,
       workflowId: executionBinding.session.workflowId,
-      role: executionBinding.session.role,
-      planId: executionBinding.session.planId,
+      role: 'coordinator',
     })
     const resumed = await resumeExecutionSession(context, executionBinding.session)
     if (resumed.storeId !== source.storeId || resumed.epoch !== source.epoch) return null

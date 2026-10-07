@@ -24,7 +24,7 @@ description: Morning Star lifecycle and authorization authority — source prior
 
 1. 当轮用户显式指令  
 2. 项目 `AGENTS.md` / `CLAUDE.md`  
-3. `{KNOWLEDGE_DIR}/README.md` 索引（**若该文件存在**；发现 Active 行并仅跟随与当轮相关的文档）  
+3. 当轮相关 knowledge 文档（登记/完整性查 store.db catalog：`mstar catalog list` / `show`；`{KNOWLEDGE_DIR}/README.md` 若存在仅为散文导览，无登记行义务）
 4. `mstar-*` skills（本 skill + 专题）  
 5. `mstar-roles` 角色正文  
 
@@ -55,10 +55,10 @@ Routing eval（宿主插件内回归用，**非**运行时必读）→ `.cursor/
 
 `Todo` → `InProgress` → `InReview` → `Done` | `Blocked`
 
-- **`Done`**：仅 `@project-manager` 或 `@qa-engineer`。
-- 实现类可设 **`InReview`**，不可设 **`Done`**。
+- Done sign-off belongs to project-manager or qualified QA evidence; the authoritative row write uses the sole primary coordinator's direct complete operation with QC/QA and declared-route proof. Leaf implementers never write Done.
+- The primary coordinator uses revisable prepare, progress and direct complete; no per-row PM identity/bind/claim, sealed Assignment or transfer protocol. Default cleanup is allow-residual. Ordinary metadata/defaults need no ceremonial prepare record.
 
-`status.json`（v2 根）/ workflow snapshot / project register 字段与 residual → **`mstar-artifacts`**。
+ACTIVE 状态字段权威在 store.db 的 root register / workflow / plan 行；`status.json` / snapshot 仅 pre-activation 或 engine-absent 回退，project register 无条件退役为迁移历史。字段与 issue severity/lifecycle → **`mstar-artifacts`**。
 
 ## Task category（路由摘要）
 
@@ -74,7 +74,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `docs` | `@product-manager` / `@architect` / `@writing-specialist` |
 | `audit` | `@code-reviewer`（mstar-audit 承载；大型仓库经 Assignment `Delegation: allowed (scout/explore only, read-only)` 扇出只读 scout；read-only advisory；不进入状态机） |
 
-**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + `status.json` 登记（见 **`mstar-conventions`**）。workflow 注册本身是 authorized domain operation（经授权 producer 的引擎原语，不自创第二注册机制），语义 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
+**硬规则**：`quick` **从不**跳过 `specify → clarify → plan`；禁止把新 CLI/API/多模块/新测例标为 `quick`。已启用 `{HARNESS_DIR}` 时，首次 implement 前须有主 plan 路径 + workflow/plan 行登记（ACTIVE 在 store.db，经 `mstar workflow register` 等公共注册动词；`status.json` 仅 pre-activation / engine-absent 回退，见 **`mstar-conventions`**）。workflow 注册本身是 authorized domain operation（经授权 producer 的引擎原语，不自创第二注册机制），语义 → 冻结契约 `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
 ## `@explore` 边界
 
@@ -86,22 +86,22 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 
 可追踪清单（plan `tasks` 或 Todo）；偏离时 PM 拉回；完成前须可核对证据（实现侧自检见 **`mstar-coding-behavior`**；门禁证据见 **`mstar-phase-gates`** / **`mstar-review-qc`**）。
 
-**Durable Roadmap Gate**：凡声明“分批 / 后续 / next plan / later / temporary workaround”的非热修任务，必须在可追踪载体写清后续路线（批次、依赖、owner/触发条件、完成定义）。可接受载体：`{PLAN_DIR}` 主 plan、CreatePlan mirror、`status.json`/residual、PM Task Board，或 `{HARNESS_DIR}/store.db` 的 milestone —— milestone ID + 关联 issue 的 acceptance/owner/dependency/trigger 证据（`mstar milestone` 家族写入与只读 rollup；规则唯一权威 → **`mstar-project-governance`「Milestone」**，本 skill 不复述）。只在对话或 Completion Report 里说“以后做”不算可追踪，不能进入 implement GO 或 Done。
+**Durable Roadmap Gate**：凡声明“分批 / 后续 / next plan / later / temporary workaround”的非热修任务，必须在可追踪载体写清后续路线（批次、依赖、owner/触发条件、完成定义）。可接受载体：`{PLAN_DIR}` 主 plan、CreatePlan mirror、store.db issue、PM Task Board，或 `{HARNESS_DIR}/store.db` 的 milestone —— milestone ID + 关联 issue 的 acceptance/owner/dependency/trigger 证据（`mstar milestone` 家族写入与只读 rollup；规则唯一权威 → **`mstar-project-governance`「Milestone」**，本 skill 不复述）。只在对话或 Completion Report 里说“以后做”不算可追踪，不能进入 implement GO 或 Done。
 
 ## 专题 skill 索引
 
 | Skill | 职责 |
 |-------|------|
 | `mstar-harness-core` | 本文件：入口、状态机、Task category、explore、索引、护栏 |
-| `mstar-use-cli` | CLI 契约（agent 面向）：任务→命令族索引、前置条件阶梯、两条协议序列、退出码 0 / 1 / 2 与稳定拒绝码读法；flags 一律以命令自身 `--help` 为准 |
+| `mstar-use-cli` | Intent-first command families, ordinary coordinator operations, three completion routes, CAS/receipts, exit/refusal codes; exact flags from source-built verb help |
 | `mstar-phase-gates` | per-plan 双阶段门禁：Prepare/Execute、意图门禁、hotfix、可验证编辑 |
 | `mstar-iteration` | 迭代管理：Phase 1–5（start / Autonomous Execute / iteration-close / PR delivery / PR merge-ready loop） |
 | `mstar-dispatch-gates` | 派发、Delegation、反递归、依赖与隔离驱动并行、SDD 路径 plan QC 强制 tri |
-| `mstar-engine-legacy` | 条件契约档案（engine-absent fallback）：status v1→v2 字段历史、lease 协议全文、各宿主 N=3/N=1 重述、反递归全清单、Engine-check 样板；engine 激活时不加载 |
+| `mstar-engine-legacy` | Engine-absent safety/field-history archive; no recreated claim/bind/transfer fallback |
 | `mstar-sdd` | Subagent-driven development：file handoff、per-task review、ledger |
 | `mstar-branch-worktree` | 功能分支、worktree、QC/QA 检出对齐 |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
-| `mstar-artifacts` | 主 plan、review bundle / durable summaries、`status.json`（v2 根）+ workflow snapshots + project register、residual、knowledge |
+| `mstar-artifacts` | 主 plan、review bundle / durable summaries、store.db root register/plan 行与 issue severity/lifecycle、notes.jsonl ledger、knowledge；root/snapshot 文件仅 legacy，project register 仅迁移历史 |
 | `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |

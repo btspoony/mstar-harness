@@ -67,7 +67,7 @@ async function fixture(name: string, root = ROOT): Promise<Fixture> {
   const workspace = mkdtempSync(join(root, name));
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const context: StoreContext = { harnessDir: workspace };
+  const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
   return {
@@ -106,14 +106,7 @@ function snapshotDoc(id: string, overrides: Record<string, unknown> = {}): strin
           file: `/plans/${id}.md`,
           status: "InProgress",
           coordination: { revision: 1, progress: { status: "InProgress", summary: "half way", evidence_paths: [] } },
-          metadata: { catalog_pin: { entity_revision: 4 } },
-          execution_lease: {
-            holder: "session-1",
-            claimed_at: STARTED_AT,
-            worktree_path: `/wt/${id}`,
-            working_branch: `feature/${id}`,
-            session_label: "must-never-be-projected",
-          },
+          metadata: { catalog_pin: { entity_revision: 4 }, worktree_path: `/wt/${id}`, working_branch: `feature/${id}` },
         },
       ],
       integration_merge_lease: {
@@ -370,7 +363,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
   const f = await fixture(name);
   const initialized = await initializeExecutionAuthority(f.context);
   await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op(`${name}-catalog`));
-  const caller: ExecutionCaller = { sessionId: `${name}-coordinator`, role: "coordinator", workflowId, planId: null };
+  const caller: ExecutionCaller = { sessionId: `${name}-coordinator`, role: "coordinator", workflowId };
   await createExecutionWorkflow({ ...f.context, caller }, {
     entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
     snapshot: {
@@ -401,7 +394,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
       { kind: "plan", id: planId, title: "Active plan", rootKind: "plans", relativePath: `${planId}.md` },
       op("active-plan"),
     );
-    const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId, planId: null };
+    const caller: ExecutionCaller = { sessionId: "active-coordinator", role: "coordinator", workflowId };
     await createExecutionWorkflow({ ...f.context, caller }, {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: {
@@ -513,8 +506,6 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const capture = await captureProjectionSources(f.context);
     const handle = await openStore(f.context, "write");
     try {
-      handle.db.prepare("delete from execution_sessions where workflow_id = ? and plan_id = ?").run(workflowId, planId);
-      handle.db.prepare("delete from execution_leases where workflow_id = ? and plan_id = ?").run(workflowId, planId);
       handle.db.prepare("delete from execution_inputs where workflow_id = ? and plan_id = ?").run(workflowId, planId);
       handle.db.prepare("delete from execution_plans where workflow_id = ? and plan_id = ?").run(workflowId, planId);
       handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
@@ -525,37 +516,6 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     });
     expect((await projections(f)).meta.generation).toBe(initial.generation);
     expect(await projectedRows(f)).toEqual(lastGood);
-  });
-  test("a completed ACTIVE plan with a released lease remains current without past ownership", async () => {
-    const workflowId = "wf-released-lease";
-    const planId = "plan-released-lease";
-    const f = await activeWorkflowFixture("active-released-lease-", workflowId, planId);
-    const leaseJson = JSON.stringify({
-      holder: "released-holder", claimed_at: STARTED_AT, worktree_path: "/tmp/wt", working_branch: "feature/x",
-      session_label: "plan-pm", lease_id: "00000000-0000-4000-8000-000000000000",
-      holder_session_id: "released-holder", holder_role: "plan-pm",
-      plan_worktree_path: "/tmp/wt", plan_branch: "feature/x", heartbeat_at: STARTED_AT, status: "released",
-    });
-    const handle = await openStore(f.context, "write");
-    try {
-      handle.db.prepare(
-        "insert into execution_leases(workflow_id, plan_id, revision, owner_epoch, lease_json) values (?, ?, 1, 1, ?)",
-      ).run(workflowId, planId, leaseJson);
-      handle.db.prepare(
-        "update execution_plans set state_json = json_set(state_json, '$.status', 'Done', '$.done_at', ?) where workflow_id = ? and plan_id = ?",
-      ).run(STARTED_AT, workflowId, planId);
-      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
-    } finally { handle.close(); }
-    const report = await refreshProjections(f.context);
-    expect(report.diagnostics).toEqual([]);
-    const dashboard = await withStoreRead(f.context, queryDashboard("workflows"));
-    const plan = dashboard.data.items.find((item) => item.id === workflowId)?.plans.find((plan) => plan.planId === planId);
-    expect(plan).toBeDefined();
-    expect(plan?.status).toBe("Done");
-    expect(plan?.leases).toEqual([]);
-    // The released plan remains readable across another refresh.
-    const again = await refreshProjections(f.context);
-    expect(again).toMatchObject({ freshness: "current" });
   });
 
   test("authority activation between a files capture and publication refuses stale publication", async () => {
@@ -727,7 +687,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const workflowId = "wf-plan-moved";
     const planId = "plan-original";
     await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op("plan-moved-catalog"));
-    const caller: ExecutionCaller = { sessionId: "coord-plan-moved", role: "coordinator", workflowId, planId: null };
+    const caller: ExecutionCaller = { sessionId: "coord-plan-moved", role: "coordinator", workflowId };
     await createExecutionWorkflow({ ...f.context, caller }, {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: { schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT, plans: [{ id: planId, title: "Plan", file: `${planId}.md`, status: "Todo" }], delivery_kind: "development", branch: { source: "feature/moved", target: "main" } } as unknown as WorkflowSnapshot,
@@ -763,7 +723,7 @@ async function activeWorkflowFixture(name: string, workflowId: string, planId: s
     const workflowId = "wf-row-moved";
     const planId = "plan-row-moved";
     await registerCatalogEntity(f.context, { kind: "plan", id: planId, title: "Plan", rootKind: "plans", relativePath: `${planId}.md` }, op("row-moved-catalog"));
-    const caller: ExecutionCaller = { sessionId: "coord-row-moved", role: "coordinator", workflowId, planId: null };
+    const caller: ExecutionCaller = { sessionId: "coord-row-moved", role: "coordinator", workflowId };
     await createExecutionWorkflow({ ...f.context, caller }, {
       entry: { id: workflowId, type: "plan", started_at: STARTED_AT, dir: `workflows/${workflowId}` },
       snapshot: { schema_version: 1, id: workflowId, type: "plan", status: "running", started_at: STARTED_AT, updated_at: STARTED_AT, plans: [{ id: planId, title: "Plan", file: `${planId}.md`, status: "Todo" }], delivery_kind: "development", branch: { source: "feature/row-moved", target: "main" } } as unknown as WorkflowSnapshot,
@@ -878,10 +838,9 @@ describe("projection publication and last-good handling", () => {
       }),
       expect.objectContaining({ workflow_id: "wf-done", plan_id: "plan-wf-done", status: "Done" }),
     ]);
-    // Presence + holder + worktree only: the session label never lands here.
+    // The workflow-wide integration mutex is the only remaining lease projection.
     expect(rows.leases).toEqual([
-      expect.objectContaining({ workflow_id: "wf-a", plan_id: "plan-wf-a", kind: "execution", holder: "session-1", worktree_path: "/wt/wf-a" }),
-      expect.objectContaining({ workflow_id: "wf-a", plan_id: "plan-wf-a", kind: "integration-merge", holder: "session-2" }),
+      expect.objectContaining({ workflow_id: "wf-a", kind: "integration-merge", holder: "session-2" }),
     ]);
     expect(rows.compasses).toEqual([
       expect.objectContaining({

@@ -8,21 +8,32 @@ For project roadmap content, use the CLI `mstar roadmap` family (not a slash com
 
 ## Store CLI upgrade and recovery
 
-`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing legacy workflow state. It creates or opens the local store, imports recognizable records, activates execution authority, and reports unrecognized or unresolvable items without moving them from their original paths. The import is intended for a stopped, disposable local workspace; it is not an online production cutover.
+`mstar store upgrade --operator <name> [--harness <path>]` is the single default path for importing legacy workflow state. It creates or opens the local store, imports recognizable records, activates execution authority, and reports unrecognized or unresolvable items without moving them from their original paths. Stop writers and align consumers before upgrading an existing store; this is not an online production cutover.
+
+The six `store` verbs administer project harnesses, including the main worktree's canonical control root. `--harness <path>` selects that project explicitly; omitting it uses normal discovery from the working directory. CLI and MCP use the same domain operations and retain their maintenance locks, verified-backup checks and migration/activation guards.
+
+For an existing store, retain a verified recovery image before upgrading:
+
+```text
+mstar store backup --harness {HARNESS_DIR} --out <absolute-backup.db>
+mstar store upgrade --harness {HARNESS_DIR} --operator <name>
+```
+
+If a retired held claim requires the operator's full stop attestation, construct the document using `mstar schema --command store.upgrade` and retry the same upgrade with `--attestation <absolute-json>`. Do not hand-edit the store or replace the project target with a fixture to evade a refusal.
 
 The remaining `store` verbs are `init`, `migrate`, `backup`, `activate`, and `retire`. `migrate` / `activate` / `retire` remain the separate issue/catalog migration flow. The only remaining `store execution` verbs are `restore-preview`, `restore`, and `export`: restore previews and restores use a standalone `store backup` image; export reports the current execution state. Staged execution preview/apply/activate/retire/abort and the safe-upgrade verb are removed.
 
 | Command | Purpose | Owning skill |
 |---------|---------|--------------|
 | [`/iteration-start`](#iteration-start) | Start an iteration: interactive direction lock, then the full lifecycle | `mstar-iteration` |
-| [`/iteration-drive`](#iteration-drive) | Drive or resume the active iteration — or, with a scope, one prepared plan | `mstar-iteration` |
+| [`/iteration-drive`](#iteration-drive) | Drive/resume the selected locked iteration with one primary coordinator | `mstar-iteration` |
 | [`/iteration-loop`](#iteration-loop) | The same lifecycle end to end, autonomous lock, minimal human intervention | `mstar-iteration` |
 | [`/codebase-audit`](#codebase-audit) | Read-only survey of a codebase → prioritized improvement plans | `mstar-audit` |
 | [`/amazing-test-audit`](#amazing-test-audit) | Read-only test-suite audit → plans to delete / repair / consolidate tests | `mstar-audit` (`tests` focus) |
 | [`/amazing-pr-review`](#amazing-pr-review) | Read-only pre-merge review of a PR / branch / diff → one verdict | `mstar-audit` (`pr` variant) |
 | [`/amazing-e2e-check`](#amazing-e2e-check) | Explicitly requested E2E / browser / device / deployment verification | `mstar-e2e` |
 
-Between the three iteration commands: `iteration-start` covers Phase 1 with an interactive lock and then continues on its own; `iteration-drive` re-enters or resumes an already locked iteration and carries the scoped route; `iteration-loop` runs Phase 1→6 without the interactive step.
+iteration-start locks interactively, iteration-drive resumes an already locked iteration, and iteration-loop runs Phase 1→6 autonomously. None launches a per-row PM.
 
 ## /iteration-start
 
@@ -43,88 +54,31 @@ Between the three iteration commands: `iteration-start` covers Phase 1 with an i
 ## /iteration-drive
 
 ```text
-/iteration-drive [no args] | --assignment <absolute-md-path> | --workflow <id> --plan <id> | --resume <absolute-session-json-path>
+/iteration-drive
 ```
 
 **Purpose** — drive the active iteration to completion: Phase 2 Autonomous Execute → Phase 3 iteration-close → Phase 4 Create PR → Phase 5 PR merge-ready → Phase 6 post-merge close. Done is Phase 6 §6.1–§6.4 complete; neither the close, nor an open PR, nor a merged PR is Done by itself.
 
-**When** — resuming or advancing an already locked iteration. No arguments keep that whole-iteration route unchanged; a scope flag takes the scoped route below. Every other non-empty shape — duplicate or unknown flags, positional arguments, missing or blank values, mixed forms, a half `--workflow`/`--plan` pair — **fails closed** before `bind` and before boot, and never falls back to the whole-iteration route.
-
-**Hosts** — the scoped route boots the PM in your **primary session**, never as a subagent; a leaf executor that receives this command refuses it.
+**When/arguments** — resume or advance an already locked iteration, with no arguments. Reject every nonempty argument shape before boot; never reinterpret unsupported input as whole-iteration authorization. PM stays in the primary session; a leaf receiving this command refuses it.
 
 **Defined in** — [`commands/iteration-drive.md`](../commands/iteration-drive.md); phase route and transition gates → `mstar-iteration` (`references/phase-2-worktree-lease.md`, `references/phase-3-iteration-close.md`, `references/phase-4-5-pr-delivery.md`, `references/phase-6-post-merge-close.md`); Phase 5 helper-skill discovery → `references/phase5-helper-discovery.md`.
 
-### Scoped plan session
+### Direct row operations
 
-Drive **one** prepared plan from an independent terminal instead of the whole iteration. The scoped session binds a single plan through the CLI, runs the normal per-plan gates (implement → plan QC tri → QA gate), and stops at a durable **handoff**. A plan session never writes `Done`; the coordinator runs `complete` after `accept` — on the **iteration** route after a verified merge, on the **standalone development** route straight from the accepted handoff (no merge, only the row execution lease).
+The primary coordinator uses ordinary `show`, revisable `prepare`, `progress`, `issue-add`, `issue-close` and direct `complete`. Source facts live in row metadata. Defaults are mandatory QA and allow-residual cleanup; configuration remains revisable during active execution, and valid metadata/defaults need no ceremonial prepare record. Leaf Assignments retain task identity/scope/worktree/evidence, not sealed plan admission.
 
-The scope rides on the `mstar plan` verb family; the table below enumerates each verb and who may call it — that ownership model is the whole point of the feature:
+All rows use the same workflow coordinator, transaction/CAS/receipt discipline and declared-route completion:
 
-| Caller | Verbs | What it owns |
-|--------|-------|--------------|
-| Coordinator seat | `bind --coordinator`, `prepare` | one seat per workflow; registers the reviewed Assignment on the target row |
-| Fresh scoped entry | `bind --assignment` / `bind --workflow --plan` | the first claim of a prepared row |
-| Resumed session | `bind --resume`, `show` | reading the row, its scope and its allowed operations |
-| **Plan session writes** | `progress`, `residual-add`, `residual-close`, `handoff` | its own row and its own register bucket only |
-| **Coordinator transitions** | `accept`, `return`, `integration-start`, `integration-accept`, `complete`, `reconcile`, `repair-delivery-source` | the lifecycle around completion: `integration-start` / `integration-accept` are iteration-route only, and the repair verb is a legacy exception rather than a normal step |
+| Route | Direct completion proof | Outer obligation |
+|---|---|---|
+| Iteration/non-standalone | Reviewed source/QC/QA and real already-performed serial two-parent integration merge in recorded target checkout, with actual base/result SHAs | Parent compound/PR/verified merge/terminal close; no child PR |
+| Standalone development | Reviewed source/QC/QA and clean registered source checkout/ref, without iteration integration inputs | Own compound/PR/verified merge/terminal close |
+| Standalone report-only | Explicit registered-policy fulfilment recorded before Done plus QC/QA, without invented Git/integration | Evidence-backed terminal close, no PR/merge |
 
-Session identity is never a flag: `--session <absolute-json>` names an engine-generated envelope that the engine re-checks against the snapshot inside its lock. There is no `--force`, no holder input, no takeover and no lease-release verb.
+Completion never performs Git merge or an ownership transfer. The coordinator explicitly merges once in the recorded integration checkout and then complete verifies the actual result. Lost output means retry complete against actual facts, not a second merge. Resolve/abort a real conflict in Git. Exact replay preserves completion timestamps. Recovery replaces only the explicitly stopped workflow coordinator; row-specific sessions/launches are removed.
 
-#### Entry forms
+Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fields/lifecycle → `mstar-artifacts`; exact flags/JSON/exit codes → `mstar-use-cli/references/plan-and-workflow.md`.
 
-```text
-/iteration-drive --assignment <absolute-assignment-md-path>
-/iteration-drive --workflow <workflow-id> --plan <plan-id>
-/iteration-drive --resume <absolute-session-json-path>
-```
-
-The first two are the fresh addressing forms and resolve the same registered Assignment; the third resumes an already bound session and is the only resume form. No arguments at all keep the whole-iteration route above.
-
-Each form binds once, and the session then re-reads with `show` and is constrained to the returned scope: the loaded skills, the child Assignments, the backlog, the goal text and every writable path. A second fresh entry for the same plan fails with the active holder; only explicit `--resume` of the original session continues, and the scoped session never passes a session credential to a child.
-
-#### Coordinator preparation
-
-The coordinator holds one seat per workflow. It runs `bind --coordinator` once, then `prepare` for the plan, registering the reviewed Assignment and releasing dependencies. This is preparation, not a second business plan: dependency/task readiness stays PM judgment. Recorded semantic scope, ownership, branch, QA and cleanup constraints remain; Assignment/plan prose edits do not trigger byte freshness refusal, restoration, rebind or re-preparation.
-
-#### Scope boundary
-
-A scoped session owns one **row**, not the workflow. It reads with `show` and writes only `progress`, `residual-add`, `residual-close` and `handoff`, plus its own bucket in the project register. Sibling rows, the snapshot's lifecycle anchors, the root `status.json` register, the shared knowledge/iteration indexes, the iteration PR and Phase 3–6 stay with the coordinator; no scoped verb performs a raw snapshot or register write.
-
-The writable surface, the field ownership and the lock rules are stated once in the runtime contract and the field reference — see *Ownership and references* below.
-
-#### Revision preconditions
-
-Mutations retain the addressed row's numeric revision or active full execution-token contract, not snapshot schema versions or dates. Plan operations may derive the current expectation; an explicitly held stale expectation still refuses. `bind` checks and claims atomically against current ownership. Issue revisions are separate numeric constraints; retired project-register byte versions are not required flags or mutation credentials.
-
-Resolve actual revision/holder/scope conflicts through the supported action and current state. Document digest changes alone do not refuse progress or require hash repair.
-
-#### Finish and completion
-
-`handoff` is the scoped finish line: the row keeps `InReview` and its `execution_lease`, and the session stops there — including for the last unfinished plan. A plan session never writes `Done`, and a request to mark `Done` before the lifecycle completes is rejected: completion comes from the coordinator's `complete` — after a verified merge on the iteration route, or straight from the accepted handoff on the standalone development route.
-
-The coordinator half starts the same way on both routes — `accept` (execution ownership transfers, still no merge) — and then follows the route the engine selects from the workflow's own type and delivery kind, never from anchors that happen to be missing. On the **iteration** route: `integration-start` (pins the attempt and its base before Git runs) → the pinned merge → `integration-accept` (records the verified result, both leases still held) → `complete`. On the **standalone development** route `complete` runs straight from the accepted handoff, with no integration record and no merge lease. `complete` is the single atomic write that sets `Done`: it releases both leases on the iteration route and only the row's execution lease on the standalone route, where the workflow stays running until its delivery evidence and the close. `return` hands a submitted or accepted handoff back to the plan owner with a reason.
-
-On the iteration route the merge is the coordinator's own Git action — an argument array, never shell interpolation — with no squash, no rebase and no branch-name merge:
-
-```bash
-git -C <integration-worktree-path> merge --no-ff --no-edit <pinned-source-sha>
-```
-
-`--handoff <id>` must be the row's live handoff id — the one `plan handoff` minted and `show` reports — and the row stays the authority, so a different id is refused rather than trusted.
-
-#### After a crash
-
-`reconcile` observes Git ancestry and the recorded pins instead of trusting a success flag. Merged but uncleaned state is not `Done`, and an interrupted attempt is classified — retry-ready, completed, or a refusal that preserves every lease — without a second merge.
-
-#### Transport
-
-The second terminal is transport, not a dependency. Any terminal works; Herdr or tmux are optional ways to open one, and nothing in this route reads pane state, TTL or terminal labels to decide ownership.
-
-#### Ownership and references
-
-- Runtime route contract, scope boundary and coordinator sequence: the **`mstar-iteration`** skill → `references/plan-scoped-pm.md`.
-- Row, session and handoff fields and ownership: the **`mstar-artifacts`** skill → `references/status-and-residuals.md`.
-- Executable flags, exit codes, JSON envelopes and rejection codes: the **`mstar-use-cli`** skill → `references/plan-and-workflow.md`.
 
 ## /iteration-loop
 

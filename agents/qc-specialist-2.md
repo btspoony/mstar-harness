@@ -57,10 +57,6 @@ permission:
     "mstar status validate *": allow
     "mstar-harness status validate": allow
     "mstar-harness status validate *": allow
-    "mstar lease verify": allow
-    "mstar lease verify *": allow
-    "mstar-harness lease verify": allow
-    "mstar-harness lease verify *": allow
   task:
     "*": deny
     explore: allow

@@ -116,8 +116,6 @@ export type CoordinatorIdentityFacts = Readonly<{
   harnessRoot: string | null;
   /** This session is a leaf/subagent (task) session. */
   leaf: boolean;
-  /** The last host-observed entry route is the scoped-plan PM family. */
-  scopedPlanEntry: boolean;
 }>;
 
 /** Observable outcome the registered tool projects into its result. */
@@ -228,8 +226,6 @@ const DEFAULT_AUTHORITY_DEPS: CoordinatorAuthorityDeps = {
   bind: (input) =>
     bindExecutionSession(executionContextFor({ harnessDir: input.harnessDir }, input.identity), {
       workflowId: input.workflowId,
-      planId: null,
-      role: "coordinator",
       expected: input.expected,
       operationId: input.operationId,
     }),
@@ -268,7 +264,6 @@ export function executionBindingOf(harnessRoot: string, session: ExecutionSessio
       workflowId: session.workflowId,
       role: session.role,
       sessionId: session.sessionId,
-      planId: session.planId,
     },
   };
 }
@@ -297,7 +292,7 @@ function refuse(code: string, text: string, details: Record<string, unknown> = {
 
 /** The §3.1 host identity of one coordinator call: provenance, scope, native id. */
 function coordinatorIdentityOf(sessionId: string, workflowId: string): ExecutionIdentity {
-  return { source: "host", sessionId, workflowId, role: "coordinator", planId: null };
+  return { source: "host", sessionId, workflowId, role: "coordinator" };
 }
 
 /** The §5 route of one control root, or the root's own refusal (never masked). */
@@ -407,12 +402,6 @@ export async function bindCoordinatorIdentity(
   if (facts.leaf) {
     return refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat");
   }
-  if (facts.scopedPlanEntry) {
-    return refuse(
-      "scoped-plan-route",
-      "the last host-observed entry of this session is the scoped-plan PM route; that route restores an existing binding and never bootstraps one",
-    );
-  }
   if (!isNonEmpty(facts.harnessRoot)) {
     return refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, {
       cwd: facts.cwd,
@@ -447,7 +436,7 @@ export async function bindCoordinatorIdentity(
     }
     const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
     try {
-      validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
+      validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
     } catch (error) {
       return refuse(codeOf(error), messageOf(error), { workflowId });
     }
@@ -500,7 +489,7 @@ export async function bindCoordinatorIdentity(
   // `harnessDir` the engine resolves and compares) — never an identity member.
   const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
   try {
-    validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
+    validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
     return refuse(codeOf(error), messageOf(error), { workflowId });
   }
@@ -669,15 +658,6 @@ function coordinatorCallContext(
   }
   if (facts.leaf) {
     return { ok: false, outcome: refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat") };
-  }
-  if (facts.scopedPlanEntry) {
-    return {
-      ok: false,
-      outcome: refuse(
-        "scoped-plan-route",
-        "the last host-observed entry of this session is the scoped-plan PM route; that route restores an existing binding and never bootstraps or recovers one",
-      ),
-    };
   }
   if (!isNonEmpty(facts.harnessRoot)) {
     return {
@@ -867,10 +847,9 @@ export async function recoverCoordinatorIdentity(
     sessionId: facts.sessionId,
     workflowId: context.workflowId,
     role: "coordinator",
-    planId: null,
   };
   try {
-    validateExecutionIdentity(identity, { workflowId: context.workflowId, role: "coordinator", planId: null });
+    validateExecutionIdentity(identity, { workflowId: context.workflowId, role: "coordinator" });
   } catch (error) {
     return refuse(codeOf(error), messageOf(error), { workflowId: context.workflowId });
   }
@@ -940,12 +919,6 @@ async function recoverActiveCoordinator(
   if (facts.leaf) {
     return refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat");
   }
-  if (facts.scopedPlanEntry) {
-    return refuse(
-      "scoped-plan-route",
-      "the last host-observed entry of this session is the scoped-plan PM route; that route restores an existing binding and never recovers one",
-    );
-  }
   if (!isNonEmpty(facts.harnessRoot)) {
     return refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, { cwd: facts.cwd });
   }
@@ -1010,7 +983,7 @@ async function recoverActiveCoordinator(
 
   const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
   try {
-    validateExecutionIdentity(identity, { workflowId, role: "coordinator", planId: null });
+    validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
     return refuse(codeOf(error), messageOf(error), { workflowId });
   }

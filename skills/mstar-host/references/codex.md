@@ -2,7 +2,7 @@
 
 Load when **`mstar-host`** detection resolves **codex** (Codex app/CLI session, `/plan` / `/goal` slash commands, Goal tools, or Codex tool namespaces such as `functions.*`, `codex_app.*`, `tool_search`, `image_gen`, or Browser plugin tools).
 
-Plan Mode: read **`references/_shared/plan-mode-bridge-core.md`** when Codex Plan Mode (`/plan`) is active. Goal Mode (`/goal`, goal tools, or goal progress controls) follows the host-agnostic **`/goal`** rule in `mstar-host` SKILL.md — applicability is by the `/goal` command, not host identity. On the scoped route (`/iteration-drive --assignment | --workflow --plan | --resume`) the goal is that **plan's scope only** — never the iteration flow, sibling plans, or Phase 3–6. Codex session plans, UI todos, and goal text are not durable harness SSOT.
+Plan Mode loads references/_shared/plan-mode-bridge-core.md; Goal Mode follows mstar-host's capability rule for the selected workflow's full lifecycle. Session plans, UI todos and goal text remain projections, not harness state authority. No per-row primary route exists.
 
 Parallel PM dispatch: read **`parallel-dispatch.md`** only when Codex exposes an actual multi-agent / Task-style invocation tool. If no callable invoke tool exists, Assignment Markdown is coordination text only; do **not** claim subagent dispatch.
 
@@ -48,7 +48,7 @@ Use skill names in prompts and references. Avoid absolute local paths unless the
 - Codex does not imply an OpenCode-style `question` tool.
 - If a structured user-input tool is available in the active mode, use it for concise 1-3 choice decisions.
 - Otherwise ask one concise Markdown question only after codebase exploration cannot answer it.
-- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows).
+- `update_plan` / local todo UI is session progress only; it does not replace `{PLAN_DIR}` plans or store.db registry/workflow/plan rows (status.json + snapshot files only pre-activation).
 - Codex Goal Mode objective is completion criteria for the host thread, not Morning Star Done authority; mirror it into the SSOT plan when the work is implementation-sized.
 
 ## Dispatch and role execution

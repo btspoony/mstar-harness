@@ -24,7 +24,7 @@ import {
   serializeExecutionValue,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
-import { parseExecutionRequest, registerExecutionSessionCommand, runExecutionCommand } from '../src/gates/execution-session.ts'
+import { registerExecutionSessionCommand, runExecutionCommand } from '../src/gates/execution-session.ts'
 import { readWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { WorkflowSessionBinding } from '../src/engine-status-store.ts'
 import { HarnessResolver } from '../src/gates/_shared.ts'
@@ -95,7 +95,7 @@ async function seedNativeAuthority(harnessDir: string): Promise<string> {
   const created = await createExecutionWorkflow(
     {
       harnessDir,
-      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
     } satisfies ExecutionContext,
     {
       entry: { id: WORKFLOW_ID, type: 'plan', started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
@@ -119,9 +119,9 @@ async function seedNativeAuthority(harnessDir: string): Promise<string> {
   const bound = await bindExecutionSession(
     {
       harnessDir,
-      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID, planId: null } satisfies ExecutionCaller,
+      caller: { sessionId: SESSION_ID, role: 'coordinator', workflowId: WORKFLOW_ID } satisfies ExecutionCaller,
     } satisfies ExecutionContext,
-    { workflowId: WORKFLOW_ID, planId: null, role: 'coordinator', expected: workflowToken, operationId: `bind-${WORKFLOW_ID}` },
+    { workflowId: WORKFLOW_ID, expected: workflowToken, operationId: `bind-${WORKFLOW_ID}` },
   )
   return encodeExecutionSessionRef(bound.data)
 }
@@ -134,12 +134,12 @@ describe('mstar-execution — authoritative non-leaf eligibility', () => {
     const handler = productionHandler(harnessDir)
     const leafAgent = agentOf(root, { origin: 'subagent', delegationDepth: 1 })
     const ref = encodeExecutionSessionRef({
-      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID, planId: null,
+      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID,
     })
     for (const input of [
       JSON.stringify({ operation: 'adopt', sessionRef: ref }),
       '{"operation":"clear"}',
-      JSON.stringify({ operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', planId: null, argv: [process.execPath, '-e', '0'] }),
+      JSON.stringify({ operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', argv: [process.execPath, '-e', '0'] }),
     ]) {
       await expect(handler(invocationOf(leafAgent, input))).rejects.toThrow('known leaf sessions cannot adopt, clear, or launch execution')
     }
@@ -173,10 +173,10 @@ describe('mstar-execution — native run and child identity transport', () => {
       const source = 'const e=process.env;const slot=(key)=>{const v=e[key];return v===undefined?"<absent>":v};'
         + 'process.stdout.write([slot("MSTAR_EXECUTION_IDENTITY"),slot("MSTAR_HOST_SESSION_ID"),slot("MSTAR_HARNESS_DIR"),slot("MSTAR_CALLER_ID"),slot("MSTAR_EXECUTION_SESSION_ID")].join("|"))'
       const result = await handler(invocationOf(agentOf(root), JSON.stringify({
-        operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', planId: null,
+        operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator',
         argv: [process.execPath, '-e', source],
       })))
-      const identity = serializeExecutionValue({ source: 'host', sessionId: SESSION_ID, workflowId: WORKFLOW_ID, role: 'coordinator', planId: null })
+      const identity = serializeExecutionValue({ source: 'host', sessionId: SESSION_ID, workflowId: WORKFLOW_ID, role: 'coordinator' })
       expect(result).toEqual({ kind: 'success', text: `${identity}|<absent>|<absent>|<absent>|<absent>` })
     } finally {
       for (const [key, value] of Object.entries(previous)) {
@@ -194,7 +194,7 @@ describe('mstar-execution — native run and child identity transport', () => {
     const controller = new AbortController()
     controller.abort()
     await expect(handler(invocationOf(agentOf(root), JSON.stringify({
-      operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator', planId: null,
+      operation: 'run', workflowId: WORKFLOW_ID, role: 'coordinator',
       argv: [process.execPath, '-e', 'process.stdout.write("late")'],
     }), controller.signal))).rejects.toThrow('execution child cancelled')
   })
@@ -228,10 +228,10 @@ describe('mstar-execution — canonical native adoption', () => {
     const ref = await seedNativeAuthority(harnessDir)
     const handler = productionHandler(harnessDir)
     const foreign = encodeExecutionSessionRef({
-      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: 'other-session', planId: null,
+      storeId: '00000000-0000-4000-8000-000000000000', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: 'other-session',
     })
     const copied = encodeExecutionSessionRef({
-      storeId: '00000000-0000-4000-8000-000000000001', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID, planId: null,
+      storeId: '00000000-0000-4000-8000-000000000001', epoch: 1, workflowId: WORKFLOW_ID, role: 'coordinator', sessionId: SESSION_ID,
     })
     await expect(handler(invocationOf(agentOf(root), JSON.stringify({ operation: 'adopt', sessionRef: foreign }))))
       .rejects.toThrow('session reference does not match the native carrying session')
@@ -244,12 +244,6 @@ describe('mstar-execution — canonical native adoption', () => {
 })
 
 describe('mstar-execution — closed input union and launcher guard', () => {
-  it('accepts only the closed operation union and rejects model-shaped extras', () => {
-    expect(parseExecutionRequest('{"operation":"clear"}')).toEqual({ operation: 'clear' })
-    expect(() => parseExecutionRequest('{"operation":"clear","sessionId":"model-input"}')).toThrow('clear does not accept extra fields')
-    expect(() => parseExecutionRequest('{"operation":"run","workflowId":"w","role":"coordinator","planId":null,"argv":["a"],"extra":1}'))
-      .toThrow('run requires workflowId, role, planId, and a non-empty argv')
-  })
 
   it('rejects an empty argv before launching a child', async () => {
     await expect(runExecutionCommand([], process.env, new AbortController().signal)).rejects.toThrow('execution argv must be non-empty')

@@ -36,7 +36,7 @@ Phase route + gate SSOT → **`mstar-iteration`** **Phase route map** + **Phase 
 - **L** → 3–4 business plans（上限 4）
 - **XL** → **>4** business plans（5+；适合大范围 autonomous 迭代）
 
-**HARD**：budget **只计**实际业务交付 plan；**不计** harness 流程（Review 链、QC/QA、compound、close、PR、merge-ready、compass/`status.json` 维护等）。流程门禁仍须执行，但不占 S/M/L/XL 名额，也不得写成独立 process plan 来“凑数/占坑”。
+**HARD**：budget **只计**实际业务交付 plan；不计 harness 流程（Review、QC/QA、compound、close、PR、merge-ready、compass / DB register 维护）。门禁仍执行，不占业务名额，也不得作为 process plan 凑数。
 
 Parse: if the last token is exactly `S`/`M`/`L`/`XL` (case-insensitive), treat it as `scale`; remaining text is `direction`. If only one token and it is `S`/`M`/`L`/`XL`, that is `scale` with empty `direction`.
 
@@ -80,7 +80,7 @@ Execute **`mstar-iteration/references/phase-1-prepare.md` §1.6**: record PM inc
 - [ ] `direction-lock` anchor executed once the autonomous lock rationale is recorded and **before** the compass/plans draft（same anchor and carrier as `iteration-start` §3.5；no `grill-me` on this route）
 - [ ] Prototype retained in iteration package with format rationale, autonomous disposition and traceability; no invented human approval
 - [ ] Scale budget applied（business plan 按 S/M/L/XL 名额）
-- [ ] compass + plans + `status.json` registered
+- [ ] compass + authored plans 经 `mstar iteration register` 登记到当前执行权威（ACTIVE: store.db）
 - [ ] Role selection reasons recorded; selected invokes returned sequentially, mandatory writer last; no fake skip receipts / skipped-role markers / blocking questions; no `{KNOWLEDGE_DIR}/` additions
 - [ ] PM final lock：compass `status: locked` + Prepare gates pass
 - [ ] Branch policy locked：`iteration_base_branch` / `spec_integration_branch` / `target_branch` recorded
@@ -98,6 +98,6 @@ Delegate to **`iteration-drive`**（Phase 2 → §2、Phase 3 → §3 + `referen
 
 **Loop 特有**：Phase 5 push cadence（HARD）→ **`mstar-iteration/references/phase-4-5-pr-delivery.md`** §5.1a；exit checklist → §5.2（同 reference）；Phase 6 → **`mstar-iteration/references/phase-6-post-merge-close.md`** §6.1–§6.4（PR **merged** 后；todo `phase-6-post-merge-close`）。
 
-**Then** report: iteration id, locked direction + scale, plans completed, compound summary, PR link, merge-ready evidence, post-merge close evidence（snapshot `completed` + root unregister）。
+**Then** report: iteration id, locked direction + scale, plans completed, compound summary, PR link, merge-ready evidence, post-merge close evidence（store workflow `completed` + DB root unregister）。
 
 PR merge itself may remain manual unless user authorized auto-merge.

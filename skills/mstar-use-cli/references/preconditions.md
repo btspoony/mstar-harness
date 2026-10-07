@@ -55,11 +55,11 @@ A harness has two separate authority records: `store_meta.authority_state` gover
 
 On `active`, writes use the independently acquired caller identity, the addressed scope's full execution token, and an operation id. The session reference names a stored session row; it is not a bearer credential.
 
-For CLI commands, `--session-id` takes precedence over `MSTAR_HOST_SESSION_ID`; the environment value is also an accepted identity input for active-registration commands and plan/assignment binds. Session identity is attribution, not authorization, on active token-authorized writes. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) remains explicit-only: its session identity must come from `--session-id`, not the environment. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity (explicit `--session-id` or host-supplied identity). MCP session identity is supplied by the host per call, except legacy `plan bind --resume`, which refuses declared identity and ignores ambient environment identity.
+CLI --session-id constrains independently acquired identity; declared host identity inputs remain transport-owned, never inferred from session-reference bytes. Pre-activation coordinator bootstrap requires explicit --session-id; file resume is read-only and never a new identity. ACTIVE reference/token/operation defaults may be derived from own current coordinator context when unambiguous. No per-row bind or Assignment input exists.
 
 - On `active`, writes use the independently acquired caller identity, the addressed scope's full execution token, and an operation id. The session reference names a stored session row; it is not a bearer credential.
 - The root registration token is read from `mstar status validate`'s `.token`; a workflow token is read from its `.workflows[]` entry there (or an authoritative workflow read); a plan token is read from `mstar plan show` for that plan. These are distinct token kinds (`root`, `workflow`, `plan`) and cannot be substituted for one another (`execution.token-kind`).
-- A session reference is produced by the active bind or recovery verb, encoded as `exec-session-v1:` plus base64url canonical JSON containing `storeId`, `epoch`, `workflowId`, `role`, `sessionId`, and `planId`.
+- Session reference contains storeId, epoch, workflowId, coordinator role and sessionId, never planId. It is produced by workflow coordinator bind/recovery, not row admission.
 - The caller identity is independently acquired for each invocation; it is never read from a session file or carried by the reference. No force flag, takeover, holder input, or lease-release verb exists.
 - Nothing here is a credential to pass on. Session references and tokens stay with the coordinator or PM that holds them.
 
@@ -71,8 +71,7 @@ For CLI commands, `--session-id` takes precedence over `MSTAR_HOST_SESSION_ID`; 
 | Workflow execution token | `mstar status validate` → matching `.workflows[]` entry, or an authoritative workflow read | Workflow-scoped writes; consumed by that write |
 | Plan execution token | `mstar plan show` → addressed plan's token | Plan-scoped writes; consumed by that write |
 | Operation id | The caller's choice | Replay key for exactly one intended operation |
-
-Tokens are not interchangeable. Read again after every successful mutation; never treat a row revision, document byte version, schema version, or timestamp as an execution token.
+Tokens are distinct CAS constraints. Use the mutation's new token or derive current own context; an explicit stale token refuses. Row/schema revisions, byte digests and timestamps are not execution tokens.
 
 ## 6. Diagnose an actual conflict
 

@@ -15,10 +15,11 @@
  * Ralph has no `meta.name`, so P-a/P-c never apply to it (including the
  * malformed-args fold-in: ralph without `objective` → pass + one warn).
  *
- * Task 3 — P-b lease attribution: the calling workspace's status.json is
+ * Task 3 — P-b row-scope attribution: the calling workspace's status.json is
  * read through the contained resolver path (agent session cwd → harness
- * dir); any plan `InProgress` lacking `execution_lease` coverage (engine
- * `verifyPlanExecutionLease`) makes writable fan-out uncovered — deny
+ * dir); any plan `InProgress` lacking a recorded row scope
+ * (`metadata.worktree_path` / `metadata.working_branch`) makes writable
+ * fan-out uncovered — deny
  * under `hard` (reason cites the plan id), advisory + warn under
  * `warn`/`ask`, allow for read-only workspaces / no harness dir / no
  * active plans. A status read failure is fail-open + ONE warn (a broken
@@ -188,7 +189,7 @@ async function seedPbShapeInvalid(harnessDir: string): Promise<void> {
   })
 }
 
-/** InProgress plan row WITHOUT a lease — orphan (uncovered). */
+/** InProgress plan row with no recorded scope — uncovered. */
 const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
   id: 'plan-orphan',
   title: 'orphan plan',
@@ -196,21 +197,19 @@ const IN_PROGRESS_ORPHAN: Record<string, unknown> = {
   status: 'InProgress',
 }
 
-/** InProgress plan row WITH a valid execution_lease (covered). */
+/** InProgress plan row whose scope is recorded (covered). */
 const IN_PROGRESS_WITH_LEASE: Record<string, unknown> = {
   id: 'plan-leased',
   title: 'leased plan',
   file: 'plans/plan-leased.md',
   status: 'InProgress',
-  execution_lease: {
-    holder: 'test-agent',
-    claimed_at: '2026-08-08',
+  metadata: {
     worktree_path: '/tmp/lease-worktree',
     working_branch: 'feature/lease',
   },
 }
 
-/** Done plan row without a lease — not active, never uncovered. */
+/** Done plan row without a scope — not active, never uncovered. */
 const DONE_NO_LEASE: Record<string, unknown> = {
   id: 'plan-done',
   title: 'done plan',
@@ -908,7 +907,6 @@ describe('workflow gate — Task 4 ledger integration (verdict rows + P-c observ
     // The deny reason cites the uncovered plan (the P-b red line) — the
     // same reason shape the P-b describe-block tests (a)/(e) pin.
     expect(decision.reason).toContain('plan-orphan')
-    expect(decision.reason).toContain('without execution_lease coverage')
     // The verdict row records into the ACTIVE workflow dir of the calling
     // workspace's harness (`.agents/workflows/wf-1/agent-flow.jsonl`).
     const events = readAgentFlow(join(ws, '.agents', 'workflows/wf-1'))!.events

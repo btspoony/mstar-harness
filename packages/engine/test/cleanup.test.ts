@@ -53,7 +53,7 @@ function target(overrides: Partial<CleanupTarget> & Pick<CleanupTarget, "kind" |
   return { tip: TIP_MERGED, owner: null, ...overrides };
 }
 
-/** Running parent iteration: Done plan-1, leased plan-2, InReview plan-6, unmerged-Done plan-5. */
+/** Running parent iteration: Done plan-1, InProgress plan-2, InReview plan-6, unmerged-Done plan-5. */
 const iterParent = snap({
   id: "iter-parent",
   type: "iteration",
@@ -65,7 +65,7 @@ const iterParent = snap({
     {
       id: "plan-2",
       status: "InProgress",
-      execution_lease: { holder: "dev-2", claimed_at: "2026-09-12", worktree_path: "/repo/.worktrees/plan-2", working_branch: "feature/plan-2" },
+      metadata: { worktree_path: "/repo/.worktrees/plan-2", working_branch: "feature/plan-2" },
     },
     { id: "plan-5", status: "Done", metadata: { working_branch: "feature/plan-5", worktree_path: "/repo/.worktrees/plan-5" } },
     { id: "plan-6", status: "InReview", metadata: { working_branch: "feature/plan-6" } },
@@ -143,7 +143,7 @@ describe("planWorktreeCleanup", () => {
     ]);
   });
 
-  test("refuses targets referenced by an active execution lease, by path and by branch", () => {
+  test("refuses non-Done row ownership targets by recorded path and branch", () => {
     const facts: CleanupFacts = {
       ...lane1Facts([worktree(MAIN_WT, "main", { isMain: true }), worktree("/repo/.worktrees/plan-2", "feature/plan-2")]),
       targets: [
@@ -152,8 +152,8 @@ describe("planWorktreeCleanup", () => {
       ],
     };
     expect(planWorktreeCleanup(iterParent, facts)).toEqual([
-      { kind: "worktree", ref: "/repo/.worktrees/plan-2", verdict: "refuse", reason: "cleanup.refuse.active-lease" },
-      { kind: "local-branch", ref: "feature/plan-2", verdict: "refuse", reason: "cleanup.refuse.active-lease" },
+      { kind: "worktree", ref: "/repo/.worktrees/plan-2", verdict: "refuse", reason: "cleanup.refuse.non-terminal" },
+      { kind: "local-branch", ref: "feature/plan-2", verdict: "refuse", reason: "cleanup.refuse.non-terminal" },
     ]);
   });
 

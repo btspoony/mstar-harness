@@ -206,9 +206,8 @@ export class DshHostAdapter extends Service implements HostAdapter {
   /**
    * Derive the carrying session's workflow-selection hint for one event
    * (D4): the structural identity read off the agent (`session.header.cwd` /
-   * `session.header.id` plus the agent's own opaque id as the lease holder)
-   * folded with this session's DURABLE binding preference from the
-   * engine-status store. Both gate reads and ledger writes route through
+   * `session.header.id`) folded with this session's DURABLE binding preference
+   * from the engine-status store. Both gate reads and ledger writes route through
    * this ONE derivation, so a session is attributed consistently within a
    * single decision.
    *

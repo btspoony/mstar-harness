@@ -30,7 +30,7 @@ Restarting this host or opening a new session does **not** re-issue an identity:
 
 ## Plan mode × harness dual-write
 
-When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, `{HARNESS_DIR}/status.json` (v2 root `workflows[]`) + `{WORKFLOW_DIR}/<id>/snapshot.json` (`plans[]` rows).
+When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, ACTIVE store.db registry/workflow/plan rows (status.json + snapshot only pre-activation).
 
 Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepare gates from `mstar-phase-gates` when not hotfix. Full procedure: **`cursor-plan-mode-bridge.md`**.
 
@@ -38,13 +38,13 @@ Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepar
 
 | Todo ID | Purpose |
 |---------|---------|
-| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, process-artifact gitignore set (`plans/`, `iterations/`, `sdd/`, `status.json`, `workflows/`, `projects/`, …), `status.json` (v2 template) |
-| `spec-register` | Register the root `workflows[]` entry + snapshot plan row (`{WORKFLOW_DIR}/<id>/snapshot.json` → `plans[]`) + spec stub if applicable |
+| `harness-init` | Init `{HARNESS_DIR}`, `{PLAN_DIR}`, process-artifact gitignore set (`plans/`, `iterations/`, `sdd/`, `status.json`, `workflows/`, `projects/`, …), empty `status.json` (pre-activation bootstrap only) |
+| `spec-register` | Register store-backed workflow/plan rows through `mstar workflow register`; prepare via `mstar plan prepare` + spec stub if applicable |
 | `mirror-plan` | Write SSOT main plan under `{PLAN_DIR}/` |
 
-Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → optional snapshot sync → `git log -1 --oneline` evidence.
+Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → PM public plan-state update in store.db → `git log -1 --oneline` evidence.
 
-Before **SwitchMode → Agent for ordinary per-plan implementation**: mirror plan exists, snapshot lists `plan_id`, root `workflows[]` entry exists, bootstrap todos are done. Never use only the Cursor URI as **Plan Path**. Phase 1 restricted-prototype preparation uses the exception below, not premature formal drafts.
+Before **SwitchMode → Agent for ordinary per-plan implementation**: mirror plan exists, `mstar status validate` / `mstar plan show` confirms registered workflow/plan identity, bootstrap todos are done. Never use only the Cursor URI as **Plan Path**. Phase 1 restricted-prototype preparation uses the exception below, not premature formal drafts.
 
 After **Build**: reload `mstar-harness-core` + this reference and resume as PM orchestration on the same carrier. Finish any pending Phase 1 design checkpoint before drafting; dispatch implementation only after its own gates, never from Build alone.
 

@@ -32,20 +32,24 @@ Complete synthetic `CaptureInput` example (adapt evidence, timestamp and semanti
 
 ## The coordinated write surfaces
 
+ACTIVE root/workflow/plan/lease/session authority is `{HARNESS_DIR}/store.db` (`execution_*`), read through `mstar status validate` / `mstar plan show` and written only through public workflow/plan verbs. The table below is the **pre-activation / engine-absent file mapping** of persist kinds, not an ACTIVE write surface.
+
 | Surface | Path shape | Holds | Store kind |
 |---|---|---|---|
 | root register | `{HARNESS_DIR}/status.json` | schema version, update timestamp, and the registry of active workflows (id, type, start, directory) | `status`, key `root` |
 | workflow snapshot | `{WORKFLOW_DIR}/<workflow-id>/snapshot.json` | one lifecycle: plan rows, coordination blocks, leases, branch anchors, delivery block | `snapshot`, key = workflow id |
 
-The root register is a registry, not a plan store: plan rows live in the snapshot, and a plan's open findings live in the issue store. Nothing is written to two of these documents by one command.
+The root register is a registry, not a plan store: ACTIVE plan rows live in `execution_plans` (pre-activation: snapshot); open findings live in store issues. Persist mappings do not authorize coordinated writes.
 
 A third legacy document still exists — the project register `{PROJECT_DIR}/<project-id>/residuals.json`. It is **migration history only**: it stays readable for the migration mapping, but it is no longer a write surface, and no command maintains it (see § Open items and § Store lifecycle).
 
 ## Protection levels
 
-**Protected** — `status`, `snapshot`. A bare put or delete through the store face refuses with `coordination.direct-write-refused` before writing anything, and that refusal also covers a generic-file alias whose canonical target is one of these documents. The consequence is deliberate: an accidental delete cannot drop the root register, and the store face is never the lifecycle route for a finished workflow.
+**ACTIVE file-route guard first** — raw root/snapshot/session-file writes and deletes refuse `execution.direct-write-refused`; reads refuse `execution.consumer-not-ready`, including canonical generic-file aliases. Do not retry via `persist json`; use the public verb.
 
-**Read-only legacy** — the `residuals` kind. It still reads the migrated project register, but a replacement refuses with `coordination.store`: a `residuals.json` is migration history and the issue store is the only findings authority. The same applies to a JSON alias pointing at a register path.
+**Pre-activation protected kinds** — `status`, `snapshot` bare put/delete refuse `coordination.direct-write-refused`; aliases do not bypass protection.
+
+**Unconditionally retired** — `residuals` kind refuses `persist.kind-retired`; project residual registers are migration history, not a live persist read/write surface. Register replacement/JSON aliases refuse `coordination.store`. Open findings use issue verbs.
 
 **Unprotected** — the review envelope kind and unrelated generic files. They keep the ordinary put / get / list / delete contract, delete is an idempotent no-op when absent, and there is no confirmation prompt. A review envelope is not a coordination document: its schema and validation belong to the review workflow's owning skill; the store face only persists and reads it.
 
@@ -60,7 +64,7 @@ Use the supported coordination/lifecycle action for the current authority, not a
 Closing one finished lifecycle is a single verb whose work has a fixed order:
 
 1. consult the registered delivery kind and its recorded evidence;
-2. write the terminal snapshot under the snapshot lock;
+2. write terminal workflow state in the ACTIVE execution store (pre-activation: snapshot lock);
 3. unregister the root entry, idempotently.
 
 ```sh
@@ -72,7 +76,7 @@ mstar status workflow-close --workflow <id> --session-ref <wire> \
 mstar status workflow-close --workflow <id> [--harness <path>] [--ended-at <date>] [--session <path>]
 ```
 
-Everything that can go wrong is checked before step 2, so a refusal leaves both documents byte-identical:
+Read the action-local receipt: ACTIVE close acts on store rows, not file bytes; pre-activation file-route refusal leaves the protected documents unchanged.
 
 - dangling leases or unfinished plan rows refuse;
 - incomplete or absent delivery evidence for the registered kind refuses, and the snapshot stays running with its root entry still registered;
@@ -87,12 +91,12 @@ Open findings are issues in `{HARNESS_DIR}/store.db`; the project register above
 
 - **Capture** is plan-scoped (`mstar plan issue-add`; active: `--session-ref`/`--operation` under the caller's independently acquired `--session-id`/`sessionId`, the execution token supplied only as an explicit constraint — on plan operations an omitted one is derived by the engine from the plan's own read; pre-activation: the row revision as `--expect`; the report names the DB-assigned issue ids and revisions) or unscoped (`mstar issue add`). A recurrence appends an occurrence to the existing issue instead of opening a second one.
 - **Close** is a separate authorized act with a terminal disposition: `mstar plan issue-close` on the plan's own linked issue (`--issue`, `--disposition`, `--expect-issue`), or `mstar issue close|waive|duplicate|supersede` unscoped. Each mutation is CAS-guarded by the issue revision, which stays an integer on every transport.
-- **The retired verbs are refusals, not aliases.** The old plan-side `residual-add` / `residual-close` verbs and the status-family `backlog-register` / `backlog-close` verbs still parse, refuse, write nothing, and name the issue verb that replaced them. There is no write-through compatibility path and no second store for closed findings.
+- **Removed plan aliases:** residual-add/residual-close are absent, not a compatibility/refusal path. Use issue-add/issue-close under the coordinator; no second findings store. Status backlog-register/backlog-close retain their independently documented refusal surface.
 - **Reading is not a rollup of the registers.** `mstar status tech-debt` prints the store's open-issue rollup and `mstar status findings-cleanup <plan-id>` enforces the plan's mode over its **linked open issues**; a missing, corrupt or staged store refuses (exit 1) instead of reporting an empty rollup.
 
 ## Store lifecycle: migration, activation, retirement
 
-The store is not writable until it is activated, and activation is a barrier — not a flag. The `store` group owns the verbs and their flags; what follows is the order and what each step demands.
+`store init` creates a fresh active issue/catalog store; `store upgrade` opens/creates the store, imports recognizable execution state, activates authority and reports skipped inputs. Neither requires routine `activate` afterwards. The sequence below is the **staged migration** route; `activate` consumes its reviewed apply and attestation, not an init receipt. Initialization semantics → `mstar-conventions`.
 
 ```sh
 mstar store migrate --out <path>              # default: read-only preview manifest (writes no DB)
@@ -102,7 +106,7 @@ mstar store activate --manifest <path> --attestation <path>   # the barrier
 mstar store retire --manifest <path>          # moves the reviewed legacy sources under a ledger
 ```
 
-- **`migrate`** previews by default: a reviewable manifest (control root, canonical source paths, provenance byte/source-set digests, parsed counts, per-entry dispositions, unresolved mappings, catalog conflicts, index-section retirement ranges) and no DB. The explicit reviewed apply commits the import in one issue/catalog/receipt transaction with a persistent ID mapping. Digest-only source drift does not refuse apply; current source path-set, identity, parsed-field and state requirements remain. The applied store is **staged**: ordinary mutations stay refused, and the legacy registers remain the live capture path.
+- **`migrate`** previews a reviewable manifest and no DB; reviewed apply commits issue/catalog/receipt import into a staged store. Ordinary mutations remain refused until activation. Source identity/path/state requirements remain; legacy project registers stay migration history and are never a live capture path.
 - **`backup`** writes a quiesced, SQLite-consistent `VACUUM INTO` recovery point (committed WAL frames included) and verifies it by reopening the copy read-only; the receipt records the store identity and the verified row counts. Copying `store.db` alone, without its WAL, is not a backup.
 - **`activate`** is the barrier. It requires the reviewed apply receipt to be the **final** one, a compatible-consumer attestation (installed entrypoints and versions, quiesced sessions, the approving operator — never session credentials) and a verified backup; the state flip, the epoch increment and the receipt commit in one transaction. Ordinary mutations work only afterwards, and every command checks epoch and state.
 - **`retire`** moves the reviewed legacy registers and index sections into `{HARNESS_DIR}/archived/store-migration/<receipt-id>/` under a resumable per-item ledger, checking active identity, epoch, current paths and item state and preserving copy-before-remove ordering. Content-digest changes alone do not refuse retirement or replay. An unreviewed register path still refuses `store.legacy-write-detected`; resume uses current item/path/state facts and archive presence, not recorded-byte equality.

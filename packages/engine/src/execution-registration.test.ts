@@ -27,11 +27,8 @@
  * - `execution-registration-blocks-migration-*` / `-refuses-an-imported-pin-*`:
  *   the legacy pending journal and an incoherent imported pin each block the
  *   migration route.
- * - `execution-catalog-pin-*`: a current catalog edit cannot mutate a prepared
- *   execution input, and an authorized eligible `prepare` selects the new input.
- * - `execution-cross-domain-*`: registration accepted → catalog metadata moves →
- *   the authoritative read stays pinned → the accepted receipt and token still
- *   select that data after a source-level reopen.
+ * - Registration-created catalog revision pins remain in authoritative
+ *   row/store state alongside the committed operation receipt.
  * - `registration recovery` / `semantic replay` / `interrupted registration`
  *   (E06b): the sparse intent resolves the omitted plan identity/title from the
  *   selected document, an iteration registered without a phase carries the
@@ -52,17 +49,14 @@ import {
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
-import { prepareExecutionPlan } from "./execution-coordination.js";
 import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import {
   bindExecutionSession,
   initializeExecutionAuthority,
-  readExecutionPlan,
   readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
-  type ExecutionPlanView,
   type ExecutionSessionRef,
   type ExecutionState,
   type ExecutionToken,
@@ -107,15 +101,14 @@ type Fixture = {
 };
 
 /**
- * An ACTIVE, empty execution authority. The workspace carries the `.mstar`
- * harness marker so the store stays pinned to it even once the harness's own
- * `plans/` child appears — the same shape a real control harness has.
+ * An ACTIVE, empty execution authority. The context selects the workspace's
+ * .mstar harness directly, including when its own plans/ child appears.
  */
 async function activeFixture(label: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, `${label}-`));
   const harnessRoot = join(workspace, ".mstar");
   mkdirSync(harnessRoot, { recursive: true });
-  const context: StoreContext = { harnessDir: workspace };
+  const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
@@ -125,7 +118,7 @@ async function activeFixture(label: string): Promise<Fixture> {
     context,
     storeId: initialized.storeId,
     rootToken: initialized.token,
-    caller: { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null },
+    caller: { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID },
   };
 }
 
@@ -812,231 +805,44 @@ describe("execution-registration", () => {
     expect((await listCatalog(fixture.context, {})).total).toBe(0);
   });
 
-  test("execution-registration-refuses-a-non-coordinator-caller-and-writes-no-registration-file", async () => {
-    const fixture = await activeFixture("caller-scope");
-    const before = await footprint(fixture.context);
-    const refusal = await refusalOf(() =>
-      commitExecutionRegistration(
-        { ...fixture.context, caller: { sessionId: "host-plan-pm", role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID } },
-        { ...planRequest({ context: fixture.context, operationId: "op-plan-pm", expectedCatalogRevision: 0 }), expected: fixture.rootToken },
-      ),
-    );
-    expect(refusal.code).toBe("execution.scope-mismatch");
-    expect(await footprint(fixture.context)).toEqual(before);
-    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
-  });
 });
 
 /* ------------------------------------------------------------------------ *
  * Frozen catalog coexistence
  * ------------------------------------------------------------------------ */
+describe("execution-registration \u2014 frozen input remains authoritative after catalog edits", () => {
+  test("catalog edits do not move the accepted plan input, pin, binding, or replay receipt across a source reopen", async () => {
+    const fixture = await activeFixture("frozen-catalog-reopen");
+    const receipt = await registerPlanWorkflow(fixture, "op-frozen-source");
+    const frozenBefore = await sealedInput(fixture.context, PLAN_ID);
+    const bindingBefore = await bindingOf(fixture.context, WORKFLOW_ID);
+    expect(frozenBefore?.input_hash).toMatch(/^[0-9a-f]{64}$/);
 
-describe("execution-catalog-pin", () => {
-  test("execution-catalog-pin-current-catalog-edits-leave-the-sealed-execution-input-alone", async () => {
-    const fixture = await activeFixture("pin-survives-edits");
-    await registerPlanWorkflow(fixture, "op-pin-source");
-    const sealed = await sealedInput(fixture.context, PLAN_ID);
-    const binding = await bindingOf(fixture.context, WORKFLOW_ID);
-    expect(binding?.catalog_revision).toBe(1);
-
-    // A current metadata edit moves the catalog: the entity's own revision and
-    // the store's catalog revision advance…
-    const edited = await updateCatalogEntity(
-      fixture.context,
-      { kind: "plan", id: PLAN_ID },
-      { title: "Renamed after registration" },
-      1,
-      { operationId: "op-catalog-edit", actor: "project-manager" },
-    );
-    expect(edited.revision).toBe(2);
-
-    // …and the sealed execution input is byte-identical: a current catalog edit
-    // cannot mutate a stored execution input. Only an authorized `prepare`
-    // selects newer catalog input.
-    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(sealed);
-    expect((await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity.title).toBe("Renamed after registration");
-    // The committed binding is registration history, not a live pointer.
-    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(binding);
-  });
-
-  test("execution-catalog-pin-an-authorized-eligible-prepare-selects-the-new-input", async () => {
-    const fixture = await activeFixture("pin-prepare");
-    await registerPlanWorkflow(fixture, "op-pin-prepare");
     await updateCatalogEntity(
       fixture.context,
       { kind: "plan", id: PLAN_ID },
-      { title: "Renamed before prepare" },
+      { title: "Catalog title changed after acceptance" },
       1,
-      { operationId: "op-catalog-edit", actor: "project-manager" },
+      { operationId: "op-frozen-catalog-edit", actor: "project-manager" },
     );
-
-    // The workflow's coordinator binds on the workflow token the registration
-    // produced, and the reviewed Assignment + plan file exist on disk.
-    const state = await readExecutionState(fixture.context);
-    const [workflow] = state.data.workflows;
-    const coordinator: ExecutionSessionRef = (
-      await bindExecutionSession({ ...fixture.context, caller: fixture.caller }, {
-        workflowId: WORKFLOW_ID,
-        planId: null,
-        role: "coordinator",
-        expected: workflow!.workflowToken,
-        operationId: "op-bind-coordinator",
-      })
-    ).data;
-    const { assignmentPath } = writeAssignmentDocuments(fixture.harnessRoot, PLAN_ID, `feature/${PLAN_ID}`);
-
-    const expected = (
-      await readExecutionPlan({ ...fixture.context, caller: fixture.caller }, coordinator, PLAN_ID)
-    ).token;
-    const prepared = await prepareExecutionPlan(
-      { ...fixture.context, caller: fixture.caller },
-      {
-        operationId: "op-prepare-plan",
-        session: coordinator,
-        expected,
-        planId: PLAN_ID,
-        operation: { kind: "prepare", assignmentPath },
-      },
-    );
-    expect(prepared.replayed).toBe(false);
-    expect(prepared.data.plan.id).toBe(PLAN_ID);
-    expect(prepared.data.frozenInput?.entity_revision).toBe(2);
-
-    // The eligible authorized prepare selects the NEW catalog input: the pin's
-    // identity half is the entity revision the catalog holds NOW, while its
-    // document half stays the frozen input's own hash — a selection, never a
-    // rewrite of the sealed input.
-    const sealed = await sealedInput(fixture.context, PLAN_ID);
-    expect(sealed).toBeDefined();
-    const pin = JSON.parse(String(sealed!.catalog_pin_json)) as {
-      store_id: string;
-      entity_revision: number;
-      document_hash: string;
-      relation_hash: string;
-    };
-    expect(pin.store_id).toBe(fixture.storeId);
-    expect(pin.entity_revision).toBe(2);
-  });
-});
-
-/* ------------------------------------------------------------------------ *
- * Cross-domain closure (S6)
- * ------------------------------------------------------------------------ */
-
-/**
- * The whole cross-domain chain on ONE store: a registration is accepted, the
- * current catalog metadata moves, the authoritative read stays pinned to the
- * accepted selection, and the accepted data is still selected from the
- * committed rows after a source-level reopen. The fail-closed half of the same
- * scenario (the authority becoming unavailable) is carried by
- * `execution-consumers.test.ts` / `execution-read.test.ts`, which own the read
- * adapter and the CLI consumers.
- */
-describe("execution-cross-domain", () => {
-  test("execution-cross-domain-accepted-data-stays-pinned-and-selected-after-reopen", async () => {
-    const fixture = await activeFixture("cross-domain-accepted");
-    const receipt = await registerPlanWorkflow(fixture, "op-cross-domain-register");
-    expect(receipt).toEqual({
-      operationId: "op-cross-domain-register",
-      workflowId: WORKFLOW_ID,
-      catalogRevision: 1,
-      recovered: false,
+    expect((await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity).toMatchObject({
+      title: "Catalog title changed after acceptance",
+      revision: 2,
     });
+    expect(bindingBefore?.catalog_revision).toBe(1);
 
-    // §7 the accepted prepare seals the frozen input and its catalog pin at the
-    // revision the registration published.
-    const [workflow] = (await readExecutionState(fixture.context)).data.workflows;
-    const coordinator: ExecutionSessionRef = (
-      await bindExecutionSession(
-        { ...fixture.context, caller: fixture.caller },
-        {
-          workflowId: WORKFLOW_ID,
-          planId: null,
-          role: "coordinator",
-          expected: workflow!.workflowToken,
-          operationId: "op-cross-domain-bind",
-        },
-      )
-    ).data;
-    const { assignmentPath } = writeAssignmentDocuments(fixture.harnessRoot, PLAN_ID, `feature/${PLAN_ID}`);
-    const planToken = (await readExecutionPlan({ ...fixture.context, caller: fixture.caller }, coordinator, PLAN_ID)).token;
-    const prepared = await prepareExecutionPlan(
-      { ...fixture.context, caller: fixture.caller },
-      {
-        operationId: "op-cross-domain-prepare",
-        session: coordinator,
-        expected: planToken,
-        planId: PLAN_ID,
-        operation: { kind: "prepare", assignmentPath },
-      },
-    );
-    expect(prepared.data.frozenInput?.entity_revision).toBe(1);
+    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(frozenBefore);
+    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(bindingBefore);
 
-    const sealed = await sealedInput(fixture.context, PLAN_ID);
-    const binding = await bindingOf(fixture.context, WORKFLOW_ID);
-
-    // The current catalog metadata moves on the SAME accepted store: the
-    // entity's own revision and the store's catalog revision advance.
-    const edited = await updateCatalogEntity(
-      fixture.context,
-      { kind: "plan", id: PLAN_ID },
-      { title: "Renamed after the accepted prepare" },
-      1,
-      { operationId: "op-cross-domain-catalog-edit", actor: "project-manager" },
-    );
-    expect(edited.revision).toBe(2);
-    expect((await getCatalog(fixture.context, { kind: "plan", id: PLAN_ID })).entity.title).toBe(
-      "Renamed after the accepted prepare",
-    );
-
-    // The authoritative read is PINNED: it reports the accepted selection (the
-    // catalog revision the pin was sealed at), and neither the sealed input nor
-    // the committed binding moved. A current catalog edit is not a rebind.
-    const pinned = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID });
-    // The address is exact, so the adapter answers the PLAN view; name the
-    // narrowed union member once instead of casting at every field read.
-    const pinnedView = pinned.data as ExecutionPlanView;
-    expect(pinnedView.frozenInput?.entity_revision).toBe(1);
-    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(sealed);
-    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(binding);
-
-    const token = (await readExecutionAuthority(fixture.context)).token;
-    expect(String(token).startsWith("exec-v1:root:")).toBe(true);
-    const beforeReopen = await footprint(fixture.context);
-
-    // A source-level reopen: a fresh handle on the same store bytes, so nothing
-    // the reads answer can come from process memory — the committed receipt and
-    // the token are re-read from their own rows.
     const reopened = await openStore(fixture.context, "read");
-    let receiptRow: { result_json?: unknown } | undefined;
-    try {
-      receiptRow = reopened.db
-        .prepare("select result_json from execution_operations where operation_id = ?")
-        .get("op-cross-domain-register") as { result_json?: unknown } | undefined;
-    } finally {
-      reopened.close();
-    }
-    expect(JSON.parse(String(receiptRow!.result_json)).data).toEqual(receipt);
-
-    // The exact retry still replays the RECORDED receipt and writes nothing…
-    expect(await registerPlanWorkflow(fixture, "op-cross-domain-register")).toEqual(receipt);
-    expect(await footprint(fixture.context)).toEqual(beforeReopen);
-
-    // …and the token still selects the accepted data, byte for byte: the
-    // registry entry, its plan, and the pinned frozen input.
-    const after = await readExecutionAuthority(fixture.context);
-    expect(after.token).toBe(token);
-    expect(after.storeId).toBe(fixture.storeId);
-    // Both selections name their narrowed union member once (the address is
-    // exact); no field is read through an unchecked inline cast.
-    const scoped = (await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID })).data as ExecutionState;
-    expect(scoped.workflows.map((entry) => entry.state.id)).toEqual([WORKFLOW_ID]);
-    expect(scoped.workflows[0]!.plans.map((row) => row.plan.id)).toEqual([PLAN_ID]);
-    const reopenedView = (await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID, planId: PLAN_ID }))
-      .data as ExecutionPlanView;
-    expect(reopenedView.frozenInput?.entity_revision).toBe(1);
+    reopened.close();
+    expect(await sealedInput(fixture.context, PLAN_ID)).toEqual(frozenBefore);
+    expect(await bindingOf(fixture.context, WORKFLOW_ID)).toEqual(bindingBefore);
+    expect(await registerPlanWorkflow(fixture, "op-frozen-source")).toEqual(receipt);
   });
 });
+
+
 
 /* ------------------------------------------------------------------------ *
  * Recovery-first registration on the ACTIVE DB (E06b: A02/A04/A05/A26/A28)
@@ -1294,37 +1100,3 @@ describe("execution-registration \u2014 recovery-first registration", () => {
   });
 });
 
-/** A real reviewed Assignment plus the plan markdown it pins, inside one harness. */
-function writeAssignmentDocuments(harnessRoot: string, planId: string, branch: string): { assignmentPath: string; planPath: string } {
-  const planDir = join(harnessRoot, "plans");
-  const sddDir = join(harnessRoot, "sdd", planId);
-  const worktreeDir = join(harnessRoot, "worktrees", planId);
-  mkdirSync(planDir, { recursive: true });
-  mkdirSync(sddDir, { recursive: true });
-  const planPath = join(planDir, `${planId}.md`);
-  writeFileSync(planPath, `# ${planId}\n`);
-  const headers: Record<string, string> = {
-    "Execution scope": "plan",
-    "Execute as": "project-manager",
-    Delegation: "allowed",
-    "Control harness root": harnessRoot,
-    "Workflow id": WORKFLOW_ID,
-    "Plan id": planId,
-    "Plan Path": planPath,
-    "Worktree path": worktreeDir,
-    "Working branch": branch,
-    "SDD dir": sddDir,
-    "QA gate": "mandatory",
-    "Findings cleanup": "allow-residual",
-    "Prepare gate": "go",
-  };
-  const assignmentPath = join(harnessRoot, "assignments", `${planId}.md`);
-  mkdirSync(dirname(assignmentPath), { recursive: true });
-  writeFileSync(
-    assignmentPath,
-    `${Object.entries(headers)
-      .map(([header, value]) => `**${header}**: ${value}`)
-      .join("\n")}\n`,
-  );
-  return { assignmentPath, planPath };
-}

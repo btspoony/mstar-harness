@@ -22,8 +22,6 @@ Phase 2–5 全程有效（drive + loop 共有的行）：
 
 派发细则 → **`mstar-dispatch-gates`** + **`mstar-host`**。Phase 3 细则 → **`mstar-iteration/references/phase-3-iteration-close.md`** + **`mstar-compound`**。
 
-**Scoped primary route 例外**（`references/plan-scoped-pm.md`）：scoped plan 会话只驱动**本 plan**——不 seed 全局 phase todos，不做「最后一个 plan `Done` → Phase 3」判断，不加载 compound；其 finish 是 **durable handoff**，`Done`、lease 删除与 Phase 3–6 归 coordinator。
-
 ## Assignment preflight（bash 块 — byte-identical 共享副本）
 
 `mstar-harness` bin 未安装时静默跳过；在每次 implement/QC/QA 派发前（**SDD** 下为最新 `{SDD_DIR}/task-N-brief.md` 或临时写盘的 Assignment）校验。模式由迭代 compass frontmatter 的 `enforcement` 键决定（Slice 5）：
@@ -44,7 +42,7 @@ if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validat
 
 ## Session todos（重叠行；drive + loop 共有）
 
-**Scoped primary route 不 seed 本表任何条目**：其 session todos 是 plan-local 任务列表，finish = handoff，**不**追加 `phase-3-*` / `phase-4-*` / `phase-5-*` / `phase-6-*` → **`plan-scoped-pm.md`** §4–§5。下表仅适用于整迭代路线（no-args `iteration-drive` / `iteration-loop`）。
+The primary coordinator projects the entire selected iteration into the table below; a row completing does not discharge its parent delivery obligations.
 
 | Todo id | 何时追加 | 何时可勾掉 |
 |---------|----------|------------|
@@ -54,7 +52,7 @@ if command -v mstar-harness >/dev/null 2>&1; then mstar-harness dispatch validat
 | `phase-5-pr-merge-ready` | Phase 4 完成后 | Phase 5 §5.5 exit 全 `[x]` |
 | `phase-6-post-merge-close` | §5.2 exit 后 PR **已 merge**（mergeable ≠ merged） | Phase 6 §6.1–§6.4 完成（`mstar status workflow-close --workflow <id>` exit 0 + 投影一致） |
 
-Phase/gate 转换时按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」按上表刷新会话 todos：先按 snapshot / plan 证据勾掉已完成 phase 条目，保留未决 gate / 未来 phase 条目，再追加下一 phase 条目；todos 只是投影，不授权状态转换。
+Phase/gate 转换按 **`mstar-host`**「Phase-transition todo refresh (host-agnostic)」刷新：依据 ACTIVE 执行行与 authored plan 证据（pre-activation：snapshot / plan）勾掉完成项，保留未决 gate / 未来 phase，再追加下一批；todos 只是投影，不授权转换。
 
 ## Continuous execution STOP list（重叠行；start / drive / loop 共有）
 

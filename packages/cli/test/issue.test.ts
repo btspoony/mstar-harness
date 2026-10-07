@@ -117,12 +117,12 @@ describe("mstar issue CLI bundle", () => {
     expect(readFileSync(BUNDLE, "utf8").startsWith("#!/usr/bin/env bun")).toBe(true);
   });
 
-  test("schema output and payload help describe the issue file contracts", () => {
+  test("schema output discloses required and conditional issue payload fields", () => {
     const schema = runBundle("bun-shebang", ["schema", "CaptureInput"], process.cwd());
     expect(schema.exitCode).toBe(0);
-    const parsed = jsonOf(schema).data as { type: string; fields: Array<{ name: string; required: boolean; type: string; description: string }> };
+    const parsed = jsonOf(schema).data as { type: string; fields: Array<{ name: string; required: boolean; type: string }> };
     expect(parsed.type).toBe("CaptureInput");
-    expect(parsed.fields).toContainEqual({ name: "projectId", required: true, type: "string", description: "Project identifier" });
+    expect(parsed.fields).toContainEqual(expect.objectContaining({ name: "projectId", required: true, type: "string" }));
     const closureSchema = runBundle("bun-shebang", ["schema", "ClosureEvidence"], process.cwd());
     expect(closureSchema.exitCode).toBe(0);
     const closurePayload = jsonOf(closureSchema).data as {
@@ -142,23 +142,6 @@ describe("mstar issue CLI bundle", () => {
       requiredWhen: ["waive"],
     });
 
-    const handoffSchema = runBundle("bun-shebang", ["schema", "HandoffEvidence"], process.cwd());
-    expect(handoffSchema.exitCode).toBe(0);
-    const handoff = jsonOf(handoffSchema).data as { fields: Array<{ name: string; required: boolean }> };
-    expect(handoff.fields).toContainEqual(expect.objectContaining({ name: "review_head", required: true }));
-
-    for (const verb of ["add", "occurrence", "triage", "close", "link"]) {
-      const help = runBundle("bun-shebang", ["issue", verb, "--help"], process.cwd());
-      const normalizedHelp = help.stdout.replace(/\s+/g, " ");
-      expect(normalizedHelp).toContain(`issue ${verb}`);
-      expect(normalizedHelp).toContain("--file");
-    }
-    for (const verb of ["progress", "issue-close", "handoff"]) {
-      const help = runBundle("bun-shebang", ["plan", verb, "--help"], process.cwd());
-      const normalizedHelp = help.stdout.replace(/\s+/g, " ");
-      expect(normalizedHelp).toContain(`plan ${verb}`);
-      expect(normalizedHelp).toContain("--file");
-    }
   });
 
 

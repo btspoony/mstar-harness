@@ -15,6 +15,9 @@ import {
   registerCatalogEntity,
   storeDbPath,
   type ExecutionCaller,
+  type ExecutionIdentity,
+  type ExecutionPlanView,
+  type ExecutionRead,
   type ExecutionSessionRef,
   type ExecutionToken,
   type StoreContext,
@@ -22,22 +25,27 @@ import {
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
 import { DatabaseSync } from "node:sqlite";
-import { executeCommand } from "./definitions.js";
-import type { CommandEnvelope, InvocationContext } from "./types.js";
+import { executeCommand } from "../src/definitions.js";
+import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const TS = "2026-01-02T03:04:05.000Z";
 const WORKFLOW_ID = "wf-1";
 const PLAN_ID = "p-1";
-const COORDINATOR_ID = "host-coord";
-const PLAN_PM_ID = "host-plan";
 const PLAN2_ID = "p-2";
-const PLAN2_PM_ID = "host-plan-2";
-const GHOST_PM_ID = "host-plan-ghost";
+const COORDINATOR_ID = "host-coord";
+const GHOST_ID = "host-coord-ghost";
+const OTHER_ID = "host-coord-other";
 const SOURCE_BRANCH = `feature/${PLAN_ID}`;
 const INTEGRATION_BRANCH = `integration/${WORKFLOW_ID}`;
 const COMPASS_REF = "iterations/iter-20260101-plan/delivery-compass.md";
+const WORKTREE = "/srv/worktrees/sparse-plan";
 
 const PROGRESS = { status: "InProgress", summary: "sparse intent", evidence_paths: [] };
+
+/** The trusted coordinator's identity tuple (the one §3.1 shape, no plan scope). */
+function coordinatorTupleOf(sessionId: string): ExecutionIdentity {
+  return { source: "local", sessionId, workflowId: WORKFLOW_ID, role: "coordinator" };
+}
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-sparse-plan-admission-"));
 afterAll(() => {
@@ -60,22 +68,21 @@ function writeText(path: string, text: string): void {
 }
 
 /**
- * One real isolated ACTIVE execution store holding one prepared workflow plan
- * (`wf-1`/`p-1`) with its coordinator and plan-pm seats bound through the real
- * verbs — the same shape the engine's own `preparedPlanFixture` builds.
+ * One real isolated ACTIVE execution store holding one running workflow with
+ * two plan rows prepared through the ordinary revisable configuration under its
+ * coordinator binding — the shape the direct coordinator model produces. There
+ * is no second seat: one workflow has one coordinator.
  */
 async function buildFixture(label: string): Promise<{
   context: StoreContext;
   repoRoot: string;
   coordinatorRef: ExecutionSessionRef;
-  planRef: ExecutionSessionRef;
-  plan2Ref: ExecutionSessionRef;
 }> {
   const repoRoot = realpathSync(mkdtempSync(join(scratchRoot(), `${label}-`)));
   runGit(["init", "-q", "-b", "main"], repoRoot);
   runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], repoRoot);
   mkdirSync(join(repoRoot, ".mstar"), { recursive: true });
-  const context: StoreContext = { harnessDir: repoRoot };
+  const context: StoreContext = { harnessDir: join(repoRoot, ".mstar") };
   const store = await initializeStore(context);
   store.close();
   const initialized = await initializeExecutionAuthority(context);
@@ -93,8 +100,8 @@ async function buildFixture(label: string): Promise<{
     { operationId: `register-${PLAN2_ID}-${label}`, actor: "sparse-plan-admission.test" },
   );
 
-  const coordinatorCaller: ExecutionCaller = { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID, planId: null };
-  const coordinatorIdentity = { source: "local" as const, ...coordinatorCaller };
+  const coordinatorCaller: ExecutionCaller = { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID };
+  const coordinatorIdentity = coordinatorTupleOf(COORDINATOR_ID);
   // The snapshot literal is the engine's own workflow shape; the external type
   // is stricter than the fixture needs, so the cast is local and reasoned.
   const entry: WorkflowEntry = { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` };
@@ -120,67 +127,46 @@ async function buildFixture(label: string): Promise<{
   const created = await createExecutionWorkflow(executionContextFor(context, coordinatorIdentity), { entry, snapshot, expected: initialized.token, operationId: `create-${label}` });
   const coordinatorBind = await bindExecutionSession(executionContextFor(context, coordinatorIdentity), {
     workflowId: WORKFLOW_ID,
-    planId: null,
-    role: "coordinator",
     expected: created.data.workflows[0]!.workflowToken,
     operationId: `bind-coordinator-${label}`,
   });
 
-  // The store's own control harness root is the `.mstar` directory under the
-  // repo root; the sealed Assignment must name exactly that root.
   const harnessRoot = join(repoRoot, ".mstar");
   const coordinatorContext = executionContextFor(context, coordinatorIdentity);
   for (const planId of [PLAN_ID, PLAN2_ID] as const) {
     const planPath = join(harnessRoot, "plans", `${planId}.md`);
     writeText(planPath, `# ${planId}\n`);
-    const assignmentPath = join(harnessRoot, "assignments", `${planId}.md`);
-    writeText(
-      assignmentPath,
-      [
-        "**Execution scope**: plan",
-        "**Execute as**: project-manager",
-        "**Delegation**: allowed",
-        `**Control harness root**: ${harnessRoot}`,
-        `**Workflow id**: ${WORKFLOW_ID}`,
-        `**Plan id**: ${planId}`,
-        `**Plan Path**: ${planPath}`,
-        `**Worktree path**: ${join(harnessRoot, "worktrees", planId)}`,
-        `**Working branch**: feature/${planId}`,
-        `**SDD dir**: ${join(harnessRoot, "sdd", planId)}`,
-        "**QA gate**: mandatory",
-        "**Findings cleanup**: zero-residual",
-        "**Prepare gate**: go",
-        "",
-      ].join("\n"),
-    );
-    const planToken: ExecutionToken = (await readExecutionPlan(coordinatorContext, coordinatorBind.data, planId)).token;
+    // A REAL checkout on the branch prepare records: prepare validates the
+    // actual checkout and branch, not merely that a directory exists.
+    const worktree = join(repoRoot, `wt-${planId}`);
+    runGit(["worktree", "add", "-q", "-b", `feature/${planId}`, worktree], repoRoot);
+    const planToken: ExecutionToken = (await readExecutionPlan(coordinatorContext, planId)).token;
     await mutateExecutionPlan(coordinatorContext, {
       operationId: `prepare-${planId}-${label}`,
       session: coordinatorBind.data,
       expected: planToken,
       planId,
-      operation: { kind: "prepare", assignmentPath },
+      operation: {
+        kind: "prepare",
+        config: { worktreePath: worktree, workingBranch: `feature/${planId}`, qaGate: "mandatory", findingsCleanup: "allow-residual" },
+      },
     });
   }
-  const planTokenAfterPrepare: ExecutionToken = (await readExecutionPlan(coordinatorContext, coordinatorBind.data, PLAN_ID)).token;
-  const planBind = await bindExecutionSession(
-    executionContextFor(context, { source: "local", sessionId: PLAN_PM_ID, role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID }),
-    { workflowId: WORKFLOW_ID, planId: PLAN_ID, role: "plan-pm", expected: planTokenAfterPrepare, operationId: `bind-plan-${label}` },
-  );
-  const plan2Token: ExecutionToken = (await readExecutionPlan(coordinatorContext, coordinatorBind.data, PLAN2_ID)).token;
-  const plan2Bind = await bindExecutionSession(
-    executionContextFor(context, { source: "local", sessionId: PLAN2_PM_ID, role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN2_ID }),
-    { workflowId: WORKFLOW_ID, planId: PLAN2_ID, role: "plan-pm", expected: plan2Token, operationId: `bind-${PLAN2_ID}-${label}` },
-  );
-  return { context, repoRoot, coordinatorRef: coordinatorBind.data, planRef: planBind.data, plan2Ref: plan2Bind.data };
+  return { context, repoRoot, coordinatorRef: coordinatorBind.data };
 }
 
-async function runPlanCommand(repoRoot: string, input: Record<string, unknown>, sessionId?: string): Promise<CommandEnvelope> {
+async function runPlanCommand(
+  repoRoot: string,
+  input: Record<string, unknown>,
+  sessionId?: string,
+  executionIdentity?: ExecutionIdentity,
+): Promise<CommandEnvelope> {
   const context: InvocationContext = {
     cwd: repoRoot,
     controlRoot: null,
     versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     signal: new AbortController().signal,
+    ...(executionIdentity === undefined ? {} : { executionIdentity }),
     ...(sessionId === undefined ? {} : { sessionId }),
     effects: {
       readInput: async () => "",
@@ -209,14 +195,11 @@ type GroupedFacts = {
   current_facts?: unknown[];
   sources_tried?: unknown[];
   available_work?: unknown[];
-  caller_session?: unknown;
-  reference_session?: unknown;
-  row_state?: unknown;
   recovery?: { outcome?: unknown; commitState?: unknown; unresolved?: Array<{ code?: unknown }> };
 };
 
 /** Raw row counts proving a refused call changed nothing (no receipt, no binding, no plan write). */
-function executionFootprint(context: StoreContext): { operations: number; sessions: number; plans: number; leases: number } {
+function executionFootprint(context: StoreContext): { operations: number; sessions: number; plans: number } {
   const db = new DatabaseSync(storeDbPath(context));
   try {
     const count = (sql: string): number => {
@@ -227,7 +210,6 @@ function executionFootprint(context: StoreContext): { operations: number; sessio
       operations: count("select count(*) as n from execution_operations"),
       sessions: count("select count(*) as n from execution_sessions"),
       plans: count("select count(*) as n from execution_plans"),
-      leases: count("select count(*) as n from execution_leases"),
     };
   } finally {
     db.close();
@@ -261,60 +243,100 @@ function operationReceiptJson(context: StoreContext, operationId: string): strin
 }
 
 describe("sparse plan intent admission", () => {
-  test("a sparse active operation with only sessionRef, operation id and payload is admitted by the engine", async () => {
-    const { repoRoot, planRef } = await buildFixture("sparse-accepted");
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-sparse-admitted", progress: PROGRESS }, PLAN_PM_ID);
-    // RED (current transport gate): status usage, "active operation requires
-    // runtime session identity, sessionRef, full execution token and operation
-    // id" — the engine's sparse resolver never runs. Target contract: the
-    // engine admits it and the plan moves to InProgress.
+  test("a sparse active operation with sessionRef, plan, operation id and payload is admitted by the engine", async () => {
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-accepted");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-admitted", progress: PROGRESS },
+      COORDINATOR_ID,
+    );
     expect(envelope.status).toBe("ok");
     if (envelope.status !== "ok") throw new Error(envelope.message);
-    // executeCommand returns CommandEnvelope<unknown>; the receipt shape is
-    // the engine's ExecutionReceipt<ExecutionPlanView>.
     const receipt = envelope.data as PlanReceiptData;
     expect(receipt.replayed).toBe(false);
     expect(receipt.data?.coordination?.progress?.summary).toBe("sparse intent");
     // The authoritative read serves the written state, not just the receipt.
     const stored = await readExecutionPlan(
-      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: PLAN_PM_ID, role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID }),
-      planRef,
+      executionContextFor(context, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
+      coordinatorRef,
       PLAN_ID,
     );
-    // The plan row's JSON shape is engine-internal; the read-back is narrowed
-    // locally to the one field this test asserts.
-    const storedPlan = stored.data.plan as { status?: unknown };
-    expect(storedPlan.status).toBe("InProgress");
+    expect(stored.data.plan.status).toBe("InProgress");
   });
 
   test("the same sparse operation id replays its own receipt", async () => {
-    const { repoRoot, planRef } = await buildFixture("sparse-replay");
-    const input = { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-sparse-replay", progress: PROGRESS };
-    const first = await runPlanCommand(repoRoot, input, PLAN_PM_ID);
+    const { repoRoot, coordinatorRef } = await buildFixture("sparse-replay");
+    const input = { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-replay", progress: PROGRESS };
+    const first = await runPlanCommand(repoRoot, input, COORDINATOR_ID);
     expect(first.status).toBe("ok");
-    const second = await runPlanCommand(repoRoot, input, PLAN_PM_ID);
+    const second = await runPlanCommand(repoRoot, input, COORDINATOR_ID);
     expect(second.status).toBe("ok");
     if (second.status !== "ok") throw new Error(second.message);
-    const replayReceipt = second.data as PlanReceiptData;
-    expect(replayReceipt.replayed).toBe(true);
+    expect((second.data as PlanReceiptData).replayed).toBe(true);
+  });
+
+  test("the coordinator reads a row with no session reference at all", async () => {
+    const { context: storeContext, repoRoot } = await buildFixture("sparse-direct-show");
+    const before = executionFootprint(storeContext);
+    const planBefore = planRowJson(storeContext, PLAN_ID);
+    const context: InvocationContext = {
+      cwd: repoRoot,
+      controlRoot: null,
+      sessionId: COORDINATOR_ID,
+      versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+      signal: new AbortController().signal,
+      effects: {
+        readInput: async () => "",
+        spawn: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "" }),
+        startDashboard: async () => { throw new Error("unused"); },
+        openBrowser: async () => { throw new Error("unused"); },
+      },
+    };
+    const envelope = await executeCommand("plan.show", { workflow: WORKFLOW_ID, plan: PLAN_ID, harness: join(repoRoot, ".mstar") }, context);
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    const data = envelope.data as ExecutionRead<ExecutionPlanView>;
+    expect(data.data.plan.id).toBe(PLAN_ID);
+    expect(executionFootprint(storeContext)).toEqual(before);
+    expect(planRowJson(storeContext, PLAN_ID)).toEqual(planBefore);
+  });
+
+  test("a sparse active operation without an addressed plan is a usage refusal", async () => {
+    const { repoRoot, coordinatorRef } = await buildFixture("sparse-no-plan");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), operation: "op-sparse-no-plan", progress: PROGRESS },
+      COORDINATOR_ID,
+    );
+    expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    if (envelope.status !== "usage") throw new Error(`expected usage, got ${envelope.status}`);
+    expect(envelope.message).toContain("--plan");
   });
 
   test("an explicit stale execution token is refused at the engine authority boundary", async () => {
-    const { context, repoRoot, planRef } = await buildFixture("sparse-stale");
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-stale");
     const staleToken: ExecutionToken = (await readExecutionPlan(
-      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: PLAN_PM_ID, role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID }),
-      planRef,
+      executionContextFor(context, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
+      coordinatorRef,
       PLAN_ID,
     )).token;
     // One committed operation moves the plan's revision: the captured token
     // WAS genuinely valid and is now stale.
-    const accepted = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-stale-mover", progress: PROGRESS }, PLAN_PM_ID);
+    const accepted = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-stale-mover", progress: PROGRESS },
+      COORDINATOR_ID,
+    );
     expect(accepted.status).toBe("ok");
     const afterMover = executionFootprint(context);
     const planAfterMover = planRowJson(context, PLAN_ID);
     const moverReceipt = operationReceiptJson(context, "op-stale-mover");
     expect(moverReceipt).not.toBeNull();
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-sparse-stale", expect: staleToken, progress: PROGRESS }, PLAN_PM_ID);
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-stale", expect: staleToken, progress: PROGRESS },
+      COORDINATOR_ID,
+    );
     expect(envelope).toMatchObject({ status: "refused", exitCode: 1, code: "execution.stale-token" });
     // The stale refusal neither mutates in place nor records a receipt.
     expect(executionFootprint(context)).toEqual(afterMover);
@@ -324,8 +346,11 @@ describe("sparse plan intent admission", () => {
   });
 
   test("a caller without an independent runtime identity cannot adopt the ref's identity", async () => {
-    const { repoRoot, planRef } = await buildFixture("sparse-no-identity");
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), operation: "op-sparse-no-identity", progress: PROGRESS });
+    const { repoRoot, coordinatorRef } = await buildFixture("sparse-no-identity");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-no-identity", progress: PROGRESS },
+    );
     // The ref names a session, but the transport carries no runtime caller:
     // the command refuses before constructing any identity from the ref —
     // nothing executes and the ref's identity is never adopted.
@@ -335,101 +360,126 @@ describe("sparse plan intent admission", () => {
   });
 
   test("an active progress update without an operation id persists the plan state", async () => {
-    const { repoRoot, planRef } = await buildFixture("sparse-derived-operation");
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-derived-operation");
     const progress = { ...PROGRESS, summary: "persisted without explicit operation id" };
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(planRef), progress }, PLAN_PM_ID);
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, progress },
+      COORDINATOR_ID,
+    );
     expect(envelope.status).toBe("ok");
     const stored = await readExecutionPlan(
-      executionContextFor({ harnessDir: repoRoot }, { source: "local", sessionId: PLAN_PM_ID, role: "plan-pm", workflowId: WORKFLOW_ID, planId: PLAN_ID }),
-      planRef,
+      executionContextFor(context, { source: "local", sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID }),
+      coordinatorRef,
       PLAN_ID,
     );
-    const storedPlan = stored.data.plan as { status?: unknown };
-    const storedProgress = stored.data.coordination?.progress as { summary?: unknown } | undefined;
-    expect(storedPlan.status).toBe("InProgress");
-    expect(storedProgress?.summary).toBe(progress.summary);
+    expect(stored.data.plan.status).toBe("InProgress");
+    expect(stored.data.coordination?.progress?.summary).toBe(progress.summary);
   });
 
-  test("a live foreign holder's reference is refused instead of being adopted", async () => {
-    const { context, repoRoot, plan2Ref } = await buildFixture("sparse-foreign");
+  test("a reference under another acquired identity cannot write for the bound coordinator", async () => {
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-copied");
     const before = executionFootprint(context);
-    const plan2RowsBefore = planRowJson(context, PLAN2_ID);
-    // A REAL, live, bound plan-pm reference — of the plan this caller does
-    // not own. The engine refuses it; it is never silently adopted.
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(plan2Ref), operation: "op-sparse-foreign", progress: PROGRESS }, PLAN_PM_ID);
-    expect(envelope).toMatchObject({ status: "refused", code: "coordination.session-mismatch" });
+    const planRowsBefore = planRowJson(context, PLAN_ID);
+    // A copied reference cannot authorize the independently acquired caller.
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: encodeExecutionSessionRef(coordinatorRef), plan: PLAN_ID, operation: "op-sparse-copied", progress: PROGRESS },
+      OTHER_ID,
+    );
+    expect(envelope).toMatchObject({ status: "refused", code: "coordination.identity-mismatch", exitCode: 1 });
     expect(envelope.status).not.toBe("ok");
     expect(envelope.status).not.toBe("usage");
     expect(executionFootprint(context)).toEqual(before);
-    expect(planRowJson(context, PLAN2_ID)).toEqual(plan2RowsBefore);
-    expect(operationReceiptJson(context, "op-sparse-foreign")).toBeNull();
-    // QC1-001: the foreign refusal keeps its flat identity facts AND now
-    // carries the engine's grouped recovery contract beside them.
-    const details = envelope.details as GroupedFacts;
-    expect(details.caller_session).toBe(PLAN_PM_ID);
-    expect(details.reference_session).toBe(PLAN2_PM_ID);
-    expect(details.current_facts?.length).toBeGreaterThan(0);
-    const foreignFacts = JSON.stringify(details.current_facts);
-    expect(foreignFacts).toContain(PLAN_PM_ID);
-    expect(foreignFacts).toContain(PLAN2_PM_ID);
-    expect(details.sources_tried?.length).toBeGreaterThan(0);
-    expect(details.available_work?.length).toBeGreaterThan(0);
-    expect(details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
-    expect(details.recovery?.unresolved?.[0]).toMatchObject({ code: "coordination.session-mismatch" });
+    expect(planRowJson(context, PLAN_ID)).toEqual(planRowsBefore);
+    expect(operationReceiptJson(context, "op-sparse-copied")).toBeNull();
   });
 
   test("a self-consistent but unbound session reference is refused at the authority boundary", async () => {
-    const { context, repoRoot, planRef } = await buildFixture("sparse-ghost");
+    const { context, repoRoot, coordinatorRef } = await buildFixture("sparse-ghost");
     const before = executionFootprint(context);
     const planRowsBefore = planRowJson(context, PLAN_ID);
-    const ghost = encodeExecutionSessionRef({ ...planRef, sessionId: GHOST_PM_ID });
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: ghost, operation: "op-sparse-ghost", progress: PROGRESS }, GHOST_PM_ID);
+    const ghost = encodeExecutionSessionRef({ ...coordinatorRef, sessionId: GHOST_ID });
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { sessionRef: ghost, plan: PLAN_ID, operation: "op-sparse-ghost", progress: PROGRESS },
+      GHOST_ID,
+    );
     expect(envelope).toMatchObject({ status: "refused", code: "execution.session-unavailable" });
     expect(envelope.status).not.toBe("usage");
     expect(envelope.code).not.toBe("command.invalid-input");
     expect(executionFootprint(context)).toEqual(before);
     expect(planRowJson(context, PLAN_ID)).toEqual(planRowsBefore);
     expect(operationReceiptJson(context, "op-sparse-ghost")).toBeNull();
-    // QC1-001: the refusal keeps its stable authority verdict and now carries
-    // the engine's grouped recovery facts — what the store actually read.
+    // The refusal keeps its stable authority verdict and carries the engine's
+    // grouped recovery facts — what the store actually read.
     const details = envelope.details as GroupedFacts;
     expect(details.current_facts?.length).toBeGreaterThan(0);
-    expect(JSON.stringify(details.current_facts)).toContain(GHOST_PM_ID);
+    expect(JSON.stringify(details.current_facts)).toContain(GHOST_ID);
     expect(details.sources_tried?.length).toBeGreaterThan(0);
     expect(details.available_work?.length).toBeGreaterThan(0);
     expect(details.recovery).toMatchObject({ outcome: "unresolved", commitState: "none" });
     expect(details.recovery?.unresolved?.[0]).toMatchObject({ code: "execution.session-unavailable" });
   });
 
-  test("a target no authority can name returns one grouped genuine-facts refusal", async () => {
-    const { repoRoot, coordinatorRef } = await buildFixture("sparse-untargeted");
-    const envelope = await runPlanCommand(repoRoot, { sessionRef: encodeExecutionSessionRef(coordinatorRef), operation: "op-sparse-untargeted", progress: PROGRESS }, COORDINATOR_ID);
-    expect(envelope).toMatchObject({ status: "refused", code: "coordination.invalid-input" });
-    const details = envelope.details as GroupedFacts;
-    expect(Array.isArray(details.current_facts)).toBe(true);
-    expect(details.current_facts?.length).toBeGreaterThan(0);
-    expect(Array.isArray(details.sources_tried)).toBe(true);
-  });
-
   test("the legacy file route still requires its own session instead of reaching the engine", async () => {
     const { repoRoot } = await buildFixture("sparse-file-route");
-    const envelope = await runPlanCommand(repoRoot, { operation: "op-file-route", progress: PROGRESS });
+    const envelope = await runPlanCommand(repoRoot, { plan: PLAN_ID, operation: "op-file-route", progress: PROGRESS });
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+  });
+
+  test("a minted coordinator identity with no reference or workflow selector mutates its row", async () => {
+    const { repoRoot } = await buildFixture("sparse-minted");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { plan: PLAN_ID, operation: "op-sparse-minted", progress: PROGRESS },
+      COORDINATOR_ID,
+      coordinatorTupleOf(COORDINATOR_ID),
+    );
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    const receipt = envelope.data as PlanReceiptData;
+    expect(receipt.replayed).toBe(false);
+    expect(receipt.data?.coordination?.progress?.summary).toBe("sparse intent");
+  });
+
+  test("an explicit session ID with no reference or minted transport mutates its row", async () => {
+    const { repoRoot } = await buildFixture("sparse-explicit-id");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { plan: PLAN_ID, operation: "op-sparse-explicit-id", progress: PROGRESS, workflow: WORKFLOW_ID },
+      COORDINATOR_ID,
+    );
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    expect((envelope.data as PlanReceiptData).data?.coordination?.progress?.summary).toBe("sparse intent");
+  });
+
+  test("an ambient host session ID with no reference or minted transport mutates its row", async () => {
+    const { repoRoot } = await buildFixture("sparse-ambient-id");
+    const envelope = await runPlanCommand(
+      repoRoot,
+      { plan: PLAN_ID, operation: "op-sparse-ambient", progress: PROGRESS, workflow: WORKFLOW_ID },
+      COORDINATOR_ID,
+    );
+    expect(envelope.status).toBe("ok");
+    if (envelope.status !== "ok") throw new Error(envelope.message);
+    expect((envelope.data as PlanReceiptData).data?.coordination?.progress?.summary).toBe("sparse intent");
   });
 
   test("the legacy file route still demands its own revision token", async () => {
     const { repoRoot } = await buildFixture("sparse-file-route-revision");
     // A valid legacy session envelope at the exact path the JSON route writes,
     // so the refusal is the route's own revision gate — not a missing file.
-    const sessionPath = join(repoRoot, "workflows", WORKFLOW_ID, "sessions", `plan-pm-${PLAN_PM_ID}.json`);
+    const sessionPath = join(repoRoot, "workflows", WORKFLOW_ID, "sessions", `coordinator-${COORDINATOR_ID}.json`);
     writeText(
       sessionPath,
-      JSON.stringify({ schema_version: 1, role: "plan-pm", session_id: PLAN_PM_ID, plan_id: PLAN_ID, workflow_id: WORKFLOW_ID, harness_root: repoRoot }, null, 2),
+      JSON.stringify({ schema_version: 1, role: "coordinator", session_id: COORDINATOR_ID, workflow_id: WORKFLOW_ID, harness_root: repoRoot }, null, 2),
     );
     const envelope = await runPlanCommand(
       repoRoot,
-      { session: sessionPath, operation: "op-file-route-revision", progress: PROGRESS },
-      PLAN_PM_ID,
+      { session: sessionPath, plan: PLAN_ID, operation: "op-file-route-revision", progress: PROGRESS },
+      COORDINATOR_ID,
     );
     // The file route's own expectedRevision gate fires before any store read:
     // the execution token vocabulary never substitutes for the revision.

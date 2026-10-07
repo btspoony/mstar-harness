@@ -34,7 +34,7 @@
  * `mstar status tech-debt` computes from the issue store (`readIssueRollup`).
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { readJson, SEVERITY_ORDER, type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { resolveIterationDir } from "./path.js";
 import { withStatusWriteLock } from "./lease.js";
@@ -116,7 +116,6 @@ export type PlanRow = {
   status?: unknown;
   /** Opaque plan metadata; metadata.track_branches retains active L2 Assignment working branches. */
   metadata?: unknown;
-  execution_lease?: unknown;
   [key: string]: unknown;
 };
 
@@ -212,15 +211,14 @@ function validateNonEmptyString(
  * § Compatibility: read accepts `id` or `plan_id`; write one canonical key).
  * Required: `id` (or legacy `plan_id`), `title`, `file`, `status` (one of
  * Todo|InProgress|InReview|Blocked|Done); `metadata` optional but must be an
- * object when present. `execution_lease` is type-checked here; the full lease
- * state machine lives in the lease module (Task 5).
+ * object when present.
  */
 export function validatePlanRow(row: unknown): GateResult {
   const violations: ValidationResult[] = [];
   if (!isPlainObject(row)) {
     return { ok: false, violations: [violation("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
-  const { id, plan_id: planId, title, file, status, metadata, execution_lease } = row;
+  const { id, plan_id: planId, title, file, status, metadata } = row;
 
   if (id === undefined && planId === undefined) {
     violations.push(violation("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
@@ -267,19 +265,6 @@ export function validatePlanRow(row: unknown): GateResult {
 
   if (metadata !== undefined && !isPlainObject(metadata)) {
     violations.push(violation("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
-  }
-  if (execution_lease !== undefined && !isPlainObject(execution_lease)) {
-    violations.push(violation("medium", "status.plan-row.invalid-execution-lease", "execution_lease must be an object"));
-  }
-  if (status === "Done" && execution_lease !== undefined) {
-    violations.push(
-      violation(
-        "medium",
-        "status.plan-row.done-with-lease",
-        "plan status Done must not carry an execution_lease \u2014 the Done authority deletes the lease in the same complete-file update as status: \"Done\" (status-and-residuals.md \u00a7 Hold, release, and override)",
-        "delete plans[].execution_lease in the same update that sets status: \"Done\"",
-      ),
-    );
   }
 
   return { ok: violations.length === 0, violations };
@@ -816,7 +801,7 @@ export async function registerWorkflowEntryLocked(statusPath: string, entry: Wor
  * existing snapshot), so it is passed through as `undefined` without
  * creating a lockdir inside a directory that does not exist.
  */
-async function withRegisteredSnapshotLock<T>(
+export async function withRegisteredSnapshotLock<T>(
   harnessDir: string,
   entry: WorkflowEntry,
   fn: (snapshot: Record<string, unknown> | undefined) => Promise<T>,
@@ -977,6 +962,93 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
       await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
       return doc;
     });
+  });
+}
+
+/** Remove a workflow only while its root entry still names the expected snapshot. */
+export async function unregisterWorkflowIfMatches(
+  root: string,
+  id: string,
+  expectedSnapshotPath: string,
+  beforeRemove: (snapshot: Record<string, unknown>) => Promise<void>,
+): Promise<StatusV2Doc> {
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  assertExecutionFileWriteAllowed({ harnessDir });
+  if (typeof id !== "string" || id.trim() === "") throw new Error("workflow id must be non-empty");
+  if (!isAbsolute(expectedSnapshotPath)) throw new Error("expected snapshot path must be absolute");
+  const store = getArtifactStore();
+  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
+  return withStatusWriteLock(statusPath, async () => {
+    const doc = readJson(statusPath) as StatusV2Doc;
+    if (!Array.isArray(doc.workflows)) throw new Error("status.json workflows must be an array");
+    const entry = doc.workflows.find((workflow) => workflow.id === id);
+    const observedSnapshotPath = entry === undefined
+      ? "<missing>"
+      : resolve(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE);
+    if (entry === undefined || observedSnapshotPath !== resolve(expectedSnapshotPath)) {
+      throw Object.assign(
+        new Error(`root entry snapshot path mismatch (observed ${observedSnapshotPath}, expected ${resolve(expectedSnapshotPath)})`),
+        { code: "catalog.purge-root-entry-mismatch" },
+      );
+    }
+    return withRegisteredSnapshotLock(harnessDir, entry, async (snapshot) => {
+      if (snapshot === undefined) throw new Error(`registered snapshot is missing for workflow ${JSON.stringify(id)}`);
+      await beforeRemove(snapshot);
+      doc.workflows = doc.workflows.filter((workflow) => workflow.id !== id);
+      doc.updated_at = todayString();
+      const gate = validateStatusV2(doc, { harnessDir });
+      if (!gate.ok) throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
+      return doc;
+    });
+  });
+}
+
+/**
+ * Hold the root and expected snapshot locks while a purge performs its journal
+ * transaction and destructive filesystem work. The callback must call
+ * `removeRoot` inside that transaction, before deleting snapshot bytes.
+ */
+export async function withWorkflowPurgeLocks<T>(
+  root: string,
+  id: string,
+  expectedSnapshotPath: string,
+  fn: (snapshot: Record<string, unknown> | undefined, rootPresent: boolean, removeRoot: () => Promise<void>) => Promise<T>,
+  testHooks?: { beforeRootAbsentSnapshotLock?: () => void },
+): Promise<T> {
+  const statusPath = resolve(root);
+  const harnessDir = dirname(statusPath);
+  assertExecutionFileWriteAllowed({ harnessDir });
+  if (typeof id !== "string" || id.trim() === "") throw new Error("workflow id must be non-empty");
+  if (!isAbsolute(expectedSnapshotPath)) throw new Error("expected snapshot path must be absolute");
+  const store = getArtifactStore();
+  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
+  return withStatusWriteLock(statusPath, async () => {
+    const doc = readJson(statusPath) as StatusV2Doc;
+    if (!Array.isArray(doc.workflows)) throw new Error("status.json workflows must be an array");
+    const entry = doc.workflows.find((workflow) => workflow.id === id);
+    if (entry !== undefined && resolve(harnessDir, entry.dir, WORKFLOW_SNAPSHOT_FILE) !== resolve(expectedSnapshotPath)) {
+      throw Object.assign(new Error(`root entry snapshot path mismatch for workflow ${JSON.stringify(id)}`), {
+        code: "catalog.purge-root-entry-mismatch",
+      });
+    }
+    const removeRoot = async (): Promise<void> => {
+      if (entry === undefined) return;
+      doc.workflows = doc.workflows.filter((workflow) => workflow.id !== id);
+      doc.updated_at = todayString();
+      const gate = validateStatusV2(doc, { harnessDir });
+      if (!gate.ok) throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
+      await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
+    };
+    if (entry !== undefined) {
+      return withRegisteredSnapshotLock(harnessDir, entry, (snapshot) => {
+        if (snapshot === undefined) throw new Error(`registered snapshot is missing for workflow ${JSON.stringify(id)}`);
+        return fn(snapshot, true, removeRoot);
+      });
+    }
+    testHooks?.beforeRootAbsentSnapshotLock?.();
+    return withStatusWriteLock(expectedSnapshotPath, () => fn(readRegisteredSnapshot(expectedSnapshotPath), false, removeRoot));
   });
 }
 

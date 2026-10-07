@@ -1,5 +1,5 @@
 /**
- * CLI `mstar plan show` / `status` / `lease` / `iteration gate` reads — the
+ * CLI `mstar plan show` / `status` / integration lease / `iteration gate` reads —
  * execution-authority read route (primary spec §5, plan task S2).
  *
  * Run with
@@ -53,7 +53,6 @@ import {
   openStore,
   registerCatalogEntity,
   type StoreContext,
-  type WorkflowSnapshot,
 } from "@mstar-harness/engine";
 import { readDashboardView } from "../../commands/src/dashboard/store-read";
 
@@ -103,7 +102,7 @@ function cliEnv(fixture: Fixture, extra: Record<string, string> = {}): Record<st
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
-    if (key === "MSTAR_HOST_SESSION_ID") continue;
+    if (key === "MSTAR_HOST_SESSION_ID" || key === "MSTAR_EXECUTION_IDENTITY") continue;
     if (value !== undefined) env[key] = value;
   }
   return { ...env, MSTAR_HARNESS_DIR: fixture.harnessDir, ...extra };
@@ -149,7 +148,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const created = await createExecutionWorkflow(
     {
       harnessDir: fixture.harnessDir,
-      caller: { sessionId: `host-${WORKFLOW_ID}`, role: "coordinator", workflowId: WORKFLOW_ID, planId: null },
+      caller: { sessionId: `host-${WORKFLOW_ID}`, role: "coordinator", workflowId: WORKFLOW_ID },
     },
     {
       entry: { id: WORKFLOW_ID, type: "plan", started_at: TS, dir: `workflows/${WORKFLOW_ID}` },
@@ -163,7 +162,7 @@ async function activeFixture(label: string): Promise<Fixture> {
         plans: [{ id: PLAN_ID, title: "Execution read plan", file: `plans/${PLAN_ID}.md`, status: "Todo" }],
         delivery_kind: "development",
         branch: { source: `feature/${WORKFLOW_ID}`, target: "main" },
-      } as unknown as WorkflowSnapshot,
+      },
       expected: initialized.token,
       operationId: `create-${WORKFLOW_ID}`,
     },
@@ -171,12 +170,10 @@ async function activeFixture(label: string): Promise<Fixture> {
   const bound = await bindExecutionSession(
     {
       harnessDir: fixture.harnessDir,
-      caller: { sessionId: `host-${WORKFLOW_ID}`, workflowId: WORKFLOW_ID, role: "coordinator", planId: null },
+      caller: { sessionId: `host-${WORKFLOW_ID}`, workflowId: WORKFLOW_ID, role: "coordinator" },
     },
     {
       workflowId: WORKFLOW_ID,
-      planId: null,
-      role: "coordinator",
       expected: created.data.workflows[0]!.workflowToken,
       operationId: `bind-${WORKFLOW_ID}`,
     },
@@ -213,7 +210,7 @@ function plantLeftoverSnapshot(fixture: Fixture): string {
         title: "file",
         file: "plans/file.md",
         status: "Done",
-        execution_lease: { lease_id: "lease-from-the-file", holder: "holder-from-the-file", plan_id: "plan-from-the-file" },
+        metadata: { worktree_path: "/tmp/file-worktree", working_branch: "feature/file" },
       },
     ],
     integration_merge_lease: { lease_id: "merge-from-the-file", holder: "holder-from-the-file", status: "held" },
@@ -289,10 +286,6 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect((view.plan as Record<string, unknown>).id).toBe(PLAN_ID);
     expect((view.plan as Record<string, unknown>).status).toBe("Todo");
     expect(payload.token.startsWith("exec-v1:plan:")).toBe(true);
-    expect(view.executionLease).toBeNull();
-    expect(view.session_file).toBeUndefined();
-    expect(view.snapshot_version).toBeUndefined();
-    expect(view.allowed_operations).toBeUndefined();
     expect(result.stdout).not.toContain("plan-from-the-file");
     expect(result.stdout).not.toContain("holder-from-the-file");
 
@@ -308,9 +301,12 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     plantLeftoverSnapshot(fixture);
 
     // The file route would need the retired session credential: not-ready.
-    const legacyRead = runCli(["plan", "show", "--session", sessionPath], fixture);
+    const legacyRead = runCli(["plan", "show", "--session", sessionPath, "--plan", PLAN_ID], fixture);
     expect(legacyRead.exitCode).toBe(1);
     expect(jsonOf(legacyRead).code).toBe("execution.consumer-not-ready");
+    const unaddressed = runCli(["plan", "show", "--session", sessionPath], fixture);
+    expect(unaddressed.exitCode).toBe(2);
+    expect(jsonOf(unaddressed).code).toBe("command.invalid-input");
 
     // The DB form and the file form are alternatives, never combined.
     const mixed = runCli(
@@ -339,12 +335,6 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     const fixture = await activeFixture("cli-read-gates");
     // A snapshot claiming a held lease for the plan and a held merge lease.
     plantLeftoverSnapshot(fixture);
-
-    // The plan's row + lease come from the DB (no lease there → missing), so the
-    // file's holder never becomes the verdict.
-    const lease = runCli(["lease", "verify", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID], fixture);
-    expect(lease.exitCode).toBe(1);
-    expect(jsonOf(lease).code).toBe("lease.verify.missing");
 
     // The workflow-wide merge lease is unclaimed in the DB although the file
     // claims one.
@@ -437,7 +427,7 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(show.exitCode).toBe(1);
     expect(jsonOf(show).code).toBe("store.corrupt");
 
-    const lease = runCli(["lease", "verify", "--workflow", WORKFLOW_ID], corrupt);
+    const lease = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], corrupt);
     expect(lease.exitCode).toBe(1);
     expect(jsonOf(lease).code).toBe("store.corrupt");
 
@@ -515,16 +505,13 @@ describe("execution-cross-domain", () => {
 
     // The retired file form is refused on the same unreadable store too: the
     // leftover session file is never promoted to an authority answer.
-    const fileForm = runCli(["plan", "show", "--session", sessionPath], fixture);
+    const fileForm = runCli(["plan", "show", "--session", sessionPath, "--plan", PLAN_ID], fixture);
     expect(fileForm.exitCode).toBe(1);
     expect(jsonOf(fileForm).code).toBe("store.corrupt");
 
     const status = runCli(["status", "validate"], fixture);
     expect(status.exitCode).toBe(1);
     expect(jsonOf(status).code).toBe("store.corrupt");
-    const lease = runCli(["lease", "verify", "--workflow", WORKFLOW_ID, "--plan", PLAN_ID], fixture);
-    expect(lease.exitCode).toBe(1);
-    expect(jsonOf(lease).code).toBe("store.corrupt");
     const merge = runCli(["lease", "verify-integration", "--workflow", WORKFLOW_ID], fixture);
     expect(merge.exitCode).toBe(1);
     expect(jsonOf(merge).code).toBe("store.corrupt");
