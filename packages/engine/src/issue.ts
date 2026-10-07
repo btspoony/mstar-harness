@@ -1705,10 +1705,10 @@ export function reopenIssueOn(
   if (!issue) throw new IssueError("issue.not-found", `Issue ${issueId} does not exist`);
   requireExpectedRevision(mutation, issue.revision);
   if (issue.disposition === "open") {
-    throw new IssueError("issue.invalid-disposition", "Only terminal→open is accepted; open cannot transition to open");
+    throw new IssueError("issue.invalid-disposition", "Only terminal\u2192open is accepted; open cannot transition to open");
   }
   if (!Object.hasOwn(TERMINAL, issue.disposition)) {
-    throw new IssueError("issue.invalid-disposition", `Only terminal→open is accepted; ${issue.disposition} is not terminal`);
+    throw new IssueError("issue.invalid-disposition", `Only terminal\u2192open is accepted; ${issue.disposition} is not terminal`);
   }
 
   const at = nowRfc3339();

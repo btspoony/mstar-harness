@@ -808,7 +808,7 @@ describe("issue dispositions, revisions, and relations", () => {
       operationId: "reopen-open-guard", actor: "project-manager", expectedRevision: reopened.revision,
     })).rejects.toMatchObject({
       code: "issue.invalid-disposition",
-      message: "[issue.invalid-disposition] Only terminal→open is accepted; open cannot transition to open",
+      message: "[issue.invalid-disposition] Only terminal\u2192open is accepted; open cannot transition to open",
     });
     await expect(reopenIssue(context, created.issueId, { reason }, {
       operationId: "reopen-stale", actor: "project-manager", expectedRevision: closed.revision,
