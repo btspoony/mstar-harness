@@ -1547,8 +1547,6 @@ const CONTINUATION_PLAN_A = "20260924-continuation-plan-a";
 const CONTINUATION_PLAN_B = "20260924-continuation-plan-b";
 const CONTINUATION_INTEGRATION_BRANCH = "integration/exec-session-continuation";
 const CONTINUATION_COMPASS_REF = `iterations/${CONTINUATION_WORKFLOW}/delivery-compass.md`;
-/** A `session-role`/qualification refusal anywhere in the chain is the regression. */
-const SESSION_GATE_REFUSAL = /^coordination\.(session-role|session-mismatch|identity-mismatch)|^execution\.scope-mismatch/;
 
 interface ContinuationPlan {
   id: string;
@@ -1654,11 +1652,6 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
     integrationPath,
     rootCommit,
   };
-}
-
-/** The one coordinator identity that drives the whole continuation. */
-function continuationIdentity(): ExecutionIdentity {
-  return { source: "local", sessionId: COORDINATOR_ID, workflowId: CONTINUATION_WORKFLOW, role: "coordinator" };
 }
 
 async function continuationWorkflowToken(fixture: ContinuationFixture): Promise<string> {
@@ -1860,8 +1853,7 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
       handle.close();
     }
 
-    // (7) No step in the whole chain refused on a session or role ground.
+    // (7) No step in the whole chain refused: every recorded code is undefined.
     expect(refusalCodes.every((code) => code === undefined)).toBe(true);
-    for (const code of refusalCodes) expect(String(code)).not.toMatch(SESSION_GATE_REFUSAL);
   }, 120_000);
 });

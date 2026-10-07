@@ -805,14 +805,19 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
   });
 
   test("a stale, foreign or copied reference surfaces the engine's own refusal code", async () => {
-    // Every code here is one the landed engine actually raises on the DB bind
-    // route: a non-active/absent holder row, a caller that does not match the
-    // reference, and a reference from a superseded store epoch. The retired
+    // Every pair below is one the landed engine throws, code and text together:
+    // a reference the store does not hold ACTIVE (`liveSession`), a caller that
+    // does not match the supplied coordinator reference (`resolveWorkflowWrite`),
+    // and a reference from a superseded authority generation
+    // (`assertExecutionSessionCurrent`). The retired
     // `coordination.session-mismatch` was dropped with the plan-PM seat and is
-    // replaced by its surviving neighbour `coordination.identity-mismatch`.
+    // never resurrected here.
     for (const [code, text] of [
-      ["execution.session-unavailable", "workflow wf-a holds no ACTIVE coordinator session native-session-a in epoch 4"],
-      ["coordination.identity-mismatch", "the trusted caller does not match the supplied coordinator reference"],
+      [
+        "execution.session-unavailable",
+        "workflow wf-a holds no ACTIVE coordinator session native-session-a in epoch 4. An execution session reference authorizes only the binding the store records at the current epoch; a legacy session envelope is never consulted.",
+      ],
+      ["execution.scope-mismatch", "the trusted caller does not match the supplied coordinator reference"],
       ["store.stale-epoch", "the execution session reference is not current"],
     ] as const) {
       const refusal = Object.assign(new Error(text), { code });
