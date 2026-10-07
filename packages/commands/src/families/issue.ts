@@ -8,12 +8,14 @@ import {
   ISSUE_PAYLOAD_SCHEMAS,
   linkIssue,
   listIssues,
+  reopenIssue,
   resolveProcessHarnessDir,
   triageIssue,
   type CaptureInput,
   type ClosureEvidence,
   type IssueFilter,
   type IssueLink,
+  type IssueReopen,
   type IssueTriage,
   type MutationContext,
   type OccurrenceInput,
@@ -44,7 +46,7 @@ const inputSchema = z.object({
 });
 type IssueInput = z.infer<typeof inputSchema>;
 
-const verbs = ["add", "list", "show", "occurrence", "triage", "close", "waive", "duplicate", "supersede", "link", "export"] as const;
+const verbs = ["add", "list", "show", "occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link", "export"] as const;
 const terminalDisposition: Record<string, TerminalDisposition> = {
   close: "resolved",
   waive: "waived",
@@ -56,13 +58,29 @@ const readVerbs: Record<string, true> = { list: true, show: true, export: true }
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
-function refused(id: string, error: unknown): CommandEnvelope<never> {
+function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`;
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, ...(paths.length > 0 ? { details: { paths } } : {}) });
+  const issueId = input?.id?.trim() || "<id>";
+  const recovery = id !== "issue.reopen"
+    ? undefined
+    : code === "issue.revision-conflict"
+      ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue reopen --id ${issueId} --expect <current-revision>\` with the same non-empty reason payload.`
+      : code === "issue.invalid-disposition"
+        ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
+        : code === "issue.scope-refused"
+          ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
+          : code === "issue.invalid-payload"
+            ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
+            : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
+  return refusalEnvelope({
+    command: id, status: "refused", code, exitCode: 1, message,
+    ...(paths.length > 0 ? { details: { paths } } : {}),
+    ...(recovery === undefined ? {} : { recovery }),
+  });
 }
 function storeContext(input: IssueInput, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
@@ -139,12 +157,20 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
     if (id === "issue.add") return ok(id, await captureIssue(context, validatePayload(input, "CaptureInput", "add") as CaptureInput, mutation(input)));
     if (id === "issue.occurrence") return ok(id, await appendOccurrence(context, requiredId(input), validatePayload(input, "OccurrenceInput", "occurrence") as OccurrenceInput, mutation(input)));
     if (id === "issue.triage") return ok(id, await triageIssue(context, requiredId(input), validatePayload(input, "IssueTriage", "triage") as IssueTriage, mutation(input)));
+    if (id === "issue.reopen") {
+      return ok(id, await reopenIssue(
+        context,
+        requiredId(input),
+        validatePayload(input, "IssueReopen", "reopen") as IssueReopen,
+        mutation(input),
+      ));
+    }
     const disposition = terminalDisposition[id.slice("issue.".length)];
     if (disposition !== undefined) return ok(id, await closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, mutation(input)));
     if (id === "issue.link") return ok(id, await linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, mutation(input)));
     throw new Error(`unsupported issue command ${id}`);
   } catch (error) {
-    return refused(id, error);
+    return refused(id, error, input);
   }
 }
 
@@ -153,6 +179,7 @@ const payloadType: Record<string, keyof typeof ISSUE_PAYLOAD_SCHEMAS> = {
   occurrence: "OccurrenceInput",
   triage: "IssueTriage",
   close: "ClosureEvidence",
+  reopen: "IssueReopen",
   waive: "ClosureEvidence",
   duplicate: "ClosureEvidence",
   supersede: "ClosureEvidence",
@@ -220,7 +247,11 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,
     flags: optionFlags[key]!,
-    required: payloadType[verb] !== undefined && (key === "operationId" || key === "actor"),
+    required: (payloadType[verb] !== undefined && (key === "operationId" || key === "actor")) ||
+      (verb === "reopen" && (key === "id" || key === "expect")),
+    ...(verb === "reopen" && key === "expect"
+      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
+      : {}),
   }));
   return {
     id,

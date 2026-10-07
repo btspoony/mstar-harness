@@ -158,6 +158,22 @@ describe("command discovery", () => {
       constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
     }));
   });
+  test("issue reopen publishes required CAS/payload inputs and revision-source schema", () => {
+    const selection = selectCommandSchema({ command: "issue.reopen" }, getCommandDefinitions());
+    if (selection.kind !== "command") throw new Error("expected issue.reopen command descriptor");
+    expect(selection.descriptor.cli.path).toEqual(["issue", "reopen"]);
+    expect(selection.descriptor.cli.options.filter((option) => option.required).map((option) => option.key))
+      .toEqual(expect.arrayContaining(["id", "actor", "expect", "operationId"]));
+    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
+      name: "expect",
+      tokenKind: "revision",
+    }));
+    expect(selection.descriptor.cli.options.find((option) => option.key === "expect")?.help)
+      .toContain("mstar issue show --id <id>");
+    expect(selection.descriptor.payloadSchemas).toMatchObject({
+      payload: { properties: { reason: { type: "string" } } },
+    });
+  });
 
   test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
