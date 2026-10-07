@@ -200,7 +200,8 @@ export type WorkflowDTO = {
   badges: DashboardBadge[];
 };
 
-export type WorkflowListDTO = { items: WorkflowDTO[]; total: number };
+export type TerminalUnregisteredDTO = { id: string; status: "completed" | "stopped" | "failed"; revision: number; adoption: Record<string, unknown> | null };
+export type WorkflowListDTO = { items: WorkflowDTO[]; total: number; terminalUnregistered?: TerminalUnregisteredDTO[] };
 
 export type IterationPlanDTO = {
   planId: string;
@@ -1280,10 +1281,35 @@ function toWorkflowDTO(
 // Workflow views
 // ---------------------------------------------------------------------------
 
+function readTerminalUnregistered(db: StoreDb): TerminalUnregisteredDTO[] {
+  const rows = db.prepare(
+    "select h.workflow_id, h.revision, h.state_json from execution_workflows h " +
+      "left join execution_registry r on r.workflow_id = h.workflow_id where r.workflow_id is null order by h.workflow_id",
+  ).all() as Array<{ workflow_id: string; revision: number; state_json: string }>;
+  const result: TerminalUnregisteredDTO[] = [];
+  for (const row of rows) {
+    const parsed: unknown = JSON.parse(row.state_json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+    const state = parsed as Record<string, unknown>;
+    if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") continue;
+    result.push({
+      id: row.workflow_id,
+      status: state.status,
+      revision: row.revision,
+      adoption: typeof state.terminal_adoption === "object" && state.terminal_adoption !== null && !Array.isArray(state.terminal_adoption)
+        ? state.terminal_adoption as Record<string, unknown>
+        : null,
+    });
+  }
+  return result;
+}
 function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListDTO {
+  const terminalUnregistered = readTerminalUnregistered(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
-  if (generated.generation === null) return { items: [], total: 0 };
+  if (generated.generation === null) {
+    return { items: [], total: 0, ...(terminalUnregistered.length === 0 ? {} : { terminalUnregistered }) };
+  }
   const projectId = text(filters.projectId);
 
   const plansByWorkflow = new Map<string, ProjectedPlanRow[]>();
@@ -1312,6 +1338,7 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
       toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities),
     ),
     total: scoped.length,
+    ...(terminalUnregistered.length === 0 ? {} : { terminalUnregistered }),
   };
 }
 

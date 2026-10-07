@@ -620,6 +620,7 @@ export type {
 } from "./execution-store.js";
 export {
   ExecutionError,
+  adoptTerminalWorkflow,
   bindExecutionSession,
   createExecutionWorkflow,
   initializeExecutionAuthority,
