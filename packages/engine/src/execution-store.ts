@@ -1931,7 +1931,7 @@ export async function adoptTerminalWorkflow(
     if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; no supported exit exists for a non-terminal header without registry membership`);
     }
-    if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.reason)) {
+    if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.stop_reason)) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason`);
     }
     const activeSession = tx.db.prepare(

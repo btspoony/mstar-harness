@@ -20,9 +20,9 @@ async function strandedTerminal(): Promise<{ context: StoreContext; caller: Exec
     handle.db.prepare(
       "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, ?, ?, ?)",
     ).run("wf-stranded", JSON.stringify({
-      id: "wf-stranded", schema_version: 1, type: "plan", status: "completed",
+      id: "wf-stranded", schema_version: 1, type: "plan", status: "stopped",
       started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z",
-      updated_at: "2026-10-01T01:00:00.000Z",
+      updated_at: "2026-10-01T01:00:00.000Z", stop_reason: "fixture terminal stop",
     }), "2026-10-01T00:00:00.000Z", "2026-10-01T01:00:00.000Z");
   } finally { handle.close(); }
   return { context, caller: { sessionId: "adopter-session", role: "coordinator", workflowId: "wf-stranded" }, epoch: authority.epoch };
@@ -37,14 +37,16 @@ describe("terminal workflow adoption", () => {
     expect(applied.replayed).toBe(false);
     expect(applied.data.terminalUnregistered).toBeUndefined();
     expect(applied.data.terminalAdoptions).toEqual([{
-      id: "wf-stranded", status: "completed", revision: 2,
+      id: "wf-stranded", status: "stopped", revision: 2,
       lifecycle_adopted_at: expect.any(String), adopt_reason: request.reason,
       actor_session_id: caller.sessionId, operation_id: request.operationId,
     }]);
     const db = await openStore(context, "read");
     try {
       expect((db.db.prepare("select count(*) as n from execution_registry where workflow_id = ?").get("wf-stranded") as { n: number }).n).toBe(0);
-      expect(db.db.prepare("select revision, json_extract(state_json, '$.status') as status from execution_workflows where workflow_id = ?").get("wf-stranded")).toEqual({ revision: 2, status: "completed" });
+      expect(db.db.prepare("select revision, json_extract(state_json, '$.status') as status, json_extract(state_json, '$.stop_reason') as stop_reason from execution_workflows where workflow_id = ?").get("wf-stranded")).toEqual({
+        revision: 2, status: "stopped", stop_reason: "fixture terminal stop",
+      });
       expect((db.db.prepare("select count(*) as n from execution_operations where operation_id = ?").get(request.operationId) as { n: number }).n).toBe(1);
     } finally { db.close(); }
     const replay = await adoptTerminalWorkflow(execution, request);
@@ -56,7 +58,7 @@ describe("terminal workflow adoption", () => {
     expect(dashboard.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
   });
 
-  test("refuses stale CAS, registered rows, active-session rows, non-terminal headers, and missing terminal reason", async () => {
+  test("refuses stale CAS, registered rows, active-session rows, non-terminal headers, and headers missing both reason keys", async () => {
     const stale = await strandedTerminal();
     await expect(adoptTerminalWorkflow({ harnessDir: stale.context.harnessDir, caller: stale.caller }, {
       workflowId: stale.caller.workflowId, expectedRevision: 2, reason: "stale", operationId: "adopt-stale",
@@ -106,6 +108,12 @@ describe("terminal workflow adoption", () => {
     failed.db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
       .run(JSON.stringify({ id: "wf-stranded", schema_version: 1, type: "plan", status: "failed", started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z", updated_at: "2026-10-01T01:00:00.000Z" }), "wf-stranded");
     failed.close();
+    const missingHeader = await openStore(missingReason.context, "read");
+    try {
+      expect(missingHeader.db.prepare(
+        "select json_extract(state_json, '$.stop_reason') as stop_reason, json_extract(state_json, '$.reason') as reason from execution_workflows where workflow_id = ?",
+      ).get("wf-stranded")).toEqual({ stop_reason: null, reason: null });
+    } finally { missingHeader.close(); }
     await expect(adoptTerminalWorkflow({ harnessDir: missingReason.context.harnessDir, caller: missingReason.caller }, {
       workflowId: missingReason.caller.workflowId, expectedRevision: 1, reason: "failed", operationId: "adopt-failed",
     })).rejects.toMatchObject({
