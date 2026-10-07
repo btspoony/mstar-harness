@@ -41,6 +41,7 @@ Apply when the assignment writes tracked repo files:
 
 - **NEVER** skip per–task-ID commits on the authorized `Working branch` when you wrote tracked files — Completion Report **Git** must be a real `git log -1 --oneline` unless read-only was assigned.
 - **NEVER** batch everything into a single closing commit unless PM explicitly allowed it.
+- **NEVER** make the first repo write or commit before `cd` to the Assignment's **`Worktree path`** and verification with `git rev-parse --show-toplevel` that the checkout root matches it, when assigned; never fall back to the default repo root, the PM integration checkout, or the primary checkout. Completion Report must state **`Worktree path used`** (absolute) when assigned.
 
 ## Plan & Documentation Rules
 

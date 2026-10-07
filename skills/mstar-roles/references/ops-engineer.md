@@ -42,6 +42,8 @@ When assignment is marked `high-risk`:
 
 - Follow PM-defined branch policy only
 - Same-repo parallel writers require worktree isolation
+- When Assignment includes **`Worktree path`**: `cd` there **before** first repo write; do not use PM integration checkout or default repo root
+- Completion Report must state **`Worktree path used`** (absolute) when assigned
 
 ## Deliverable Template
 
