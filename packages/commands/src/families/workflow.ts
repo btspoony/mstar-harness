@@ -358,7 +358,14 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
           const active = await resolveExecutionReadRoute({ harnessDir });
           if (active !== "execution") {
-            return refusalEnvelope({ command: id, status: "refused", code: "execution.adoption-refused", exitCode: 1, message: "terminal adoption requires an active execution authority; register the workflow through the supported workflow registration route" });
+            return refusalEnvelope({
+              command: id,
+              status: "refused",
+              code: "execution.adoption-refused",
+              exitCode: 1,
+              message: "terminal adoption requires an active execution authority",
+              recovery: "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
+            });
           }
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
           return ok(id, await adoptTerminalWorkflow(executionContextFor({ harnessDir }, identity), {

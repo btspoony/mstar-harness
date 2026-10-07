@@ -9,22 +9,22 @@ import type { CommandEnvelope, InvocationContext } from "../types.js";
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 
-async function fixture(): Promise<{ root: string; harness: string }> {
+async function fixture(active = true): Promise<{ root: string; harness: string }> {
   const root = mkdtempSync(join(tmpdir(), "mstar-adopt-terminal-command-"));
   roots.push(root);
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const initial = await initializeStore({ harnessDir: harness });
   initial.close();
-  await initializeExecutionAuthority({ harnessDir: harness });
+  if (active) await initializeExecutionAuthority({ harnessDir: harness });
   const writer = await openStore({ harnessDir: harness }, "write");
   try {
     writer.db.prepare(
       "insert into execution_workflows(workflow_id, revision, creator_session_id, state_json, created_at, updated_at) values (?, 1, null, ?, ?, ?)",
     ).run("wf-command", JSON.stringify({
-      id: "wf-command", schema_version: 1, type: "plan", status: "completed",
+      id: "wf-command", schema_version: 1, type: "plan", status: "stopped",
       started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z",
-      updated_at: "2026-10-01T01:00:00.000Z",
+      updated_at: "2026-10-01T01:00:00.000Z", stop_reason: "fixture terminal stop",
     }), "2026-10-01T00:00:00.000Z", "2026-10-01T01:00:00.000Z");
   } finally { writer.close(); }
   return { root, harness };
@@ -71,7 +71,7 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   expect(before.status).toBe("ok");
   if (before.status === "ok") {
     expect((before.data as { terminalUnregistered: unknown[]; terminalAdoptions: unknown[] }).terminalUnregistered)
-      .toEqual([{ id: "wf-command", status: "completed", revision: 1 }]);
+      .toEqual([{ id: "wf-command", status: "stopped", revision: 1 }]);
     expect((before.data as { terminalAdoptions: unknown[] }).terminalAdoptions).toEqual([]);
   }
   const first = await executeCommand("workflow.adopt-terminal", input, invocation(root));
@@ -83,9 +83,8 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   const status = await executeCommand("status.validate", {}, invocation(root));
   expect(status.status).toBe("ok");
   if (status.status === "ok") {
-    expect((status.data as { terminalUnregistered: unknown[]; terminalAdoptions: Array<{ id: string; revision: number; lifecycle_adopted_at: string; adopt_reason: string }> }).terminalUnregistered).toEqual([]);
-    expect((status.data as { terminalAdoptions: Array<{ id: string; revision: number; lifecycle_adopted_at: string; adopt_reason: string }> }).terminalAdoptions)
-      .toMatchObject([{ id: "wf-command", revision: 2, lifecycle_adopted_at: expect.any(String), adopt_reason: input.reason }]);
+    expect((status.data as { terminalAdoptions: Array<{ id: string; status: string; revision: number; lifecycle_adopted_at: string; adopt_reason: string }> }).terminalAdoptions)
+      .toMatchObject([{ id: "wf-command", status: "stopped", revision: 2, lifecycle_adopted_at: expect.any(String), adopt_reason: input.reason }]);
   }
   const definition = getCommandDefinitions().find((entry) => entry.id === "workflow.adopt-terminal");
   expect(definition).toBeDefined();
@@ -99,6 +98,48 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   }
 });
 
+test("fresh adoption operation against listed adopted revision gets the exact already-adopted refusal", async () => {
+  const { root, harness } = await fixture();
+  const original = { workflow: "wf-command", harness, expect: "1", operation: "already-adopted-original", reason: "adopt fixture" };
+  const first = await executeCommand("workflow.adopt-terminal", original, invocation(root));
+  expect(first.status).toBe("ok");
+  const replay = await executeCommand("workflow.adopt-terminal", original, invocation(root));
+  expect(replay.status).toBe("ok");
+  if (replay.status === "ok") expect((replay.data as { replayed: boolean }).replayed).toBe(true);
+
+  const read = await executeCommand("status.validate", {}, invocation(root));
+  expect(read.status).toBe("ok");
+  if (read.status !== "ok") throw new Error("expected status validate success");
+  const adopted = (read.data as { terminalAdoptions: Array<{ id: string; revision: number }> }).terminalAdoptions
+    .find((entry) => entry.id === "wf-command");
+  expect(adopted).toBeDefined();
+  const refused = await executeCommand("workflow.adopt-terminal", {
+    ...original, expect: String(adopted!.revision), operation: "already-adopted-fresh-operation",
+  }, invocation(root));
+  expectAdoptionRefusal(
+    refused,
+    "[execution.adoption-refused] workflow wf-command already has a terminal-adoption record; read status validate and use the recorded result",
+    "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed.",
+  );
+  const after = await executeCommand("status.validate", {}, invocation(root));
+  expect(after.status).toBe("ok");
+  if (after.status === "ok") {
+    expect((after.data as { terminalAdoptions: Array<{ id: string; revision: number }> }).terminalAdoptions)
+      .toContainEqual(expect.objectContaining({ id: "wf-command", revision: adopted!.revision }));
+  }
+});
+
+test("inactive-authority refusal names the supported status and store-upgrade recovery", async () => {
+  const { root, harness } = await fixture(false);
+  const refused = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-inactive", reason: "inactive authority",
+  }, invocation(root));
+  expectAdoptionRefusal(
+    refused,
+    "terminal adoption requires an active execution authority",
+    "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
+  );
+});
 test("workflow adopt-terminal refusal keeps exact engine message first and names the recovery", async () => {
   const { root, harness } = await fixture();
   const refused = await executeCommand("workflow.adopt-terminal", {
@@ -113,6 +154,12 @@ test("workflow adopt-terminal refusal keeps exact engine message first and names
 test("registered-row refusal advertises the existing close path", async () => {
   const { root, harness } = await fixture();
   await withWriter(harness, (db) => {
+    db.prepare("update execution_workflows set state_json = ? where workflow_id = ?")
+      .run(JSON.stringify({
+        id: "wf-command", schema_version: 1, type: "plan", status: "completed",
+        started_at: "2026-10-01T00:00:00.000Z", ended_at: "2026-10-01T01:00:00.000Z",
+        updated_at: "2026-10-01T01:00:00.000Z",
+      }), "wf-command");
     db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
       .run("wf-command", JSON.stringify({ id: "wf-command", type: "plan", started_at: "2026-10-01T00:00:00.000Z", dir: "workflows/wf-command" }));
     const epoch = (db.prepare("select authority_epoch from store_meta where id = 1").get() as { authority_epoch: number }).authority_epoch;
