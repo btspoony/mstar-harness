@@ -507,6 +507,101 @@ body {
   padding-left: var(--space-4);
 }
 
+/* Roadmap: the milestone board (issue 306)
+   One column per milestone plus the explicit unassigned column. Flat white
+   region with 1px separators, exactly like the dashboard's other data
+   regions: no nested cards, no shadow, no gradient. The wrapper reuses
+   `.table-scroll`, so a board wider than the viewport scrolls inside its own
+   labelled region. Token values come verbatim from DESIGN.md frontmatter. */
+.board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  align-items: start;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-column {
+  padding: var(--space-3) var(--space-4);
+  border-left: 1px solid var(--color-gray-400);
+}
+
+.board-column:first-child {
+  border-left: none;
+}
+
+.board-column-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-gray-400);
+}
+
+.board-column .facts {
+  margin: 0 0 var(--space-2);
+}
+
+.board-column .fact {
+  grid-template-columns: 1fr;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+}
+
+.board-column .relations > li {
+  padding: var(--space-2) 0;
+}
+
+/* The unassigned column is named, not a milestone: a muted fill marks it. */
+.board-column-unassigned {
+  background: var(--color-background-200);
+}
+
+.board-counts {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  color: var(--color-gray-900);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.board-count {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-gray-400);
+  padding: var(--space-1) 0;
+}
+
+.board-count:first-child {
+  border-top: none;
+}
+
+.board-count-label {
+  overflow-wrap: anywhere;
+}
+
+/* The demoted content authority: closed by default, keyboard-accessible. */
+.collapsible-summary {
+  cursor: pointer;
+}
+
+.collapsible-summary .heading-20 {
+  display: inline;
+  margin: 0;
+}
+
+.collapsible[open] > .collapsible-summary {
+  margin-bottom: var(--space-2);
+}
+
 .legacy-json {
   margin: var(--space-2) 0 0;
   padding: var(--space-3);
@@ -653,6 +748,14 @@ body {
   .fact {
     grid-template-columns: 1fr;
     gap: var(--space-1);
+  }
+
+  /* Below sm the board stacks into one column per row instead of forcing a
+     page-wide horizontal scroll (DESIGN.md "Spacing and responsive layout"). */
+  .board {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow-x: visible;
   }
 }
 
