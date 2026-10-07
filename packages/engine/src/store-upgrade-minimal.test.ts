@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assertExecutionFileWriteAllowed, initializeStore, migrationChecksum, MIGRATIONS, openStore, SCHEMA_VERSION_TABLE_SQL, storeDbPath, upgradeStore, type StoreContext, type StoreDb } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
@@ -262,6 +262,7 @@ test("store upgrade imports snapshot rows, ownership, and unknown bytes, then re
 
 test("an ACTIVE schema-8 store is normalized in place: protocol JSON becomes the target shape and business facts survive", async () => {
   const { context } = legacyWorkspace("active-schema8-normalize");
+  cleanCheckout(dirname(context.harnessDir), "main");
   const workflowId = "wf-active-schema8-normalize";
   const planId = `${workflowId}-plan`;
   const sessionId = "session-active-schema8-normalize";
@@ -733,6 +734,7 @@ test("a sealed/completed legacy file snapshot is projected and imported instead 
 
 async function historicalClaimWorkspace(name: string) {
   const { context } = legacyWorkspace(name);
+  cleanCheckout(dirname(context.harnessDir), "main");
   const workflowId = `wf-${name}`;
   const planId = `${workflowId}-plan`;
   const sessionId = `session-${name}`;
