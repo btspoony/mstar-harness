@@ -127,6 +127,9 @@ function severitiesOf(result: GateResult): string[] {
 function findViolation(result: GateResult, code: string): (typeof result.violations)[number] | undefined {
   return result.violations.find((v) => v.code === code);
 }
+function ownerEntries(...branches: string[]) {
+  return branches.map((branch) => ({ branch, workflowId: "wf-fixture", planId: "plan-fixture" }));
+}
 
 describe("readMainWorktree — first-record main-worktree discovery", () => {
   test("probes the main worktree (first porcelain record) with refs/heads stripped", () => {
@@ -240,7 +243,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/int",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["iteration/int", "feature/a"],
+        lifecycleBranches: ownerEntries("iteration/int", "feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -264,7 +267,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["feature/a"],
+        lifecycleBranches: ownerEntries("feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -318,7 +321,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/int",
         mainWorktree: mainInfo(join(root, "repo")),
         expectedMainBranch: mainInfo(join(root, "repo")).branch,
-        lifecycleBranches: ["iteration/int", "feature/a"],
+        lifecycleBranches: ownerEntries("iteration/int", "feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -342,7 +345,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/other",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["iteration/int", "feature/a"],
+        lifecycleBranches: ownerEntries("iteration/int", "feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -399,7 +402,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "",
         mainWorktree: { root: realpathSync(repo), branch: "release/other" },
         expectedMainBranch: "main",
-        lifecycleBranches: ["feature/a"],
+        lifecycleBranches: ownerEntries("feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -507,7 +510,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/int",
         mainWorktree: { root: realpathSync(repo), branch: "develop" },
         expectedMainBranch: "develop",
-        lifecycleBranches: ["iteration/int", "feature/a"],
+        lifecycleBranches: ownerEntries("iteration/int", "feature/a"),
         rowWorktreePath: paths.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -531,7 +534,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: main.branch,
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["feature/a"],
+        lifecycleBranches: ownerEntries("feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -580,7 +583,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/int",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["iteration/int"],
+        lifecycleBranches: ownerEntries("iteration/int"),
         rowWorktreePath: wts.get("iteration/int")!,
         rowWorkingBranch: "iteration/int",
         planId: "p-1",
@@ -633,7 +636,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "iteration/int",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["iteration/int"],
+        lifecycleBranches: ownerEntries("iteration/int"),
         rowWorktreePath: alias,
         rowWorkingBranch: "iteration/int",
         planId: "p-1",
@@ -724,7 +727,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["feature/a", "feature/b"],
+        lifecycleBranches: ownerEntries("feature/a", "feature/b"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/b",
         planId: "p-1",
@@ -749,7 +752,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["feature/a"],
+        lifecycleBranches: ownerEntries("feature/a"),
         rowWorktreePath: wts.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -802,7 +805,7 @@ describe("l1PreDispatchCheck — L1 cross-plan checklist (main / integration / f
         integrationBranch: "",
         mainWorktree: main,
         expectedMainBranch: main.branch,
-        lifecycleBranches: ["feature/a"],
+        lifecycleBranches: ownerEntries("feature/a"),
         rowWorktreePath: paths.get("feature/a")!,
         rowWorkingBranch: "feature/a",
         planId: "p-1",
@@ -1374,7 +1377,7 @@ describe("git probe timeout — bounded probes fail closed ", () => {
           integrationBranch: "",
           mainWorktree: main,
           expectedMainBranch: main.branch,
-          lifecycleBranches: ["feature/x"],
+          lifecycleBranches: ownerEntries("feature/x"),
           rowWorktreePath: wts.get("feature/x")!,
           rowWorkingBranch: "feature/x",
           planId: "p-1",
@@ -1401,7 +1404,7 @@ test("L1 identity probes are once per checkout per invocation, never cached acro
     const shim = join(root, "git-shim");
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
     writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
-    const input = { workflowType: "iteration" as const, integrationWorktreePath: wts.get("iteration/a")!, integrationBranch: "iteration/a", mainWorktree: main, expectedMainBranch: main.branch, lifecycleBranches: ["iteration/a", "feature/a"], rowWorktreePath: wts.get("feature/a")!, rowWorkingBranch: "feature/a", planId: "plan-a" };
+    const input = { workflowType: "iteration" as const, integrationWorktreePath: wts.get("iteration/a")!, integrationBranch: "iteration/a", mainWorktree: main, expectedMainBranch: main.branch, lifecycleBranches: ownerEntries("iteration/a", "feature/a"), rowWorktreePath: wts.get("feature/a")!, rowWorkingBranch: "feature/a", planId: "plan-a" };
     expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);
     expect(readFileSync(log, "utf8").split("\n").filter((line) => line.endsWith("rev-parse --git-dir"))).toHaveLength(3);
     expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);

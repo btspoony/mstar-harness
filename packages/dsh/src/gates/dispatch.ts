@@ -742,6 +742,7 @@ function worktreeL1Violations(harnessDir: string | null, header: string, hint?: 
   if (siblingScan.kind === 'refusal') {
     return [worktreeViolation(siblingScan.code, siblingScan.detail, 'repair or unregister the unreadable lifecycle state before dispatch')]
   }
+  // The legacy file scan exposes branch strings only; only this identity-less fallback uses a generic owner label.
   for (const branch of siblingScan.branches) lifecycleBranches.push({ branch, workflowId: 'active sibling lifecycle', planId: null })
   // Recorded residency expectation: the Assignment header transports the
   // value recorded at lifecycle start; the explicit `branch.base` is the
