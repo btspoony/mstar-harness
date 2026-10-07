@@ -47,7 +47,7 @@ Phase 6: post-merge close —— PR merged 后 §6.1–§6.4
 | 当前动作 | 必读 detail（按需加载，勿通读） |
 |---------|--------------------------------|
 | **start** (new iteration / reopen direction lock) | **`references/phase-1-prepare.md`** (§1.1–§1.6: context → direction lock/hook → §1.2.5 retained prototype and feedback loop → formal compass/plans/specs → registration → selected Review & Edit rounds with mandatory final writer). Interactive requires current-design HTML confirmation before authoring; explicit autonomous opt-in retains an appropriate prototype without routine human approval. |
-| **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch、control root + integration worktree + lease execution checklist） |
+| **execute / resume**（推进或恢复 per-plan 循环） | **`references/phase-2-worktree-lease.md`**（§2.0 五道闸、§2.1–§2.5 loop/dispatch、control root + integration worktree checklist） |
 | **close**（全部 plan Done 后收口迭代） | **`references/phase-3-iteration-close.md`**（§3.0–§3.6：entry checklist、compound、roadmap、完成标记、exit checklist + commit） |
 | **PR / merge-ready**（开 PR、推进合并就绪 loop） | **`references/phase-4-5-pr-delivery.md`**（§4–§5.2：开 PR、§5.1a push cadence、loop、exit checklist） |
 | **Phase 6 / post-merge close**（PR merged 后关闭 lifecycle） | **`references/phase-6-post-merge-close.md`**（entry（verified merged）+ §6.1 terminal write → §6.2 unregister → §6.3 projection reconciliation → §6.4 cleanup：`mstar worktree cleanup`，dry-run 默认，`--apply` 才变更） |

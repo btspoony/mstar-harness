@@ -82,7 +82,7 @@ When **`Execution mode: sdd`** (`mstar-sdd`):
 - **依赖驱动**：按 **`mstar-sdd`** § Ready-task scheduling 并行派发独立 ready tasks；各 task 后一位 fresh reviewer。真实依赖、共享写目标和 integration merge 串行。
 - **`SDD implementer session: sticky`**：same implementer subagent may **resume** across tasks when host supports it; **reviewers never resume** — see **`mstar-sdd/references/sticky-implementer-session.md`**.
 - File handoffs only — no pasted plan/diff/history in dispatch prompts.
-- **scope 与凭据边界**：`{SDD_DIR}/task-N-brief.md` 携带继承的 plan 作用域（plan id + 绝对路径）；**不下发** session JSON、`--expect <revision>` 等写凭据，也不得让 implementer/reviewer 自选 plan 或释放 lease（见 § Plan 作用域与 credential 不下发）。
+- **scope 与凭据边界**：`{SDD_DIR}/task-N-brief.md` 携带继承的 plan 作用域（plan id + 绝对路径）；**不下发** session JSON、`--expect <revision>` 等写凭据，也不得让 implementer/reviewer 自选 plan（见 § Plan 作用域与 credential 不下发）。leaf 不持有行级执行 lease；integration merge lease 由 coordinator 持有。
 - Record per-task BASE SHA; use `review-package` for diffs — **never `HEAD~1`**.
 - After all tasks: branch `review-package` in `{SDD_DIR}/review/` → **mandatory tri-review N=3** when `Execution mode: sdd`; **N=1** only for `inline` / explicit single override.
 
