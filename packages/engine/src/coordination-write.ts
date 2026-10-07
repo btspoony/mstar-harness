@@ -40,6 +40,8 @@ import type { ValidationResult } from "./core.js";
 
 /** Stable refusal codes of ordinary coordinator and protected workflow writes. */
 export const COORDINATION_ERROR_CODES = [
+  "plan.prepare.working-branch-control",
+  "plan.prepare.control-branch-unresolved",
   "coordination.harness-not-found",
   "coordination.workflow-not-found",
   "coordination.plan-not-found",

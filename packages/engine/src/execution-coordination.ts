@@ -17,6 +17,7 @@
  * `mutateExecutionPlan`.
  */
 import { dirname, isAbsolute } from "node:path";
+import { execFileSync } from "node:child_process";
 import { assertCatalogExecutionCommittedOn } from "./catalog-registration.js";
 import {
   CoordinationError,
@@ -676,6 +677,31 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
   return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
 }
 
+/** Refuse assigning any plan row to the branch attached to the control checkout. */
+function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: string | undefined): void {
+  if (workingBranch === undefined) return;
+  let controlBranch: string;
+  try {
+    const controlRoot = controlHarnessRoot(context);
+    const repositoryRoot = execFileSync("git", ["-C", controlRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    controlBranch = execFileSync("git", ["-C", repositoryRoot, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
+    if (repositoryRoot === "" || controlBranch === "" || controlBranch === "HEAD") throw new Error("control branch is unresolved");
+  } catch {
+    throw new CoordinationError(
+      "plan.prepare.control-branch-unresolved",
+      "cannot resolve the control checkout branch; run prepare where the control checkout is a valid git repo",
+      { harness_root: controlHarnessRoot(context) },
+    );
+  }
+  if (workingBranch === controlBranch) {
+    throw new CoordinationError(
+      "plan.prepare.working-branch-control",
+      `workingBranch "${workingBranch}" is the control checkout branch; record a feature branch — the primary worktree is the control checkout and is never a plan's working lane`,
+      { working_branch: workingBranch, control_branch: controlBranch },
+    );
+  }
+}
+
 /**
  * §3 `prepare` records the ordinary revisable execution configuration — the
  * explicit scope facts, the QA gate and the findings-cleanup mode — in one
@@ -713,6 +739,7 @@ export async function prepareExecutionPlan(
       // exemption from the check.
       assertPrepareAdmission({ planId: witness.planId, row: witness.view.plan as PlanRow });
       const effective = effectiveScope(witness.view, inputs.config);
+      assertWorkingBranchIsFeature(context, effective.workingBranch);
       if (effective.worktreePath !== undefined) {
         validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
       }
