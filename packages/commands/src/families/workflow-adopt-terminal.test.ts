@@ -53,6 +53,11 @@ function expectAdoptionRefusal(result: CommandEnvelope, firstLine: string, recov
     recovery,
   });
 }
+function expectDeadEndMarkers(recovery: string, needsIssue397Residual: boolean): void {
+  expect(recovery).toContain("No supported exit exists");
+  expect(recovery).toContain("mstar issue add");
+  if (needsIssue397Residual) expect(recovery).toContain("I-000397 residual surface");
+}
 async function withWriter(harness: string, action: (db: StoreDb) => void): Promise<void> {
   const writer = await openStore({ harnessDir: harness }, "write");
   try { action(writer.db); }
@@ -120,8 +125,12 @@ test("registered-row refusal advertises the existing close path", async () => {
   expectAdoptionRefusal(
     refused,
     "[execution.adoption-refused] workflow wf-command is already registered; finish its lifecycle through mstar status workflow-close",
-    "Use `mstar status workflow-close --workflow <id> --reason <text>` under the ACTIVE coordinator holder's binding to finish the existing terminal close.",
+    "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding.",
   );
+  const close = await executeCommand("status.workflow-close", {
+    workflow: "wf-command", harness, reason: "restating existing terminal lifecycle", operation: "registered-close",
+  }, invocation(root));
+  expect(close.status).toBe("ok");
 });
 
 test("ACTIVE-session refusal routes the existing holder to its close authority", async () => {
@@ -136,8 +145,12 @@ test("ACTIVE-session refusal routes the existing holder to its close authority",
   }, invocation(root));
   expectAdoptionRefusal(
     refused,
-    "[execution.adoption-refused] workflow wf-command has an ACTIVE coordinator session at the current epoch; terminal adoption requires that holder's own close authority to restate the terminal lifecycle first",
-    "The ACTIVE coordinator holder must use its own bound authority: run `mstar status workflow-close --workflow <id> --reason <text>` to restate the terminal lifecycle and finish close.",
+    "[execution.adoption-refused] workflow wf-command has an ACTIVE coordinator session at the current epoch; no supported exit exists for a terminal header holding an ACTIVE session at the current epoch",
+    "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+  );
+  expectDeadEndMarkers(
+    "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    true,
   );
 });
 
@@ -150,8 +163,12 @@ test("nonterminal-header refusal routes through execution bind and normal close"
   }, invocation(root));
   expectAdoptionRefusal(
     refused,
-    "[execution.adoption-refused] workflow wf-command is not terminal; terminal adoption only records an already-terminal header and will not change this header",
-    "Bind the non-terminal header with `mstar plan bind --execution --workflow <id> --coordinator` using a fresh runtime identity, then run `mstar status workflow-close --workflow <id> --reason <text>` under that binding.",
+    "[execution.adoption-refused] workflow wf-command is not terminal; no supported exit exists for a non-terminal header without registry membership",
+    "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+  );
+  expectDeadEndMarkers(
+    "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
+    true,
   );
 });
 
@@ -164,8 +181,12 @@ test("missing terminal-reason refusal states the dead end and issue-capture rout
   }, invocation(root));
   expectAdoptionRefusal(
     refused,
-    "[execution.adoption-refused] workflow wf-command has no recorded terminal reason in its header; no supported online operation can add it",
-    "No supported online verb can add the missing stopped/failed reason. Preserve the header and capture this dead end with `mstar issue add`; do not claim it can be adopted.",
+    "[execution.adoption-refused] workflow wf-command has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason",
+    "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header.",
+  );
+  expectDeadEndMarkers(
+    "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header.",
+    false,
   );
 });
 

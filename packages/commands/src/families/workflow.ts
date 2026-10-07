@@ -57,18 +57,18 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
       : code === "execution.adoption-refused" && message.includes("no terminal header")
         ? "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection."
         : code === "execution.adoption-refused" && message.includes("already registered")
-          ? "Use `mstar status workflow-close --workflow <id> --reason <text>` under the ACTIVE coordinator holder's binding to finish the existing terminal close."
+          ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
           : code === "execution.adoption-refused" && message.includes("ACTIVE coordinator session")
-            ? "The ACTIVE coordinator holder must use its own bound authority: run `mstar status workflow-close --workflow <id> --reason <text>` to restate the terminal lifecycle and finish close."
-            : code === "execution.adoption-refused" && message.includes("not terminal")
-              ? "Bind the non-terminal header with `mstar plan bind --execution --workflow <id> --coordinator` using a fresh runtime identity, then run `mstar status workflow-close --workflow <id> --reason <text>` under that binding."
+            ? "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
+            : code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")
+              ? "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
               : code === "execution.adoption-refused" && message.includes("no recorded terminal reason")
-                ? "No supported online verb can add the missing stopped/failed reason. Preserve the header and capture this dead end with `mstar issue add`; do not claim it can be adopted."
-                : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
-                  ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                  : code.startsWith("execution.adoption")
-                    ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-                    : undefined;
+                ? "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header."
+                  : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
+                    ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
+                    : code.startsWith("execution.adoption")
+                      ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
+                      : undefined;
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
