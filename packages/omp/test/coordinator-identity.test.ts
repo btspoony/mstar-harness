@@ -136,12 +136,22 @@ describe("prerequisite identity — coordinator identity adapter input", () => {
   });
 
   test("an engine refusal is reported with its own code, and the adapter never fabricates a success", async () => {
-    const refusal = Object.assign(new Error("duplicate coordinator holder"), { code: "coordination.duplicate-holder" });
+    // The live code for this path: a workflow that already records a coordinator
+    // refuses a second bind with `coordination.identity-mismatch` (the retired
+    // plan-PM seat's `coordination.duplicate-holder` and its per-plan holder
+    // fence were deleted with the seat). The adapter is a pure passthrough: it
+    // must surface the engine's own code and text, never invent a success.
+    const refusal = Object.assign(
+      new Error(
+        "workflow wf-a already has coordinator native-session-a; use plan bind --resume /repo/main/.mstar/workflows/wf-a/sessions/coordinator-native-session-a.json, or recover the stopped coordinator through workflow recover-coordinator",
+      ),
+      { code: "coordination.identity-mismatch" },
+    );
     const result = await bindCoordinatorIdentity({ operation: "bind", workflowId: "wf-a" }, FACTS, async () => {
       throw refusal;
     });
-    expect(result).toMatchObject({ ok: false, isError: true, code: "coordination.duplicate-holder" });
-    expect(result.text).toBe("duplicate coordinator holder");
+    expect(result).toMatchObject({ ok: false, isError: true, code: "coordination.identity-mismatch" });
+    expect(result.text).toBe(refusal.message);
   });
 });
 
@@ -795,9 +805,14 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
   });
 
   test("a stale, foreign or copied reference surfaces the engine's own refusal code", async () => {
+    // Every code here is one the landed engine actually raises on the DB bind
+    // route: a non-active/absent holder row, a caller that does not match the
+    // reference, and a reference from a superseded store epoch. The retired
+    // `coordination.session-mismatch` was dropped with the plan-PM seat and is
+    // replaced by its surviving neighbour `coordination.identity-mismatch`.
     for (const [code, text] of [
       ["execution.session-unavailable", "workflow wf-a holds no ACTIVE coordinator session native-session-a in epoch 4"],
-      ["coordination.session-mismatch", "the trusted caller is session other of workflow wf-a"],
+      ["coordination.identity-mismatch", "the trusted caller does not match the supplied coordinator reference"],
       ["store.stale-epoch", "the execution session reference is not current"],
     ] as const) {
       const refusal = Object.assign(new Error(text), { code });
