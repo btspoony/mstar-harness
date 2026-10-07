@@ -43,6 +43,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
+import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 import type { WorkflowLifecycleType } from "./workflow.js";
 
 /**
@@ -189,8 +190,8 @@ export type L1PreDispatchInput = {
   mainWorktree: MainWorktreeInfo | null;
   /** Recorded main-worktree branch (plan header) or the explicit `branch.base` fallback — never the branch observed at check time. */
   expectedMainBranch: string;
-  /** Branches owned by ANY active lifecycle (integration/plan/track) — main must not sit on any of them, even when the recorded expectation matches. */
-  lifecycleBranches: readonly string[];
+  /** Active lifecycle owner claims; the expected main branch is sanctioned residency. */
+  lifecycleBranches: readonly ActiveLifecycleBranch[];
   /** `plans[].metadata.worktree_path` — the plan's feature worktree. */
   rowWorktreePath: string;
   /** `plans[].metadata.working_branch` — the plan's Working branch. */
@@ -416,13 +417,19 @@ export function l1PreDispatchCheck(input: L1PreDispatchInput, opts: BranchProbeO
     } else {
       violations.push(...assertMainWorktreeResidency(mainWorktree, expectedMainBranch).violations);
     }
-    if (mainWorktree.branch !== "" && lifecycleBranches.includes(mainWorktree.branch)) {
+    const owner = lifecycleBranches.find((entry) => entry.branch === mainWorktree.branch && entry.branch !== expectedMainBranch);
+    if (mainWorktree.branch !== "" && owner) {
+      const ownerLabel = owner.workflowId === null ? "an active lifecycle with no recorded workflow id" : `workflow ${owner.workflowId}`;
+      const ownerRecovery =
+        owner.workflowId === null
+          ? "wait for the owning lifecycle to finish and close through its documented lifecycle verbs"
+          : `wait for workflow ${owner.workflowId} to finish and close through its documented lifecycle verbs`;
       violations.push(
         violation(
           "high",
           "worktree.main.residency-switched",
-          `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", which is owned by an active lifecycle \u2014 main must not carry any lifecycle-owned branch, even when the recorded expectation matches it`,
-          "restore the recorded main-worktree branch; never switch main to satisfy a check",
+          `main worktree "${mainWorktree.root}" is on branch "${mainWorktree.branch}", owned by ${ownerLabel}${owner.planId ? ` plan ${owner.planId}` : ""}`,
+          `${ownerRecovery}, or have its coordinator correct the row via mstar plan prepare`,
         ),
       );
     }

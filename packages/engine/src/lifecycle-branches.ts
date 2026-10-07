@@ -8,33 +8,42 @@ import { readWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } f
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+/** One observed lifecycle owner claim. */
+export type ActiveLifecycleBranch = { branch: string; workflowId: string | null; planId: string | null };
+
+/** The stable identity of a lifecycle plan row, preferring its canonical id. */
+export function activeLifecyclePlanId(row: unknown): string | null {
+  if (!isPlainObject(row)) return null;
+  return typeof row.id === "string" ? row.id : typeof row.plan_id === "string" ? row.plan_id : null;
+}
+
 /** Collect ownership, including retained L2 tracks; base/target are not ownership. */
-export function collectActiveLifecycleBranches(snapshots: readonly Record<string, unknown>[]): string[] {
-  const owned = new Set<string>();
+export function collectActiveLifecycleBranches(snapshots: readonly Record<string, unknown>[]): ActiveLifecycleBranch[] {
+  const owned = new Map<string, ActiveLifecycleBranch>();
+  const add = (branch: string, workflowId: string | null, planId: string | null) => {
+    const key = `${branch}\0${workflowId ?? ""}\0${planId ?? ""}`;
+    if (!owned.has(key)) owned.set(key, { branch, workflowId, planId });
+  };
   for (const doc of snapshots) {
+    const workflowId = typeof doc.id === "string" ? doc.id : null;
     const branch = doc.branch;
-    if (isPlainObject(branch) && typeof branch.integration === "string" && branch.integration.trim() !== "") {
-      owned.add(branch.integration);
-    }
+    if (isPlainObject(branch) && typeof branch.integration === "string" && branch.integration.trim() !== "") add(branch.integration, workflowId, null);
     if (!Array.isArray(doc.plans)) continue;
     for (const row of doc.plans) {
       if (!isPlainObject(row)) continue;
+      const planId = activeLifecyclePlanId(row);
       const meta = row.metadata;
       if (isPlainObject(meta) && Array.isArray(meta.track_branches)) {
-        for (const branch of meta.track_branches) {
-          if (typeof branch === "string" && branch.trim() !== "") owned.add(branch);
-        }
+        for (const track of meta.track_branches) if (typeof track === "string" && track.trim() !== "") add(track, workflowId, planId);
       }
-      if (isPlainObject(meta) && typeof meta.working_branch === "string" && meta.working_branch.trim() !== "") {
-        owned.add(meta.working_branch);
-      }
+      if (isPlainObject(meta) && typeof meta.working_branch === "string" && meta.working_branch.trim() !== "") add(meta.working_branch, workflowId, planId);
     }
   }
-  return [...owned];
+  return [...owned.values()];
 }
 
 export type ActiveLifecycleScan =
-  | { kind: "ok"; branches: string[]; notes: ValidationResult[] }
+  | { kind: "ok"; branches: ActiveLifecycleBranch[]; notes: ValidationResult[] }
   | { kind: "refusal"; code: string; detail: string };
 
 /** Read all other registered active snapshots through the canonical reader.
@@ -80,7 +89,7 @@ export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflo
   } catch (error) {
     return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
   }
-  const owned = new Set<string>();
+  const owned: ActiveLifecycleBranch[] = [];
   const notes: ValidationResult[] = [];
   for (const entry of register.workflows as unknown[]) {
     if (typeof entry !== "object" || entry === null || typeof (entry as Record<string, unknown>).id !== "string") {
@@ -110,7 +119,7 @@ export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflo
         detail: `${snapshotPath}: ${(error as Error).message}`,
       };
     }
-    for (const branch of collectActiveLifecycleBranches([snapshot])) owned.add(branch);
+    owned.push(...collectActiveLifecycleBranches([snapshot]));
   }
-  return { kind: "ok", branches: [...owned], notes };
+  return { kind: "ok", branches: owned, notes };
 }
