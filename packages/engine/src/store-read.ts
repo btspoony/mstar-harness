@@ -200,8 +200,12 @@ export type WorkflowDTO = {
   badges: DashboardBadge[];
 };
 
-export type TerminalUnregisteredDTO = { id: string; status: "completed" | "stopped" | "failed"; revision: number; adoption: Record<string, unknown> | null };
-export type WorkflowListDTO = { items: WorkflowDTO[]; total: number; terminalUnregistered?: TerminalUnregisteredDTO[] };
+export type TerminalUnregisteredDTO = { id: string; status: "completed" | "stopped" | "failed"; revision: number };
+export type TerminalAdoptionDTO = {
+  id: string; status: "completed" | "stopped" | "failed"; revision: number;
+  lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string;
+};
+export type WorkflowListDTO = { items: WorkflowDTO[]; total: number; terminalUnregistered?: TerminalUnregisteredDTO[]; terminalAdoptions?: TerminalAdoptionDTO[] };
 
 export type IterationPlanDTO = {
   planId: string;
@@ -1281,34 +1285,40 @@ function toWorkflowDTO(
 // Workflow views
 // ---------------------------------------------------------------------------
 
-function readTerminalUnregistered(db: StoreDb): TerminalUnregisteredDTO[] {
+function readTerminalState(db: StoreDb): { unregistered: TerminalUnregisteredDTO[]; adopted: TerminalAdoptionDTO[] } {
   const rows = db.prepare(
     "select h.workflow_id, h.revision, h.state_json from execution_workflows h " +
       "left join execution_registry r on r.workflow_id = h.workflow_id where r.workflow_id is null order by h.workflow_id",
   ).all() as Array<{ workflow_id: string; revision: number; state_json: string }>;
-  const result: TerminalUnregisteredDTO[] = [];
+  const unregistered: TerminalUnregisteredDTO[] = [];
+  const adopted: TerminalAdoptionDTO[] = [];
   for (const row of rows) {
     const parsed: unknown = JSON.parse(row.state_json);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
     const state = parsed as Record<string, unknown>;
     if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") continue;
-    result.push({
-      id: row.workflow_id,
-      status: state.status,
-      revision: row.revision,
-      adoption: typeof state.terminal_adoption === "object" && state.terminal_adoption !== null && !Array.isArray(state.terminal_adoption)
-        ? state.terminal_adoption as Record<string, unknown>
-        : null,
-    });
+    if (typeof state.lifecycle_adopted_at === "string" && typeof state.adopt_reason === "string" &&
+        typeof state.adoption_actor_session_id === "string" && typeof state.adoption_operation_id === "string") {
+      adopted.push({
+        id: row.workflow_id, status: state.status, revision: row.revision,
+        lifecycle_adopted_at: state.lifecycle_adopted_at, adopt_reason: state.adopt_reason,
+        actor_session_id: state.adoption_actor_session_id, operation_id: state.adoption_operation_id,
+      });
+    } else {
+      unregistered.push({ id: row.workflow_id, status: state.status, revision: row.revision });
+    }
   }
-  return result;
+  return { unregistered, adopted };
 }
 function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListDTO {
-  const terminalUnregistered = readTerminalUnregistered(db);
+  const terminal = readTerminalState(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
   if (generated.generation === null) {
-    return { items: [], total: 0, ...(terminalUnregistered.length === 0 ? {} : { terminalUnregistered }) };
+    return { items: [], total: 0,
+      ...(terminal.unregistered.length === 0 ? {} : { terminalUnregistered: terminal.unregistered }),
+      ...(terminal.adopted.length === 0 ? {} : { terminalAdoptions: terminal.adopted }),
+    };
   }
   const projectId = text(filters.projectId);
 
@@ -1338,7 +1348,8 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
       toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities),
     ),
     total: scoped.length,
-    ...(terminalUnregistered.length === 0 ? {} : { terminalUnregistered }),
+    ...(terminal.unregistered.length === 0 ? {} : { terminalUnregistered: terminal.unregistered }),
+    ...(terminal.adopted.length === 0 ? {} : { terminalAdoptions: terminal.adopted }),
   };
 }
 

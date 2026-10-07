@@ -35,9 +35,11 @@ describe("terminal workflow adoption", () => {
     const request = { workflowId: "wf-stranded", expectedRevision: 1, reason: "close the imported terminal record", operationId: "adopt-op-1" };
     const applied = await adoptTerminalWorkflow(execution, request);
     expect(applied.replayed).toBe(false);
-    expect(applied.data.terminalUnregistered).toEqual([{
+    expect(applied.data.terminalUnregistered).toBeUndefined();
+    expect(applied.data.terminalAdoptions).toEqual([{
       id: "wf-stranded", status: "completed", revision: 2,
-      adoption: { recorded_at: expect.any(String), reason: request.reason, actor_session_id: caller.sessionId, operation_id: request.operationId },
+      lifecycle_adopted_at: expect.any(String), adopt_reason: request.reason,
+      actor_session_id: caller.sessionId, operation_id: request.operationId,
     }]);
     const db = await openStore(context, "read");
     try {
@@ -47,10 +49,11 @@ describe("terminal workflow adoption", () => {
     } finally { db.close(); }
     const replay = await adoptTerminalWorkflow(execution, request);
     expect(replay.replayed).toBe(true);
-    expect(replay.data.terminalUnregistered).toEqual(applied.data.terminalUnregistered);
-    expect((await readExecutionState(context)).data.terminalUnregistered).toEqual(applied.data.terminalUnregistered);
+    expect(replay.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
+    expect((await readExecutionState(context)).data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
     const dashboard = await withStoreRead(context, queryDashboard("workflows"));
-    expect(dashboard.data.terminalUnregistered).toEqual(applied.data.terminalUnregistered);
+    expect(dashboard.data.terminalUnregistered).toBeUndefined();
+    expect(dashboard.data.terminalAdoptions).toEqual(applied.data.terminalAdoptions);
   });
 
   test("refuses stale CAS, registered rows, active-session rows, non-terminal headers, and missing terminal reason", async () => {

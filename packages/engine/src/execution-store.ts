@@ -178,7 +178,8 @@ export type ExecutionState = {
     integrationLease: IntegrationMergeLease | null;
   }>;
   /** Terminal headers outside ACTIVE registry membership, including their CAS revision. */
-  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; adoption: Record<string, unknown> | null }>;
+  terminalUnregistered?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number }>;
+  terminalAdoptions?: Array<{ id: string; status: "completed" | "stopped" | "failed"; revision: number; lifecycle_adopted_at: string; adopt_reason: string; actor_session_id: string; operation_id: string }>;
 };
 
 /**
@@ -1039,6 +1040,7 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
     workflows.push(readWorkflowView(db, store, workflowId));
   }
   const terminalUnregistered: NonNullable<ExecutionState["terminalUnregistered"]> = [];
+  const terminalAdoptions: NonNullable<ExecutionState["terminalAdoptions"]> = [];
   const headers = db.prepare("select workflow_id, revision, state_json from execution_workflows order by rowid")
     .all() as Array<{ workflow_id?: unknown; revision?: unknown; state_json?: unknown }>;
   for (const row of headers) {
@@ -1046,17 +1048,25 @@ function readExecutionGraph(db: StoreDb, store: StoreIdentity, meta: ExecutionMe
     if (registeredIds.has(id)) continue;
     const state = storedJsonObject(row.state_json, `execution_workflows(${id}).state_json`);
     if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") continue;
-    terminalUnregistered.push({
-      id,
-      status: state.status,
-      revision: storedRevision(row.revision, `execution_workflows(${id}).revision`),
-      adoption: isPlainObject(state.terminal_adoption) ? state.terminal_adoption : null,
-    });
+    const revision = storedRevision(row.revision, `execution_workflows(${id}).revision`);
+    if (isNonEmptyString(state.lifecycle_adopted_at) && isNonEmptyString(state.adopt_reason) &&
+        isNonEmptyString(state.adoption_actor_session_id) && isNonEmptyString(state.adoption_operation_id)) {
+      terminalAdoptions.push({
+        id, status: state.status, revision,
+        lifecycle_adopted_at: state.lifecycle_adopted_at,
+        adopt_reason: state.adopt_reason,
+        actor_session_id: state.adoption_actor_session_id,
+        operation_id: state.adoption_operation_id,
+      });
+    } else {
+      terminalUnregistered.push({ id, status: state.status, revision });
+    }
   }
   return {
     root: { version: 2, updated_at: meta.rootUpdatedAt, workflows: entries },
     workflows,
     ...(terminalUnregistered.length === 0 ? {} : { terminalUnregistered }),
+    ...(terminalAdoptions.length === 0 ? {} : { terminalAdoptions }),
   };
 }
 
@@ -1930,12 +1940,17 @@ export async function adoptTerminalWorkflow(
     if (activeSession !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has an ACTIVE session at the current epoch; recover it through mstar session recover before terminal adoption`);
     }
-    if (state.terminal_adoption !== undefined) {
+    if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);
     }
     const now = new Date().toISOString();
-    const adoption = { recorded_at: now, reason: input.reason, actor_session_id: caller.sessionId, operation_id: input.operationId };
-    const nextState = { ...state, terminal_adoption: adoption };
+    const nextState = {
+      ...state,
+      lifecycle_adopted_at: now,
+      adopt_reason: input.reason,
+      adoption_actor_session_id: caller.sessionId,
+      adoption_operation_id: input.operationId,
+    };
     tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?")
       .run(JSON.stringify(nextState), now, input.workflowId, input.expectedRevision);
     tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
