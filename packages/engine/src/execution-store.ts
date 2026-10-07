@@ -1929,16 +1929,16 @@ export async function adoptTerminalWorkflow(
     }
     const state = storedJsonObject(row.state_json, `execution_workflows(${input.workflowId}).state_json`);
     if (state.status !== "completed" && state.status !== "stopped" && state.status !== "failed") {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; register it through the supported workflow registration route`);
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} is not terminal; terminal adoption only records an already-terminal header and will not change this header`);
     }
     if ((state.status === "stopped" || state.status === "failed") && !isNonEmptyString(state.reason)) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; preserve the row and resolve its provenance before adoption`);
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no recorded terminal reason in its header; no supported online operation can add it`);
     }
     const activeSession = tx.db.prepare(
       "select session_id from execution_sessions where workflow_id = ? and epoch = ? and state = 'active' limit 1",
     ).get(input.workflowId, tx.epoch);
     if (activeSession !== undefined) {
-      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has an ACTIVE session at the current epoch; recover it through mstar session recover before terminal adoption`);
+      throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has an ACTIVE coordinator session at the current epoch; terminal adoption requires that holder's own close authority to restate the terminal lifecycle first`);
     }
     if (state.lifecycle_adopted_at !== undefined || state.adopt_reason !== undefined) {
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} already has a terminal-adoption record; read status validate and use the recorded result`);

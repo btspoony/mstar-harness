@@ -86,7 +86,7 @@ describe("terminal workflow adoption", () => {
       workflowId: active.caller.workflowId, expectedRevision: 1, reason: "active", operationId: "adopt-active",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded has an ACTIVE session at the current epoch; recover it through mstar session recover before terminal adoption",
+      message: "[execution.adoption-refused] workflow wf-stranded has an ACTIVE coordinator session at the current epoch; terminal adoption requires that holder's own close authority to restate the terminal lifecycle first",
     });
 
     const nonterminal = await strandedTerminal();
@@ -98,7 +98,7 @@ describe("terminal workflow adoption", () => {
       workflowId: nonterminal.caller.workflowId, expectedRevision: 1, reason: "running", operationId: "adopt-running",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded is not terminal; register it through the supported workflow registration route",
+      message: "[execution.adoption-refused] workflow wf-stranded is not terminal; terminal adoption only records an already-terminal header and will not change this header",
     });
 
     const missingReason = await strandedTerminal();
@@ -110,7 +110,7 @@ describe("terminal workflow adoption", () => {
       workflowId: missingReason.caller.workflowId, expectedRevision: 1, reason: "failed", operationId: "adopt-failed",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded has no recorded terminal reason in its header; preserve the row and resolve its provenance before adoption",
+      message: "[execution.adoption-refused] workflow wf-stranded has no recorded terminal reason in its header; no supported online operation can add it",
     });
   });
 });
