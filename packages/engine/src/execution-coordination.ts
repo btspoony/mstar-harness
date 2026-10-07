@@ -676,6 +676,34 @@ function readPrepareInputs(call: ExecutionPlanRequest<PrepareOperation>): Prepar
   return { config: { ...config, qaGate: config.qaGate ?? "mandatory", findingsCleanup: config.findingsCleanup ?? "allow-residual" } };
 }
 
+/** Refuse assigning any plan row to the branch attached to the control checkout. */
+function assertWorkingBranchIsFeature(context: ExecutionContext, workingBranch: string | undefined): void {
+  if (workingBranch === undefined) return;
+  const controlRoot = controlHarnessRoot(context);
+  let repositoryRoot: string | undefined;
+  let controlBranch: string | undefined;
+  try {
+    repositoryRoot = gitRead(controlRoot, ["rev-parse", "--show-toplevel"]);
+    if (repositoryRoot !== undefined) controlBranch = gitRead(repositoryRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    // Bounded Git probe failures are converted below to the actionable refusal.
+  }
+  if (repositoryRoot === undefined || controlBranch === undefined || controlBranch === "" || controlBranch === "HEAD") {
+    throw new CoordinationError(
+      "plan.prepare.control-branch-unresolved",
+      "cannot resolve the control checkout branch; run prepare where the control checkout is a valid git repo",
+      { harness_root: controlRoot },
+    );
+  }
+  if (workingBranch === controlBranch) {
+    throw new CoordinationError(
+      "plan.prepare.working-branch-control",
+      `workingBranch "${workingBranch}" is the control checkout branch; record a feature branch — the primary worktree is the control checkout and is never a plan's working lane`,
+      { working_branch: workingBranch, control_branch: controlBranch },
+    );
+  }
+}
+
 /**
  * §3 `prepare` records the ordinary revisable execution configuration — the
  * explicit scope facts, the QA gate and the findings-cleanup mode — in one
@@ -713,6 +741,7 @@ export async function prepareExecutionPlan(
       // exemption from the check.
       assertPrepareAdmission({ planId: witness.planId, row: witness.view.plan as PlanRow });
       const effective = effectiveScope(witness.view, inputs.config);
+      assertWorkingBranchIsFeature(context, effective.workingBranch);
       if (effective.worktreePath !== undefined) {
         validateSuppliedCheckout(effective.worktreePath, effective.workingBranch, witness.planId);
       }

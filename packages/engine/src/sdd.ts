@@ -932,6 +932,8 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
       }
     }
   }
+  const snapshotsWithDirectoryIds = (sources: readonly { workflowId: string; doc: Record<string, unknown> }[]) =>
+    sources.map(({ workflowId, doc }) => (typeof doc.id === "string" ? doc : { ...doc, id: workflowId }));
   if (matches.length === 0) return { kind: "none" };
   if (registeredActive === null) {
     return {
@@ -939,7 +941,7 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
       workflowId: matches[0]!.workflowId,
       row: matches[0]!.row,
       snapshot: matches[0]!.doc,
-      activeSnapshots: scanned.map((s) => s.doc),
+      activeSnapshots: snapshotsWithDirectoryIds(scanned),
     };
   }
   const active = matches.filter((m) => registeredActive.has(m.workflowId));
@@ -952,7 +954,7 @@ function findWorkflowPlanRow(controlHarnessRoot: string, planId: string): Workfl
   }
   // The L1 lifecycle-branch ownership set spans ALL registered active
   // lifecycles, never only the governing one.
-  const activeDocs = scanned.filter((s) => registeredActive.has(s.workflowId)).map((s) => s.doc);
+  const activeDocs = snapshotsWithDirectoryIds(scanned.filter((s) => registeredActive.has(s.workflowId)));
   return {
     kind: "row",
     workflowId: active[0]!.workflowId,
