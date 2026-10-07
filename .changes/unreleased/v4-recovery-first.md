@@ -1,6 +1,6 @@
 ---
 category: Harness
-packages: root
+packages: root, cli, commands, engine
 ---
 
 - **Recovery-first engine surface.** Exported lifecycle operations (`mutatePlanCoordination`, `mutateExecutionPlan`, `mutateExecutionWorkflow`, `amendPrepareWorkflow`, the registration producers and the closes) accept a sparse intent — omitted redundant selectors, revisions, session projections and copied metadata — resolved against the caller's trusted root, its durable association and recorded declarations, with transaction-local inputs staying strict. Published resolvers: `resolveIntentRoot`, `resolveIntentTarget`, `resolveCurrentAuthority`.
@@ -17,10 +17,12 @@ packages: root
 - **`plan issue-add` derives plan-owned project association per finding** and reports independently invalid entries with their array indexes before capture; DB capture and plan linking stay composed in one transaction with occurrence keys as stable event identities.
 - **Declared per-kind `persist.write` payload schemas**; aggregate status validation failures surface through the persist command while coordinated replacement/version-conflict handling is preserved.
 - **Documented `judgment review-advice` as the supported route** for the historical, unregistered `judgment submit` intent; ReviewDecisionPack-owned fields are derived and multiple missing pack paths surface together.
-- **Documented `mstar-harness schema` discovery** for issue capture/occurrence/triage/closure/link and plan progress/handoff payloads; disposition-specific fields are checked before writing, not guessed through repeated refusals.
+- **Documented `mstar-harness schema` discovery** for issue capture/occurrence/triage/closure/link and plan progress payloads; disposition-specific fields are checked before writing, not guessed through repeated refusals.
 - **Test corpus cleanup.** Every inventoried package corpus (engine, cli, commands, omp, opencode, judgment) was swept under one written keep/delete rule: assertions pinning source shape, wording/help prose, forwarding echoes, duplicated registry copies, exported arity or environment constants were deleted, not renamed or re-pinned; consumer-visible behavior, boundaries, atomicity, authority, replay and actionable diagnostics were retained.
 - **Development acceptance stays isolated.** Acceptance language aligned with isolated product-behavior proof rather than live provider, authenticated host, installed artifact or device receipts; separately authorized operational verification remains independent.
 - **Native model-handoff preference off is a success-shaped no-op** with a neutral notice at both direction-lock and phase-1-lock; enabled handoff still checks coordinator identity and actual readiness.
+- Allowed sparse active workflow mutations and workflow close to derive current tokens and generate one operation id when omitted; explicit session references and tokens remain constraints.
+- ACTIVE cleanup reads the authoritative store; a launched minted coordinator identity takes precedence over ambient identity without granting unrelated workflow authority.
 
 <!-- CN -->
 - **面向恢复的引擎接口。** 导出的生命周期操作接受**稀疏意图**（可省略冗余选择器、修订号、会话投影与复制的元数据），依据调用者可信根、持久关联与已记录声明完成解析；事务内实际输入仍严格。已发布解析器：`resolveIntentRoot`、`resolveIntentTarget`、`resolveCurrentAuthority`。
@@ -37,7 +39,9 @@ packages: root
 - **`plan issue-add` 为每条发现推导计划所属项目**，并在开始捕获前按数组索引汇总独立无效项；DB 捕获与计划关联仍在同一事务中完成，occurrence key 作为稳定事件身份。
 - **声明按 kind 区分的 `persist.write` payload schema**；persist 命令聚合呈现 status 校验错误，保留协调式替换与版本冲突处理。
 - **明确 `judgment review-advice` 是历史未注册 `judgment submit` 意图的受支持路由**；ReviewDecisionPack 契约字段自动补全，多个缺失路径一并指出。
-- **补充 `mstar-harness schema` 查询指引**（issue 捕获/复现/分诊/关闭/关联及 plan progress/handoff）；按处置类型预先核对字段，不再逐项试错。
+- **补充 `mstar-harness schema` 查询指引**（issue 捕获/复现/分诊/关闭/关联及 plan progress 载荷）；按处置类型预先核对字段，不再逐项试错。
 - **测试语料清理。** 所有登记在册的包语料（engine、cli、commands、omp、opencode、judgment）按同一条书面保留/删除规则完成清扫：仅固定源码形态、措辞/帮助文案、转发回声、重复注册表副本、导出元数或环境常量的断言一律删除而非重新固化；面向使用者的行为、边界、原子性、授权、重放与可操作诊断均予保留。
 - **开发验收保持隔离。** 验收语言对齐隔离的产品行为证据，不要求真实供应商、已认证宿主、已安装产物或设备收据；另行授权的运维验证保持独立。
 - **原生模型交接偏好关闭即成功形态无操作**，direction-lock 与 phase-1-lock 均返回中性通知；开启时仍校验协调者身份与真实就绪条件。
+- 活跃 workflow 修改与关闭允许稀疏调用：省略时从当前作用域派生令牌并生成一次操作 ID；显式会话引用和令牌仍作为约束校验。
+- ACTIVE 清理读取权威 store；启动时铸造的 coordinator 身份优先于环境身份，不因此授予其他 workflow 权限。

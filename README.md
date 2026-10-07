@@ -30,8 +30,8 @@ English / [中文](README_CN.md)
 - **Judgment stays in `mstar-*` skills** — skills remain the single source of truth (SSOT) for roles, gates, and workflow judgment
 - **One engine across hosts** — the same engine + skills power dsh (DeepSeek Harness), omp, OpenCode, Cursor, Kimi Code, ZCode, and Codex
 - **Agent Plugin packaging** — one-command install; portable across any Agent Plugins v1.0.0 client
-- **Pluggable JSON persistence** — coordination docs (`status.json`, workflow snapshots, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
-- **Issue/catalog store vs execution JSON** — `{HARNESS_DIR}/store.db` (SQLite) is the issue and catalog authority after activation; `ArtifactStore` remains execution/review JSON (`status.json`, snapshots). The retired project registers are migration history with no write path. They are not the same store.
+- **Pluggable JSON persistence (pre-activation fallback)** — coordination docs (`status.json`, workflow snapshots, review envelopes) persist through an `ArtifactStore`; the default `FsStore` keeps the existing `.mstar/` paths, and integrations mount their own store via `MSTAR_STORE_MODULE` / `--store` / in-process `setArtifactStore`
+- **Store authority vs JSON transport** — after activation, `{HARNESS_DIR}/store.db` (SQLite) is the issue, catalog, roadmap, and workflow/plan execution authority; `ArtifactStore` retains pre-activation execution JSON (`status.json`, snapshots) and review JSON. The retired project registers are migration history with no write path; open items are issues in the store. They are not the same store.
 - **Recommended host** (best → usable): **dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **What ships**
@@ -224,12 +224,12 @@ flowchart TD
     F --> G["PM: lock compass and create integration branch"]
     F2 --> G
     G --> H["Phase 2→5: execute → close → PR → merge-ready"]
-    E -->|No| I["PM: select active plan from workflow snapshot"]
+    E -->|No| I["PM: select active plan from ACTIVE store.db execution authority"]
     H --> I
     I --> J{"Any plan not Done"}
     J -->|Yes| K["PM: dispatch one plan on a feature branch"]
     K --> L["Dev roles: implement and report"]
-    L --> M["PM: update plan and workflow snapshot"]
+    L --> M["PM: update plan document and execution state through ACTIVE store.db authority"]
     M --> N["QC trio: review gate"]
     N --> O{"QC decision"}
     O -->|Request Changes| K

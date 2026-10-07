@@ -51,7 +51,7 @@ Dispatch independent ready tasks concurrently after L2 worktree isolation. Keep 
 ## Per-task loop (PM only · Workflow)
 
 1. Record `BASE_SHA` (never use `HEAD~1` later)
-2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；先完成派生验证，fail-closed 守卫在其后）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式值必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 仅查 `status.json` 或任一 workflow snapshot 文件存在性，不校验 `workflows[]`（这是当前发现探针，不是 ACTIVE 状态读写路由），linked worktree 缺文件会 fail closed）
+2. `mstar sdd workspace <plan-id>` → `SDD_DIR`（iteration L1 从 feature cwd 调用时：`MSTAR_CONTROL_ROOT=<main-repo-root>`（= **Git 派生的主 worktree 根**；Git 主 worktree 发现失败（`readMainWorktree` 返回 null）时 fail closed）或 `mstar sdd workspace <plan-id> <main-repo-root>`；显式 Git root 必须与派生主根 canonicalize 一致，integration/外来检出被拒而非静默重定向；probe 仅查 `status.json` 或任一 workflow snapshot 文件存在性，不校验 `workflows[]`（这是当前发现探针，不是 ACTIVE 状态读写路由）；无文件命中则回退到主根下已有 `.mstar` / `.agents` 目录，否则 `.mstar`，不因 linked worktree 缺文件而拒绝）
 3. `mstar sdd task-brief <plan> N` → brief file
 4. Dispatch implementer:
     - Copy the plan task's budget into the Assignment header field **`Task budget (implement / ops rounds)`** (canonical template → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; one-round capacity criterion → `mstar-artifacts/references/plan-quality-bar.md` item 7) — header region only, before the body markers
@@ -126,7 +126,7 @@ The SDD helpers are engine-backed commands under **`mstar sdd`**（引擎 CLI；
 
 | Command | Usage |
 |--------|--------|
-| `mstar sdd workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under control harness when set (`MSTAR_CONTROL_ROOT` or 2nd arg); fail closed on linked worktree without either an existing `status.json` or workflow snapshot (existence probe, not state validation) |
+| `mstar sdd workspace` | `PLAN_ID [CONTROL_ROOT]` → creates `{SDD_DIR}` under the verified main-worktree control harness (`MSTAR_CONTROL_ROOT` or 2nd arg when supplied); fail closed on Git main-worktree discovery failure or a supplied Git control root that is not main. `status.json` / snapshot existence is only a discovery probe, with directory / `.mstar` fallback; explicit non-Git standalone roots remain supported |
 | `mstar sdd task-brief` | `PLAN_FILE TASK_N [OUTFILE]` |
 | `mstar sdd review-package` | `BASE HEAD [OUTFILE]` |
 | `mstar sdd check-context` | Action-seam gate against resolved SDD context; arguments and refusal recovery → command `--help` |

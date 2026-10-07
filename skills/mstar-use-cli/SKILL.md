@@ -91,7 +91,7 @@ Find the task, run the family, then read its owning skill for the rules around i
 | Request explicitly enabled bounded review advice | `mstar judgment review-advice` | `mstar-review-qc`; current help owns the pilot/pack contract |
 
 Per-family detail — refusal codes, JSON envelopes, sequence walkthroughs — is in the references listed at the end. Validator and lint families are indexed in `references/checks-and-lints.md`.
-Retired, never live alternatives: `status archive-residuals` / `backlog-register` / `backlog-close` → `status.verb-retired`; `plan residual-add` / `residual-close` → `plan.verb-retired`; `persist … residuals` → `persist.kind-retired`. Capture and disposition use issue verbs, not aliases.
+Retired, never live alternatives: `status archive-residuals` / `backlog-register` / `backlog-close` → `status.verb-retired`; removed plan verbs (including `plan residual-add` / `residual-close`) → exit `2`, `command.invalid-input`; `persist … residuals` → `persist.kind-retired`. Capture and disposition use issue verbs, not aliases.
 
 
 ### 2. Conflict diagnostics (not a preflight chain)
