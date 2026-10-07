@@ -30,8 +30,8 @@ Harness Workflow Engine · Agent Plugin
 - **判断留在 `mstar-*` skills** —— skills 仍是角色、门禁与工作流判断的唯一事实来源（SSOT）
 - **一个引擎跨宿主** —— 同一引擎 + skills 驱动 dsh（DeepSeek Harness）、omp、OpenCode、Cursor、Kimi Code、ZCode、Codex
 - **Agent Plugin 打包** —— 一条命令安装；可移植到任意 Agent Plugins v1.0.0 客户端
-- **可插拔 JSON 持久化** —— 协调文档（`status.json`、workflow snapshots、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
-- **Issue/catalog 库 vs 执行 JSON** —— 激活后 `{HARNESS_DIR}/store.db`（SQLite）是 issue 与 catalog 权威；`ArtifactStore` 仍是执行/审查 JSON（`status.json`、snapshots）。已退役的 project register 是迁移历史，没有写入路径，open item 以 store 中的 issue 为准。两者不是同一存储。
+- **可插拔 JSON 持久化（激活前回退）** —— 协调文档（`status.json`、workflow snapshots、review envelopes）经 `ArtifactStore` 持久化；默认 `FsStore` 保持既有 `.mstar/` 路径，集成方可经 `MSTAR_STORE_MODULE` / `--store` / 进程内 `setArtifactStore` 挂载自有存储
+- **Store 权威 vs JSON transport** —— 激活后 `{HARNESS_DIR}/store.db`（SQLite）是 issue、catalog、roadmap 与 workflow/plan 执行态的权威；`ArtifactStore` 保留激活前执行 JSON（`status.json`、snapshots）与审查 JSON。已退役的 project register 是迁移历史，没有写入路径，open item 以 store 中的 issue 为准。两者不是同一存储。
 - **推荐宿主**（最佳 → 可用）：**dsh = omp ≥ ZCode = OpenCode = Cursor > Kimi > Codex**
 
 **交付内容**
@@ -225,12 +225,12 @@ flowchart TD
     F --> G["PM: 锁定 compass 并创建 integration branch"]
     F2 --> G
     G --> H["Phase 2→5: execute → close → PR → merge-ready"]
-    E -->|否| I["PM: 从 workflow snapshot 选择 active plan"]
+    E -->|否| I["PM: 从 ACTIVE store.db 执行权威选择 active plan"]
     H --> I
     I --> J{"是否仍有 plan 未 Done"}
     J -->|是| K["PM: 在 feature branch 分派一个 plan"]
     K --> L["开发角色: 实现并回报"]
-    L --> M["PM: 更新 plan 与 workflow snapshot"]
+    L --> M["PM: 更新 plan 文档，并经 ACTIVE store.db 权威更新执行态"]
     M --> N["QC 三审: review gate"]
     N --> O{"QC 结论"}
     O -->|Request Changes| K
