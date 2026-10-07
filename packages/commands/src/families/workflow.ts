@@ -54,15 +54,21 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     ? "Use the title in the selected plan document's H1, or correct that document before registering."
     : code === "execution.header-revision-conflict"
       ? "Run `mstar status validate`, then retry `mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>`."
-      : code === "execution.adoption-refused" && message.includes("already registered")
-        ? "Run `mstar status workflow-close --workflow <id>` to finish the existing close path."
-        : code === "execution.adoption-refused" && message.includes("ACTIVE session")
-          ? "Run `mstar session recover --workflow <id> --prior-session <id> --reason <text> --expect <token> --operation <id>`, then retry terminal adoption."
-          : code === "execution.adoption-refused" && message.includes("not terminal")
-            ? "Register the non-terminal workflow through `mstar workflow register`, then use its registered lifecycle route."
-            : code.startsWith("execution.adoption")
-              ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-              : undefined;
+      : code === "execution.adoption-refused" && message.includes("no terminal header")
+        ? "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection."
+        : code === "execution.adoption-refused" && message.includes("already registered")
+          ? "Use `mstar status workflow-close --workflow <id> --reason <text>` under the ACTIVE coordinator holder's binding to finish the existing terminal close."
+          : code === "execution.adoption-refused" && message.includes("ACTIVE coordinator session")
+            ? "The ACTIVE coordinator holder must use its own bound authority: run `mstar status workflow-close --workflow <id> --reason <text>` to restate the terminal lifecycle and finish close."
+            : code === "execution.adoption-refused" && message.includes("not terminal")
+              ? "Bind the non-terminal header with `mstar plan bind --execution --workflow <id> --coordinator` using a fresh runtime identity, then run `mstar status workflow-close --workflow <id> --reason <text>` under that binding."
+              : code === "execution.adoption-refused" && message.includes("no recorded terminal reason")
+                ? "No supported online verb can add the missing stopped/failed reason. Preserve the header and capture this dead end with `mstar issue add`; do not claim it can be adopted."
+                : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
+                  ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
+                  : code.startsWith("execution.adoption")
+                    ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
+                    : undefined;
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
