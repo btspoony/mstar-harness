@@ -17,7 +17,7 @@
  * makes the upgrade refuse exactly as it would in a real workspace.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -182,6 +182,39 @@ function controlRoot(label: string): StoreContext {
 
 function storePath(context: StoreContext): string {
   return join(context.harnessDir, "store.db");
+}
+
+/**
+ * Bounded turns the reported clean-close case may wait for the runtime's
+ * collection-scheduled sidecar cleanup (#360). Only the WAIT is bounded: the
+ * assertions after it are not, and whatever residue survives the bound still
+ * fails their strict guards.
+ */
+const QUIESCENCE_TURNS = 100;
+
+/**
+ * Wait, within a bound of event-loop turns, for the runtime's
+ * collection-scheduled SQLite cleanup to land. This runtime completes a closed
+ * connection's cleanup — checkpoint every committed frame into the database
+ * file, then remove the now-empty `-wal`/`-shm` pair — when the closed handle
+ * is collected, not when `close()` returns (#360), so the post-close store
+ * shape is the garbage collector's to schedule rather than the test's to
+ * assume: a single forced collection is not a guarantee that the cleanup has
+ * already completed. Each turn forces a collection and then yields one
+ * event-loop turn before looking again (the yield is a turn, never a duration;
+ * the sibling execution-recovery case yields the same way). This only waits:
+ * it never relaxes the caller's guard, and a store that never reaches its
+ * quiesced shape fails that guard exactly as it did before.
+ */
+async function settleQuiescedSidecars(context: StoreContext): Promise<void> {
+  const wal = `${storePath(context)}-wal`;
+  const shm = `${storePath(context)}-shm`;
+  for (let turn = 0; turn < QUIESCENCE_TURNS; turn++) {
+    if (!existsSync(wal) && !existsSync(shm)) return;
+    Bun.gc(true);
+    if (!existsSync(wal) && !existsSync(shm)) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 /**
@@ -2654,11 +2687,16 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     );
     const accepted = executionFootprint(context);
 
-    Bun.gc(true);
     // The precondition this case is about: SQLite's own quiesced shape — every
     // committed frame in the database file, both sidecars gone — is really on
-    // disk. If a runtime stops leaving it, this fails here rather than passing
-    // the reads below for the wrong reason.
+    // disk. This runtime lands that cleanup at handle collection rather than at
+    // `close()` return (#360), so a single forced collection is not a guarantee
+    // that the scheduled cleanup has already completed: the case waits for the
+    // shape — within a bound of event-loop turns — before it asserts it. The
+    // wait is the only thing that is bounded: if the shape is still absent
+    // after it, these guards fail on the residual files, exactly as before, and
+    // the reads below never run for the wrong reason.
+    await settleQuiescedSidecars(context);
     expect(existsSync(`${storePath(context)}-wal`)).toBe(false);
     expect(existsSync(`${storePath(context)}-shm`)).toBe(false);
 
@@ -2674,6 +2712,48 @@ describe("execution-session: \u00A72.3 binding, role-scoped identity and the pla
     expect((await readExecutionState(context)).token).toBe(root.token);
     // Read-only: the authority those reads served is the accepted one, unmoved.
     expect(executionFootprint(context)).toEqual(accepted);
+  });
+
+  test("clean close leaves no wal sidecar", async () => {
+    // #360 classification case (Task 1). The reported observation is that CI
+    // run 36978948301 failed THIS file's other case because a `-wal` sidecar was
+    // still there after a clean close: `expect(existsSync(...+-wal")).toBe(false)`
+    // received `true` (1 fail / 2702 pass). This case is the same contract
+    // stated where the reported shape is produced, with the `-wal` byte length
+    // as its discriminator: a clean close either leaves no sidecar, or leaves
+    // one whose byte length is 0 — SQLite's own cleanup checkpointed every
+    // committed frame and has only to remove the now-empty file. A non-zero
+    // length means the checkpoint never ran or a handle is still open.
+    const shared = "host-shared";
+    const fixture = await createdWorkflow("session-read-clean-close-sidecar", shared);
+    const { context, workflowToken, planTokens } = fixture;
+    const coordinator = sessionCaller("wf-1", shared);
+    const coordinatorRef = await bindExecutionSession(
+      domainContext(context, coordinator),
+      sessionBind("wf-1", null, workflowToken, "bind-clean-close-coordinator"),
+    );
+    // Every handle the case opened is closed by now, but this runtime completes
+    // a closed connection's cleanup at collection (#360), so wait for it —
+    // within a bound of event-loop turns — before measuring the shape. The
+    // bound is the only bounded thing: the discriminator below still fails on
+    // any content-bearing residue the wait could not fold away.
+    await settleQuiescedSidecars(context);
+    const walPath = `${storePath(context)}-wal`;
+    const walBytes = existsSync(walPath) ? statSync(walPath).size : 0;
+    if (existsSync(walPath)) expect(walBytes).toBe(0);
+
+    // Whichever of the two clean shapes the runtime left, the authority it
+    // folded in (all bytes, when the sidecar is gone; no bytes, when it is
+    // empty) is served by both reads, and the store is never left needing a
+    // checkpoint with content still in flight.
+    const root = await readExecutionState(context);
+    expect(root.data.workflows.map((entry) => entry.state.id)).toEqual(["wf-1"]);
+    expect(root.data.workflows[0]?.coordinator).toEqual(coordinatorRef.data);
+    const plan = await readExecutionPlan(domainContext(context, coordinator), coordinatorRef.data, "p-1");
+    expect(plan.token).toBe(planTokens["p-1"]);
+    expect(plan.data.plan).toMatchObject({ id: "p-1", status: "Todo" });
+    expect((await readExecutionState(context)).token).toBe(root.token);
+    expect(existsSync(walPath) ? statSync(walPath).size : 0).toBe(0);
   });
 
   test("refuses a malformed, foreign-role or caller-mismatched reference before an unavailable store answers", async () => {
