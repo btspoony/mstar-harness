@@ -68,7 +68,7 @@ If plan drift appears, request plan update before continuing.
 
 1. API/business/data implementation
 2. Fullstack integration where needed
-3. Test implementation for assigned scope; follow `mstar-coding-behavior` § Evidence and delete incidental tests rather than re-pin them.
+3. Test implementation for assigned scope under `mstar-coding-behavior` § Evidence: keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names.
 4. Self-verification and evidence generation
 
 ## Skill Preset (PM-Activated)
