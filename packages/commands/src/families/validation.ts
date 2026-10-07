@@ -312,8 +312,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         const lifecycleBranches: Array<{ branch: string; workflowId: string; planId: string | null }> = [];
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
         if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail);
-        // The legacy file scan exposes branch strings only; only this identity-less fallback uses a generic owner label.
-        for (const branch of siblingScan.branches) lifecycleBranches.push({ branch, workflowId: "active sibling lifecycle", planId: null });
+        lifecycleBranches.push(...siblingScan.branches);
         // The selected row's source checkout/branch uses the dedicated identity
         // guard; its retained tracks and other snapshot ownership still block main.
         const snapshotWithoutSelectedSource = {

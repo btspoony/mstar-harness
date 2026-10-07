@@ -37,7 +37,7 @@ export function collectActiveLifecycleBranches(snapshots: readonly Record<string
 }
 
 export type ActiveLifecycleScan =
-  | { kind: "ok"; branches: string[]; notes: ValidationResult[] }
+  | { kind: "ok"; branches: ActiveLifecycleBranch[]; notes: ValidationResult[] }
   | { kind: "refusal"; code: string; detail: string };
 
 /** Read all other registered active snapshots through the canonical reader.
@@ -83,7 +83,7 @@ export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflo
   } catch (error) {
     return { kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable", detail: `${registerPath}: ${(error as Error).message}` };
   }
-  const owned = new Set<string>();
+  const owned: ActiveLifecycleBranch[] = [];
   const notes: ValidationResult[] = [];
   for (const entry of register.workflows as unknown[]) {
     if (typeof entry !== "object" || entry === null || typeof (entry as Record<string, unknown>).id !== "string") {
@@ -113,7 +113,7 @@ export function scanActiveLifecycleBranches(harnessDir: string, governingWorkflo
         detail: `${snapshotPath}: ${(error as Error).message}`,
       };
     }
-    for (const entry of collectActiveLifecycleBranches([snapshot])) owned.add(entry.branch);
+    owned.push(...collectActiveLifecycleBranches([snapshot]));
   }
-  return { kind: "ok", branches: [...owned], notes };
+  return { kind: "ok", branches: owned, notes };
 }

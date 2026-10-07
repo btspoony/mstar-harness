@@ -5,13 +5,18 @@ import { tmpdir } from "node:os";
 import { collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "../src/lifecycle-branches.js";
 
 test("ownership includes retained tracks and excludes base/target anchors", () => {
-  expect(
-    new Set(collectActiveLifecycleBranches([
-      { branch: { integration: "iteration/a", base: "main", target: "release" }, plans: [
-        { metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } },
-      ] },
-    ])),
-  ).toEqual(new Set(["iteration/a", "feature/track", "feature/a", "feature/retained"]));
+  expect(collectActiveLifecycleBranches([
+    {
+      id: "wf-a",
+      branch: { integration: "iteration/a", base: "main", target: "release" },
+      plans: [{ id: "plan-a", metadata: { working_branch: "feature/retained", track_branches: ["feature/track", "feature/a", "", null] } }],
+    },
+  ])).toEqual([
+    { branch: "iteration/a", workflowId: "wf-a", planId: null },
+    { branch: "feature/track", workflowId: "wf-a", planId: "plan-a" },
+    { branch: "feature/a", workflowId: "wf-a", planId: "plan-a" },
+    { branch: "feature/retained", workflowId: "wf-a", planId: "plan-a" },
+  ]);
 });
 
 test("unreadable active register shapes fail closed, including null", () => {
@@ -71,7 +76,10 @@ test("a running sibling row's branch intent is reported by the scan", () => {
     const scan = scanActiveLifecycleBranches(harness, "wf-governing");
     expect(scan.kind).toBe("ok");
     if (scan.kind !== "ok") throw new Error("the active register must be readable");
-    expect([...scan.branches].sort()).toEqual(["feature/plan-running", "iteration/wf-running"]);
+    expect(scan.branches).toEqual([
+      { branch: "iteration/wf-running", workflowId: "wf-running", planId: null },
+      { branch: "feature/plan-running", workflowId: "wf-running", planId: "plan-running" },
+    ]);
 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
