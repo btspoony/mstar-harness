@@ -68,7 +68,7 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
   const recovery = id !== "issue.reopen"
     ? undefined
     : code === "store.operation-conflict"
-      ? `Replay the original \`mstar issue reopen\` request unchanged (same issue id, payload, expected revision, actor, and operation id) to receive its recorded receipt, or retry this request with a fresh \`--operation-id\`.`
+      ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
       : code === "issue.revision-conflict"
         ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue reopen --id ${issueId} --expect <current-revision>\` with the same non-empty reason payload.`
         : code === "issue.invalid-disposition"

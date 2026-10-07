@@ -205,9 +205,21 @@ describe("mstar issue CLI bundle", () => {
     expect(operationConflict.exitCode).toBe(1);
     expect(jsonOf(operationConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
     expect(String(jsonOf(operationConflict).message)).toContain(
-      "Recovery: Replay the original `mstar issue reopen` request unchanged",
+      "Recovery: Replay the original request that reserved this operation id unchanged to receive its recorded receipt",
     );
-    expect(String(jsonOf(operationConflict).message)).toContain("or retry this request with a fresh `--operation-id`");
+    expect(String(jsonOf(operationConflict).message)).toContain("or run this operation with a fresh `--operation-id`");
+
+    const closeIdConflict = runBundle("node", [
+      "issue", "reopen", "--id", created.issueId,
+      "--payload", JSON.stringify({ reason: "different command reserved the id" }),
+      "--expect", String(closeReceipt.revision), "--operation-id", "reopen-close",
+      "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(closeIdConflict.exitCode).toBe(1);
+    expect(jsonOf(closeIdConflict)).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    expect(String(jsonOf(closeIdConflict).message)).toContain(
+      "Recovery: Replay the original request that reserved this operation id unchanged",
+    );
 
     const shown = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect(shown.exitCode).toBe(0);
