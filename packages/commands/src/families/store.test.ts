@@ -8,7 +8,6 @@ import type { InvocationContext } from "../types.js";
 import { executeCommand, getCommandDefinitions } from "../definitions.js";
 import { getStoreCommandDefinitions } from "../index.js";
 
-const controlRoot = join(tmpdir(), "mstar-store-upgrade-test-control");
 
 function legacyWorkspace(harness: string): void {
   const workflowId = "upgrade-fixture-workflow";
@@ -37,7 +36,7 @@ function invocation(cwd: string): InvocationContext {
   const messages: string[] = [];
   return {
     cwd,
-    controlRoot,
+    controlRoot: join(cwd, ".mstar"),
     versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     signal: new AbortController().signal,
     effects: {
@@ -70,7 +69,7 @@ async function protectedStoreState(harness: string) {
   }
 }
 
-test("store.upgrade is the one-command minimal default and does not require attestation", async () => {
+test("store.upgrade discovers the canonical project harness and imports its legacy workflow without attestation", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-upgrade-command-"));
   try {
     const harness = join(root, ".mstar");
@@ -78,7 +77,7 @@ test("store.upgrade is the one-command minimal default and does not require atte
     legacyWorkspace(harness);
     const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
     if (definition === undefined) throw new Error("missing store.upgrade definition");
-    const result = await definition.execute(definition.input.parse({ harness, operator: "fixture-operator" }), invocation(root));
+    const result = await definition.execute(definition.input.parse({ operator: "fixture-operator" }), invocation(root));
     expect(result.status).toBe("ok");
     if (result.status === "ok") expect(result.data).toMatchObject({ verdict: "upgraded", authorityState: "active", imported: 1 });
   } finally {

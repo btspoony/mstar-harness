@@ -36,7 +36,7 @@ Apply only affected items by **reading the assigned changed diff and directly re
 ## Evidence and planning attribution (affected changes only)
 
 - [ ] Independently assess whether changed executable behavior has meaningful consumer-visible test coverage or invariant/boundary/regression evidence; accept applicable existing L1/L2 evidence, without running tests or requiring a new test for each edit.
-- [ ] Flag only concrete gaps: source-shape/wording pins, forwarding echoes, duplicated producer checks, and environment-dependent bytes are not meaningful coverage. Docs/policy changes use scoped static or before/after evidence, not prose tests (`mstar-coding-behavior` § Evidence).
+- [ ] Keep product-behaviour assertions and fails-first regression defences; flag incidental / source-shape / wiring / environment-constant assertions (wording/source-shape pins, forwarding echoes, duplicated producer checks, environment-dependent bytes) for deletion — deleted, never renamed or re-pinned. Report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion". PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge assertions against production-owner contracts, not names. Docs/policy changes use scoped static or before/after evidence, not prose tests (`mstar-coding-behavior` § Evidence).
 - [ ] For touched delivery compass, plan, spec, or knowledge documents, verify local edit attribution includes seat, model, ISO-8601 timestamp, and iteration; `unknown` is valid for an unavailable model ID, not a reason to infer it from this reviewer session.
 
 ## High-risk ops (when Assignment marks high-risk)

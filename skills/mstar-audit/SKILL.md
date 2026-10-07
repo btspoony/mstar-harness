@@ -54,6 +54,8 @@ If a relevant verification entry is missing or has a known failure, record that 
 
 Full codebase audit: nine-category fan-out across **`references/audit-playbook.md`** with the effort table (`quick` / `standard` / `deep`) and "state what was not audited" → **`references/codebase-audit.md`** § Phase 2. PR review: scoping + concern lenses → **`references/pr-review.md`** § Scoping / Concern lenses.
 
+**Test assertions (all variants, including `pr`):** keep product-behaviour assertions and fails-first regression defences; delete incidental / source-shape / wiring / environment-constant assertions — deleted, never renamed or re-pinned. On finding a non-product assertion, the auditor must report its non-product-assertion class and conclude **"delete, or replace with a product-behaviour assertion"**. Calibrate against the PR #280 counter-examples: manifest parity guard, platform build-byte pins, raw-SQLite fixture, test-only header regression; judge the assertion and production-owner contract, not the example name alone. Detailed candidate evidence and retention safeguards → **`references/test-audit.md`** §§ 2–7.
+
 ### Phase 3 — Vet, prioritize, confirm
 
 **Attack before vet — claims must survive an adversarial pass first.** Take the top candidate findings (by leverage; scale the count to finding volume — attack the whole table when small, the head when large) and run a three-way attack on each:

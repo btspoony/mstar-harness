@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { captureIssue, openStore } from "@mstar-harness/engine";
+import { captureIssue, getIssue, initializeStore, openStore } from "@mstar-harness/engine";
 import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandDefinitions } from "../src/index.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
@@ -34,9 +34,9 @@ function invocation(cwd: string, control = controlRoot): InvocationContext {
   };
 }
 
-async function invoke(definition: CommandDefinition, input: Record<string, unknown>, cwd: string): Promise<CommandEnvelope> {
+async function invoke(definition: CommandDefinition, input: Record<string, unknown>, cwd: string, control?: string): Promise<CommandEnvelope> {
   const parsed = definition.input.parse(input);
-  return definition.execute(parsed, invocation(cwd));
+  return definition.execute(parsed, invocation(cwd, control));
 }
 
 function definition(id: string): CommandDefinition {
@@ -115,6 +115,45 @@ describe("store and execution command surface", () => {
     expect(existsSync(join(root, "recovery.db"))).toBe(true);
     expect(typeof dataOf(backup).storeId).toBe("string");
   });
+  test("backs up the explicitly selected control-root store without changing its content", async () => {
+    const root = fixture("store-admin-backup");
+    const harness = join(root, ".mstar");
+    mkdirSync(harness);
+    const initialized = await initializeStore({ harnessDir: harness });
+    initialized.close();
+    const finding = await captureIssue({ harnessDir: harness }, {
+      projectId: "_default",
+      title: "Canonical store finding",
+      kind: "bug",
+      severity: "medium",
+      impact: "The canonical store backup must preserve this finding.",
+      acceptance: "The recovery image contains the original issue.",
+      sourceIdentity: "fixture/canonical-backup",
+      rootCauseKey: "canonical-backup",
+      acceptanceKey: "recoverable-content",
+      occurrenceKey: "canonical-backup-first",
+      sourceKind: "review",
+      location: "fixture/canonical-backup",
+      observedBehavior: "The explicitly selected canonical store is the administration target.",
+      evidence: ["fixture finding"],
+      discoveredAt: "2026-10-07T00:00:00Z",
+    }, { operationId: "canonical-backup-issue", actor: "project-manager" });
+    const before = await storeSnapshot(harness);
+    const out = join(root, "recovery.db");
+    const caller = fixture("store-admin-caller");
+    const backup = await invoke(definition("store.backup"), { harness, out }, caller, harness);
+    expect(backup.status).toBe("ok");
+    expect(await storeSnapshot(harness)).toEqual(before);
+
+    const recoveryHarness = fixture("store-admin-recovery");
+    copyFileSync(out, join(recoveryHarness, "store.db"));
+    expect(await getIssue({ harnessDir: recoveryHarness }, finding.issueId)).toMatchObject({
+      id: finding.issueId,
+      title: "Canonical store finding",
+      disposition: "open",
+    });
+  });
+
   test("store init refuses catalog migration inputs", async () => {
     for (const [label, legacyPath, contents] of [
       ["project residuals", join("projects", "alpha", "residuals.json"), "{}\n"],
@@ -137,26 +176,20 @@ describe("store and execution command surface", () => {
 
 
 
-  test("refuses the control-root store and refuses an un-applied migration at activation", async () => {
+  test("refuses activation of an unapplied migration at the control-root store", async () => {
     const root = fixture("store-barriers");
     const control = join(root, "control");
     mkdirSync(control, { recursive: true });
     const init = await invoke(definition("store.init"), { harness: control }, root);
     expect(init.status).toBe("ok");
     const before = await storeSnapshot(control);
-    const forbidden = await definition("store.backup").execute(
-      definition("store.backup").input.parse({ harness: control }), invocation(root, control),
-    );
-    expect(forbidden.status).toBe("usage");
-    if (forbidden.status === "usage") expect(forbidden.message).toContain("control-root store");
-    expect(await storeSnapshot(control)).toEqual(before);
 
     const manifestPath = join(root, "manifest.json");
-    const preview = await invoke(definition("store.migrate"), { harness: control, out: manifestPath }, root);
+    const preview = await invoke(definition("store.migrate"), { harness: control, out: manifestPath }, root, control);
     expect(preview.status).toBe("ok");
     const attestationPath = join(root, "attestation.json");
     writeJson(attestationPath, { attestedAt: "2026-09-26T00:00:00.000Z", operator: "fixture-operator", consumers: [], stoppedSessions: [] });
-    const activation = await invoke(definition("store.activate"), { harness: control, manifest: manifestPath, attestation: attestationPath }, root);
+    const activation = await invoke(definition("store.activate"), { harness: control, manifest: manifestPath, attestation: attestationPath }, root, control);
     expect(activation.status).toBe("refused");
     if (activation.status === "refused") expect(activation.code).toBe("store.activation-stale");
     expect(await storeSnapshot(control)).toEqual(before);

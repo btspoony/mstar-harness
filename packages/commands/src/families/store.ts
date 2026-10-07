@@ -66,9 +66,6 @@ function findLegacyWorkspaceFact(harnessDir: string): string | null {
 function contextOf(input: StoreInput, invocation: InvocationContext): StoreContext {
   const resolved = resolveProcessHarnessDir(invocation.cwd, input.harness);
   const harnessDir = resolved ?? (input.harness === undefined ? invocation.cwd : path.resolve(input.harness));
-  if (invocation.controlRoot !== null && path.resolve(harnessDir) === path.resolve(invocation.controlRoot)) {
-    throw new SddScriptError("store operations must name a fixture or project harness, never the control-root store", 2);
-  }
   return { harnessDir };
 }
 function absoluteFile(value: string, flag: string): string {
@@ -228,6 +225,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     retire: ["harness", "manifest", "out"],
   };
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
+    harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
     attestation: "absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does \u2014 the same `mstar store upgrade --operator <name> --attestation <absolute-json>` call retries after a refusal",
   };
   const optionKeys = optionsByVerb[verb];
@@ -252,9 +250,9 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
       activate: ["read", "write"],
       retire: ["read", "write"],
     } satisfies Record<(typeof verbs)[number], readonly CommandEffect[]>)[verb],
-    description: verb === "upgrade"
+    description: `${verb === "upgrade"
       ? "Open or create the issue store, import recognizable execution state, activate the authority, and report skipped items."
-      : `Store ${verb} operation.`,
+      : `Store ${verb} operation.`} The canonical control root is a supported project harness.`,
     execute: (input, invocation) => execute(id, input, invocation),
   };
 }
