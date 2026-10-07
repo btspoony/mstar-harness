@@ -19,6 +19,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { initializeStore } from "@mstar-harness/engine";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -68,9 +69,9 @@ function cliEnv(): Record<string, string> {
   return env;
 }
 
-function runCli(args: string[]): RunResult {
+function runCli(args: string[], cwd = CLI_ROOT): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
-    cwd: CLI_ROOT,
+    cwd,
     env: cliEnv(),
     stdout: "pipe",
     stderr: "pipe",
@@ -113,6 +114,8 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void): Promise<void> {
   const harness = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: harness, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture source"], { cwd: harness, stdio: "ignore" });
   // Contract §4: the row pointers are resolved against `{PLAN_DIR}` and the
   // declaration is read, so the fixture owns the registered plan markdown.
   mkdirSync(join(harness, "plans"), { recursive: true });
@@ -193,7 +196,7 @@ describe("mstar iteration register", () => {
   test("the registered workflow accepts a coordinator binding (exit 0)", async () => {
     await setupHarness((harness) => {
       expect(runCli(registerArgs(harness)).exitCode).toBe(0);
-      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator"]);
+      const bind = runCli(["plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness, "--session-id", "fixture-coordinator"], harness);
       expect(bind.exitCode).toBe(0);
       const payload = envelope(bind).data as { session: Record<string, unknown> };
       expect(payload.session.role).toBe("coordinator");
