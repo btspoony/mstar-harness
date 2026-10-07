@@ -86,7 +86,7 @@ describe("terminal workflow adoption", () => {
       workflowId: active.caller.workflowId, expectedRevision: 1, reason: "active", operationId: "adopt-active",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded has an ACTIVE coordinator session at the current epoch; terminal adoption requires that holder's own close authority to restate the terminal lifecycle first",
+      message: "[execution.adoption-refused] workflow wf-stranded has an ACTIVE coordinator session at the current epoch; no supported exit exists for a terminal header holding an ACTIVE session at the current epoch",
     });
 
     const nonterminal = await strandedTerminal();
@@ -98,7 +98,7 @@ describe("terminal workflow adoption", () => {
       workflowId: nonterminal.caller.workflowId, expectedRevision: 1, reason: "running", operationId: "adopt-running",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded is not terminal; terminal adoption only records an already-terminal header and will not change this header",
+      message: "[execution.adoption-refused] workflow wf-stranded is not terminal; no supported exit exists for a non-terminal header without registry membership",
     });
 
     const missingReason = await strandedTerminal();
@@ -110,7 +110,7 @@ describe("terminal workflow adoption", () => {
       workflowId: missingReason.caller.workflowId, expectedRevision: 1, reason: "failed", operationId: "adopt-failed",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded has no recorded terminal reason in its header; no supported online operation can add it",
+      message: "[execution.adoption-refused] workflow wf-stranded has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason",
     });
   });
 });
