@@ -11,8 +11,8 @@ const refusalScan = (name: string) => scanRefusals(fixture(name), name);
 const reachabilityScan = (name: string) => scanRecoveryText(fixture(name), name, grammar);
 
 describe("over-design known-answer backtest", () => {
-  test("#340 instance 4 missing recovery is classified by presence-only rule", () => {
-    expect(refusalScan("instance-4-catchall.ts").map(({ classification }) => classification)).toContain("missing-recovery");
+  test("#340 instance 4 catch-all without structured recovery is missing-recovery despite its identical-failure rerun message", () => {
+    expect(refusalScan("instance-4-catchall.ts").map(({ classification }) => classification)).toEqual(["missing-recovery"]);
   });
 
   test("#340 instance 5 wrong-path restore-preview is capability-unreachable", () => {

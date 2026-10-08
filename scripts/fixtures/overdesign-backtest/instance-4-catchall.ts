@@ -4,6 +4,6 @@ import { refusalEnvelope } from "../../../../packages/engine/src/refusal";
 export function upgradeBlocked() {
   return refusalEnvelope({
     code: "store.upgrade-blocked",
-    message: "Upgrade blocked.",
+    message: "Upgrade blocked. Rerun the upgrade; it will refuse with the same catch-all.",
   });
 }
