@@ -1,7 +1,29 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { scanSource } from "./lint-hash-gates";
+import { main, scanSource } from "./lint-hash-gates";
 
 const gate = (marker = "") => `${marker}\nif (expectedDigest !== observedDigest) throw new Error("mismatch");`;
+
+async function runLint(files: Record<string, string>, json = false) {
+  const repo = mkdtempSync(join(tmpdir(), "hash-gates-"));
+  mkdirSync(join(repo, "src"));
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(repo, "src", name), content);
+  const output: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => output.push(args.join(" "));
+  console.error = (...args: unknown[]) => output.push(args.join(" "));
+  try {
+    const exitCode = await main(["--repo", repo, "--dir", "src", ...(json ? ["--json"] : [])]);
+    return { exitCode, output: output.join("\n") };
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    rmSync(repo, { recursive: true, force: true });
+  }
+}
 
 describe("hash-gate scope and authorization", () => {
   test("does not report test-file assertions or gates", () => {
@@ -21,7 +43,39 @@ describe("hash-gate scope and authorization", () => {
     expect(findings[0]?.reason).toBe("authorized marker requires a non-empty reason");
   });
 
+  test("does not authorize marker text inside a string literal or block comment", () => {
+    for (const source of [
+      `if (expectedDigest !== observedDigest) throw new Error("// hash-gate: authorized — diagnostic");`,
+      `/* // hash-gate: authorized — diagnostic */\nif (expectedDigest !== observedDigest) throw new Error("mismatch");`,
+    ]) {
+      expect(scanSource("packages/engine/src/hash.ts", source).map(({ classification }) => classification)).toEqual(["hash-gate"]);
+    }
+  });
+
   test("keeps unmarked gates as violations", () => {
     expect(scanSource("packages/engine/src/hash.ts", gate()).map(({ classification }) => classification)).toEqual(["hash-gate"]);
+  });
+  test("authorized-only reports exit 0 and exposes authorizedGates in text and JSON", async () => {
+    const files = { "authorized.ts": gate("// hash-gate: authorized — preserve identity") };
+    const text = await runLint(files);
+    expect(text.exitCode).toBe(0);
+    expect(text.output).toContain("authorized gates — 1");
+    expect(text.output).toContain("src/authorized.ts");
+    const json = await runLint(files, true);
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(json.output).authorizedGates).toHaveLength(1);
+  });
+
+  test("mixed authorized and unmarked gates exit 1 and invalid whitespace reason is a violation", async () => {
+    const mixed = await runLint({
+      "authorized.ts": gate("// hash-gate: authorized — preserve identity"),
+      "unmarked.ts": gate(),
+    });
+    expect(mixed.exitCode).toBe(1);
+    expect(mixed.output).toContain("1 violation(s)");
+    expect(mixed.output).toContain("authorized gates — 1");
+    const invalid = await runLint({ "invalid.ts": gate("// hash-gate: authorized —   ") }, true);
+    expect(invalid.exitCode).toBe(1);
+    expect(JSON.parse(invalid.output).violations[0].reason).toBe("authorized marker requires a non-empty reason");
   });
 });

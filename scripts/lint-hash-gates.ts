@@ -638,11 +638,23 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
     add(node, "record-only", kind, "");
   }
   const lines = text.split(/\r?\n/);
+  const markerOnLine = (lineNumber: number): string | undefined => {
+    const line = lines[lineNumber - 1];
+    if (line === undefined) return undefined;
+    const scanner = ts.createScanner(ts.ScriptTarget.ES2022, false, ts.LanguageVariant.Standard, line);
+    while (scanner.scan() !== ts.SyntaxKind.EndOfFileToken) {
+      if (scanner.getToken() === ts.SyntaxKind.SingleLineCommentTrivia) {
+        const comment = scanner.getTokenText();
+        if (/^\s*\/\/ hash-gate: authorized —/.test(comment)) return comment;
+      }
+    }
+    return undefined;
+  };
   const marked = findings.map((finding) => {
     if (!Object.hasOwn(VIOLATION_CLASSES, finding.classification) || finding.classification === "invalid-authorized-marker") return finding;
-    const marker = [lines[finding.line - 1], lines[finding.line - 2]].find((line) => line?.includes("// hash-gate: authorized"));
+    const marker = markerOnLine(finding.line) ?? markerOnLine(finding.line - 1);
     if (marker === undefined) return finding;
-    const match = marker.match(/\/\/ hash-gate: authorized —(.*)$/);
+    const match = marker.match(/^\s*\/\/ hash-gate: authorized —(.*)$/);
     const reason = match?.[1]?.trim() ?? "";
     return { ...finding, classification: reason.length > 0 ? "authorized-gate" as const : "invalid-authorized-marker" as const, reason: reason.length > 0 ? reason : "authorized marker requires a non-empty reason" };
   });
@@ -705,7 +717,7 @@ Usage: bun scripts/lint-hash-gates.ts [--repo <path>] [--dir <path>]... [--json]
 
 Exit codes: 0 clean, 1 violations found, 2 usage or read error.`;
 
-async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv);
   if ("error" in parsed) {
     if (parsed.error === "help") {
