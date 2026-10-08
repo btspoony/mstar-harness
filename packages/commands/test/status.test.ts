@@ -179,6 +179,7 @@ describe("status command family", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "status-schema-facts-"));
     try {
       const harnessDir = path.join(dir, ".mstar");
+      mkdirSync(harnessDir, { recursive: true });
       const store = await initializeStore({ harnessDir });
       const supportedMax = Math.max(...MIGRATIONS.map((migration) => migration.version));
       const insert = store.db.prepare("insert into schema_version(version, name, checksum, applied_at) values(?, ?, ?, ?)");

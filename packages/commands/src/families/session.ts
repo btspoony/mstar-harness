@@ -13,6 +13,7 @@ import {
   type ActivationAttestation,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
+import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
@@ -62,6 +63,53 @@ function requiredFact(path: string): RefusalDiagnostic {
 
 /** The recovered cardinality facts, in the shared admission vocabulary. */
 const RECOVER_ALTERNATIVE_EXPECTED = "exactly one of priorSession | unowned=true";
+
+/** The parser's reported position, kept only when the runtime actually gives one. */
+function parserLocation(message: string): string | undefined {
+  const position = message.match(/\bposition\s+(\d+)\b/i)?.[1];
+  if (position !== undefined) return `position ${position}`;
+  const lineColumn = message.match(/\bline\s+(\d+)\s+column\s+(\d+)\b/i);
+  return lineColumn === null ? undefined : `line ${lineColumn[1]} column ${lineColumn[2]}`;
+}
+
+/**
+ * The parser fact one malformed attestation refusal carries: the runtime's own
+ * grammatical cause and, only when it reports one, its position — never the
+ * offending source bytes.
+ *
+ * The supported runtimes append the offending document differently: Node wraps
+ * it as a double-quoted `..., "<source>" is not valid JSON` excerpt, while Bun's
+ * identifier form is a double-quoted `Unexpected identifier "<source>"` with no
+ * suffix at all. Every double-quoted operand is therefore the runtime's echo of
+ * an operand, not parser grammar, and is elided to `"…"`. Single-quoted operands
+ * are grammar the parser authored (`'}'`, `','`, `property name`) and are kept —
+ * unless their inner text is also present in the submitted document, in which
+ * case they are an echo of the caller's content and are elided too. The result
+ * is scrubbed once more by the repository's secret redactor so nothing
+ * credential-shaped can survive.
+ */
+function attestationParserCause(error: unknown, submitted: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const location = parserLocation(message);
+  const cause = message
+    .replace(/^JSON Parse error:\s*/i, "")
+    .replace(/^JSON parse error:\s*/i, "")
+    .replace(/^SyntaxError:\s*/i, "")
+    .replace(/"[^"]*"/g, '"…"')
+    .replace(/'([^']*)'/g, (match, inner: string) =>
+      inner.length >= 2 && /[A-Za-z0-9]/.test(inner) && submitted.includes(inner) ? "'…'" : match)
+    .replace(/,?\s*"…"\s+is not valid JSON\s*$/i, "")
+    .replace(/,?\s*\.\.\.\s+is not valid JSON\s*$/i, "")
+    .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+    .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+    .replace(/\s*\(line \d+ column \d+\)/gi, "")
+    .replace(/,?\s*is not valid JSON\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/[\s,:;]+$/, "")
+    .trim();
+  const scrubbed = redactSecrets(cause === "" ? "syntax error" : cause).text;
+  return location === undefined ? scrubbed : `${scrubbed} (${location})`;
+}
 
 /** The recovered caller inputs of `session.recover`, all non-optional. */
 type RecoverInputs = Readonly<{
@@ -150,7 +198,7 @@ function readAttestationDocument(pathValue: string): ActivationAttestation {
   try {
     return JSON.parse(text) as ActivationAttestation;
   } catch (error) {
-    throw new RecoveryInputError("session.recover.attestation-malformed", "refused", `--attestation is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new RecoveryInputError("session.recover.attestation-malformed", "refused", `--attestation is not valid JSON: ${attestationParserCause(error, text)}`);
   }
 }
 

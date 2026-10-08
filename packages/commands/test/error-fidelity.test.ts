@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { executeCommand } from "../src/definitions.js";
@@ -112,5 +112,69 @@ describe("session.recover input discovery", () => {
     expect(result.message).toContain("--attestation must be an absolute path");
     // The relative path was never resolved against the process cwd.
     expect(existsSync(path.join(harness, "workflows"))).toBe(false);
+  });
+
+  test("a malformed attestation keeps its parser grammar but never echoes the submitted document", async () => {
+    // The supported runtimes echo the offending operand differently: Node wraps
+    // it in a double-quoted `..., "<source>" is not valid JSON` excerpt, while
+    // Bun's identifier form is `Unexpected identifier "<source>"` with no
+    // suffix at all. Both are the runtime echoing an OPERAND, so both must be
+    // elided; the parser's own grammar must survive.
+    for (const [label, document] of [
+      ["identifier operand (Bun shape)", '{"operator":{"actor":LEAKSENTINEL7QX9}}'],
+      ["bare-word value (Node excerpt shape)", '{"actor":LEAKSENTINEL7QX9}'],
+      ["unterminated document", '{"version":1,"actor":"LEAKSENTINEL7QX9"'],
+      ["trailing garbage", '{"version":1} LEAKSENTINEL7QX9'],
+      ["single-quoted document", "{'actor':'LEAKSENTINEL7QX9'}"],
+    ] as const) {
+      const { root, harness } = fixture();
+      const attestation = path.join(root, "attestation.json");
+      writeFileSync(attestation, document);
+      const result = await executeCommand("session.recover", {
+        workflow: "wf-recover", unowned: true, sessionId: "caller-session",
+        reason: "recovery", attestation, expect: "token", operation: "recover-1", harness,
+      }, context(root));
+
+      // Stable, specific classification — not a generic usage envelope.
+      expect(result, label).toMatchObject({ status: "refused", code: "session.recover.attestation-malformed", exitCode: 1 });
+      if (result.status === "ok") throw new Error(label);
+      // Concrete parser facts survive: the cause is a real parser statement, and
+      // a location is reported only because this runtime supplied one.
+      expect(result.message, label).toMatch(/^--attestation is not valid JSON: \S/);
+      expect(result.message, label).not.toContain("--attestation is not valid JSON: \n");
+      expect(JSON.stringify(result), `${label}: the submitted sentinel must not reach the envelope`).not.toContain("LEAKSENTINEL7QX9");
+      expect(result.message, label).not.toContain("actor");
+      // Nothing was written and the engine was never reached.
+      expect(existsSync(path.join(harness, "workflows")), label).toBe(false);
+    }
+  });
+
+  test("the parser cause keeps the actual reported location and grammar shape", async () => {
+    const { root, harness } = fixture();
+    const attestation = path.join(root, "attestation.json");
+    const document = '{"version":1,"actor":"LEAKSENTINEL7QX9"';
+    writeFileSync(attestation, document);
+    // The cause this runtime actually reports for this input, from the same
+    // parser — never an invented coordinate.
+    let reported = "";
+    try { JSON.parse(document); } catch (error) { reported = error instanceof Error ? error.message : String(error); }
+    const position = reported.match(/\bposition\s+(\d+)\b/i)?.[1];
+    const lineColumn = reported.match(/\bline\s+(\d+)\s+column\s+(\d+)\b/i);
+    const expectedLocation = position !== undefined
+      ? `position ${position}`
+      : lineColumn === null ? "" : `line ${lineColumn[1]} column ${lineColumn[2]}`;
+
+    const result = await executeCommand("session.recover", {
+      workflow: "wf-recover", unowned: true, sessionId: "caller-session",
+      reason: "recovery", attestation, expect: "token", operation: "recover-1", harness,
+    }, context(root));
+    if (result.status === "ok") throw new Error("expected the malformed refusal");
+    if (expectedLocation === "") {
+      // This runtime reported no coordinate, so none may be invented.
+      expect(result.message).not.toMatch(/\b(position|line)\s+\d/);
+    } else {
+      expect(result.message).toContain(`(${expectedLocation})`);
+    }
+    expect(JSON.stringify(result)).not.toContain("LEAKSENTINEL7QX9");
   });
 });

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getCommandDefinitions, executeCommand } from "../src/index.js";
-import type { CommandEnvelope, InvocationContext } from "../src/types.js";
+import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
