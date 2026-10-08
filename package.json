@@ -33,7 +33,8 @@
     "validation:drift": "bun run scripts/drift-lint.ts",
     "lint:ascii-literals": "bun scripts/lint-ascii-literals.ts",
     "lint:hash-gates": "bun scripts/lint-hash-gates.ts",
-    "lint:refusal-quality": "bun scripts/lint-refusal-quality.ts"
+    "lint:refusal-quality": "bun scripts/lint-refusal-quality.ts",
+    "lint:help-reachability": "bun scripts/lint-help-reachability.ts"
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {

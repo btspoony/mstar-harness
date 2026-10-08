@@ -45,7 +45,7 @@ export function extractCliGrammar(): CliGrammar {
 function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
 }
-function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
+export function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
   const stopClause = (text: string): string => {
     const boundary = text.search(/[.;,!?\uFF0C]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b/i);
     return boundary < 0 ? text : text.slice(0, boundary);
