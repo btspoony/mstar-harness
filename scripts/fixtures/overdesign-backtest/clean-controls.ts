@@ -9,7 +9,7 @@ export function reachableRefusal() {
 }
 
 export function validUsageEnvelope() {
-  return { kind: "usage", message: "Usage: status validate" };
+  return refusalEnvelope({ status: "usage", code: "command.usage", message: "Usage: status validate" });
 }
 
 export const provenance = { assignmentSha256: sha256(assignmentBytes) };

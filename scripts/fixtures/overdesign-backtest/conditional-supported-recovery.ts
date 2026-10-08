@@ -4,6 +4,6 @@ export function conditionalRecovery(flag: boolean) {
   return refusalEnvelope({
     code: "restore.unavailable",
     message: "Unavailable",
-    ...(flag ? { recovery: "Run status validate." } : { recovery: "Run execution restore-preview." }),
+    ...(flag ? { recovery: "Run status validate." } : {}),
   });
 }
