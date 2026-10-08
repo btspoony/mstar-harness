@@ -76,12 +76,14 @@ async function withActiveHolder(harness: string, sessionId: string): Promise<voi
 }
 
 /**
- * The operator stop document the transport reads, built from genuine fixture
- * operator/consumer facts and the addressed sessions, then validated through
- * the shared structural contract the command publishes before it is written.
+ * The genuine operator/consumer/stop facts of the fixture (declared
+ * preconditions, not facts inferred from any refusal), shaped as the raw
+ * document the FILE transport reads. Consumers that must consume the emitted
+ * proof contract build this document and validate it against the published
+ * JSON schema before writing it.
  */
-function writeAttestation(root: string, stoppedSessionIds: readonly string[], overrides: Record<string, unknown> = {}): string {
-  const document = activationAttestationDocumentSchema.parse({
+function attestationDocument(stoppedSessionIds: readonly string[]): Record<string, unknown> {
+  return {
     version: 1,
     attestedAt: "2026-10-08T00:00:00.000Z",
     operator: { actor: "recovery-operator", authorizationRef: "operator-authorization-fixture" },
@@ -90,8 +92,15 @@ function writeAttestation(root: string, stoppedSessionIds: readonly string[], ov
       runtime: "bun", runtimeVersion: "99.0.0", version: "0.0.0-test", current: true, disposition: "reloaded",
     }],
     stoppedSessions: stoppedSessionIds.map((sessionId) => ({ sessionId, host: "fixture-host", state: "stopped" })),
-    ...overrides,
-  });
+  };
+}
+
+/**
+ * The operator stop document the transport reads, validated through the shared
+ * structural contract before it is written.
+ */
+function writeAttestation(root: string, stoppedSessionIds: readonly string[], overrides: Record<string, unknown> = {}): string {
+  const document = activationAttestationDocumentSchema.parse({ ...attestationDocument(stoppedSessionIds), ...overrides });
   const path = join(root, "attestation.json");
   writeFileSync(path, JSON.stringify(document, null, 2));
   return path;
@@ -261,14 +270,21 @@ test("ACTIVE-holder refusal publishes targets and full proof contract before a f
   if (details === undefined || !("attestationContract" in details) || details.attestationContract === null || typeof details.attestationContract !== "object") {
     throw new Error("the first correction refusal must publish the proof contract");
   }
-  // The published proof contract is consumed here: a non-empty structural
-  // schema plus the semantic rules, not a copied producer echo.
+  // The published contract is consumed: the emitted JSON schema is converted
+  // into a real validator and that validator checks the corrected file, so a
+  // wrong/empty `required` or a missing document field fails the correction.
   const contractSchema = z.object({
     schema: z.record(z.string(), z.unknown()),
     constraints: z.array(z.object({ path: z.string(), rule: z.string() })).min(1),
   });
   const contract = contractSchema.parse(details.attestationContract);
-  expect(contract.schema).toHaveProperty("required");
+  // Strip the zod transport annotation (`~standard`) so only the JSON Schema is
+  // left; zod's own converter is its declared consumer, so the annotation below
+  // supplies its input type rather than asserting a validated shape.
+  const emittedJsonSchema: Record<string, unknown> = { ...contract.schema };
+  delete emittedJsonSchema["~standard"];
+  const jsonSchema = emittedJsonSchema as Parameters<typeof z.fromJSONSchema>[0];
+  const emittedValidator = z.fromJSONSchema(jsonSchema);
   // The correction's stop targets come from the refusal, never a hardcoded list.
   if (!("active_holder_sessions" in details)) throw new Error("the refusal must name the addressed ACTIVE holders");
   const targets = z.array(z.string()).min(1).parse(details.active_holder_sessions);
@@ -280,10 +296,19 @@ test("ACTIVE-holder refusal publishes targets and full proof contract before a f
       .toEqual({ revision: 1 });
   });
 
-  // One proof file, built from the published structural contract and the
-  // refusal's own targets; the operator/consumer facts are the genuine fixture
-  // preconditions declared in writeAttestation, not facts invented here.
-  const attestation = writeAttestation(root, targets);
+  // One proof file, built from the emitted contract and the refusal's own
+  // targets; the operator/consumer facts are the genuine fixture preconditions
+  // declared in writeAttestation, not facts invented here. The emitted validator
+  // must reject a document missing a required field before the retry succeeds.
+  const document = attestationDocument(targets);
+  const { version: _omitted, ...missingRequired } = document;
+  // A document missing an emitted required field must fail the emitted
+  // validator, so the correction consumer cannot silently accept a broken
+  // published contract.
+  expect(emittedValidator.safeParse(missingRequired).success).toBe(false);
+  expect(emittedValidator.safeParse(document).success).toBe(true);
+  const attestation = join(root, "attestation.json");
+  writeFileSync(attestation, JSON.stringify(document, null, 2));
   const applied = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness, reason: "active holder", attestation,
   }, invocation(root));
@@ -355,7 +380,6 @@ test("the command transport refuses wrong, malformed and self-settling documents
   const malformed = await fixture();
   await withActiveHolder(malformed.harness, "stranded-holder");
   const parserSchema = z.object({ parser: z.object({ cause: z.string().min(1), location: z.string().min(1).optional() }) });
-  const distinctCauses: string[] = [];
   for (const [name, text] of [
     ["trailing-comma", "{\"token\":\"fixture-malformed-secret\",}"],
     ["truncated", "{\"version\":1,"],
@@ -370,15 +394,28 @@ test("the command transport refuses wrong, malformed and self-settling documents
     expect(unparseable).toMatchObject({ status: "refused", code: "workflow.adopt-terminal.attestation-malformed", exitCode: 1 });
     if (unparseable.status !== "refused") throw new Error("expected the malformed-document refusal");
     const parser = parserSchema.parse(unparseable.details).parser;
-    // The parser's own grammatical cause is retained, not collapsed to one
-    // generic string; no source snippet or credential token is echoed.
-    expect(parser.cause).not.toBe("syntax error");
-    distinctCauses.push(parser.cause);
+    // Compare against the parser's own reported interface for the SAME input,
+    // independently of the production sanitizer.
+    let actual = "";
+    try { JSON.parse(text); } catch (error) { actual = error instanceof Error ? error.message : String(error); }
+    expect(actual).not.toBe("");
+    // Location is retained exactly when the runtime parser reports one, never
+    // invented when it reports none.
+    const actualPosition = actual.match(/\bposition\s+(\d+)\b/i)?.[1];
+    const actualLineColumn = actual.match(/\bline\s+(\d+)\s+column\s+(\d+)\b/i);
+    const actualLocation = actualPosition !== undefined
+      ? `position ${actualPosition}`
+      : actualLineColumn === null || actualLineColumn === undefined
+        ? undefined
+        : `line ${actualLineColumn[1]} column ${actualLineColumn[2]}`;
+    expect(parser.location).toBe(actualLocation);
+    // Safe parser-authored grammar (its quoted delimiters/keywords) survives the
+    // sanitizer; only the source/token excerpt is removed.
+    for (const grammar of actual.match(/'[^']*'/g) ?? []) expect(parser.cause).toContain(grammar);
+    // No source/token/credential excerpt is echoed anywhere in the refusal.
+    expect(parser.cause).not.toContain("fixture-malformed-secret");
     expect(JSON.stringify(unparseable)).not.toContain("fixture-malformed-secret");
-    // A location is reported only when the runtime parser actually gives one.
-    if (parser.location !== undefined) expect(parser.location).toMatch(/^(position \d+|line \d+ column \d+)$/);
   }
-  expect(new Set(distinctCauses).size).toBeGreaterThan(1);
   // A relative document is caller input, not a filesystem read.
   const relative = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness: malformed.harness, expect: "1", operation: "adopt-relative", reason: "relative",

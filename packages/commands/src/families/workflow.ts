@@ -154,14 +154,16 @@ function jsonParseDiagnostic(error: unknown): { cause: string; location?: string
   const cause = message
     .replace(/^JSON Parse error:\s*/i, "")
     .replace(/^SyntaxError:\s*/i, "")
-    // Drop an embedded document excerpt some runtimes append after the grammar
-    // cause (`..., "<source>" is not valid JSON`), keeping only the cause.
+    // The runtime appends the offending document as a double-quoted excerpt
+    // (`Unexpected token '}', "{\"secret\":...}" is not valid JSON`). Drop that
+    // excerpt — it carries the raw source/token bytes. The parser's own
+    // single-quoted grammar (`','`, `'}'`, `property name`) is authored by the
+    // parser, not the document, so it is preserved.
     .replace(/[:,]?\s*"[\s\S]*"\s+is not valid JSON\s*$/i, "")
     .replace(/[:,]?\s*\.\.\.\s*is not valid JSON\s*$/i, "")
     .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s*\(line \d+ column \d+\)/gi, "")
-    .replace(/'[^']*'|"[^"]*"|`[^`]*`/g, "")
     .replace(/[,\s]+is not valid JSON\s*$/i, "")
     .replace(/\s+/g, " ")
     .replace(/[\s,:;]+$/, "")
