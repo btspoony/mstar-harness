@@ -52,6 +52,13 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     }
     return undefined;
   };
+  const resolveLocalDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
+    for (let current = scope; current && current.kind !== "source"; current = current.parent) {
+      const declaration = current.declarations.get(name);
+      if (declaration) return declaration;
+    }
+    return undefined;
+  };
   const wrappers = findRefusalWrappers(source);
   const callBindings = (wrapper: RefusalWrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
     const bindings = new Map<string, ts.Expression>();
@@ -74,13 +81,18 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
-      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
-        return value(declaration.initializer, scopeByNode.get(declaration), new Set(seenDeclarations).add(declaration), bindings, seenBindings);
+      const currentScope = scope ?? scopeByNode.get(node);
+      const local = resolveLocalDeclaration(currentScope, node.text);
+      if (local?.initializer && !seenDeclarations.has(local)) {
+        return value(local.initializer, scopeByNode.get(local), new Set(seenDeclarations).add(local), bindings, seenBindings);
       }
       if (bindings.has(node.text) && !seenBindings.has(node.text)) {
         const actual = bindings.get(node.text)!;
         return value(actual, scopeByNode.get(actual), seenDeclarations, bindings, new Set(seenBindings).add(node.text));
+      }
+      const declaration = resolveDeclaration(currentScope, node.text);
+      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
+        return value(declaration.initializer, scopeByNode.get(declaration), new Set(seenDeclarations).add(declaration), bindings, seenBindings);
       }
     }
     return undefined;
@@ -90,11 +102,14 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
       return resolveBound(node.expression, bindings, seen);
     }
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scopeByNode.get(node), node.text);
-      if (declaration?.initializer) return resolveBound(declaration.initializer, bindings, seen);
+      const scope = scopeByNode.get(node);
+      const local = resolveLocalDeclaration(scope, node.text);
+      if (local?.initializer) return resolveBound(local.initializer, bindings, seen);
       if (bindings.has(node.text) && !seen.has(node.text)) {
         return resolveBound(bindings.get(node.text)!, bindings, new Set(seen).add(node.text));
       }
+      const declaration = resolveDeclaration(scope, node.text);
+      if (declaration?.initializer) return resolveBound(declaration.initializer, bindings, seen);
     }
     return node;
   };
@@ -119,13 +134,18 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
         || hasUnresolvedTemplate(node.right, scope, seenDeclarations, bindings, seenBindings);
     }
     if (ts.isIdentifier(node)) {
-      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
-      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
-        return hasUnresolvedTemplate(declaration.initializer, scopeByNode.get(declaration), new Set(seenDeclarations).add(declaration), bindings, seenBindings);
+      const currentScope = scope ?? scopeByNode.get(node);
+      const local = resolveLocalDeclaration(currentScope, node.text);
+      if (local?.initializer && !seenDeclarations.has(local)) {
+        return hasUnresolvedTemplate(local.initializer, scopeByNode.get(local), new Set(seenDeclarations).add(local), bindings, seenBindings);
       }
       if (bindings.has(node.text) && !seenBindings.has(node.text)) {
         const actual = bindings.get(node.text)!;
         return hasUnresolvedTemplate(actual, scopeByNode.get(actual), seenDeclarations, bindings, new Set(seenBindings).add(node.text));
+      }
+      const declaration = resolveDeclaration(currentScope, node.text);
+      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
+        return hasUnresolvedTemplate(declaration.initializer, scopeByNode.get(declaration), new Set(seenDeclarations).add(declaration), bindings, seenBindings);
       }
     }
     return false;

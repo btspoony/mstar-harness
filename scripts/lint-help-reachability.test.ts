@@ -179,4 +179,15 @@ describe("help reachability lint", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
     expect(findings[0]?.reason).toContain("unresolved runtime substitution — advertised command is not statically provable");
   });
+
+  test("uses wrapper call-site arguments instead of shadowed outer recovery declarations", () => {
+    const source = `
+      const recovery = "Run mstar workflow --resume";
+      function refused(recovery: string) {
+        return refusalEnvelope({ code: "NO_STATE", status: "refused", message: "Blocked", recovery });
+      }
+      refused("Run mstar nonexistent");
+    `;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
 });
