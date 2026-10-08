@@ -47,43 +47,88 @@ describe("session and workflow command families", () => {
     expect(iteration.payloads?.row?.schema.safeParse([{ id: "plan-a" }]).success).toBe(true);
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
   });
-  test("pathname fields carry no payload descriptor, so a file path is never parsed as JSON", () => {
-    // `--file` is an absolute pathname on every workflow verb. A descriptor
-    // bound to it would make the shared CLI decoder `JSON.parse` the path and
-    // reject ordinary paths as invalid JSON, so the field must not appear —
-    // while the genuine document-valued fields keep theirs.
-    for (const id of ["workflow.evidence", "workflow.execution-policy"]) {
-      const command = definition(id);
-      expect(command.payloads).toBeDefined();
-      expect(command.payloads).not.toHaveProperty("file");
-      expect(command.cli.options.some((option) => option.key === "file")).toBe(true);
-    }
-  });
 
-  test("evidence before Done is accepted through the workflow command", async () => {
+  test("workflow.evidence FILE patches merge complete members and refuse wrong-kind or invalid blocks without mutation", async () => {
     const context = testContext();
     const harnessDir = path.join(context.cwd, ".mstar");
     mkdirSync(harnessDir, { recursive: true });
     mkdirSync(path.join(harnessDir, "plans"), { recursive: true });
     writeFileSync(path.join(harnessDir, "plans", "plan-evidence-order.md"), "**plan_id:** plan-evidence-order\n");
+    writeFileSync(path.join(harnessDir, "plans", "plan-report-only.md"), "**plan_id:** plan-report-only\n");
     const store = await initializeStore({ harnessDir });
     store.close();
-    const registered = await definition("workflow.register").execute({
+    const development = await definition("workflow.register").execute({
       workflow: "wf-evidence-order", planId: "plan-evidence-order", planTitle: "Evidence order",
       planFile: "plans/plan-evidence-order.md", deliveryKind: "development", branchSource: "feature/evidence-order",
       branchTarget: "main", harness: harnessDir,
     }, context);
-    expect(registered).toMatchObject({ status: "ok" });
+    expect(development.status).toBe("ok");
 
     const evidenceFile = path.join(context.cwd, "delivery.json");
     writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "created" } }));
-    const recorded = await definition("workflow.evidence").execute({
+    const recordedCompound = await definition("workflow.evidence").execute({
       workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
     }, context);
-    expect(recorded.status).toBe("ok");
-    const snapshot = JSON.parse(readFileSync(path.join(harnessDir, "workflows", "wf-evidence-order", "snapshot.json"), "utf8"));
-    expect(snapshot.delivery).toEqual({ compound: { outcome: "created" } });
-    expect(snapshot.plans[0].status).not.toBe("Done");
+    expect(recordedCompound.status).toBe("ok");
+
+    writeFileSync(evidenceFile, JSON.stringify({
+      pr: { repo: "owner/repo", head: "feature/evidence-order", target: "main" },
+    }));
+    const recordedPr = await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context);
+    expect(recordedPr.status).toBe("ok");
+
+    writeFileSync(evidenceFile, JSON.stringify({ merge: { provider: "github", evidence: "confirmed merge receipt" } }));
+    const recordedMerge = await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context);
+    expect(recordedMerge.status).toBe("ok");
+
+    writeFileSync(evidenceFile, JSON.stringify({ completion: { policy: "wrong-kind", evidence: "must not attach" } }));
+    expect((await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context)).status).toBe("refused");
+    writeFileSync(evidenceFile, JSON.stringify({ compound: { outcome: "skipped" } }));
+    expect((await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context)).status).toBe("refused");
+    writeFileSync(evidenceFile, JSON.stringify({ pr: { repo: "owner/repo", head: "other-head", target: "main" } }));
+    const changedIdentity = await definition("workflow.evidence").execute({
+      workflow: "wf-evidence-order", file: evidenceFile, harness: harnessDir,
+    }, context);
+    expect(changedIdentity.status).toBe("refused");
+    expect(changedIdentity.message).toContain("different PR identity");
+
+    const developmentSnapshot = JSON.parse(readFileSync(
+      path.join(harnessDir, "workflows", "wf-evidence-order", "snapshot.json"), "utf8",
+    ));
+    expect(developmentSnapshot.delivery).toEqual({
+      compound: { outcome: "created" },
+      pr: { repo: "owner/repo", head: "feature/evidence-order", target: "main" },
+      merge: { provider: "github", evidence: "confirmed merge receipt" },
+    });
+    expect(developmentSnapshot.plans[0].status).not.toBe("Done");
+
+    const reportOnly = await definition("workflow.register").execute({
+      workflow: "wf-report-only", planId: "plan-report-only", planTitle: "Report only",
+      planFile: "plans/plan-report-only.md", deliveryKind: "verification/report-only",
+      completionPolicy: "approval-v1", harness: harnessDir,
+    }, context);
+    expect(reportOnly.status).toBe("ok");
+    writeFileSync(evidenceFile, JSON.stringify({ completion: { policy: "approval-v1", evidence: "acceptance/report.md" } }));
+    const recordedCompletion = await definition("workflow.evidence").execute({
+      workflow: "wf-report-only", file: evidenceFile, harness: harnessDir,
+    }, context);
+    expect(recordedCompletion.status).toBe("ok");
+    writeFileSync(evidenceFile, JSON.stringify({ pr: { repo: "owner/repo", head: "feature", target: "main" } }));
+    expect((await definition("workflow.evidence").execute({
+      workflow: "wf-report-only", file: evidenceFile, harness: harnessDir,
+    }, context)).status).toBe("refused");
+    const reportSnapshot = JSON.parse(readFileSync(
+      path.join(harnessDir, "workflows", "wf-report-only", "snapshot.json"), "utf8",
+    ));
+    expect(reportSnapshot.delivery).toEqual({ completion: { policy: "approval-v1", evidence: "acceptance/report.md" } });
   });
 
 

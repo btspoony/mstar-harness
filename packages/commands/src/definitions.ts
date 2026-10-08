@@ -1,7 +1,7 @@
 import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { z } from "zod";
-import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
+import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
 import { getCoordinationChecksCommandDefinitions } from "./families/coordination-checks.js";
 import { getPersistCommandDefinitions } from "./families/persist.js";
@@ -281,6 +281,16 @@ function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { 
   return { path: inputPath(issue), expected, received };
 }
 
+function inputConditionMatches(
+  condition: NonNullable<CommandRequirement["condition"]>,
+  input: Readonly<Record<string, unknown>>,
+): boolean {
+  const trigger = input[condition.field];
+  return condition.equals !== undefined
+    ? trigger === condition.equals
+    : condition.present === false ? trigger === undefined : trigger !== undefined;
+}
+
 export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
   const definition = canonicalDefinitions.find((entry) => entry.id === id);
   if (definition === undefined) {
@@ -317,13 +327,11 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
         received: typeof selectorValue === "string" ? JSON.stringify(selectorValue) : typeof selectorValue,
       }]
     : [];
-  const conditionalRequired = contract.requirements.filter((entry) => {
-    if (!entry.required || entry.condition === undefined) return false;
-    const trigger = effectiveRecord[entry.condition.field];
-    return entry.condition.equals !== undefined
-      ? trigger === entry.condition.equals
-      : entry.condition.present === false ? trigger === undefined : trigger !== undefined;
-  });
+  const conditionalRequired = contract.requirements.filter((entry) =>
+    entry.required === true &&
+    entry.condition !== undefined &&
+    inputConditionMatches(entry.condition, effectiveRecord)
+  );
   const required = [...new Set([...contract.required, ...conditionalRequired.map((entry) => entry.name)])];
   const missing = required.filter((key) => effectiveRecord[key] === undefined && !diagnostics.some((entry) => entry.path === key));
   const requiredDiagnostics = missing.map((key) => ({
@@ -333,8 +341,72 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     expected: "present",
     received: "undefined",
   }));
-  const allDiagnostics = [...diagnostics, ...requiredDiagnostics, ...selectorDiagnostic];
-  if (!parsed.success || missing.length > 0 || selectorInvalid) {
+  const allowedValueFacts = new Set<string>();
+  const allowedValueDiagnostics = contract.requirements.flatMap((entry) => {
+    const value = effectiveRecord[entry.name];
+    if (
+      entry.allowedValues === undefined ||
+      value === undefined ||
+      (entry.condition !== undefined && !inputConditionMatches(entry.condition, effectiveRecord))
+    ) return [];
+    const fact = JSON.stringify([entry.name, entry.condition, entry.allowedValues]);
+    if (allowedValueFacts.has(fact)) return [];
+    allowedValueFacts.add(fact);
+    if (entry.allowedValues.includes(value as string | boolean | number)) return [];
+    return [{
+      path: entry.name,
+      code: "not_allowed",
+      message: `${entry.name} must be one of ${entry.allowedValues.map((allowed) => JSON.stringify(allowed)).join(" | ")}`,
+      expected: entry.allowedValues.map((allowed) => JSON.stringify(allowed)).join(" | "),
+      received: JSON.stringify(value),
+    }];
+  });
+  const alternativeGroups = new Set<string>();
+  const alternativeDiagnostics = contract.requirements.flatMap((entry) => {
+    const alternatives = entry.alternatives;
+    if (
+      alternatives === undefined ||
+      (entry.condition !== undefined && !inputConditionMatches(entry.condition, effectiveRecord))
+    ) return [];
+    const signature = JSON.stringify([entry.condition, alternatives]);
+    if (alternativeGroups.has(signature)) return [];
+    alternativeGroups.add(signature);
+    const selected = alternatives.members.filter((member) => {
+      const value = effectiveRecord[member.name];
+      return member.whenTrue === true ? value === true : value !== undefined;
+    });
+    const invalid = alternatives.cardinality === "exactly-one"
+      ? selected.length !== 1
+      : alternatives.cardinality === "at-least-one"
+        ? selected.length === 0
+        : selected.length > 1;
+    if (!invalid) return [];
+    const members = alternatives.members.map((member) => `${member.name}${member.whenTrue === true ? "=true" : ""}`);
+    const expected = alternatives.cardinality === "exactly-one"
+      ? `exactly one of ${members.join(" | ")}`
+      : alternatives.cardinality === "at-least-one"
+        ? `at least one of ${members.join(" | ")}`
+        : `at most one of ${members.join(" | ")}`;
+    const received = selected.map((member) => `${member.name}${member.whenTrue === true ? "=true" : ""}`).join(" | ") || "none";
+    return [{
+      path: members.join("|"),
+      code: alternatives.cardinality === "at-most-one" ? "exclusive" : "alternative-required",
+      message: `${expected}; received ${received}`,
+      expected,
+      received,
+    }];
+  });
+  const allDiagnostics = [
+    ...diagnostics,
+    ...requiredDiagnostics,
+    ...allowedValueDiagnostics,
+    ...alternativeDiagnostics,
+    ...selectorDiagnostic,
+  ];
+  const conditionalRequirementFacts = contract.requirements.filter((entry) =>
+    entry.condition !== undefined || entry.alternatives !== undefined || entry.allowedValues !== undefined
+  );
+  if (!parsed.success || missing.length > 0 || allowedValueDiagnostics.length > 0 || alternativeDiagnostics.length > 0 || selectorInvalid) {
     const issue = issues[0];
     const facts = issue === undefined ? undefined : rejectionFacts(issue, effectiveInput);
     const optionKey = issue?.path.map(String).join(".");
@@ -357,7 +429,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
         required,
         defaults: contract.defaults,
         requirements: contract.requirements,
-        conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
+        conditionalRequirements: conditionalRequirementFacts,
       },
       ...(rejected === undefined ? {} : { rejected }),
     });
@@ -376,7 +448,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
           required,
           defaults: contract.defaults,
           requirements: contract.requirements,
-          conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
+          conditionalRequirements: conditionalRequirementFacts,
         },
       };
     }

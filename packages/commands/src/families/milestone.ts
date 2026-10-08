@@ -61,14 +61,14 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
         ...(name === "expectStore" || name === "expectIssue" ? { tokenKind: "revision" as const } : {}),
       })),
       ...(verb === "update" ? [
-        { name: "name", ownership: "caller" as const, route, required: false, constraint: "at least one of name, ordinal, status, target, or clearTarget=true is required" },
-        { name: "ordinal", ownership: "caller" as const, route, required: false, constraint: "at least one patch field is required; target and clearTarget are optional" },
-        { name: "status", ownership: "caller" as const, route, required: false, constraint: "at least one patch field is required; target and clearTarget are optional" },
-        { name: "target", ownership: "caller" as const, route, required: false, constraint: "optional patch; mutually exclusive with clearTarget" },
-        { name: "clearTarget", ownership: "caller" as const, route, required: false, constraint: "only true clears target; false does not select a patch or alternative" },
+        { name: "name", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-least-one" as const, members: [{ name: "name" }, { name: "ordinal" }, { name: "status" }, { name: "target" }, { name: "clearTarget", whenTrue: true }] }, constraint: "at least one patch value is required; target is optional and clearTarget selects only when true" },
+        { name: "ordinal", ownership: "caller" as const, route, required: false },
+        { name: "status", ownership: "caller" as const, route, required: false },
+        { name: "target", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-most-one" as const, members: [{ name: "target" }, { name: "clearTarget", whenTrue: true }] }, constraint: "optional patch; supplying target and clearTarget=true is refused" },
+        { name: "clearTarget", ownership: "caller" as const, route, required: false, constraint: "only true selects clear; false does not select a patch" },
       ] : []),
       ...(verb === "assign" ? [
-        { name: "id", ownership: "caller" as const, route, required: false, constraint: "exactly one of id or clear=true is required" },
+        { name: "id", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "exactly-one" as const, members: [{ name: "id" }, { name: "clear", whenTrue: true }] }, constraint: "exactly one of id or clear=true is required" },
         { name: "clear", ownership: "caller" as const, route, required: false, constraint: "only true selects unassignment; false does not select this alternative" },
       ] : []),
     ]);
@@ -78,8 +78,9 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
         path: ["milestone", verb], aliases: [], arguments: [],
         options: opts.map((key) => ({
           key, flags: flags[key], required: required[verb].includes(key),
-          ...(verb === "update" && key === "clearTarget" ? { help: "Only true clears target; false does not select an alternative." } : {}),
-          ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target." } : {}),
+          ...(verb === "update" && key === "clearTarget" ? { help: "Optional: only true clears target, and it cannot be combined with --target. False does not select a patch." } : {}),
+          ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target=true." } : {}),
+          ...(verb === "assign" && key === "clear" ? { help: "Only true selects unassignment; exactly one of --id and --clear=true is required." } : {}),
         })),
       },
       input: schema.pick(Object.fromEntries(opts.map((key) => [key, true])) as never),

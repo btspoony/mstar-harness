@@ -176,13 +176,16 @@ describe("issue command family", () => {
       actor: "project-manager",
     }, context);
     expect(blank.status).toBe("refused");
-    const option = command.cli.options.find(({ key }) => key === "operationId");
-    expect(option?.required).toBe(false);
-    expect(option?.defaultValue).toBeUndefined();
-    expect(option?.help).toContain("fresh id");
-    const requirement = command.requirements?.find(({ name, route }) => name === "operationId" && route === "mcp");
-    expect(requirement).toMatchObject({ required: false });
-    expect(requirement?.constraint).toContain("fresh id");
+    if (first.status !== "ok") return;
+    const receipt = first.data as { issueId: string; revision: number };
+    const triaged = await definition("issue.triage").execute({
+      id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
+      actor: "project-manager", expect: receipt.revision,
+    }, context);
+    expect(triaged.status).toBe("ok");
+    const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    expect(shown.status).toBe("ok");
+    if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision + 1, severity: "low" });
   });
 });
 

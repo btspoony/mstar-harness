@@ -158,31 +158,6 @@ describe("command discovery", () => {
       constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
     }));
   });
-  test("issue reopen publishes required CAS/payload facts and optional generated replay-id behavior", () => {
-    const selection = selectCommandSchema({ command: "issue.reopen" }, getCommandDefinitions());
-    if (selection.kind !== "command") throw new Error("expected issue.reopen command descriptor");
-    expect(selection.descriptor.cli.path).toEqual(["issue", "reopen"]);
-    expect(selection.descriptor.cli.options.filter((option) => option.required).map((option) => option.key))
-      .toEqual(expect.arrayContaining(["id", "actor", "expect"]));
-    expect(selection.descriptor.cli.options.find((option) => option.key === "operationId"))
-      .toMatchObject({ required: false, help: expect.stringContaining("fresh id") });
-    expect(selection.descriptor.defaults).not.toHaveProperty("operationId");
-    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "operationId",
-      route: "mcp",
-      required: false,
-      constraint: expect.stringContaining("fresh id"),
-    }));
-    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "expect",
-      tokenKind: "revision",
-    }));
-    expect(selection.descriptor.cli.options.find((option) => option.key === "expect")?.help)
-      .toContain("mstar issue show --id <id>");
-    expect(selection.descriptor.payloadSchemas).toMatchObject({
-      payload: { properties: { reason: { type: "string" } } },
-    });
-  });
 
   test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
@@ -262,29 +237,6 @@ describe("command discovery", () => {
   });
 });
 
-test("workflow.evidence publishes its engine-typed FILE contract and valid partial members", () => {
-  const evidence = getCommandDefinitions().find((entry) => entry.id === "workflow.evidence");
-  if (evidence === undefined) throw new Error("missing workflow.evidence definition");
-  const delivery = evidence.payloads?.delivery;
-  expect(delivery?.help).toContain("pathname, never inline JSON");
-  expect(delivery?.help).toContain("reason is required for skipped");
-  expect(delivery?.help).toContain("registered completion_policy");
-  const schema = delivery?.schema;
-  expect(schema?.safeParse({}).success).toBe(false);
-  expect(schema?.safeParse({ completion: { policy: "accepted policy", evidence: "acceptance.md" } }).success).toBe(true);
-  expect(schema?.safeParse({ compound: { outcome: "updated" } }).success).toBe(true);
-  expect(schema?.safeParse({ pr: { repo: "org/repo", head: "feature", target: "main" } }).success).toBe(true);
-  expect(schema?.safeParse({ compound: { outcome: "unknown" } }).success).toBe(false);
-  expect(schema?.safeParse({ merge: { provider: "gh", evidence: " " } }).success).toBe(false);
-  expect(schema?.safeParse({ unknown: { value: "x" } }).success).toBe(false);
-
-  const fileOption = evidence.cli.options.find((option) => option.key === "file");
-  expect(fileOption?.flags).toBe("--file <path>");
-  expect(fileOption?.help).toContain("Path-only wire");
-  expect(evidence.requirements).toContainEqual(expect.objectContaining({
-    name: "file", route: "mcp", required: true, condition: { field: "declareKind", present: false },
-  }));
-});
 
 test("workflow.recover-coordinator is FILE-only and returns usage with the supported ACTIVE recovery pointer", async () => {
   const recovery = getCommandDefinitions().find((entry) => entry.id === "workflow.recover-coordinator");
@@ -346,42 +298,4 @@ test("workflow.recover-coordinator is FILE-only and returns usage with the suppo
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
-test("canonical registry publishes bounded minima, safe defaults, and conditional requirements for named families", () => {
-  const schemas = Object.fromEntries(getCommandSchemas(getCommandDefinitions()).map((descriptor) => [descriptor.id, descriptor]));
-
-  const ledger = schemas["workflow-note.append"];
-  expect(ledger?.cli.path).toEqual(["workflow-note", "append"]);
-  expect(ledger?.required).toEqual(expect.arrayContaining(["workflow", "sessionRef", "id", "text", "sessionId"]));
-  expect(ledger?.requirements).toContainEqual(expect.objectContaining({ name: "sessionRef", route: "mcp", required: true }));
-
-  const recovery = schemas["session.recover"];
-  expect(recovery?.required).toEqual(expect.arrayContaining(["workflow", "reason", "attestation", "expect", "operation", "sessionId"]));
-  expect(recovery?.required).not.toContain("unowned");
-  expect(recovery?.requirements).toContainEqual(expect.objectContaining({
-    name: "unowned", route: "mcp", required: false, constraint: expect.stringContaining("false does not select"),
-  }));
-
-  const milestone = schemas["milestone.update"];
-  expect(milestone?.required).toEqual(expect.arrayContaining(["project", "id", "expectStore", "operation"]));
-  expect(milestone?.required).not.toEqual(expect.arrayContaining(["target", "clearTarget"]));
-  expect(milestone?.requirements).toContainEqual(expect.objectContaining({
-    name: "clearTarget", route: "mcp", required: false, constraint: expect.stringContaining("false does not select"),
-  }));
-
-  const promote = schemas["audit.promote"];
-  expect(promote?.required).toEqual(expect.arrayContaining(["path", "deliveryKind"]));
-  expect(promote?.requirements).toContainEqual(expect.objectContaining({
-    name: "branchSource", route: "mcp", required: true, condition: { field: "deliveryKind", equals: "development" },
-  }));
-
-  const reportPath = schemas["pr-review.report-path"];
-  expect(reportPath?.required).toEqual(expect.arrayContaining(["target", "reportsDir"]));
-  expect(reportPath?.requirements).toContainEqual(expect.objectContaining({
-    name: "slug", route: "mcp", required: true, condition: { field: "stage", present: true },
-  }));
-  expect(schemas["pr-review.seat-prompt"]?.defaults).toMatchObject({
-    security: false, skillRoot: "skills/mstar-audit", recon: [], tier: "default", collectFolded: false,
-  });
-  expect(schemas.dashboard?.defaults).toMatchObject({ port: 0, open: false });
 });

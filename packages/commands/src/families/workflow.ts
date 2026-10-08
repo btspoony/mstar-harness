@@ -8,7 +8,7 @@ import {
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
-  type ActivationAttestation, type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
+  type ActivationAttestation, type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
@@ -282,13 +282,16 @@ function makeDefinition(
  * provider/fulfilment invariants.
  */
 const nonBlankEvidenceText = z.string().regex(/\S/, "must be non-empty");
-const compoundEvidenceSchema = z.object({
-  outcome: z.enum(WORKFLOW_COMPOUND_OUTCOMES),
-  reason: nonBlankEvidenceText.optional(),
-});
-const prEvidenceSchema = z.object({ repo: nonBlankEvidenceText, head: nonBlankEvidenceText, target: nonBlankEvidenceText });
-const mergeEvidenceSchema = z.object({ provider: nonBlankEvidenceText, evidence: nonBlankEvidenceText });
-const completionEvidenceSchema = z.object({ policy: nonBlankEvidenceText, evidence: nonBlankEvidenceText });
+const nonSkippedCompoundOutcomes = WORKFLOW_COMPOUND_OUTCOMES.filter(
+  (outcome): outcome is Exclude<WorkflowCompoundOutcome, "skipped"> => outcome !== "skipped",
+) as [Exclude<WorkflowCompoundOutcome, "skipped">, ...Exclude<WorkflowCompoundOutcome, "skipped">[]];
+const compoundEvidenceSchema = z.union([
+  z.object({ outcome: z.literal("skipped"), reason: nonBlankEvidenceText }).strict(),
+  z.object({ outcome: z.enum(nonSkippedCompoundOutcomes), reason: nonBlankEvidenceText.optional() }).strict(),
+]);
+const prEvidenceSchema = z.object({ repo: nonBlankEvidenceText, head: nonBlankEvidenceText, target: nonBlankEvidenceText }).strict();
+const mergeEvidenceSchema = z.object({ provider: nonBlankEvidenceText, evidence: nonBlankEvidenceText }).strict();
+const completionEvidenceSchema = z.object({ policy: nonBlankEvidenceText, evidence: nonBlankEvidenceText }).strict();
 const deliveryEvidenceFields = {
   compound: compoundEvidenceSchema.optional(),
   pr: prEvidenceSchema.optional(),

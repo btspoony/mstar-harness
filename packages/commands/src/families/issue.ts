@@ -139,6 +139,15 @@ function issueFilter(input: IssueInput): IssueFilter {
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
   };
 }
+function requiredId(input: IssueInput): string {
+  if (input.id === undefined || input.id.trim() === "") {
+    const error = new Error("issue id is required") as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = ["id"];
+    throw error;
+  }
+  return input.id.trim();
+}
 
 async function execute(id: string, input: IssueInput, invocation: InvocationContext): Promise<CommandEnvelope<unknown>> {
   try {
@@ -179,6 +188,15 @@ const payloadType: Record<string, keyof typeof ISSUE_PAYLOAD_SCHEMAS> = {
   duplicate: "ClosureEvidence",
   supersede: "ClosureEvidence",
   link: "IssueLink",
+};
+const expectedRevisionVerbs: Record<string, true> = {
+  triage: true,
+  close: true,
+  reopen: true,
+  waive: true,
+  duplicate: true,
+  supersede: true,
+  link: true,
 };
 function fieldSchema(field: PayloadFieldSchema, verb: string): z.ZodType {
   let schema: z.ZodType;
@@ -247,11 +265,11 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && key === "actor") ||
       (verb === "show" && key === "id") ||
-      (verb === "reopen" && (key === "id" || key === "expect")),
-    ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
-    ...(verb === "reopen" && key === "expect"
-      ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
+      (expectedRevisionVerbs[verb] === true && key === "expect"),
+    ...(expectedRevisionVerbs[verb] === true && key === "expect"
+      ? { help: "Current issue revision from `mstar issue show --id <id>`; the write checks this revision as a CAS precondition." }
       : {}),
+    ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
   }));
   const isMutation = payloadType[verb] !== undefined;
   const requirements = isMutation
@@ -260,8 +278,9 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         { name: "operationId", ownership: "caller" as const, route, required: false, constraint: mutationOperationHelp! },
         { name: "payload", ownership: "caller" as const, route, required: true, condition: { field: "file", present: false }, constraint: `payload shape: mstar schema ${payloadType[verb]}` },
         { name: "file", ownership: "caller" as const, route, required: true, condition: { field: "payload", present: false }, constraint: "absolute JSON file alternative to payload" },
-        ...(verb === "add" ? [] : [{ name: "id", ownership: "caller" as const, route, required: true }]),
-        ...(verb === "reopen" ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const }] : []),
+        ...(verb === "reopen" || expectedRevisionVerbs[verb] === true
+          ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write" }]
+          : []),
       ])
     : verb === "show" || verb === "export"
       ? (["cli", "mcp"] as const).map((route) => ({

@@ -95,8 +95,8 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
     command({
       id: "session.recover",
       cli: { path: ["session", "recover"], aliases: [], arguments: [], options: [
-        { key: "workflow", flags: "--workflow <id>", required: true }, { key: "priorSession", flags: "--prior-session <id>", required: false },
-        { key: "unowned", flags: "--unowned", required: false }, { key: "reason", flags: "--reason <text>", required: true },
+        { key: "workflow", flags: "--workflow <id>", required: true }, { key: "priorSession", flags: "--prior-session <id>", required: false, help: "Exactly one of --prior-session or --unowned=true is required." },
+        { key: "unowned", flags: "--unowned", required: false, help: "Only true selects ownerless recovery; false is not an alternative." }, { key: "reason", flags: "--reason <text>", required: true },
         { key: "attestation", flags: "--attestation <path>", required: true }, { key: "expect", flags: "--expect <token>", required: true, help: SESSION_RECOVER_EXPECT_HELP },
         { key: "operation", flags: "--operation <id>", required: true }, { key: "harness", flags: "--harness <path>", required: false },
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
@@ -108,7 +108,7 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           { name, ownership: "caller" as const, route: "mcp" as const, required: true, ...(name === "expect" ? { tokenKind: "workflow" as const } : {}) },
         ]),
         ...(["cli", "mcp"] as const).flatMap((route) => [
-          { name: "priorSession", ownership: "caller" as const, route, required: false, constraint: "exactly one of priorSession or unowned=true is required; priorSession is required unless unowned is true" },
+          { name: "priorSession", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "exactly-one" as const, members: [{ name: "priorSession" }, { name: "unowned", whenTrue: true }] }, constraint: "exactly one of priorSession or unowned=true" },
           { name: "unowned", ownership: "caller" as const, route, required: false, constraint: "only true selects ownerless recovery; false does not select this alternative" },
           { name: "sessionId", ownership: "caller" as const, route, required: true, constraint: "current operator's acquired conversation identity; never derive or substitute it" },
         ]),
