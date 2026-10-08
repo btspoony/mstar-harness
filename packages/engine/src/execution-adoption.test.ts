@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { z } from "zod";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -265,7 +266,7 @@ describe("terminal adoption session settlement", () => {
         .toEqual({ state: "revoked", revision: 2 });
       const stored = db.db.prepare("select result_json from execution_operations where operation_id = ?")
         .get("adopt-settle-1") as { result_json: string };
-      const storedReceipt = JSON.parse(stored.result_json) as Record<string, unknown>;
+      const storedReceipt = z.record(z.string(), z.unknown()).parse(JSON.parse(stored.result_json));
       expect(storedReceipt).toHaveProperty("operationRecovery", expect.objectContaining({ outcome: "applied" }));
       expect(storedReceipt).not.toHaveProperty("recovery");
     } finally { db.close(); }

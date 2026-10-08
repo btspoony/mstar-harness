@@ -294,7 +294,7 @@ test("workflow adopt-terminal settles the attested ACTIVE holder through the com
   expect(applied.data).not.toHaveProperty("operationRecovery");
   if (replay.status === "ok") {
     expect(replay.data).not.toHaveProperty("operationRecovery");
-    const replayData = replay.data as { replayed: boolean; [key: string]: unknown };
+    const replayData = z.object({ replayed: z.boolean() }).passthrough().parse(replay.data);
     expect({ ...replayData, replayed: false }).toEqual(applied.data);
   }
   await withWriter(harness, (db) => {
