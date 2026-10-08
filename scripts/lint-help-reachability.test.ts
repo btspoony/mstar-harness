@@ -133,4 +133,28 @@ describe("help reachability lint", () => {
     const surface = extractCliGrammar();
     expect(scanRecoveryText(envelope("Run mstar status validate and then --xyz"), "packages/engine/src/fixture.ts", surface).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
   });
+
+  test("resolves recovery identifiers in function and nested block scopes", () => {
+    const source = `
+      function first() {
+        const recovery = "Run mstar workflow nonexistent";
+        return refusalEnvelope({ code: "NO_STATE", message: "No state", recovery });
+      }
+      function second() {
+        const recovery = "Run mstar workflow --resume";
+        return refusalEnvelope({ code: "NO_STATE", message: "No state", recovery });
+      }
+      function nested() {
+        const recovery = "Run mstar workflow --resume";
+        {
+          const recovery = "Run mstar workflow missing-child";
+          return refusalEnvelope({ code: "NO_STATE", message: "No state", recovery });
+        }
+      }
+    `;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map(({ classification }) => classification)).toEqual([
+      "capability-unreachable",
+      "capability-unreachable",
+    ]);
+  });
 });

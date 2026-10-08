@@ -41,7 +41,7 @@ The prepare-seal owner correction takes precedence over repairing that prohibite
 
 ## Default operating-model premise (this repository)
 
-Unless the reviewing Assignment explicitly supplies a different premise, apply this lens to this repository's engine/store under the frozen operating model: **local, stopped, disposable workspace state**. The operation is a local static file update; do not assume concurrent writers, live services, or irreplaceable process data without evidence. An Assignment may override this default by declaring a different operating-model premise for the reviewed change. For a foreign repository or an Assignment outside this repository that supplies neither this repository default nor an explicit premise, return `cannot-judge: no operating-model premise supplied`.
+Unless the reviewing Assignment explicitly overrides it, apply this lens to this repository's `packages/engine/src` (engine/store) and `packages/commands/src` (CLI) under the default premise: **local, stopped, disposable workspace state**. Operations update local files; do not assume concurrent writers, live services, or irreplaceable persisted process data without evidence. An Assignment may explicitly supply a different premise. For foreign repositories or reviewed modules outside that default scope, return `cannot-judge: no operating-model premise supplied` when the Assignment supplies no premise.
 
 ## Judgment procedure
 

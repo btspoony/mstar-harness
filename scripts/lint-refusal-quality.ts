@@ -196,8 +196,10 @@ export function recoveryIsReachable(recovery: string, grammar: CliGrammar): bool
 }
 /**
  * Bounded structured-channel scan: validation violation() results, arbitrary helper calls,
- * and raw programmer-error throws are intentionally excluded. Cause and recovery-presence
- * checks apply only to the recognized refusal channels.
+ * and raw programmer-error throws are excluded. One same-file wrapper level is followed only
+ * when a top-level helper has exactly one direct return of refusalEnvelope or CoordinationError;
+ * its call-site arguments are substituted without recursively following wrapper chains.
+ * Cause and recovery-presence checks apply only to the recognized refusal channels.
  */
 export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -208,6 +210,38 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   visitDeclarations(sf);
   const findings: RefusalFinding[] = [];
+  type WrapperDescriptor = { parameters: readonly ts.ParameterDeclaration[]; inner: ts.CallExpression | ts.NewExpression };
+  const wrappers = new Map<string, WrapperDescriptor>();
+  const registerWrapper = (name: string, parameters: readonly ts.ParameterDeclaration[], body: ts.ConciseBody): void => {
+    const returned: ts.Expression[] = [];
+    if (ts.isBlock(body)) {
+      const collectReturns = (node: ts.Node): void => {
+        if (node !== body && ts.isFunctionLike(node)) return;
+        if (ts.isReturnStatement(node) && node.expression) returned.push(node.expression);
+        else ts.forEachChild(node, collectReturns);
+      };
+      collectReturns(body);
+    } else returned.push(body);
+    if (returned.length !== 1) return;
+    const expression = returned[0]!;
+    const target = ts.isCallExpression(expression) && expression.expression.getText(sf).split(".").at(-1) === "refusalEnvelope"
+      ? expression
+      : ts.isNewExpression(expression) && expression.expression.getText(sf).split(".").at(-1) === "CoordinationError"
+        ? expression
+        : undefined;
+    if (target) wrappers.set(name, { parameters, inner: target });
+  };
+  for (const statement of sf.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
+      registerWrapper(statement.name.text, statement.parameters, statement.body);
+    } else if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isFunctionLike(declaration.initializer) && declaration.initializer.body) {
+          registerWrapper(declaration.name.text, declaration.initializer.parameters, declaration.initializer.body);
+        }
+      }
+    }
+  }
   const codeValue = (node: ts.Expression | undefined): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
@@ -238,40 +272,89 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   let grammar: CliGrammar | undefined;
   const getGrammar = () => grammar ??= extractCliGrammar();
+  const callBindings = (wrapper: WrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
+    const bindings = new Map<string, ts.Expression>();
+    wrapper.parameters.forEach((parameter, index) => {
+      if (ts.isIdentifier(parameter.name)) {
+        const actual = call.arguments[index] ?? parameter.initializer;
+        if (actual) bindings.set(parameter.name.text, actual);
+      }
+    });
+    return bindings;
+  };
+  const resolveBound = (expression: ts.Expression, bindings: Map<string, ts.Expression>, seen = new Set<string>()): ts.Expression => {
+    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) {
+      return resolveBound(expression.expression, bindings, seen);
+    }
+    if (ts.isIdentifier(expression) && bindings.has(expression.text) && !seen.has(expression.text)) {
+      const next = new Set(seen).add(expression.text);
+      return resolveBound(bindings.get(expression.text)!, bindings, next);
+    }
+    if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression) && bindings.has(expression.expression.text)) {
+      const baseName = expression.expression.text;
+      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seen).add(baseName));
+      const object = ts.isIdentifier(actual) ? declarations.get(actual.text) : actual;
+      if (object && ts.isObjectLiteralExpression(object)) {
+        for (const property of object.properties) {
+          if (ts.isPropertyAssignment(property)) {
+            const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
+            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seen);
+          }
+          if (ts.isShorthandPropertyAssignment(property) && property.name.text === expression.name.text) return resolveBound(property.name, bindings, seen);
+        }
+      }
+    }
+    return expression;
+  };
+  const envelopeInput = (input: ts.Expression | undefined, bindings: Map<string, ts.Expression>): ObjectAlternative[] => {
+    if (!input) return [];
+    let resolved = resolveBound(input, bindings);
+    if (ts.isIdentifier(resolved)) resolved = declarations.get(resolved.text) ?? resolved;
+    if (!ts.isObjectLiteralExpression(resolved)) return [];
+    return objectAlternatives(resolved).map((alternative) => ({
+      ...alternative,
+      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings)])),
+    }));
+  };
+  const addFinding = (node: ts.Node, classification: RefusalClassification, reason: string): void => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
+  };
+  const checkEnvelope = (node: ts.Node, input: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
+    const variants = envelopeInput(input, bindings);
+    if (variants.some(({ fields }) => !isCauseCode(fields.get("code")))) {
+      addFinding(node, "missing-cause-code", "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.");
+    }
+    if (variants.some(({ fields }) => {
+      const recovery = fields.get("recovery");
+      const status = codeValue(fields.get("status"));
+      const text = codeValue(recovery);
+      return status !== "usage" && (!recovery || text === undefined || text.trim() === "");
+    })) addFinding(node, "missing-recovery", "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.");
+  };
+  const checkCoordinationError = (node: ts.Node, code: ts.Expression | undefined, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
+    const resolvedCode = code && resolveBound(code, bindings);
+    const resolvedMessage = message && resolveBound(message, bindings);
+    if (!isCauseCode(resolvedCode)) addFinding(node, "missing-cause-code", "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.");
+    const text = codeValue(resolvedMessage);
+    if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
+      addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
+    }
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(sf).split(".").at(-1) === "CoordinationError") {
-      const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-      const add = (classification: RefusalClassification, reason: string) =>
-        findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
-      if (!isCauseCode(node.arguments?.[0])) {
-        add("missing-cause-code", "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.");
-      }
-      const message = codeValue(node.arguments?.[1]);
-      if (message && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(message) && !recoveryIsReachable(message, getGrammar())) {
-        add("unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
-      }
+      checkCoordinationError(node, node.arguments?.[0], node.arguments?.[1]);
       return visitChildren(node);
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(sf).split(".").at(-1);
-      if (callee === "refusalEnvelope") {
-        const input = node.arguments[0];
-        if (!input || !ts.isObjectLiteralExpression(input)) return visitChildren(node);
-        const variants = objectAlternatives(input);
-        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        const add = (classification: RefusalClassification, reason: string) =>
-          findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
-        if (variants.some(({ fields }) => !isCauseCode(fields.get("code")))) {
-          add("missing-cause-code", "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.");
-        }
-        const recoveryMissing = variants.some(({ fields }) => {
-          const recovery = fields.get("recovery");
-          const status = codeValue(fields.get("status"));
-          const text = codeValue(recovery);
-          return status !== "usage" && (!recovery || text === undefined || text.trim() === "");
-        });
-        if (recoveryMissing) add("missing-recovery", "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.");
-        return visitChildren(node);
+      const wrapper = callee ? wrappers.get(callee) : undefined;
+      if (wrapper) {
+        const bindings = callBindings(wrapper, node);
+        if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings);
+        else checkCoordinationError(node, wrapper.inner.arguments?.[0], wrapper.inner.arguments?.[1], bindings);
+      } else if (callee === "refusalEnvelope") {
+        checkEnvelope(node, node.arguments[0]);
       }
     }
     visitChildren(node);

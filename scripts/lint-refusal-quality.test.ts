@@ -143,4 +143,18 @@ describe("refusal quality scanner", () => {
     `, "packages/engine/src/fixture.ts");
     expect(findings).toEqual([]);
   });
+
+  test("checks calls to one-level same-file refusal wrappers using call-site arguments", () => {
+    const findings = scanSource(`
+      function refused(input: unknown) {
+        return refusalEnvelope(input as RefusalInput);
+      }
+      refused({ command: "status", status: "refused", code: "status.blocked", message: "Blocked" });
+      refused({ command: "status", status: "refused", code: "", message: "Bad", recovery: "Run mstar status validate" });
+    `, "packages/commands/src/wrapper-fixture.ts");
+    expect(findings.map(({ line, classification }) => [line, classification])).toEqual([
+      [5, "missing-recovery"],
+      [6, "missing-cause-code"],
+    ]);
+  });
 });

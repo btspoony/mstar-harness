@@ -25,17 +25,40 @@ function makeFinding(source: ts.SourceFile, file: string, node: ts.Node, reason:
 
 export function scanRecoveryText(sourceText: string, file: string, grammar: CliGrammar): HelpReachabilityFinding[] {
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const declarations = new Map<string, ts.Expression>();
-  const collect = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) declarations.set(node.name.text, node.initializer);
-    ts.forEachChild(node, collect);
+  interface Scope { parent?: Scope; kind: "source" | "function" | "block"; declarations: Map<string, ts.VariableDeclaration>; }
+  const scopeByNode = new WeakMap<ts.Node, Scope>();
+  const sourceScope: Scope = { kind: "source", declarations: new Map() };
+  const buildScopes = (node: ts.Node, inherited: Scope): void => {
+    const kind = ts.isFunctionLike(node) ? "function" : ts.isBlock(node) ? "block" : undefined;
+    const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map() } : inherited;
+    scopeByNode.set(node, scope);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      let target = scope;
+      if (!(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
+        while (target.parent && target.kind === "block") target = target.parent;
+      }
+      target.declarations.set(node.name.text, node);
+    }
+    ts.forEachChild(node, (child) => buildScopes(child, scope));
   };
-  collect(source);
-  const value = (node: ts.Expression | undefined): string | undefined => {
+  buildScopes(source, sourceScope);
+  const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
+    for (let current = scope; current; current = current.parent) {
+      const declaration = current.declarations.get(name);
+      if (declaration) return declaration;
+    }
+    return undefined;
+  };
+  const value = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
-    if (ts.isIdentifier(node)) return value(declarations.get(node.text));
+    if (ts.isIdentifier(node)) {
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      if (!declaration?.initializer || seen.has(declaration)) return undefined;
+      seen.add(declaration);
+      return value(declaration.initializer, scopeByNode.get(declaration), seen);
+    }
     return undefined;
   };
   const findings: HelpReachabilityFinding[] = [];
