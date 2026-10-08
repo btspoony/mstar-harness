@@ -936,30 +936,30 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
 /** Read and validate a session envelope (throws `coordination.session-*`). */
 export function readSessionEnvelope(sessionPath: string): CoordinationSession {
   if (!isNonEmptyString(sessionPath) || !isAbsolute(sessionPath)) {
-    throw invalidInput("sessionPath must be an absolute path");
+    throw invalidInput("sessionPath must be an absolute path. Inspect the harness authority with mstar status validate.");
   }
   const abs = resolve(sessionPath);
   if (!existsSync(abs)) {
-    throw new CoordinationError("coordination.session-not-found", `session envelope not found: ${abs}`, { path: abs });
+    throw new CoordinationError("coordination.session-not-found", `session envelope not found: ${abs}. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(abs, "utf8"));
   } catch (error) {
-    throw new CoordinationError("coordination.store", `session envelope is not valid JSON: ${abs}: ${errorMessage(error)}`, {
+    throw new CoordinationError("coordination.store", `session envelope is not valid JSON: ${abs}: ${errorMessage(error)}. Inspect the harness authority with mstar status validate.`, {
       path: abs,
     });
   }
   if (!isPlainObject(parsed)) {
-    throw new CoordinationError("coordination.store", `session envelope must be an object: ${abs}`, { path: abs });
+    throw new CoordinationError("coordination.store", `session envelope must be an object: ${abs}. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   assertExactKeys(parsed, ENVELOPE_KEYS, `session envelope ${abs}`);
   if (parsed.schema_version !== 1) {
-    throw invalidInput(`session envelope ${abs} must declare schema_version 1`, { path: abs });
+    throw invalidInput(`session envelope ${abs} must declare schema_version 1. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   const role = parsed.role;
   if (role !== "coordinator") {
-    throw new CoordinationError("coordination.invalid-input", `session envelope ${abs} has role ${JSON.stringify(role)}`, {
+    throw new CoordinationError("coordination.invalid-input", `session envelope ${abs} has role ${JSON.stringify(role)}. Inspect the harness authority with mstar status validate.`, {
       path: abs,
     });
   }
@@ -967,16 +967,16 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
   const workflowId = parsed.workflow_id;
   const harnessRoot = parsed.harness_root;
   if (!isNonEmptyString(sessionId)) {
-    throw invalidInput(`session envelope ${abs} requires a non-empty session_id`, { path: abs });
+    throw invalidInput(`session envelope ${abs} requires a non-empty session_id. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   if (!isNonEmptyString(workflowId)) {
-    throw invalidInput(`session envelope ${abs} requires a non-empty workflow_id`, { path: abs });
+    throw invalidInput(`session envelope ${abs} requires a non-empty workflow_id. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   if (!isNonEmptyString(harnessRoot)) {
-    throw invalidInput(`session envelope ${abs} requires a non-empty harness_root`, { path: abs });
+    throw invalidInput(`session envelope ${abs} requires a non-empty harness_root. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   if (!isAbsolute(harnessRoot)) {
-    throw invalidInput(`session envelope ${abs} harness_root must be absolute`, { path: abs });
+    throw invalidInput(`session envelope ${abs} harness_root must be absolute. Inspect the harness authority with mstar status validate.`, { path: abs });
   }
   const session: CoordinationSession = {
     schema_version: 1,
@@ -1026,11 +1026,11 @@ function createSessionEnvelope(session: CoordinationSession): string {
     if (code === "EEXIST") {
       throw new CoordinationError(
         "coordination.identity-mismatch",
-        `session envelope already exists: ${path}; use plan bind --resume with that coordinator envelope instead of re-binding`,
+        `session envelope already exists: ${path}; use mstar plan bind --resume ${path}`,
         { path },
       );
     }
-    throw new CoordinationError("coordination.store", `cannot create session envelope ${path}: ${errorMessage(error)}`, {
+    throw new CoordinationError("coordination.store", `cannot create session envelope ${path}: ${errorMessage(error)}. Inspect the harness state with mstar status validate; verify that ${path} is writable from the control harness root.`, {
       path,
     });
   }
@@ -1055,7 +1055,7 @@ function assertSnapshotPath(harnessRoot: string, workflowId: string, snapshotPat
   if (canonicalizeNearestExisting(fromTable) !== canonicalizeNearestExisting(snapshotPath)) {
     throw new CoordinationError(
       "coordination.path-mismatch",
-      `resolved snapshot path ${snapshotPath} is not the store's ${fromTable}`,
+      `resolved snapshot path ${snapshotPath} is not the store's ${fromTable}. Run mstar status validate; expected store path is ${fromTable}, resolved path is ${snapshotPath}.`,
       { expected: fromTable, actual: snapshotPath },
     );
   }
@@ -1075,7 +1075,7 @@ async function commitSnapshot(
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      `refusing to write a snapshot that fails validation \u2014 ${summarize(gate.violations)}`,
+      `refusing to write a snapshot that fails validation \u2014 ${summarize(gate.violations)}. Inspect the workflow with mstar status validate; correct the listed validation violations before retrying.`,
       { violations: gate.violations.map((entry) => entry.code) },
     );
   }
