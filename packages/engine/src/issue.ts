@@ -38,6 +38,8 @@ const SEVERITIES: Record<Severity, true> = {
   low: true,
   info: true,
 };
+const ISSUE_KIND_VALUES = Object.keys(KINDS);
+const SEVERITY_VALUES = Object.keys(SEVERITIES);
 
 export type MutationContext = {
   operationId: string;
@@ -90,12 +92,13 @@ export type PayloadFieldSchema = {
   properties?: Record<string, PayloadFieldSchema>;
 };
 
+/** Runtime payload contract; CLI help and `mstar-harness schema` derive from this registry. */
 export const ISSUE_PAYLOAD_SCHEMAS = {
   CaptureInput: {
     projectId: { required: true, type: "string", description: "Project identifier" },
     title: { required: true, type: "string", description: "Finding title" },
-    kind: { required: true, type: "string", description: "Issue kind", values: Object.keys(KINDS) },
-    severity: { required: true, type: "string", description: "Severity", values: Object.keys(SEVERITIES) },
+    kind: { required: true, type: "string", description: "Issue kind", values: ISSUE_KIND_VALUES },
+    severity: { required: true, type: "string", description: "Severity", values: SEVERITY_VALUES },
     impact: { required: true, type: "string", description: "User or system impact" },
     acceptance: { required: true, type: "string", description: "Acceptance condition" },
     owner: { required: false, type: "string", description: "Optional owner" },
@@ -751,8 +754,7 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
 }
 
 function issueVocabularyError(field: "kind" | "severity", value: unknown): IssueError {
-  const vocabulary = field === "kind" ? KINDS : SEVERITIES;
-  const supported = Object.keys(vocabulary);
+  const supported = field === "kind" ? ISSUE_KIND_VALUES : SEVERITY_VALUES;
   const received = typeof value === "string" ? value : value === null ? "null" : typeof value;
   const error = new IssueError(
     "issue.scope-refused",
