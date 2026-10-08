@@ -150,7 +150,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
               const gate = await evaluatePostMergeCloseFromExecutionAuthority({ harnessDir: root }, input.workflow);
               return gate.ok
                 ? ok(id, { phase: 6, gate })
-                : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
+                : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate }, recovery: "Resolve the reported post-merge blockers, then run mstar iteration gate --workflow <workflow-id> --phase 6." });
             }
 
             const compassPath = path.resolve(context.cwd, input.compass!);
@@ -170,14 +170,14 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
               : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           }
           const file = snapshotPath(context, input.workflow, input.harness);
-          if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}`, recovery: "The workflow snapshot must be restored at the reported path before mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
+          if (!existsSync(file)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.snapshot-not-found", exitCode: 1, message: `workflow snapshot not found: ${file}`, recovery: "The workflow snapshot must be restored at the reported path. For phase-6 post-merge close, run mstar iteration gate --workflow <workflow-id> --phase 6; for phase transition checks, run mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
           const snapshot = readJson(file);
           if (phase6) {
             const root = harnessDir(context, input.harness);
             let rootDoc: unknown;
             try { const rootFile = path.join(root, "status.json"); if (existsSync(rootFile)) rootDoc = readJson(rootFile); } catch { rootDoc = undefined; }
             const gate = evaluatePostMergeClose(snapshot, rootDoc);
-            return gate.ok ? ok(id, { phase: 6, gate }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
+            return gate.ok ? ok(id, { phase: 6, gate }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "phase 6 post-merge close gate is blocked", details: { gate }, recovery: "Resolve the reported post-merge blockers, then run mstar iteration gate --workflow <workflow-id> --phase 6." });
           }
           const compassPath = path.resolve(context.cwd, input.compass!);
           if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}`, recovery: "The compass must exist at the reported path before mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
