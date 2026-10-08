@@ -1,3 +1,4 @@
+import { activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -181,34 +182,11 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
     return refused(id, error);
   }
 }
-
 /**
- * The operator stop attestation `store upgrade --attestation <absolute-json>`
- * reads: the full `ActivationAttestation` the engine validates before any
- * schema change. Published under its own document-contract key — the
- * `--attestation` option stays a plain path string, never an inline JSON
- * field.
+ * The engine validates the full operator attestation. Its published schema and
+ * semantic constraints are shared with terminal adoption; the option remains
+ * a file path and is never an inline JSON input.
  */
-const attestationDocumentSchema = z.object({
-  version: z.literal(1),
-  attestedAt: z.string().min(1),
-  operator: z.object({ actor: z.string().min(1), authorizationRef: z.string().min(1) }),
-  consumers: z.array(z.object({
-    entryId: z.string().min(1),
-    kind: z.enum(["cli", "host-plugin", "hook", "coordinator"]),
-    entrypoint: z.string().min(1),
-    runtime: z.enum(["bun", "node"]),
-    runtimeVersion: z.string().min(1),
-    version: z.string().min(1),
-    current: z.boolean(),
-    disposition: z.enum(["reloaded", "upgraded", "excluded:not-this-control-root", "excluded:no-store-access", "excluded:superseded-binary"]),
-  })).min(1),
-  stoppedSessions: z.array(z.object({
-    sessionId: z.string().min(1),
-    host: z.string().min(1),
-    state: z.enum(["stopped", "reloaded"]),
-  })),
-});
 
 function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
   const verb = id.slice("store.".length) as (typeof verbs)[number];
@@ -240,7 +218,7 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     id,
     cli: { path: ["store", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    ...(verb === "upgrade" ? { payloads: { existingActivationAttestation: { schema: attestationDocumentSchema } } } : {}),
+    ...(verb === "upgrade" ? { payloads: { existingActivationAttestation: { schema: activationAttestationDocumentSchema } } } : {}),
     output: commandEnvelopeSchema,
     effects: ({
       init: ["read", "write"],
