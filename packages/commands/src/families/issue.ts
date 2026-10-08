@@ -54,6 +54,9 @@ const terminalDisposition: Record<string, TerminalDisposition> = {
   supersede: "superseded",
 };
 const readVerbs: Record<string, true> = { list: true, show: true, export: true };
+const revisionCasVerbs: Record<string, true> = {
+  triage: true, close: true, waive: true, duplicate: true, supersede: true, reopen: true, link: true,
+};
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -65,19 +68,19 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
     ? error.paths as string[]
     : [];
   const issueId = input?.id?.trim() || "<id>";
-  const recovery = id !== "issue.reopen"
-    ? undefined
-    : code === "store.operation-conflict"
-      ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
-      : code === "issue.revision-conflict"
-        ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue reopen --id ${issueId} --expect <current-revision>\` with the same non-empty reason payload.`
+  const recovery = code === "issue.revision-conflict"
+    ? `Run \`mstar issue show --id ${issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
+    : id !== "issue.reopen"
+      ? undefined
+      : code === "store.operation-conflict"
+        ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
         : code === "issue.invalid-disposition"
-        ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
-        : code === "issue.scope-refused"
-          ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
-          : code === "issue.invalid-payload"
-            ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
-            : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
+          ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
+          : code === "issue.scope-refused"
+            ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
+            : code === "issue.invalid-payload"
+              ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
+              : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(paths.length > 0 ? { details: { paths } } : {}),
@@ -251,7 +254,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "operationId" || key === "actor")) ||
       (verb === "reopen" && (key === "id" || key === "expect")),
-    ...(verb === "reopen" && key === "expect"
+    ...(key === "expect" && revisionCasVerbs[verb] === true
       ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
       : {}),
   }));
