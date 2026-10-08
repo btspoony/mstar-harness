@@ -59,12 +59,6 @@ dsh plugin --profile headless add @mstar-harness/dsh
 - **无交互通道**——没有可用应答者时，`ask_user_question` 与审批提示会 fail-closed。无人值守运行应保留受限权限预设（`workspace-write` 搭配 approval `ask`，或使用 `read-only` 进行只读检查），并在开始工作前核实会话实际生效的权限。仅执行该边界内已允许的操作；若某项操作需要审批，停止该操作并通过 web profile 获取审批。不要通过解除沙箱限制来绕过缺失的审批通道。交互式 Prepare 流程（grill-me）属于 web profile。
 - **默认模型解析**——headless 不组合 fallbacks 行，因此 settings 里 `agent-default-model` 钉在 `FallbacksChain` 会以 `NO_ADAPTER` 失败（web profile 的产物）。把默认模型指向真实 provider，或同样把 `dsh-llm-fallbacks` 装进 headless profile（注意：已发布的 dsh 0.1.0-rc.6 上，fallbacks 的 settings 集成早于 `SettingsProvider.installSection` API，虚拟适配器不会注册——随 dsh ≥ 0.1.2-alpha 解决）。
 
-### 直接计划协调
-
-唯一 primary workflow coordinator 通过普通 prepare/progress/complete 和原生 leaf 派发推进明确选定的行。Configuration/source metadata 保持可修订；默认 mandatory QA 与 allow-residual cleanup，不要求 sealed Assignment 或逐行 claim/bind。`/iteration-drive` 只接受无参数调用；旧 scoped 输入在 boot 前拒绝，不启动第二个 primary，也不扩大 scope。
-
-迭代完成验证实际串行合并并保留父级交付。Standalone development 验证登记 source 并保留 compound/PR/核实合并/close。Report-only 在 Done 前要求明确匹配的策略履行，再凭证据 close，不虚构 Git/PR。保留 SDD、QC 三审、QA、L1/L2 隔离与 coordinator transaction/CAS/receipts。Session run/recovery 仅限 coordinator。精确形状见 mstar-use-cli/references/plan-and-workflow.md。
-
 ### Configuration
 
 | Key | Type | Default | Meaning |

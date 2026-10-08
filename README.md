@@ -113,18 +113,8 @@ Enter PM, then run the per-plan cycle: `Prepare → Execute → QC → QA gate �
 | Command | When |
 |---------|------|
 | `/iteration-start [direction] [pause]` | Start a new iteration: Phase 1 (interactive grill-me), then auto-continue Phase 2→6.<br>`direction` — optional hint (still interactive).<br>`pause` — stop after Phase 1; resume with `/iteration-drive`. |
-| `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration. |
+| `/iteration-drive` | Resume Phase 2→6 on an already-locked iteration (no arguments). |
 | `/iteration-loop [direction] [scale]` | Full Phase 1→6 autonomous (no grill-me).<br>`direction` — optional free text.<br>`scale` — `S` / `M` / `L` / `XL` (default `M`). |
-
-### Direct plan coordination
-
-One primary coordinator drives all rows of its selected workflow through ordinary `mstar plan prepare`, `progress` and `complete`. Leaf tasks retain normal SDD, isolated worktrees, QC tri and QA gates. Configuration is revisable; defaults are mandatory QA and allow-residual cleanup, with no sealed Assignment or per-row bind.
-
-`/iteration-drive` accepts no arguments. Unsupported scoped/extra arguments are rejected before boot; they never start the whole iteration instead. Independent terminal PMs and ownership-transfer completion are removed.
-
-Completion keeps three distinct obligations: iteration rows prove the actual serial integration merge and leave parent delivery intact; standalone development proves its registered source and continues through compound/PR/verified-merge/close; standalone report-only consumes explicit policy fulfilment recorded before Done, then evidence-backed close without invented Git/PR.
-
-Flags, JSON and recovery → `mstar-use-cli/references/plan-and-workflow.md`; recipe → [`docs/commands.md`](docs/commands.md#iteration-drive).
 
 ### Audit, review & verification
 

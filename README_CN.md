@@ -114,18 +114,8 @@ Codex 角色链接修复与具名子代理验证：[Codex 安装](INSTALL.md#cod
 | 命令 | 何时 |
 |------|------|
 | `/iteration-start [direction] [pause]` | 开始新迭代：Phase 1（交互式 grill-me），然后自动推进 Phase 2→6。<br>`direction` — 可选提示（仍走交互）。<br>`pause` — 止于 Phase 1；之后用 `/iteration-drive` 恢复。 |
-| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→6。 |
+| `/iteration-drive` | 在已锁定的迭代上恢复 / 继续推进 Phase 2→6（无参数）。 |
 | `/iteration-loop [direction] [scale]` | Phase 1→6 全自动（无 grill-me）。<br>`direction` — 可选自由文本。<br>`scale` — `S` / `M` / `L` / `XL`（默认 `M`）。 |
-
-### 直接计划协调
-
-唯一 primary coordinator 通过普通 `mstar plan prepare`、`progress` 与 `complete` 推进选定 workflow 的所有行。Leaf 任务保留常规 SDD、独立 worktree、QC 三审与 QA 门禁。配置可修订；默认 mandatory QA 与 allow-residual cleanup，不要求 sealed Assignment 或逐行 bind。
-
-`/iteration-drive` 只接受无参数调用。旧 scoped 或其他非空参数在 boot 前被拒绝，不会改为启动整个迭代。独立终端 PM 与所有权转交完成路线已移除。
-
-完成仍有三种不同义务：迭代行证明实际串行集成合并并保留父级交付；standalone development 证明登记的 source 后继续 compound/PR/核实合并/close；standalone report-only 在 Done 前消费明确记录的策略履行，再凭证据 close，不虚构 Git/PR。
-
-标志、JSON 与恢复 → `mstar-use-cli/references/plan-and-workflow.md`；配方 → [`docs/commands.md`](docs/commands.md#iteration-drive)。
 
 ### 审计、Review 与验证
 
