@@ -383,7 +383,7 @@ function invalidInput(message: string, details: Record<string, unknown> = {}): C
 /** The single mapping from a violated stored shape to the refusal vocabulary. */
 export function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
   if (violations.length > 0) {
-    throw new CoordinationError("coordination.invalid-input", `${what} is invalid \u2014 ${summarize(violations)}`, {
+    throw new CoordinationError("coordination.invalid-input", `${what} is invalid \u2014 ${summarize(violations)}. Inspect the stored workflow with mstar status validate.`, {
       violations: violations.map((entry) => entry.code),
     });
   }
@@ -421,7 +421,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   } catch (error) {
     throw new CoordinationError(
       "coordination.local-store-required",
-      `no artifact store is resolvable from ${resolve(process.cwd())} \u2014 scoped coordination requires createFsStore(<control harness root>): ${errorMessage(error)}`,
+      `Run mstar status validate from the control harness root ${harnessRoot}; current working directory is ${resolve(process.cwd())}, where no artifact store is resolvable.`,
       { harness_root: harnessRoot },
     );
   }
@@ -429,7 +429,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   if (typeof root !== "string") {
     throw new CoordinationError(
       "coordination.local-store-required",
-      "the active ArtifactStore exposes no local root \u2014 scoped coordination requires the canonical FsStore",
+      `Run mstar status validate from the control harness root ${harnessRoot}; the active ArtifactStore has no local root, so this operation requires the canonical FsStore.`,
       { harness_root: harnessRoot },
     );
   }
@@ -438,7 +438,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   if (actual !== expected) {
     throw new CoordinationError(
       "coordination.path-mismatch",
-      `active ArtifactStore root ${actual} does not match the resolved control harness root ${expected}`,
+      `Run mstar status validate from the resolved control harness root ${expected}; the active ArtifactStore root is ${actual}.`,
       { expected, actual },
     );
   }
@@ -487,7 +487,7 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
     if (linked) {
       throw new CoordinationError(
         "coordination.not-in-git",
-        `${start} is a linked checkout (${join(dir, ".git")} is a file) whose main worktree is unreadable \u2014 refusing to resolve a process harness root from local artifacts`,
+        `${start} is a linked checkout (${join(dir, ".git")} is a file), and its main worktree cannot be read. Run mstar status validate from the main worktree at the control harness root; resolving the process harness root from linked-checkout local artifacts is unsafe.`,
         { cwd: start, marker: join(dir, ".git") },
       );
     }
@@ -778,7 +778,7 @@ function refuseResolution(problem: RecoveryProblem, resolvedFrom: readonly Resol
     : "coordination.invalid-input";
   // The message names the unresolved fact AND the facts currently true, so a
   // consumer that renders only prose still sees the conflict it must decide.
-  throw new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}`, {
+  throw new CoordinationError(code, `${problem.needed}: ${problem.currentFacts.join("; ")}. Inspect the workflow and plan rows with mstar status validate and mstar plan show --plan <plan-id>.`, {
     component: problem.component,
     path: problem.path,
     sources_tried: problem.sourcesTried,
@@ -808,7 +808,7 @@ function safePlanId(planId: string, where: string): string {
   try {
     assertSafePathComponent(planId, where);
   } catch (error) {
-    throw invalidInput(`${where} ${JSON.stringify(planId)} is not a safe path component: ${errorMessage(error)}`, {
+    throw invalidInput(`${where} ${JSON.stringify(planId)} is not a safe path component: ${errorMessage(error)}. Correct the caller input and inspect the target workflow with mstar status validate.`, {
       plan_id: planId,
     });
   }
@@ -825,7 +825,7 @@ function safePlanId(planId: string, where: string): string {
  */
 function safeSessionId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string") throw invalidInput("sessionId must be a string");
+  if (typeof value !== "string") throw invalidInput("sessionId must be a string. Correct the caller input and inspect the target workflow with mstar status validate.");
   return assertSafeSessionId(value, "session id");
 }
 
@@ -850,7 +850,7 @@ function readSnapshot(dir: string): WorkflowSnapshot {
 function readSnapshotWithPhase(dir: string): { snapshot: WorkflowSnapshot; phaseDerived: boolean } {
   const snapshotPath = join(dir, SNAPSHOT_FILE);
   if (!existsSync(snapshotPath)) {
-    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}`, {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}. The snapshot path is ${snapshotPath}; inspect the harness with mstar status validate.`, {
       path: snapshotPath,
     });
   }
@@ -866,7 +866,7 @@ function readSnapshotWithPhase(dir: string): { snapshot: WorkflowSnapshot; phase
     if (error instanceof StoreError) throw error;
     throw new CoordinationError(
       "coordination.store",
-      `workflow snapshot is unreadable or invalid at ${snapshotPath}: ${errorMessage(error)}`,
+      `workflow snapshot is unreadable or invalid at ${snapshotPath}: ${errorMessage(error)}. The snapshot path is ${snapshotPath}; inspect the harness with mstar status validate.`,
       { path: snapshotPath },
     );
   }
@@ -877,7 +877,7 @@ function findPlanRow(snapshot: WorkflowSnapshot, planId: string): { row: PlanRow
     .map((row, index) => ({ row, index }))
     .filter((entry) => rowPlanIds(entry.row).includes(planId));
   if (matches.length === 0) {
-    throw new CoordinationError("coordination.plan-not-found", `plan ${planId} is not a row of workflow ${snapshot.id}`, {
+    throw new CoordinationError("coordination.plan-not-found", `plan ${planId} is not a row of workflow ${snapshot.id}. Select a registered row with mstar plan show --plan <plan-id>.`, {
       workflow_id: snapshot.id,
       plan_id: planId,
     });
@@ -885,7 +885,7 @@ function findPlanRow(snapshot: WorkflowSnapshot, planId: string): { row: PlanRow
   if (matches.length > 1) {
     throw new CoordinationError(
       "coordination.store",
-      `workflow ${snapshot.id} has ${matches.length} rows claiming plan id ${planId} \u2014 refusing to pick one`,
+      `workflow ${snapshot.id} has ${matches.length} rows claiming plan id ${planId} \u2014 refusing to pick one. Run mstar status validate; workflow ${snapshot.id} has conflicting row ownership for plan ${planId}.`,
       { workflow_id: snapshot.id, plan_id: planId },
     );
   }
@@ -899,7 +899,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   if (!isPlainObject(input)) throw invalidInput("scope input must name a workflow and plan");
   assertExactKeys(input, ["workflowId", "planId", "harnessDir"], "scope input");
   if (!isNonEmptyString(input.workflowId) || !isNonEmptyString(input.planId)) {
-    throw invalidInput("workflowId and planId are required; select the explicit row with plan show");
+    throw invalidInput("workflowId and planId are required; supply workflowId and planId from mstar plan show --plan <plan-id>");
   }
   const workflowId = safePlanId(input.workflowId, "workflowId");
   const planId = safePlanId(input.planId, "planId");
@@ -909,7 +909,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   const snapshot = readSnapshot(dirname(snapshotPath));
   const { row } = findPlanRow(snapshot, planId);
   const projectId = projectBucketOf(row);
-  if (!isNonEmptyString(row.file)) throw invalidInput(`plan ${planId} has no registered file; supply its canonical plan file through workflow registration or Prepare amendment`);
+  if (!isNonEmptyString(row.file)) throw invalidInput(`plan ${planId} has no registered file; inspect registration with mstar status validate; the row has no registered file.`);
   const plan = resolveRegisteredPlanFile({ harnessRoot, planId, file: row.file });
   const recorded = planScopeOfMetadata(row, snapshot);
   return {
@@ -3455,6 +3455,7 @@ async function mutateComplete(
       proveGit?.();
       const refs = [...completion.qc.reports, completion.qc.consolidated, completion.qa.report];
       for (const ref of refs) {
+        // hash-gate: authorized — completion evidence integrity; refuse Done against a report altered after capture
         if (sha256Bytes(readFileSync(ref.path)) !== ref.sha256) throw invalidInput(`completion evidence changed before commit: ${ref.path}; finish the report and retry complete`);
       }
       const coordination: RowCoordination = { ...(context.coordination ?? { revision: 0 }), revision: context.revision + 1, completion };
