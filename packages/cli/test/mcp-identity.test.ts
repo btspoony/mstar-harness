@@ -5,6 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { McpServer } from "@modelcontextprotocol/server";
 import {
   ACTIVATION_PROTOCOL_VERSION,
   createExecutionWorkflow,
@@ -15,8 +17,8 @@ import {
   type ActivationAttestation,
   type ExecutionToken,
 } from "@mstar-harness/engine";
-import { getCommandDefinitions, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
-import { registerMcpCommands, mcpToolInputSchema, type ResolveContext } from "../src/mcp/register";
+import { getCommandDefinitions, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
+import { registerMcpCommands, type ResolveContext } from "../src/mcp/register";
 import { registerCliCommands } from "../src/command-adapter";
 import { resolveContext } from "../src/mcp/stdio";
 
@@ -65,16 +67,30 @@ async function registeredMcpCall(
   payload: Record<string, unknown>,
   baseContext: InvocationContext,
   resolver: ResolveContext = () => baseContext,
-): Promise<{ structuredContent: { status: string; code: string; message: string } }> {
-  let registered: ((input: unknown, extra: { mcpReq: { signal: AbortSignal } }) => Promise<unknown>) | undefined;
-  const server = {
-    registerTool(name: string, _options: unknown, handler: typeof registered) {
-      if (name === `mstar_${commandId.replace(/[.-]/g, "_")}`) registered = handler;
-    },
-  };
-  registerMcpCommands(server as never, getCommandDefinitions(), resolver);
-  if (registered === undefined) throw new Error(`MCP handler not registered: ${commandId}`);
-  return await registered(payload, { mcpReq: { signal: baseContext.signal } }) as { structuredContent: { status: string; code: string; message: string } };
+): Promise<CommandEnvelope> {
+  const definition = getCommandDefinitions().find((entry) => entry.id === commandId);
+  if (definition === undefined) throw new Error(`missing command: ${commandId}`);
+  const server = new McpServer({ name: "identity-test-server", version: "1.0.0" });
+  const client = new Client({ name: "identity-test-client", version: "1.0.0" });
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+  try {
+    registerMcpCommands(server, [definition], resolver);
+    await server.connect(serverEnd);
+    await client.connect(clientEnd);
+    const { tools } = await client.listTools();
+    const tool = tools.find((entry) => entry.name === `mstar_${commandId.replace(/[.-]/g, "_")}`);
+    expect(tool?.inputSchema.properties).toMatchObject({ sessionId: { type: "string" } });
+    expect(tool?.inputSchema.required ?? []).not.toContain("sessionId");
+    const result = await client.callTool({ name: `mstar_${commandId.replace(/[.-]/g, "_")}`, arguments: payload });
+    if (result.structuredContent !== undefined) return result.structuredContent as CommandEnvelope;
+    const text = (result.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
+    const start = text.indexOf('{"version":1,');
+    if (start < 0) throw new Error(`SDK refusal lost its safe command facts: ${text}`);
+    return JSON.parse(text.slice(start)) as CommandEnvelope;
+  } finally {
+    await client.close();
+    await server.close();
+  }
 }
 
 async function runCli(args: string[], baseContext: InvocationContext): Promise<Record<string, unknown>> {
@@ -118,20 +134,18 @@ describe("MCP session identity", () => {
       { ...recoveryInput(attestation), harness: fixture.harness, sessionId: "main-session" },
       context(fixture.root),
     );
-    expect(result.structuredContent).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+    expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
   });
 
-  test("absent identity preserves the exact active recovery usage refusal", async () => {
+  test("absent identity preserves active recovery usage and help", async () => {
     const root = fixtureRoot();
     const result = await registeredMcpCall(
       "session.recover",
       recoveryInput(writeAttestation(root)),
       context(root),
     );
-    expect(result.structuredContent).toMatchObject({
-      status: "usage", code: "command.invalid-input",
-      message: "active recovery requires the main conversation session identity",
-    });
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(result.details?.helpRoute).toBe("mstar session recover --help");
   });
   test("stdio resolver ignores the legacy environment identity when no parameter is supplied", async () => {
     const previous = process.env.MSTAR_HOST_SESSION_ID;
@@ -144,9 +158,8 @@ describe("MCP session identity", () => {
         context(root),
         resolveContext,
       );
-      expect(result.structuredContent).toMatchObject({
-        status: "usage", message: "active recovery requires the main conversation session identity",
-      });
+      expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(result.details?.helpRoute).toBe("mstar session recover --help");
     } finally {
       if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
       else process.env.MSTAR_HOST_SESSION_ID = previous;
@@ -164,7 +177,7 @@ describe("MCP session identity", () => {
         context(fixture.root),
         resolveContext,
       );
-      expect(result.structuredContent).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
+      expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
     } finally {
       if (previous === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
       else process.env.MSTAR_HOST_SESSION_ID = previous;
@@ -177,7 +190,7 @@ describe("MCP session identity", () => {
     const attestation = writeAttestation(fixture.root);
     const before = readFileSync(path.join(fixture.harness, "store.db"));
     for (const [sessionId, code] of [
-      ["", "coordination.identity-missing"],
+      ["", "command.invalid-input"],
       ["../other-session", "coordination.invalid-session-id"],
       ["folder\\\\session", "coordination.invalid-session-id"],
     ]) {
@@ -186,7 +199,10 @@ describe("MCP session identity", () => {
         { ...recoveryInput(attestation), harness: fixture.harness, sessionId },
         context(fixture.root),
       );
-      expect(result.structuredContent).toMatchObject({ status: "refused", code });
+      expect(result).toMatchObject({ status: sessionId === "" ? "usage" : "refused", code });
+      if (sessionId === "") {
+        expect(result.details?.diagnostics).toContainEqual(expect.objectContaining({ path: "sessionId", expected: "non-empty string", received: '""' }));
+      }
     }
     expect(readFileSync(path.join(fixture.harness, "store.db"))).toEqual(before);
   });
@@ -214,18 +230,18 @@ describe("MCP session identity", () => {
       execution: true, coordinator: true, workflow, harness: fixture.harness, expect: token,
       operation: "bind-recorded-owner", sessionId: owner.sessionId,
     }, context(fixture.root));
-    expect(bound.structuredContent.status).toBe("ok");
+    expect(bound.status).toBe("ok");
     const sessionRef = encodeExecutionSessionRef({
       storeId: fixture.authority.storeId, epoch: fixture.authority.epoch,
       workflowId: workflow, role: "coordinator", sessionId: owner.sessionId,
     });
     const payload = { sessionRef, plan, harness: fixture.harness };
     const ownerRead = await registeredMcpCall("plan.show", { ...payload, sessionId: owner.sessionId }, context(fixture.root));
-    expect(ownerRead.structuredContent.status).toBe("ok");
+    expect(ownerRead.status).toBe("ok");
     const before = readFileSync(path.join(fixture.harness, "store.db"));
     const wrongSession = await registeredMcpCall("plan.show", { ...payload, sessionId: "different-valid-session" }, context(fixture.root));
     const after = readFileSync(path.join(fixture.harness, "store.db"));
-    expect(wrongSession.structuredContent).toMatchObject({ status: "refused", code: "coordination.identity-mismatch" });
+    expect(wrongSession).toMatchObject({ status: "refused", code: "coordination.identity-mismatch" });
     expect(after).toEqual(before);
   });
 
@@ -240,9 +256,4 @@ describe("MCP session identity", () => {
     expect(result).toMatchObject({ status: "refused", code: "coordination.workflow-not-found" });
   });
 
-  test("MCP schema publishes identity as an optional argument", () => {
-    const recovery = getCommandDefinitions().find((definition) => definition.id === "session.recover") as CommandDefinition;
-    expect(mcpToolInputSchema(recovery).safeParse({ workflow: "wf-recovery", sessionId: "main-session" }).success).toBe(true);
-    expect(mcpToolInputSchema(recovery).safeParse({ workflow: "wf-recovery" }).success).toBe(true);
-  });
 });

@@ -24,7 +24,7 @@ import { getProcessCommandDefinitions } from "./families/process.js";
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
 import { getLocalCommandDefinitions } from "./families/local.js";
 import { getReportCommandDefinitions } from "./families/report.js";
-import { getCommandSchemas, getSchemaCommandDefinitions } from "./families/schema.js";
+import { getCommandSchemas, getSchemaCommandDefinitions, type CommandSchemaDescriptor } from "./families/schema.js";
 
 
 const failureEnvelopeSchema = z.object({
@@ -184,42 +184,26 @@ function redactInputScalar(value: string): string {
 }
 
 /**
- * Every scalar submitted anywhere in the input. An issue message can quote a
- * value that is NOT the one at the issue path — an `unrecognized_keys` issue
- * names the unknown key, a refinement quotes its own input — so sanitizing only
- * the value at the path leaves those copies in the emitted message. Object keys
- * are collected too: a strict object reports the offending key by name.
+ * Sanitize both messages and paths against secret-shaped strings anywhere in
+ * the submitted input, including object keys quoted by strict-object issues.
+ * Numeric/boolean scalars cannot contain secrets and need no redactor pass.
  */
-function submittedScalars(input: unknown): string[] {
-  const scalars: string[] = [];
+function issueMessageSanitizer(input: unknown): (message: string) => string {
+  const replacements: Record<string, string> = {};
   const visit = (value: unknown): void => {
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      scalars.push(String(value));
+    if (typeof value === "string") {
+      const redacted = redactInputScalar(value);
+      if (redacted !== value && replacements[value] === undefined) replacements[value] = redacted;
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item);
     } else if (value !== null && typeof value === "object") {
       for (const [key, item] of Object.entries(value)) {
-        scalars.push(key);
+        visit(key);
         visit(item);
       }
     }
   };
   visit(input);
-  return scalars;
-}
-
-/**
- * A schema issue message with every submitted secret-shaped scalar replaced by
- * its redacted form. Benign scalars (numbers, ordinary words) redact to
- * themselves, so the message keeps its diagnostic value while a custom token
- * the pattern-based redactor does not recognize is never echoed to the caller.
- */
-function issueMessageSanitizer(input: unknown): (message: string) => string {
-  const replacements: Record<string, string> = {};
-  for (const scalar of submittedScalars(input)) {
-    const redacted = redactInputScalar(scalar);
-    if (redacted !== scalar && replacements[scalar] === undefined) replacements[scalar] = redacted;
-  }
   const scalars = Object.keys(replacements);
   const pattern = scalars.length === 0 ? undefined : new RegExp(scalars.map((scalar) =>
     scalar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
@@ -235,7 +219,7 @@ function inputDiagnostic(
   sanitize: (message: string) => string,
   input: unknown,
 ): RefusalDiagnostic {
-  const path = inputPath(issue);
+  const path = sanitize(inputPath(issue));
   const index = issue.path.find((part) => typeof part === "number");
   const facts = rejectionFacts(issue, input);
   return {
@@ -261,7 +245,7 @@ function inputPath(issue: z.ZodError["issues"][number]): string {
   "");
 }
 
-function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { path: string; expected: string; received: string } {
+function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { expected: string; received: string } {
   const expected = issue.code === "invalid_type"
     ? issue.expected
     : issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values)
@@ -276,18 +260,23 @@ function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { 
   const value = inputValueAtPath(input, issue.path);
   const received = value === undefined ? "undefined" : value === null ? "null" :
     typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
-      redactInputScalar(String(value));
-  return { path: inputPath(issue), expected, received };
+      typeof value === "string" ? redactInputScalar(value) : String(value);
+  return { expected, received };
 }
 
-export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
-  const definition = canonicalDefinitions.find((entry) => entry.id === id);
-  if (definition === undefined) {
-    return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
-  }
+export type CommandAdmission =
+  | { success: true; input: unknown; data: unknown; sessionId?: string; required: readonly string[] }
+  | { success: false; envelope: CommandEnvelope<never> };
+
+/** Shared admission, including transport-composed schemas, without executing effects. */
+export function admitCommandInput(
+  definition: CommandDefinition,
+  input: unknown,
+  contract: CommandSchemaDescriptor,
+  schema: z.ZodType = definition.input,
+): CommandAdmission {
   const isInputObject = input !== null && typeof input === "object" && !Array.isArray(input);
   const rawInput = isInputObject ? input as Record<string, unknown> : {};
-  const contract = commandSchemasById.get(definition.id)!;
   let effectiveInput: unknown = input;
   if (isInputObject) {
     let effectiveObject = rawInput;
@@ -300,7 +289,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     effectiveInput = effectiveObject;
   }
   const effectiveRecord = isInputObject ? effectiveInput as Record<string, unknown> : {};
-  const parsed = definition.input.safeParse(effectiveInput);
+  const parsed = schema.safeParse(effectiveInput);
   const issues = parsed.success ? [] : parsed.error.issues;
   const sanitize = issueMessageSanitizer(effectiveInput);
   const diagnostics = issues.map((issue) => inputDiagnostic(issue, sanitize, effectiveInput));
@@ -332,12 +321,14 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     expected: "present",
     received: "undefined",
   }));
-  const allDiagnostics = [...diagnostics, ...requiredDiagnostics, ...selectorDiagnostic];
+  const allDiagnostics = diagnostics;
+  allDiagnostics.push(...requiredDiagnostics, ...selectorDiagnostic);
   if (!parsed.success || missing.length > 0 || selectorInvalid) {
-    const issue = issues[0];
-    const facts = issue === undefined ? undefined : rejectionFacts(issue, effectiveInput);
-    const optionKey = issue?.path.map(String).join(".");
-    const option = definition.cli.options.find((entry) => entry.key === optionKey);
+    const first = allDiagnostics[0];
+    const facts = first?.path === undefined || first.expected === undefined || first.received === undefined
+      ? undefined
+      : { path: first.path, expected: first.expected, received: first.received };
+    const option = definition.cli.options.find((entry) => entry.key === facts?.path);
     const rejected = facts !== undefined && facts.path !== "" ? {
       path: option?.flags.split(/[ <]/)[0] ?? facts.path,
       expected: facts.expected,
@@ -347,10 +338,9 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
       expected: selectorDiagnostic[0].expected,
       received: selectorDiagnostic[0].received,
     } : missing.length === 1 ? { path: missing[0]!, expected: "present", received: "undefined" } : undefined;
-    const message = allDiagnostics.map((entry) => entry.message).join("; ");
-    return refusalEnvelope({
-      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: sanitize(message),
+    return { success: false, envelope: refusalEnvelope({
+      command: definition.id, status: "usage", code: "command.invalid-input", exitCode: 2,
+      message: allDiagnostics.length === 1 ? allDiagnostics[0]!.message : "Invalid command input",
       diagnostics: allDiagnostics,
       details: {
         required,
@@ -359,11 +349,37 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
         conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
       },
       ...(rejected === undefined ? {} : { rejected }),
-    });
+    }) };
   }
-  const request = typeof selectorValue === "string" ? { ...context, sessionId: selectorValue } : context;
+  return {
+    success: true, input: effectiveInput, data: parsed.data, required,
+    ...(typeof selectorValue === "string" ? { sessionId: selectorValue } : {}),
+  };
+}
+
+export async function executeCommand(id: string, input: unknown, context: InvocationContext): Promise<CommandEnvelope> {
+  const definition = canonicalDefinitions.find((entry) => entry.id === id);
+  if (definition === undefined) {
+    return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
+  }
+  const contract = commandSchemasById.get(definition.id)!;
+  const admitted = admitCommandInput(definition, input, contract);
+  if (!admitted.success) return admitted.envelope;
+  return executeAdmittedCommand(definition, admitted, context, contract);
+}
+
+/** Execute a successfully admitted input once; transports may own admission. */
+export async function executeAdmittedCommand(
+  definition: CommandDefinition,
+  admitted: Extract<CommandAdmission, { success: true }>,
+  context: InvocationContext,
+  contract: CommandSchemaDescriptor,
+): Promise<CommandEnvelope> {
+  const id = definition.id;
+  const { required, sessionId } = admitted;
+  const request = sessionId === undefined ? context : { ...context, sessionId };
   try {
-    const envelope = await definition.execute(parsed.data, request);
+    const envelope = await definition.execute(admitted.data, request);
     if (!definition.output.safeParse(envelope).success) {
       return { version: 1, command: id, status: "error", code: "command.output-invalid", exitCode: 1, message: "handler returned an invalid envelope" };
     }

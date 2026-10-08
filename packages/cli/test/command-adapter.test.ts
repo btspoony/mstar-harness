@@ -9,7 +9,6 @@ import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import { serializeExecutionValue } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
-import { mcpToolInputSchema, registerMcpCommands } from "../src/mcp/register";
 import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 
@@ -86,51 +85,6 @@ describe("generated CLI adapter", () => {
     }
   });
 
-  test("MCP tool schemas publish the domain-owned payload contract instead of an opaque field", () => {
-    const definitions = getCommandDefinitions();
-    const definition = (id: string): CommandDefinition => {
-      const found = definitions.find((entry) => entry.id === id);
-      if (found === undefined) throw new Error(`missing command definition: ${id}`);
-      return found;
-    };
-
-    // An issue verb's placeholder `payload: z.unknown().optional()` becomes the
-    // per-verb domain schema, so `tools/list` carries the constructible shape.
-    const schema = mcpToolInputSchema(definition("issue.add")).toJSONSchema() as {
-      properties: Record<string, Record<string, unknown>>;
-      required?: readonly string[];
-    };
-    expect(schema.properties.payload).toMatchObject({ type: "object" });
-    // The published payload carries the real domain contract, not `{}`.
-    expect(schema.properties.payload.required).toContain("rootCauseKey");
-    expect(Object.keys((schema.properties.payload.properties ?? {}) as object)).toContain("title");
-    // …and stays transport-optional: the domain handler owns the requirement.
-    expect(schema.required ?? []).not.toContain("payload");
-
-    // A field the family itself shapes stays its own contract: the workflow
-    // `--file` descriptor must not turn an absolute pathname into a document.
-    const policy = mcpToolInputSchema(definition("workflow.execution-policy")).toJSONSchema() as {
-      properties: Record<string, Record<string, unknown>>;
-    };
-    expect(policy.properties.file).toMatchObject({ type: "string" });
-
-    // A descriptor keyed by a VALUE of the command's own argument
-    // (`persist.write` declares one contract per `kind`) names no input field,
-    // so it is never injected: a published tool field the handler does not read
-    // is a capability `tools/list` must not advertise. The handler reads the
-    // document from `input`/`file` only.
-    const persist = mcpToolInputSchema(definition("persist.write")).toJSONSchema() as {
-      properties: Record<string, unknown>;
-      required?: readonly string[];
-    };
-    for (const field of ["status", "snapshot", "review", "json"]) {
-      expect(Object.keys(persist.properties)).not.toContain(field);
-      expect(persist.required ?? []).not.toContain(field);
-    }
-    // …and the transport the handler does read stays published.
-    expect(Object.keys(persist.properties)).toContain("input");
-    expect(Object.keys(persist.properties)).toContain("file");
-  });
 
 
   test("an issue --payload is decoded and validated by its own descriptor with pathful diagnostics", async () => {
@@ -393,46 +347,7 @@ describe("schema selector routes", () => {
     expect(envelope.message).toContain("exactly one");
   });
 
-  test("MCP registers the schema tool with the exactly-one input contract", () => {
-    const definition = getCommandDefinitions().find((entry) => entry.id === "schema");
-    if (definition === undefined) throw new Error("schema command definition missing");
-    const toolSchema = mcpToolInputSchema(definition).toJSONSchema() as { anyOf?: readonly Record<string, unknown>[] };
-    const branches = toolSchema.anyOf ?? [];
-    expect(branches).toHaveLength(3);
-    const selectorKeys = branches.map((branch) => {
-      expect(branch.additionalProperties).toBe(false);
-      const properties = Object.keys(branch.properties as object);
-      expect(properties).toHaveLength(1);
-      return properties[0];
-    });
-    expect(selectorKeys).toEqual(["command", "family", "type"]);
-  });
 
-  test("MCP schema tool resolves a family query and refuses an empty one", async () => {
-    let handler: ((input: unknown, extra: { mcpReq: { signal: AbortSignal } }) => Promise<unknown>) | undefined;
-    const server = {
-      registerTool(name: string, _options: unknown, registered: typeof handler) {
-        if (name === "mstar_schema") handler = registered;
-      },
-    };
-    registerMcpCommands(server as never, getCommandDefinitions(), () => context());
-    if (handler === undefined) throw new Error("mstar_schema tool not registered");
-    const signal = { mcpReq: { signal: new AbortController().signal } };
-
-    const family = await handler!({ family: "worktree" }, signal) as {
-      structuredContent: { status: string; data: { kind: string; members: readonly { id: string }[] } };
-    };
-    expect(family.structuredContent.status).toBe("ok");
-    expect(family.structuredContent.data.kind).toBe("family");
-    expect(family.structuredContent.data.members.some((member) => member.id === "worktree.check")).toBe(true);
-
-    const empty = await handler!({}, signal) as {
-      structuredContent: { status: string; code: string; message: string };
-    };
-    expect(empty.structuredContent.status).toBe("usage");
-    expect(empty.structuredContent.exitCode).toBe(2);
-    expect(empty.structuredContent.message).toContain("exactly one");
-  });
 });
 describe("payload option decoding", () => {
   test("worktree cleanup accepts a lone --worktree path as a one-element list", async () => {

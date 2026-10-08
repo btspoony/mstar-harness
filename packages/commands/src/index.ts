@@ -6,8 +6,11 @@ export {
   commandEnvelopeSchema,
   getCommandDefinitions,
   executeCommand,
+  admitCommandInput,
+  executeAdmittedCommand,
   validateCommandDefinitions,
 } from "./definitions.js";
+export type { CommandAdmission } from "./definitions.js";
 export { getPlanCommandDefinitions, PLAN_COMPLETION_EVIDENCE_SCHEMA } from "./families/plan.js";
 export { getSessionCommandDefinitions } from "./families/session.js";
 export { getWorkflowCommandDefinitions } from "./families/workflow.js";

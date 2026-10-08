@@ -8,6 +8,7 @@ import {
   spawnProcess,
   startDashboard,
   type CommandDefinition,
+  type CommandSchemaDescriptor,
   type CommandEnvelope,
   type CommandEffects,
   type InvocationContext,
@@ -87,42 +88,32 @@ export function mapParserError(error: unknown, argv: readonly string[]): Command
 }
 
 /**
- * Resolve parser failures to stable fields only when argv identifies the
- * rejected option from the command's own definition.
+ * Resolve fields from canonical option keys. Argv positions are reported only
+ * for tokens not consumed as known option values, including repeated forms.
  */
 function parserDiagnostic(error: CommanderError, argv: readonly string[]): Record<string, unknown> {
   const command = commandIdFromArgv(argv);
   const definition = getCommandDefinitions().find((entry) => entry.id === command);
-  const field = parserField(error, argv, definition);
+  const field = parserField(error, definition);
   const helpRoute = cliHelpRoute(argv);
   const usage = error.code === "commander.excessArguments" && definition !== undefined
     ? renderCliUsage(definition)
     : undefined;
   const option = field === undefined || definition === undefined
     ? undefined
-    : definition.cli.options.find((candidate) => candidate.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === field));
-  const expected = option === undefined ? undefined :
-    hasType(optionJsonSchema(definition!, option.key), "boolean") ? "boolean flag" : "option value";
-  const rawArgs = argv.slice(2);
-  const quoted = /'([^']+)'/.exec(error.message)?.[1];
-  const rejectedIndex = field === undefined ? undefined : rawArgs.findIndex((token) =>
-    option?.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === token),
-  );
+    : definition.cli.options.find((candidate) => candidate.key === field);
   const missingValue = error.code === "commander.optionMissingArgument" || error.code === "commander.missingMandatoryOptionValue";
-  const unknownIndex = error.code === "commander.unknownOption"
-    ? rawArgs.findIndex((token) => token === quoted)
-    : -1;
-  const path = field ?? (unknownIndex >= 0 ? `argv[${unknownIndex + 2}]` : undefined);
+  const quoted = /'([^']+)'/.exec(error.message)?.[1];
+  const unknown = error.code === "commander.unknownOption";
+  const rejectedIndex = (!unknown && !missingValue) || definition === undefined || quoted === undefined ? undefined
+    : rejectedOptionIndex(argv, definition, quoted, missingValue ? option : undefined);
+  const path = field ?? (unknown && rejectedIndex !== undefined ? `argv[${rejectedIndex}]` : undefined);
   return {
-    ...(path === undefined ? {} : {
-      path,
-      ...(field === undefined
-        ? { expected: "recognized option", received: quoted ?? "unknown option" }
-        : {
-          expected,
-          received: missingValue ? "missing value" : rejectedIndex === -1 || rejectedIndex === undefined ? undefined : rawArgs[rejectedIndex + 1],
-        }),
-    }),
+    ...(path === undefined ? {} : { path }),
+    ...(unknown ? { expected: "recognized option", received: quoted ?? "unknown option" } : {}),
+    ...(missingValue && option !== undefined ? { expected: "option value", received: "missing value" } : {}),
+    ...(option === undefined ? {} : { flag: option.flags }),
+    ...(rejectedIndex === undefined ? {} : { argvIndex: rejectedIndex, token: argv[rejectedIndex] }),
     code: error.code,
     message: error.message,
     ...(usage === undefined ? {} : { usage }),
@@ -132,29 +123,48 @@ function parserDiagnostic(error: CommanderError, argv: readonly string[]): Recor
 
 function parserField(
   error: CommanderError,
-  argv: readonly string[],
   definition?: CommandDefinition,
 ): string | undefined {
   const quoted = /'([^']+)'/.exec(error.message)?.[1];
-  if (error.code === "commander.excessArguments" && definition !== undefined) {
-    const rawArgs = argv.slice(2);
-    const terminator = rawArgs.indexOf("--");
-    const args = terminator === -1 ? rawArgs : rawArgs.slice(0, terminator);
-    const options = definition.cli.options;
-    for (let index = 0; index < args.length; index++) {
-      const token = args[index]!;
-      const option = options.find((candidate) => candidate.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === token));
-      if (option !== undefined && !hasType(optionJsonSchema(definition, option.key), "boolean") &&
-        args[index + 1] !== undefined && options.some((candidate) =>
-          candidate.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === args[index + 1]))) {
-        return token;
-      }
-    }
-  }
   if (quoted === undefined) return undefined;
-  if (error.code === "commander.missingArgument") return quoted;
-  if (error.code === "commander.missingMandatoryOptionValue") return optionKey(quoted);
-  if (error.code === "commander.optionMissingArgument") return optionKey(quoted);
+  if (error.code === "commander.missingArgument") {
+    return definition?.cli.arguments.find((argument) => argument.key === quoted)?.key;
+  }
+  if (error.code === "commander.missingMandatoryOptionValue" || error.code === "commander.optionMissingArgument") {
+    const key = optionKey(quoted);
+    return definition?.cli.options.find((option) => option.key === key)?.key;
+  }
+  return undefined;
+}
+
+function rejectedOptionIndex(
+  argv: readonly string[],
+  definition: CommandDefinition,
+  quoted: string,
+  missingOption?: CommandDefinition["cli"]["options"][number],
+): number | undefined {
+  const options = definition.cli.options.map((option) => ({
+    option,
+    flags: cliOptionFlags(definition, option),
+    names: option.flags.split(/[ ,|]+/).filter((flag) => flag.startsWith("-")),
+  }));
+  for (let index = 2; index < argv.length; index++) {
+    const token = argv[index]!;
+    if (token === "--") break;
+    const name = token.split("=")[0]!;
+    const known = options.find((entry) => entry.names.includes(name));
+    if (known !== undefined) {
+      if (token.includes("=")) continue;
+      if (known.flags.includes("<")) {
+        if (index + 1 === argv.length && known.option === missingOption) return index;
+        index++; // Commander consumes a required value even when it looks like a flag.
+      } else if (known.flags.includes("[") && argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) {
+        index++;
+      }
+      continue;
+    }
+    if (missingOption === undefined && token === quoted) return index;
+  }
   return undefined;
 }
 
@@ -212,8 +222,11 @@ function cliOptionFlags(definition: CommandDefinition, option: CommandDefinition
  * Payload descriptor keys are advertised as fields only when they are declared
  * input fields; kind-keyed contracts are labeled separately.
  */
-export function renderCommandContract(definition: CommandDefinition, route: "cli" | "mcp"): string {
-  const descriptor = getCommandSchemas([definition])[0]!;
+export function renderCommandContract(
+  definition: CommandDefinition,
+  route: "cli" | "mcp",
+  descriptor: CommandSchemaDescriptor = getCommandSchemas([definition])[0]!,
+): string {
   const lines = [definition.description, `Command id: ${descriptor.id}`, `Effects: ${descriptor.effects.join(", ")}`];
   if (route === "cli" && definition.cli.options.some((option) => option.context === "sessionId")) {
     lines.push("Session identity resolves --session-id first, then the launched session's minted MSTAR_EXECUTION_IDENTITY (the active-route caller identity, validated against the addressed workflow/role/plan), then the ambient MSTAR_HOST_SESSION_ID (empty/whitespace ignored), else unset; for active token-authorized writes it is attribution, not authorization. The legacy pre-activation coordinator bootstrap (`plan bind --coordinator`) requires an explicit --session-id and rejects the environment value. Legacy `plan bind --resume` ignores ambient environment identity and refuses a declared identity.");
@@ -610,7 +623,8 @@ function ensureCommand(program: Command, pathParts: readonly string[]): Command 
 }
 
 function configureLeaf(command: Command, definition: CommandDefinition): void {
-  if (command.description() === "") command.description(renderCommandContract(definition, "cli"));
+  const descriptor = getCommandSchemas([definition])[0]!;
+  if (command.description() === "") command.description(renderCommandContract(definition, "cli", descriptor));
   for (const alias of definition.cli.aliases) {
     if (!alias.includes(" ")) command.alias(alias);
   }
@@ -620,9 +634,7 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
       command.argument(token, argument.key);
     }
   }
-  const requirements = definition.cli.options.some((option) => option.key === "expect")
-    ? getCommandSchemas([definition])[0]?.requirements ?? []
-    : [];
+  const requirements = descriptor.requirements;
   if (command.options.length === 0) {
     for (const option of definition.cli.options) {
       const flags = cliOptionFlags(definition, option);
