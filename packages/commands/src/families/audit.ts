@@ -26,6 +26,7 @@ import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 import { engineErrorFacts } from "./family-refusal.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
+import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
 type Verb = (typeof verbs)[number];
