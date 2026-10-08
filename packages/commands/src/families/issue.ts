@@ -170,11 +170,11 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       const receipt = await action(write);
       return ok(id, { ...(receipt as Record<string, unknown>), operationId: write.operationId });
     };
-    if (id === "issue.add") return runMutation((write) => captureIssue(context, validatePayload(input, "CaptureInput", "add") as CaptureInput, write));
-    if (id === "issue.occurrence") return runMutation((write) => appendOccurrence(context, requiredId(input), validatePayload(input, "OccurrenceInput", "occurrence") as OccurrenceInput, write));
-    if (id === "issue.triage") return runMutation((write) => triageIssue(context, requiredId(input), validatePayload(input, "IssueTriage", "triage") as IssueTriage, write));
+    if (id === "issue.add") return await runMutation((write) => captureIssue(context, validatePayload(input, "CaptureInput", "add") as CaptureInput, write));
+    if (id === "issue.occurrence") return await runMutation((write) => appendOccurrence(context, requiredId(input), validatePayload(input, "OccurrenceInput", "occurrence") as OccurrenceInput, write));
+    if (id === "issue.triage") return await runMutation((write) => triageIssue(context, requiredId(input), validatePayload(input, "IssueTriage", "triage") as IssueTriage, write));
     if (id === "issue.reopen") {
-      return runMutation((write) => reopenIssue(
+      return await runMutation((write) => reopenIssue(
         context,
         requiredId(input),
         validatePayload(input, "IssueReopen", "reopen") as IssueReopen,
@@ -182,8 +182,8 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       ));
     }
     const disposition = terminalDisposition[id.slice("issue.".length)];
-    if (disposition !== undefined) return runMutation((write) => closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, write));
-    if (id === "issue.link") return runMutation((write) => linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, write));
+    if (disposition !== undefined) return await runMutation((write) => closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, write));
+    if (id === "issue.link") return await runMutation((write) => linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, write));
     throw new Error(`unsupported issue command ${id}`);
   } catch (error) {
     return refused(id, error, input);
@@ -275,7 +275,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     : "Replay id; if omitted, this command generates one fresh id for this invocation. Explicit values are preserved and blank values are not defaulted.";
   const commandInput = inputSchema.extend({
     ...(requiresIssueId ? { id: z.string().min(1) } : {}),
-    ...(expectedRevisionVerbs[verb] === true ? { expect: z.string().min(1) } : {}),
+    ...(expectedRevisionVerbs[verb] === true ? { expect: z.number().int().nonnegative() } : {}),
   });
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,

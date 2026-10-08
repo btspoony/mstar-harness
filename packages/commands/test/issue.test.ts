@@ -2,9 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStore } from "@mstar-harness/engine";
-import { getCommandDefinitions } from "../src/index.js";
-import type { CommandEffects, InvocationContext } from "../src/types.js";
+import { initializeStore, openStore } from "@mstar-harness/engine";
+import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -36,6 +35,32 @@ function definition(id: string) {
   return found;
 }
 
+async function issueState(context: InvocationContext) {
+  const harnessDir = context.controlRoot;
+  if (harnessDir === null) throw new Error("test context must provide an isolated harness");
+  const store = await openStore({ harnessDir }, "read");
+  try {
+    const tables = new Set((store.db.prepare("select name from sqlite_master where type='table'").all() as { name: string }[]).map(({ name }) => name));
+    const count = (table: string) => tables.has(table)
+      ? (store.db.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n
+      : null;
+    const meta = tables.has("store_meta")
+      ? store.db.prepare("select revision from store_meta where id = 1").get() as { revision: number } | null
+      : null;
+    const issueCounter = tables.has("issue_counter") ? store.db.prepare("select * from issue_counter").all() : null;
+    return {
+      issues: count("issues"),
+      issueTransitions: count("issue_transitions"),
+      storeOperations: count("store_operations"),
+      executionOperations: count("execution_operations"),
+      storeMetaRevision: meta?.revision ?? null,
+      issueCounter,
+    };
+  } finally {
+    store.close();
+  }
+}
+
 function capture(overrides: Record<string, unknown> = {}) {
   return {
     projectId: "proj-a", title: "Finding", kind: "bug", severity: "high", impact: "impact", acceptance: "acceptance",
@@ -46,6 +71,105 @@ function capture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("issue command family", () => {
+
+  test("public admission and execution preserve numeric CAS and structured issue refusals", async () => {
+    const context = await testContext();
+    const seed = await executeCommand("issue.add", {
+      payload: capture(), actor: "project-manager",
+    }, context);
+    expect(seed.status).toBe("ok");
+    if (seed.status !== "ok") return;
+    const seedReceipt = seed.data as { issueId: string; operationId: string };
+    expect(seedReceipt.operationId).toMatch(/^[0-9a-f-]{36}$/);
+    const shown = await executeCommand("issue.show", { id: seedReceipt.issueId }, context);
+    expect(shown.status).toBe("ok");
+    if (shown.status !== "ok") return;
+    const shownIssue = shown.data as { id: string; revision: number };
+    expect(typeof shownIssue.revision).toBe("number");
+
+    const triageDefinition = definition("issue.triage");
+    const triageContract = getCommandSchemas(getCommandDefinitions()).find(({ id }) => id === "issue.triage");
+    if (triageContract === undefined) throw new Error("missing canonical issue.triage command contract");
+    const triageInput = {
+      id: shownIssue.id,
+      actor: "project-manager",
+      payload: { reason: "publicly admitted numeric revision" },
+    };
+    const numericAdmission = admitCommandInput(triageDefinition, { ...triageInput, expect: shownIssue.revision }, triageContract);
+    expect(numericAdmission.success).toBe(true);
+    const missingAdmission = admitCommandInput(triageDefinition, triageInput, triageContract);
+    expect(missingAdmission).toMatchObject({
+      success: false,
+      envelope: { status: "usage", code: "command.invalid-input" },
+    });
+    const stringAdmission = admitCommandInput(triageDefinition, { ...triageInput, expect: "not-a-revision" }, triageContract);
+    expect(stringAdmission).toMatchObject({
+      success: false,
+      envelope: { status: "usage", code: "command.invalid-input" },
+    });
+    const beforeInvalidCas = await issueState(context);
+    const missingCas = await executeCommand("issue.triage", triageInput, context);
+    expect(missingCas).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    const stringCas = await executeCommand("issue.triage", { ...triageInput, expect: "not-a-revision" }, context);
+    expect(stringCas).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(await issueState(context)).toEqual(beforeInvalidCas);
+
+    const numericTriage = await executeCommand("issue.triage", {
+      ...triageInput, expect: shownIssue.revision, operationId: "public-numeric-triage",
+    }, context);
+    expect(numericTriage).toMatchObject({
+      status: "ok",
+      data: { issueId: shownIssue.id, revision: shownIssue.revision + 1, operationId: "public-numeric-triage" },
+    });
+    const beforeStale = await issueState(context);
+    const stale = await executeCommand("issue.triage", {
+      ...triageInput, expect: shownIssue.revision, operationId: "public-stale-triage",
+    }, context);
+    expect(stale).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
+    expect(await issueState(context)).toEqual(beforeStale);
+
+    const beforeBlank = await issueState(context);
+    const blank = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/blank", rootCauseKey: "blank-root", acceptanceKey: "blank-accept", occurrenceKey: "blank-occ" }),
+      operationId: "", actor: "project-manager",
+    }, context);
+    expect(blank).toMatchObject({
+      status: "refused", code: "issue.invalid-payload", details: { paths: ["operationId"] },
+    });
+    expect(await issueState(context)).toEqual(beforeBlank);
+
+    const beforeMalformed = await issueState(context);
+    const malformed = await executeCommand("issue.add", { payload: {}, actor: "project-manager" }, context);
+    expect(malformed).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    expect(await issueState(context)).toEqual(beforeMalformed);
+    const nextGenerated = await executeCommand("issue.add", {
+      payload: capture({ sourceIdentity: "review/next", rootCauseKey: "next-root", acceptanceKey: "next-accept", occurrenceKey: "next-occ" }),
+      actor: "project-manager",
+    }, context);
+    expect(nextGenerated).toMatchObject({ status: "ok", data: { issueId: "I-000002" } });
+    if (nextGenerated.status === "ok") expect((nextGenerated.data as { operationId: string }).operationId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const replayInput = capture({
+      sourceIdentity: "review/replay", rootCauseKey: "replay-root", acceptanceKey: "replay-accept", occurrenceKey: "replay-occ",
+    });
+    const replayFirst = await executeCommand("issue.add", {
+      payload: replayInput, operationId: "public-replay", actor: "project-manager",
+    }, context);
+    expect(replayFirst).toMatchObject({ status: "ok", data: { operationId: "public-replay" } });
+    if (replayFirst.status !== "ok") return;
+    const beforeReplay = await issueState(context);
+    const replay = await executeCommand("issue.add", {
+      payload: replayInput, operationId: "public-replay", actor: "project-manager",
+    }, context);
+    expect(replay).toEqual(replayFirst);
+    expect(await issueState(context)).toEqual(beforeReplay);
+    const conflict = await executeCommand("issue.add", {
+      payload: { ...replayInput, title: "Conflicting request" },
+      operationId: "public-replay", actor: "project-manager",
+    }, context);
+    expect(conflict).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    expect(await issueState(context)).toEqual(beforeReplay);
+  });
 
   test("malformed capture is rejected without creating an issue", async () => {
     const context = await testContext();

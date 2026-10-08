@@ -131,8 +131,7 @@ describe("session and workflow command families", () => {
     })).status).toBe("ok");
     await markDone("wf-report-only");
     const mismatchClose = await close("wf-report-only");
-    expect(mismatchClose.status).toBe("refused");
-    expect(mismatchClose.message).toContain("delivery.completion.policy");
+    expect(mismatchClose).toMatchObject({ status: "refused", code: "coordination.invalid-transition" });
     expect(readSnapshot("wf-report-only").status).toBe("running");
     expect((await record("wf-report-only", {
       completion: { policy: "approval-v1", evidence: "acceptance/report.md" },

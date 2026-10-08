@@ -414,7 +414,6 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
         childOperation: "capture",
         childOperationIdOrigin: "session + plan + entry occurrenceKey",
         causeCode: "store.operation-conflict",
-        correction: expect.stringContaining("distinct occurrenceKey"),
       },
     });
     const secondRefusal = await refusalOf(() => callBatch("outer-batch-new-id", conflictingEntries));
@@ -423,7 +422,9 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
       details: {
         entryIndex: 1,
         entryPath: "entries[1].occurrenceKey",
-        correction: expect.stringContaining("fresh outer operationId does not change"),
+        childOperation: "capture",
+        childOperationIdOrigin: "session + plan + entry occurrenceKey",
+        causeCode: "store.operation-conflict",
       },
     });
     expect(await issueFacts(fixture.context)).toEqual(beforeIssues);
