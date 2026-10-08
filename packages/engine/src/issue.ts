@@ -7,6 +7,7 @@
  * `issue.ambiguous-identity` instead of guessing a merge.
  */
 import { createHash } from "node:crypto";
+import { redactSecrets } from "./audit.js";
 import { join } from "node:path";
 import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
@@ -755,7 +756,12 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
 
 function issueVocabularyError(field: "kind" | "severity", value: unknown): IssueError {
   const supported = field === "kind" ? ISSUE_KIND_VALUES : SEVERITY_VALUES;
-  const received = typeof value === "string" ? value : value === null ? "null" : typeof value;
+  const received =
+    typeof value === "string"
+      ? redactSecrets(value).text
+      : value === null
+        ? "null"
+        : typeof value;
   const error = new IssueError(
     "issue.scope-refused",
     `${field} received ${JSON.stringify(received)}; supported values are ${supported.join(", ")}. ` +

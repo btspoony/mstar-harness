@@ -311,6 +311,31 @@ process.stdout.write(JSON.stringify(receipt));
     expect((failure as Error).message).toContain("critical, high, medium, low, info");
     expect((failure as Error).message).not.toContain("kind");
   });
+  test("capture enum refusals redact credential-like scalar input and reduce object input to type facts", () => {
+    const secret = `sk_live_${"a".repeat(24)}`;
+    for (const [field, value] of [
+      ["kind", secret],
+      ["severity", secret],
+      ["kind", { token: secret }],
+      ["severity", { token: secret }],
+    ] as const) {
+      let failure: IssueError | undefined;
+      try {
+        assertCaptureRequest(baseInput({ [field]: value } as Partial<CaptureInput>));
+      } catch (error) {
+        if (error instanceof IssueError) failure = error;
+      }
+      const serialized = JSON.stringify({ message: failure?.message, details: failure?.details });
+      expect(serialized).not.toContain(secret);
+      expect(failure).toMatchObject({
+        code: "issue.scope-refused",
+        details: { causes: [{ field, received: typeof value === "string" ? expect.any(String) : "object" }] },
+      });
+      expect(failure?.message).toContain(field);
+      expect(failure?.message).toContain("mstar schema CaptureInput");
+      expect(failure?.message).toContain("mstar plan issue-add --help");
+    }
+  });
 
   test("reopening the DB retains captured data", async () => {
     const context = ctx("capture-reopen-");

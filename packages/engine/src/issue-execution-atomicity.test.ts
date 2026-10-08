@@ -176,12 +176,14 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     const derived = deriveResidualEntries([baseInput({ projectId: "caller-project", occurrenceKey: "event-17" })], "plan-project");
     expect(derived[0]).toMatchObject({ projectId: "plan-project", occurrenceKey: "event-17" });
     const before = await issueFacts(context);
+    const secret = `sk_live_${"b".repeat(24)}`;
     let failure: unknown;
     try {
       deriveResidualEntries(
         [
           baseInput({ occurrenceKey: "event-bad-kind", kind: "tech-debt" as never }),
-          baseInput({ occurrenceKey: "event-bad-both", kind: "tech-debt" as never, severity: "urgent" as never }),
+          baseInput({ occurrenceKey: "event-bad-both", kind: secret as never, severity: { token: secret } as never }),
+          baseInput({ occurrenceKey: "event-mixed-cause", title: "", kind: secret as never }),
         ],
         "_default",
       );
@@ -192,24 +194,38 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
       code: "coordination.invalid-input",
       details: {
         problems: [
-          { path: "entries[0]", causes: [{ path: "entries[0].kind", field: "kind", received: "tech-debt" }] },
+          {
+            path: "entries[0]",
+            causes: [{ path: "entries[0].kind", field: "kind", received: "tech-debt" }],
+          },
           {
             path: "entries[1]",
             causes: [
-              { path: "entries[1].kind", field: "kind", received: "tech-debt" },
-              { path: "entries[1].severity", field: "severity", received: "urgent" },
+              { path: "entries[1].kind", field: "kind" },
+              { path: "entries[1].severity", field: "severity", received: "object" },
+            ],
+          },
+          {
+            path: "entries[2]",
+            causes: [
+              { code: "issue.scope-refused" },
+              { path: "entries[2].kind", field: "kind" },
             ],
           },
         ],
       },
     });
     const message = (failure as Error).message;
+    expect(JSON.stringify({ message, details: (failure as { details: unknown }).details })).not.toContain(secret);
     expect(message).toContain("entries[0]");
     expect(message).toContain("entries[1]");
+    expect(message).toContain("entries[2]");
     expect(message).toContain("kind received");
     expect(message).toContain("severity received");
+    expect(message).toContain("title must be nonblank");
     expect(message).toContain("critical, high, medium, low, info");
     expect(message).toContain("mstar schema CaptureInput");
+    expect(message).toContain("mstar plan issue-add --help");
     expect(await issueFacts(context)).toEqual(before);
 
     const corrected = deriveResidualEntries(
