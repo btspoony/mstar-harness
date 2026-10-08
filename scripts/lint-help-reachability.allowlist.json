@@ -1918,5 +1918,17 @@
     "justification": "PR review round 5 template recovery rejected pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:7ade6b212bba",
+    "justification": "PR review round 6 unresolved CoordinationError command template pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/workflow.ts:c448ec400069",
+    "justification": "PR review round 6 unresolved CoordinationError command template pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
   }
 ]

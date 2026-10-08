@@ -172,4 +172,11 @@ describe("help reachability lint", () => {
     expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
     expect(findings[0]?.reason).toContain("unresolved runtime substitution — advertised command is not statically provable");
   });
+
+  test("rejects coordination messages whose command contains a runtime substitution", () => {
+    const source = 'new CoordinationError("NO_STATE", `Use mstar status validate ${flag}`);';
+    const findings = scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar);
+    expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+    expect(findings[0]?.reason).toContain("unresolved runtime substitution — advertised command is not statically provable");
+  });
 });

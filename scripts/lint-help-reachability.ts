@@ -155,7 +155,12 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
   };
   const inspectCoordinationError = (node: ts.Node, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     const bound = message && resolveBound(message, bindings);
+    const unresolvedTemplate = !!bound && hasUnresolvedTemplate(bound, scopeByNode.get(bound), new Set(), bindings);
     const text = value(bound, bound && scopeByNode.get(bound), new Set(), bindings);
+    if (unresolvedTemplate && text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text)) {
+      reportFailure(node, unresolvedTemplateReason);
+      return;
+    }
     if (text && !/\bmstar\s+[a-z][a-z0-9.-]*/i.test(text)) inspect(node, text);
   };
   const visit = (node: ts.Node): void => {

@@ -61,7 +61,11 @@ export function extractCliGrammar(): CliGrammar {
   return { verbs, flagsByVerb, positionalsByVerb, optionsByVerb };
 }
 
-export interface ObjectAlternative { fields: Map<string, ts.Expression>; conditions: Map<string, boolean>; }
+export interface ObjectAlternative {
+  fields: Map<string, ts.Expression>;
+  conditions: Map<string, boolean>;
+  unprovenFields: Map<string, ts.Expression>;
+}
 export function objectAlternatives(expression: ts.Expression): ObjectAlternative[] {
   const mergeConditions = (left: Map<string, boolean>, right: Map<string, boolean>): Map<string, boolean> | undefined => {
     const merged = new Map(left);
@@ -71,6 +75,13 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
     }
     return merged;
   };
+  const mergeUnprovenFields = (left: Map<string, ts.Expression>, right: Map<string, ts.Expression>): Map<string, ts.Expression> =>
+    new Map([...left, ...right]);
+  const unknownObject = (source: ts.Expression, conditions: Map<string, boolean>): ObjectAlternative => ({
+    fields: new Map(),
+    conditions,
+    unprovenFields: new Map(["code", "recovery", "status"].map((field) => [field, source])),
+  });
   const values = (expression: ts.Expression, conditions = new Map<string, boolean>()): { expression: ts.Expression; conditions: Map<string, boolean> }[] => {
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) return values(expression.expression, conditions);
     if (ts.isConditionalExpression(expression)) {
@@ -84,27 +95,37 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
   const fromObject = (object: ts.ObjectLiteralExpression): ObjectAlternative[] => {
     const spreadAlternatives = (spread: ts.Expression): ObjectAlternative[] =>
       values(spread).flatMap(({ expression: branch, conditions }) => {
-        if (!ts.isObjectLiteralExpression(branch)) return [{ fields: new Map(), conditions }];
+        if (!ts.isObjectLiteralExpression(branch)) return [unknownObject(branch, conditions)];
         return fromObject(branch).flatMap((alternative) => {
           const merged = mergeConditions(conditions, alternative.conditions);
-          return merged ? [{ fields: alternative.fields, conditions: merged }] : [];
+          return merged ? [{ ...alternative, conditions: merged }] : [];
         });
       });
-    let alternatives: ObjectAlternative[] = [{ fields: new Map(), conditions: new Map() }];
+    let alternatives: ObjectAlternative[] = [{ fields: new Map(), conditions: new Map(), unprovenFields: new Map() }];
     for (const property of object.properties) {
       if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
         const name = property.name.text;
         alternatives = alternatives.flatMap((base) => values(property.initializer).flatMap(({ expression: value, conditions }) => {
           const merged = mergeConditions(base.conditions, conditions);
-          return merged ? [{ fields: new Map([...base.fields, [name, value]]), conditions: merged }] : [];
+          if (!merged) return [];
+          const unprovenFields = new Map(base.unprovenFields);
+          unprovenFields.delete(name);
+          return [{ fields: new Map([...base.fields, [name, value]]), conditions: merged, unprovenFields }];
         }));
       } else if (ts.isShorthandPropertyAssignment(property)) {
-        for (const alternative of alternatives) alternative.fields.set(property.name.text, property.name);
+        for (const alternative of alternatives) {
+          alternative.fields.set(property.name.text, property.name);
+          alternative.unprovenFields.delete(property.name.text);
+        }
       } else if (ts.isSpreadAssignment(property)) {
         const choices = spreadAlternatives(property.expression);
         alternatives = alternatives.flatMap((base) => choices.flatMap((choice) => {
           const merged = mergeConditions(base.conditions, choice.conditions);
-          return merged ? [{ fields: new Map([...base.fields, ...choice.fields]), conditions: merged }] : [];
+          return merged ? [{
+            fields: new Map([...base.fields, ...choice.fields]),
+            conditions: merged,
+            unprovenFields: mergeUnprovenFields(base.unprovenFields, choice.unprovenFields),
+          }] : [];
         }));
       }
     }
@@ -114,7 +135,7 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
     if (!ts.isObjectLiteralExpression(branch)) return [];
     return fromObject(branch).flatMap((alternative) => {
       const merged = mergeConditions(conditions, alternative.conditions);
-      return merged ? [{ fields: alternative.fields, conditions: merged }] : [];
+      return merged ? [{ ...alternative, conditions: merged }] : [];
     });
   });
 }
@@ -370,15 +391,34 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const checkEnvelope = (node: ts.Node, input: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     const variants = envelopeInput(input, bindings);
-    if (variants.some(({ fields }) => !isCauseCode(fields.get("code")))) {
-      addFinding(node, "missing-cause-code", "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.");
+    const missingCause = variants.find(({ fields, unprovenFields }) => unprovenFields.has("code") || !isCauseCode(fields.get("code")));
+    if (missingCause) {
+      const source = missingCause.unprovenFields.get("code");
+      addFinding(
+        node,
+        "missing-cause-code",
+        source
+          ? `Rule #341 class 2 (named cause): code cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.`
+          : "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.",
+      );
     }
-    if (variants.some(({ fields }) => {
+    const missingRecovery = variants.find(({ fields, unprovenFields }) => {
       const recovery = fields.get("recovery");
       const status = codeValue(fields.get("status"));
-      const text = codeValue(recovery);
-      return status !== "usage" && (!recovery || text === undefined || text.trim() === "");
-    })) addFinding(node, "missing-recovery", "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.");
+      const statusMayBeRefused = unprovenFields.has("status") || status !== "usage";
+      const recoveryText = codeValue(recovery);
+      return statusMayBeRefused && (unprovenFields.has("recovery") || !recovery || recoveryText === undefined || recoveryText.trim() === "");
+    });
+    if (missingRecovery) {
+      const source = missingRecovery.unprovenFields.get("recovery") ?? missingRecovery.unprovenFields.get("status");
+      addFinding(
+        node,
+        "missing-recovery",
+        source
+          ? `Rule #341 class 3 (recovery): recovery presence cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.`
+          : "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.",
+      );
+    }
   };
   const checkCoordinationError = (node: ts.Node, code: ts.Expression | undefined, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     const resolvedCode = code && resolveBound(code, bindings);

@@ -196,4 +196,44 @@ describe("refusal quality scanner", () => {
     `, "packages/engine/src/fixture.ts");
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
   });
+  test("treats opaque object spreads as unprovable unless later literal fields override them", () => {
+    const findings = scanSource(`
+      function refusal(overrides: object) {
+        return refusalEnvelope({
+          status: "refused",
+          code: "valid.code",
+          message: "Blocked",
+          recovery: "Run mstar workflow --resume",
+          ...overrides,
+        });
+      }
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+    expect(findings.every(({ reason }) => reason.includes("overrides"))).toBe(true);
+
+    for (const spread of [
+      "loadOverrides()",
+      'flag ? { status: "refused", code: "valid.code", recovery: "Run mstar workflow --resume" } : overrides',
+    ]) {
+      const opaqueFindings = scanSource(`
+        refusalEnvelope({
+          status: "refused",
+          code: "valid.code",
+          message: "Blocked",
+          recovery: "Run mstar workflow --resume",
+          ...(${spread}),
+        });
+      `, "packages/engine/src/fixture.ts");
+      expect(opaqueFindings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+    }
+    expect(scanSource(`
+      refusalEnvelope({
+        ...overrides,
+        status: "refused",
+        code: "valid.code",
+        message: "Blocked",
+        recovery: "Run mstar workflow --resume",
+      });
+    `, "packages/engine/src/fixture.ts")).toEqual([]);
+  });
 });
