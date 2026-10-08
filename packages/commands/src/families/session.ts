@@ -106,8 +106,13 @@ function attestationParserCause(error: unknown): string {
     .replace(/\s+/g, " ")
     .replace(/[\s,:;]+$/, "")
     .trim();
-  const scrubbed = redactSecrets(cause === "" ? "syntax error" : cause).text;
-  return location === undefined ? scrubbed : `${scrubbed} (${location})`;
+  const scrubbed = redactSecrets(cause).text;
+  // `syntax error` is only the last resort for a message that carried no usable
+  // parser fact at all — never a mask over grammar that was already preserved
+  // above, which is why any runtime message with real content yields a
+  // non-empty cause here.
+  const fact = scrubbed !== "" ? scrubbed : "syntax error";
+  return location === undefined ? fact : `${fact} (${location})`;
 }
 
 /** The recovered caller inputs of `session.recover`, all non-optional. */
@@ -302,13 +307,14 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
           return ok("session.recover", receipt);
         } catch (error) {
           if (error instanceof RecoveryInputError) {
-            return refusalEnvelope({
-              command: "session.recover",
-              status: error.status,
-              code: error.code,
-              exitCode: error.status === "usage" ? 2 : 1,
-              message: error.message,
-            });
+            // The refusal shape is a discriminated pair of branches, so status
+            // and exit code are correlated by the branch itself rather than by
+            // a computed exit code the caller's union cannot narrow: a relative
+            // path stays the usage form (exit 2), and an unreadable or
+            // malformed document stays the refused form (exit 1).
+            return error.status === "usage"
+              ? refusalEnvelope({ command: "session.recover", status: "usage", code: error.code, exitCode: 2, message: error.message })
+              : refusalEnvelope({ command: "session.recover", status: "refused", code: error.code, exitCode: 1, message: error.message });
           }
           return engineRefusal("session.recover", error);
         }

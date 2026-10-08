@@ -138,14 +138,36 @@ describe("session.recover input discovery", () => {
       // Stable, specific classification — not a generic usage envelope.
       expect(result, label).toMatchObject({ status: "refused", code: "session.recover.attestation-malformed", exitCode: 1 });
       if (result.status === "ok") throw new Error(label);
-      // Concrete parser facts survive: a real cause statement, never a generic
-      // wrapper and never an empty tail.
-      expect(result.message, label).toMatch(/^--attestation is not valid JSON: \S/);
+      // The published cause must preserve the runtime's OWN parser-authored
+      // grammar, not a generic wrapper. The oracle is derived directly from the
+      // same runtime's raw message — its leading category phrase and its
+      // single-quoted grammar tokens — never by mirroring the production
+      // sanitizer, so a cause collapsed to `syntax error` or stripped of its
+      // grammar fails here.
+      const rawMessage = (() => { try { JSON.parse(document); return ""; } catch (error) { return error instanceof Error ? error.message : String(error); } })();
+      const category = rawMessage
+        .replace(/^JSON Parse error:\s*/i, "")
+        .replace(/^JSON parse error:\s*/i, "")
+        .replace(/^SyntaxError:\s*/i, "")
+        .split(/["']/)[0]!
+        .trim();
+      const cause = result.message
+        .slice("--attestation is not valid JSON: ".length)
+        .replace(/\s*\(position \d+\)$/, "")
+        .replace(/\s*\(line \d+ column \d+\)$/, "")
+        .trim();
+      expect(cause, `${label}: the concrete parser cause must not be empty`).not.toBe("");
+      expect(cause, `${label}: the parser's own category ${JSON.stringify(category)} must open the published cause`).toContain(category);
+      for (const token of rawMessage.match(/'[^']*'/g) ?? []) {
+        expect(cause, `${label}: parser grammar ${token} must survive in the cause`).toContain(token);
+      }
       // Every double-quoted operand the SAME runtime derives for this input is
       // gone from the published message; the sentinel is gone from the whole
       // serialized envelope, not just the cause.
-      const rawMessage = (() => { try { JSON.parse(document); return ""; } catch (error) { return error instanceof Error ? error.message : String(error); } })();
       for (const operand of rawMessage.match(/"[^"]*"/g) ?? []) {
+        // Only meaningful operands are checked: an empty match is contained in
+        // every string and would assert nothing.
+        if (operand.length <= 2) continue;
         expect(result.message, `${label}: runtime operand ${JSON.stringify(operand)} must not reach the message`).not.toContain(operand);
       }
       expect(JSON.stringify(result), `${label}: the submitted sentinel must not reach the envelope`).not.toContain("LEAKSENTINEL7QX9");
