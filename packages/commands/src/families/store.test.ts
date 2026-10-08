@@ -266,20 +266,51 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
     }
     expect(readFileSync(malformedPath)).toEqual(malformedBytes);
 
-    // The supported retry reads a full document naming the exact retired holder
-    // stopped after its claim; no fixture repair or replacement store intervenes.
-    const attestationPath = join(root, "attestation.json");
-    writeFileSync(attestationPath, JSON.stringify({
+    // Every invalid document reaches the real engine validator through the
+    // store command's absolute-file transport; none may start the cutover.
+    const validAttestation = {
       version: 1,
       attestedAt: "2026-10-04T04:00:00Z",
       operator: { actor: "fixture-operator", authorizationRef: "fixture-authorization" },
       consumers: [{
-        entryId: "coordinator-cli", kind: "coordinator",
-        entrypoint: "packages/cli/src/index.ts", runtime: "node", runtimeVersion: "24.18.0",
-        version: "0.0.0-test", current: true, disposition: "reloaded",
+        entryId: "coordinator-cli", kind: "coordinator" as const,
+        entrypoint: "packages/cli/src/index.ts", runtime: "node" as const, runtimeVersion: "24.18.0",
+        version: "0.0.0-test", current: true, disposition: "reloaded" as const,
       }],
-      stoppedSessions: [{ sessionId, host: "omp", state: "stopped" }],
-    }));
+      stoppedSessions: [{ sessionId, host: "omp", state: "stopped" as const }],
+    };
+    const nonCoordinator = {
+      ...validAttestation,
+      consumers: [{ ...validAttestation.consumers[0]!, kind: "cli" as const }],
+    };
+    const multipleCurrent = {
+      ...validAttestation,
+      consumers: [
+        ...validAttestation.consumers,
+        { ...validAttestation.consumers[0]!, entryId: "second-current" },
+      ],
+    };
+    const invalidDocuments: unknown[] = [
+      { ...validAttestation, operator: { ...validAttestation.operator, actor: "   " } },
+      { ...validAttestation, attestedAt: "not-an-instant" },
+      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, runtimeVersion: "24.17.9" }] },
+      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, current: false }] },
+      multipleCurrent,
+      nonCoordinator,
+      { ...validAttestation, sessionCredential: "not-accepted" },
+      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, sessionCredential: "not-accepted" }] },
+    ];
+    const attestationPath = join(root, "attestation.json");
+    for (const invalidDocument of invalidDocuments) {
+      writeFileSync(attestationPath, JSON.stringify(invalidDocument));
+      const invalid = await executeCommand("store.upgrade", {
+        harness, operator: "fixture-operator", attestation: attestationPath,
+      }, invocation(root));
+      expect(invalid.status).toBe("refused");
+      expect(await protectedStoreState(harness)).toEqual(before);
+    }
+    // The same actual consumer accepts the corrected proof after all failures.
+    writeFileSync(attestationPath, JSON.stringify(validAttestation));
     const attestationBytes = readFileSync(attestationPath);
     const result = await executeCommand("store.upgrade", {
       harness, operator: "fixture-operator", attestation: attestationPath,
