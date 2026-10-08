@@ -125,6 +125,8 @@ export function createMcpClientLaunch(options: McpClientLaunchOptions): SpawnFn 
       const toolError = response.result !== null && typeof response.result === "object"
         && "isError" in response.result && response.result.isError === true;
       const succeeded = response.error === undefined && !toolError;
+      const status = succeeded ? "completed" : "failed";
+      const exitCode = succeeded ? 0 : 1;
       exchanges.push({
         method,
         name,
@@ -139,9 +141,9 @@ export function createMcpClientLaunch(options: McpClientLaunchOptions): SpawnFn 
           type: "command_execution",
           id: `mcp-${id}`,
           command: ["mcp", method, name],
-          mcp_tool_call: { method, name },
-          status: succeeded ? "completed" : "failed",
-          exit_code: succeeded ? 0 : 1,
+          mcp_tool_call: { id: `mcp-${id}`, method, name, status, exit_code: exitCode },
+          status,
+          exit_code: exitCode,
         },
       });
     };

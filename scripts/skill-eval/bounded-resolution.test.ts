@@ -447,18 +447,23 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-mcp-guess-path": "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.\ncorrected call succeeded",
 };
 
-const mcpCall = (id: string, name: string, failed = false): string => JSON.stringify({
-  type: "item.completed",
-  id,
-  item: {
-    type: "command_execution",
+const mcpCall = (id: string, name: string, failed = false): string => {
+  const method = name === "tools/list" ? "tools/list" : "tools/call";
+  const status = failed ? "failed" : "completed";
+  const exitCode = failed ? 1 : 0;
+  return JSON.stringify({
+    type: "item.completed",
     id,
-    command: ["mcp", "tools/call", name],
-    mcp_tool_call: { name },
-    status: failed ? "failed" : "completed",
-    exit_code: failed ? 1 : 0,
-  },
-});
+    item: {
+      type: "command_execution",
+      id,
+      command: ["mcp", method, name],
+      mcp_tool_call: { id, method, name, status, exit_code: exitCode },
+      status,
+      exit_code: exitCode,
+    },
+  });
+};
 
 function finalFor(caseId: string): string {
   const lines: string[] = [];
@@ -1289,12 +1294,17 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
       const tools = ["mstar_schem", "tools/list", "mstar_schema", "tools/list"];
       for (let index = 0; index < count; index++) {
         const id = ids[index] === false ? undefined : `mcp-${index + 1}`;
+        const status = index === 0 ? "failed" : "completed";
+        const exitCode = index === 0 ? 1 : 0;
+        const method = tools[index] === "tools/list" ? "tools/list" : "tools/call";
+        const mcpToolCall: Record<string, unknown> = { method, name: tools[index]!, status, exit_code: exitCode };
+        if (id !== undefined) mcpToolCall.id = id;
         const item: Record<string, unknown> = {
           type: "command_execution",
-          command: ["mcp", "tools/call", tools[index]!],
-          mcp_tool_call: { name: tools[index]! },
-          status: index === 0 ? "failed" : "completed",
-          exit_code: index === 0 ? 1 : 0,
+          command: ["mcp", method, tools[index]!],
+          mcp_tool_call: mcpToolCall,
+          status,
+          exit_code: exitCode,
         };
         if (id !== undefined) item.id = id;
         const record: Record<string, unknown> = { type: "item.completed", item };
