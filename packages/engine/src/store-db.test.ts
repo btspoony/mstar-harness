@@ -486,3 +486,54 @@ describe("migration 7 - project_milestones", () => {
     handle.close();
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * The schema-unsupported refusal names the STORE, the BUILD and the MIGRATION
+ * as three distinct facts. A build that lags a store written by several newer
+ * migrations meets the FIRST migration it cannot interpret, which is neither
+ * the store's own highest applied version nor anything this build supports:
+ * reporting that first-unknown row as "the store version" understates the store
+ * by a whole generation and sends the operator to the wrong upgrade target.
+ * ------------------------------------------------------------------------ */
+
+describe("store-db schema-unsupported reports store / build / first-unknown distinctly", () => {
+  test("a store written past this build's supported maximum reports all three facts, not the first unknown row as the store version", async () => {
+    const dir = mkdtempSync(join(ROOT, "schema-facts-"));
+    const handle = await initializeStore({ harnessDir: dir });
+    const supportedMax = Math.max(...MIGRATIONS.map((migration) => migration.version));
+    // Simulate a store written by a NEWER build: a real applied set for the
+    // build's own migrations, plus two migrations this build does not carry.
+    const insert = handle.db.prepare("insert into schema_version(version, name, checksum, applied_at) values(?, ?, ?, ?)");
+    insert.run(supportedMax + 1, "from-a-newer-build", "f".repeat(64), "2026-09-18T00:00:00.000Z");
+    insert.run(supportedMax + 2, "from-an-even-newer-build", "e".repeat(64), "2026-09-18T00:00:00.000Z");
+    const highestApplied = supportedMax + 2;
+    const firstUnsupported = supportedMax + 1;
+    const versionsBefore = handle.db.prepare("select version from schema_version order by version").all();
+    handle.close();
+
+    // The validation guard is unchanged: the read still refuses this store.
+    const refusal: unknown = await openStore({ harnessDir: dir }, "read").then(() => null, (error: unknown) => error);
+    expect(refusal).toMatchObject({ code: "store.schema-unsupported" });
+    const message = refusal !== null && typeof refusal === "object" && "message" in refusal && typeof refusal.message === "string"
+      ? refusal.message
+      : "";
+    expect(message).not.toBe("");
+    // The store's OWN highest applied version — which is NOT the first row this
+    // build cannot interpret (that is the whole defect this regression pins).
+    expect(message).toContain(`highest applied schema version is ${highestApplied}`);
+    expect(message).not.toContain(`highest applied schema version is ${firstUnsupported}`);
+    // The loaded build's supported maximum, and the first unsupported migration.
+    expect(message).toContain(`this build supports versions 1..${supportedMax}`);
+    expect(message).toContain(`first unsupported migration is ${firstUnsupported}`);
+    // The same three facts travel as MACHINE facts on `details`, so an agent
+    // (and `status.validate`, which forwards a store error's details verbatim)
+    // reads the values instead of re-parsing prose.
+    expect(refusal).toMatchObject({
+      details: { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: firstUnsupported },
+    });
+    // No state write: the guard refuses before any mutation and every row stands.
+    const after = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
+    expect(after.prepare("select version from schema_version order by version").all()).toEqual(versionsBefore);
+    after.close();
+  });
+});

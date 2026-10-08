@@ -78,14 +78,22 @@ export type StoreErrorCode =
   | "execution.consumer-not-ready"
   | "execution.workflow-identity-mismatch";
 
-/** Typed refusal with an actionable, stable code. */
+/** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
   readonly code: StoreErrorCode;
+  /**
+   * Structured facts for the caller when a prose message cannot carry them
+   * losslessly — e.g. the three distinct version facts of a schema refusal. It
+   * is optional so the ~50 existing two-argument constructions keep their exact
+   * shape; a caller that supplies none gets no `details` key at all.
+   */
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: StoreErrorCode, message: string) {
+  constructor(code: StoreErrorCode, message: string, details?: Record<string, unknown>) {
     super(`[${code}] ${message}`);
     this.name = "StoreError";
     this.code = code;
+    if (details !== undefined) this.details = details;
   }
 }
 
@@ -1461,10 +1469,23 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
     const row = applied[i];
     const compiled = MIGRATIONS.find((m) => m.version === row.version);
     if (!compiled) {
+      // The three facts are distinct and all belong in the refusal. The row's
+      // own version is the FIRST the build cannot interpret; the store's schema
+      // version is the highest row actually applied (a build that supports 1..7
+      // reading a store at 9 meets version 8 first, so calling 8 "the store
+      // version" understates the store by a whole generation); the build's
+      // supported maximum is the highest COMPILED version, not the migration
+      // count, which only coincides while the versions stay contiguous from 1.
+      let highestApplied = 0;
+      for (const candidate of applied) if (candidate.version > highestApplied) highestApplied = candidate.version;
+      let supportedMax = 0;
+      for (const migration of MIGRATIONS) if (migration.version > supportedMax) supportedMax = migration.version;
       throw new StoreError(
         "store.schema-unsupported",
-        `The store was written by schema version ${row.version}, which this build does not know. ` +
-          `Known versions: 1..${MIGRATIONS.length}. Upgrade the harness to read this store; nothing was modified.`,
+        `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, ` +
+          `and the first unsupported migration is ${row.version}. ` +
+          `Upgrade the harness to read this store; nothing was modified.`,
+        { storeSchemaVersion: highestApplied, supportedSchemaMax: supportedMax, firstUnsupportedMigration: row.version },
       );
     }
     if (row.version !== i + 1) {

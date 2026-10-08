@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
+import { engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
@@ -39,10 +41,23 @@ const contracts: Record<Verb, { args: { key: string; required: boolean; variadic
 };
 const idFor = (verb: Verb) => `pr-review.${verb}`;
 const ok = (id: string, data: unknown): CommandEnvelope => ({ version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data });
-const failure = (id: string, error: unknown): CommandEnvelope<never> => {
+/**
+ * Map one error to this family's refusal without rewriting an engine-authored
+ * one: a typed engine error keeps its own `code`, `details` and `recovery`
+ * verbatim (the wrapper may add routing facts, never replace), an untyped
+ * internal failure stays the family's own `error` envelope, and a supplied
+ * value error is a usage refusal.
+ */
+export const failure = (id: string, error: unknown): CommandEnvelope<never> => {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message });
-  return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+  const { code, details, recovery } = engineErrorFacts(error);
+  if (code === undefined) return { version: 1, command: id, status: "error", code: `${id}.failed`, exitCode: 1, message };
+  return refusalEnvelope({
+    command: id, status: "refused", code, exitCode: 1, message,
+    ...(details === undefined ? {} : { details }),
+    ...(recovery === undefined ? {} : { recovery }),
+  });
 };
 class UsageError extends Error {}
 const abs = (cwd: string, file: string) => path.isAbsolute(file) ? file : path.resolve(cwd, file);
@@ -216,7 +231,15 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
       id, cli: { path: ["pr-review", verb], aliases: [], arguments: contract.args, options: contract.options },
       input: inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never), output: commandEnvelopeSchema,
       effects: contract.effects, description: contract.description,
-      async execute(raw, context) { const parsed = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never).safeParse(raw); return parsed.success ? execute(verb, parsed.data, context) : failure(id, new UsageError(parsed.error.message)); },
+      async execute(raw, context) {
+        const parsed = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never).safeParse(raw);
+        if (parsed.success) return execute(verb, parsed.data, context);
+        return refusalEnvelope({
+          command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
+          message: "Invalid input.",
+          diagnostics: decodeInputDiagnostics(parsed.error, raw),
+        });
+      },
     };
   });
 }

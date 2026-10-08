@@ -14,6 +14,8 @@ import {
 } from "@mstar-harness/engine";
 import { refusalEnvelope } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
+import { engineErrorFacts } from "./family-refusal.js";
 import { TOKEN_SUPPLIES } from "../identity-supplies.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -26,10 +28,13 @@ function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
 }
 function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
-  const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
-    ? error.code
-    : `${id}.refused`;
-  return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message: error instanceof Error ? error.message : String(error) });
+  const { code, details, recovery } = engineErrorFacts(error);
+  return refusalEnvelope({
+    command: id, status: "refused", code: code ?? `${id}.refused`, exitCode: 1,
+    message: error instanceof Error ? error.message : String(error),
+    ...(details === undefined ? {} : { details }),
+    ...(recovery === undefined ? {} : { recovery }),
+  });
 }
 
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
@@ -94,12 +99,39 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       description: "Recover a stopped workflow coordinator through active DB authority. Recovery never resumes a session.",
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
-        if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: parsed.error.message });
+        if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "Invalid input.", diagnostics: decodeInputDiagnostics(parsed.error, raw) });
         const { workflow, priorSession, unowned, reason, attestation, expect, operation, harness } = parsed.data;
-        if ((priorSession === undefined) === (unowned !== true) || reason === undefined || attestation === undefined || expect === undefined || operation === undefined) {
-          return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session recover requires exactly one priorSession or unowned, plus reason, attestation, expect and operation" });
+        const sourceCount = Number(priorSession !== undefined) + Number(unowned === true);
+        const missing = [
+          ...(sourceCount === 0 ? ["priorSession", "unowned"] : []),
+          ...(reason === undefined ? ["reason"] : []),
+          ...(attestation === undefined ? ["attestation"] : []),
+          ...(expect === undefined ? ["expect"] : []),
+          ...(operation === undefined ? ["operation"] : []),
+          ...(context.sessionId === undefined || context.sessionId.trim() === "" ? ["sessionId"] : []),
+        ];
+        const exclusive = sourceCount > 1 ? ["priorSession", "unowned"] : [];
+        if (missing.length > 0 || exclusive.length > 0) {
+          const diagnostics = [
+            ...missing.map((field) => ({
+              path: field,
+              code: "required",
+              message: field === "sessionId"
+                ? "active recovery requires the main conversation session identity"
+                : `${field} is required`,
+            })),
+            ...exclusive.map((field) => ({
+              path: field,
+              code: "exclusive",
+              message: `exactly one of priorSession or unowned may be supplied`,
+            })),
+          ];
+          return refusalEnvelope({
+            command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2,
+            message: "session recover inputs are incomplete or mutually exclusive",
+            diagnostics,
+          });
         }
-        if (context.sessionId === undefined) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "active recovery requires the main conversation session identity" });
         try {
           const root = resolveProcessHarnessDir(context.cwd, harness);
           if (root === null) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });

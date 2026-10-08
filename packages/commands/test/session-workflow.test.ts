@@ -105,10 +105,13 @@ describe("session and workflow command families", () => {
     expect(result.status).toBe("usage");
   });
 
-  test("session.recover requires the runtime main-conversation identity", async () => {
+  test("session.recover refuses request-supplied identity when runtime identity is absent", async () => {
     const context = testContext();
     const result = await definition("session.recover").execute({ workflow: "wf-recovery", sessionId: "child-agent-session", priorSession: "stopped", reason: "reload", attestation: "/tmp/wf-recovery-attestation.json", expect: "stale-token", operation: "recover-1" }, context);
-    expect(result).toMatchObject({ status: "usage", message: "active recovery requires the main conversation session identity" });
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input" });
+    expect(result.details?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "sessionId", code: "required" }),
+    ]));
   });
   test("workflow recovery requires the runtime main-session identity, not a request-supplied session", async () => {
     const recovery = definition("workflow.recover-coordinator");

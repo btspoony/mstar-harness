@@ -14,7 +14,13 @@ class UsageError extends Error {}
 function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
 function context(input: Input, invocation: InvocationContext): StoreContext { const root = resolveProcessHarnessDir(invocation.cwd, input.harness); return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd }; }
 function envelope(id: string, data: unknown): CommandEnvelope { return { version:1, command:id, status:"ok", code:`${id}.ok`, exitCode:0, data }; }
-export function failure(id: string, error: unknown): CommandEnvelope<never> { const message=error instanceof Error?error.message:String(error); if(error instanceof UsageError) return refusalEnvelope({command:id,status:"usage",code:"usage",exitCode:2,message,details:{operation:id}}); const code=error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : `${id}.internal-error`; return refusalEnvelope({command:id,status:"refused",code,exitCode:1,message,details:{operation:id}}); }
+export function failure(id: string, error: unknown): CommandEnvelope<never> {
+  const message = error instanceof Error ? error.message : String(error);
+  const { code, details, recovery } = engineErrorFacts(error);
+  const facts = { details: { operation: id, ...details }, ...(recovery === undefined ? {} : { recovery }) };
+  if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, ...facts });
+  return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, ...facts });
+}
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {
   const verb = id.slice("milestone.".length) as typeof verbs[number]; const projectId = requireValue(input.project,"--project"); const store = context(input,invocation);
