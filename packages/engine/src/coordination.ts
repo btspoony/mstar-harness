@@ -3607,10 +3607,10 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
     "replacement",
   );
   if (!isNonEmptyString(input.harnessRoot) || !isAbsolute(input.harnessRoot)) {
-    throw invalidInput("harnessRoot must be an absolute path");
+    throw invalidInput("harnessRoot must be an absolute path. Inspect the harness with mstar status validate.");
   }
   if (!isPlainObject(input.ref) || !isNonEmptyString(input.ref.kind) || !isNonEmptyString(input.ref.key)) {
-    throw invalidInput("ref must be an ArtifactRef with kind and key");
+    throw invalidInput("ref must be an ArtifactRef with kind and key. Inspect the harness with mstar status validate.");
   }
   const kind = input.ref.kind;
   if (kind === "status") {
@@ -3621,14 +3621,14 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if ((kind as string) === "residuals") {
     throw new CoordinationError(
       "coordination.store",
-      "project register replacement is retired \u2014 a residuals.json is migration history and the issue store (store.db) is the only findings authority",
+      "project register replacement is retired \u2014 a residuals.json is migration history and the issue store (store.db) is the only findings authority. Inspect the harness with mstar status validate.",
       { kind: "residuals" },
     );
   }
   if (kind !== "snapshot") {
     throw new CoordinationError(
       "coordination.scoped-writer-required",
-      `kind ${kind} has no coordinated writer \u2014 a scoped replacement covers snapshot and status; ${kind} keeps its own writer`,
+      `kind ${kind} has no coordinated writer \u2014 a scoped replacement covers snapshot and status; ${kind} keeps its own writer. Inspect the harness with mstar status validate.`,
       { kind },
     );
   }
@@ -3637,27 +3637,27 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (!isNonEmptyString(input.sessionPath) || !isAbsolute(input.sessionPath)) {
     throw new CoordinationError(
       "coordination.session-role",
-      "a coordinated snapshot replacement requires the coordinator session envelope",
+      "a coordinated snapshot replacement requires the absolute coordinator session envelope. Inspect the harness with mstar status validate.",
       { kind: input.ref.kind },
     );
   }
   const session = readSessionEnvelope(input.sessionPath);
   if (session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", `a coordinator session is required, not ${session.role}`, {
+    throw new CoordinationError("coordination.session-role", `a coordinator session is required, not ${session.role}. Inspect the harness with mstar status validate; for an existing binding resume with mstar plan bind --resume <session-file> only after checking the recorded workflow.`, {
       role: session.role,
     });
   }
   if (session.workflow_id !== input.ref.key) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      `session ${session.session_id} coordinates workflow ${session.workflow_id}, not ${input.ref.key}`,
+      `session ${session.session_id} coordinates workflow ${session.workflow_id}, not ${input.ref.key}. Inspect current authority with mstar status validate; for an existing binding resume with mstar plan bind --resume <session-file>.`,
       { expected: session.workflow_id, actual: input.ref.key },
     );
   }
   const snapshotPath = resolveArtifactPath(harnessRoot, input.ref);
   assertSnapshotPath(harnessRoot, input.ref.key, snapshotPath);
   if (!existsSync(snapshotPath)) {
-    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}`, {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}. Inspect the workflow with mstar status validate; bind its coordinator with mstar plan bind before coordinated snapshot replacement.`, {
       path: snapshotPath,
     });
   }
@@ -3665,22 +3665,22 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (current.coordination === undefined) {
     throw new CoordinationError(
       "coordination.identity-missing",
-      `workflow ${current.id} has no coordinator binding; use plan bind before coordinated snapshot replacement`,
+      `workflow ${current.id} has no coordinator binding; inspect the workflow with mstar status validate, then bind its coordinator with mstar plan bind before coordinated snapshot replacement`,
       { workflow_id: current.id },
     );
   }
   if (!isPlainObject(input.payload)) {
-    throw invalidInput("a snapshot payload must be an object");
+    throw invalidInput("a snapshot payload must be an object. Correct the supplied snapshot payload before retrying; inspect current workflow with mstar status validate.");
   }
   if (input.payload.id !== input.ref.key) {
     throw invalidInput(
-      `snapshot payload id ${JSON.stringify(input.payload.id)} does not match ref key ${JSON.stringify(input.ref.key)}`,
+      `snapshot payload id ${JSON.stringify(input.payload.id)} does not match ref key ${JSON.stringify(input.ref.key)}. Correct the supplied snapshot payload before retrying; inspect current workflow with mstar status validate.`,
       {},
     );
   }
   const gate = validateWorkflowSnapshot(input.payload);
   if (!gate.ok) {
-    throw invalidInput(`snapshot payload fails validation \u2014 ${summarize(gate.violations)}`, {
+    throw invalidInput(`snapshot payload fails validation \u2014 ${summarize(gate.violations)}. Correct the supplied snapshot payload before retrying; inspect current workflow with mstar status validate.`, {
       violations: gate.violations.map((entry) => entry.code),
     });
   }
@@ -3720,14 +3720,14 @@ function registeredWorkflowEntries(harnessRoot: string, doc: unknown, statusPath
     if (!isPlainObject(entry) || !isNonEmptyString(entry.id) || !isNonEmptyString(entry.dir)) {
       throw new CoordinationError(
         "coordination.store",
-        `root ${statusPath} holds a malformed workflow entry \u2014 refusing to classify coordination ownership`,
+        `root ${statusPath} contains a malformed workflow entry; correct its id and harness-relative dir, then inspect registrations with mstar status validate.`,
         { path: statusPath },
       );
     }
     if (isAbsolute(entry.dir) || entry.dir.split(/[\\/]+/).includes("..")) {
       throw new CoordinationError(
         "coordination.store",
-        `root ${statusPath} holds a workflow entry whose dir ${JSON.stringify(entry.dir)} is not harness-relative`,
+        `root ${statusPath} holds a workflow entry whose dir ${JSON.stringify(entry.dir)} is not harness-relative. Correct its id and harness-relative dir, then inspect registrations with mstar status validate.`,
         { path: statusPath, dir: entry.dir },
       );
     }
@@ -3770,7 +3770,7 @@ function coordinatedOwnershipOf(
     if (!lockedPaths.has(snapshotPath)) {
       throw new CoordinationError(
         "coordination.store",
-        `snapshot ${snapshotPath} was not locked before the protection discovery`,
+        `snapshot ${snapshotPath} was not locked before the protection discovery. Run mstar status validate to inspect registered workflows; this indicates an internal lock invariant failure, not a missing operator action.`,
         { path: snapshotPath },
       );
     }
@@ -3814,17 +3814,17 @@ async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: str
   if (canonicalizeNearestExisting(fromTable) !== canonicalizeNearestExisting(statusPath)) {
     throw new CoordinationError(
       "coordination.path-mismatch",
-      `resolved status path ${statusPath} is not the store's ${fromTable}`,
+      `resolved status path ${statusPath} is not the store's ${fromTable}. Inspect current registrations with mstar status validate; expected path is ${fromTable}, actual path is ${statusPath}.`,
       { expected: fromTable, actual: statusPath },
     );
   }
-  if (!isPlainObject(input.payload)) throw invalidInput("a status payload must be an object");
+  if (!isPlainObject(input.payload)) throw invalidInput("a status payload must be an object. Inspect current registrations with mstar status validate.");
   // The store's status slot is typed; `validateStatusV2` below is what proves
   // the payload actually carries that shape before anything is written.
   const statusDoc = input.payload as StatusV2Doc;
   const gate = validateStatusV2(statusDoc, { harnessDir: harnessRoot });
   if (!gate.ok) {
-    throw invalidInput(`status payload fails validation \u2014 ${summarize(gate.violations)}`, {
+    throw invalidInput(`status payload fails validation \u2014 ${summarize(gate.violations)}. Inspect current registrations with mstar status validate.`, {
       violations: gate.violations.map((entry) => entry.code),
     });
   }
@@ -3837,14 +3837,14 @@ async function replaceRootStatus(input: CoordinatedReplacement, harnessRoot: str
       const currentOwnership = coordinatedOwnershipOf(lockedEntries, currentEntries);
       if (currentOwnership.workflows.length > 0) {
         throw scopedWriterRequired(
-          `refusing to replace ${statusPath}: it registers coordinated workflows ${currentOwnership.workflows.join(", ")} \u2014 the scoped writers own those rows`,
+          `refusing to replace ${statusPath}: it registers coordinated workflows ${currentOwnership.workflows.join(", ")} \u2014 the scoped writers own those rows. Use the scoped workflow/plan commands for these owned rows; inspect them with mstar status validate.`,
           { path: statusPath, workflows: currentOwnership.workflows, side: "current" },
         );
       }
       const proposedOwnership = coordinatedOwnershipOf(lockedEntries, proposedEntries);
       if (proposedOwnership.workflows.length > 0) {
         throw scopedWriterRequired(
-          `refusing to replace ${statusPath} with a root that registers coordinated workflows ${proposedOwnership.workflows.join(", ")}`,
+          `refusing to replace ${statusPath} with a root that registers coordinated workflows ${proposedOwnership.workflows.join(", ")}. Use the scoped workflow/plan commands for these owned rows; inspect them with mstar status validate.`,
           { path: statusPath, workflows: proposedOwnership.workflows, side: "proposed" },
         );
       }
