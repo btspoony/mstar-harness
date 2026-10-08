@@ -12,7 +12,7 @@ export interface AllowlistEntry { signature: string; justification: string; trac
 export interface CliGrammar {
   verbs: Set<string>;
   flagsByVerb: Map<string, Set<string>>;
-  positionalsByVerb?: Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>;
+  positionalsByVerb?: Map<string, readonly { key: string; required: boolean; variadic: boolean; choices?: readonly string[] }[]>;
   optionsByVerb?: Map<string, readonly { flags: readonly string[]; required: boolean; takesValue: boolean }[]>;
 }
 
@@ -26,7 +26,7 @@ export function extractCliGrammar(): CliGrammar {
   const schemas = getCommandSchemas(definitions);
   const verbs = new Set<string>();
   const flagsByVerb = new Map<string, Set<string>>();
-  const positionalsByVerb = new Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>();
+  const positionalsByVerb = new Map<string, readonly { key: string; required: boolean; variadic: boolean; choices?: readonly string[] }[]>();
   const optionsByVerb = new Map<string, readonly { flags: readonly string[]; required: boolean; takesValue: boolean }[]>();
   for (const definition of definitions) {
     const verb = definition.cli.path.join(" ");
@@ -34,7 +34,7 @@ export function extractCliGrammar(): CliGrammar {
     const flags = flagsByVerb.get(verb) ?? new Set<string>();
     for (const option of definition.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter((token) => /^--?/.test(token))) flags.add(flag);
     flagsByVerb.set(verb, flags);
-    positionalsByVerb.set(verb, definition.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
+    positionalsByVerb.set(verb, definition.cli.arguments.map(({ key, required, variadic, choices }) => ({ key, required, variadic, ...(choices ? { choices } : {}) })));
     optionsByVerb.set(verb, definition.cli.options.map((option) => ({
       flags: option.flags.match(/--?[A-Za-z][A-Za-z0-9-]*/g) ?? [],
       required: option.required,
@@ -47,7 +47,7 @@ export function extractCliGrammar(): CliGrammar {
     const flags = flagsByVerb.get(verb) ?? new Set<string>();
     for (const option of schema.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter((token) => /^--?/.test(token))) flags.add(flag);
     flagsByVerb.set(verb, flags);
-    positionalsByVerb.set(verb, schema.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
+    positionalsByVerb.set(verb, schema.cli.arguments.map(({ key, required, variadic, choices }) => ({ key, required, variadic, ...(choices ? { choices } : {}) })));
     optionsByVerb.set(verb, schema.cli.options.map((option) => ({
       flags: option.flags.match(/--?[A-Za-z][A-Za-z0-9-]*/g) ?? [],
       required: option.required,
@@ -273,6 +273,11 @@ export function recoveryFailure(recovery: string, grammar: CliGrammar): string |
     }
     if (args.length < requiredPositionals) return `recovery command is missing a required positional argument for ${verb}`;
     if (args.length > maxArgs) return `recovery command has too many positional arguments for ${verb}`;
+    for (const [index, argument] of positionals.entries()) {
+      if (argument.choices && args[index] !== undefined && !argument.choices.includes(args[index]!)) {
+        return `positional value is not in declared choices for ${argument.key} in ${verb}`;
+      }
+    }
     for (const option of options.filter(({ required }) => required)) {
       if (!option.flags.some((flag) => supplied.has(flag))) return `recovery command is missing required option ${option.flags.join("/")}`;
     }

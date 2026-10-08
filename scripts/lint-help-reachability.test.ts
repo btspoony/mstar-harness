@@ -198,6 +198,21 @@ describe("help reachability lint", () => {
     expect(findings[0]?.reason).toContain("unresolved runtime substitution — advertised command is not statically provable");
   });
 
+  test("rejects runtime suffixes in concatenated coordination commands", () => {
+    const source = 'new CoordinationError("NO_STATE", "Use mstar status validate " + flag);';
+    const findings = scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar);
+    expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+    expect(findings[0]?.reason).toContain("unresolved runtime substitution — advertised command is not statically provable");
+  });
+
+  test("validates declared positional choices and accepts a valid choice", () => {
+    const surface = extractCliGrammar();
+    const invalid = scanRecoveryText(envelope("Run mstar persist get nonsense --key k"), "packages/engine/src/fixture.ts", surface);
+    expect(invalid.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+    expect(invalid[0]?.reason).toContain("positional value is not in declared choices");
+    expect(scanRecoveryText(envelope("Run mstar persist get status --key k"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
+  });
+
   test("uses wrapper call-site arguments instead of shadowed outer recovery declarations", () => {
     const source = `
       const recovery = "Run mstar workflow --resume";

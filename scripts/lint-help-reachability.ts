@@ -113,6 +113,26 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     }
     return node;
   };
+  const concatenatedCommandText = (
+    node: ts.Expression | undefined,
+    scope?: Scope,
+    bindings = new Map<string, ts.Expression>(),
+  ): string | undefined => {
+    if (!node) return undefined;
+    const parts: ts.Expression[] = [];
+    const flatten = (part: ts.Expression): void => {
+      if (ts.isBinaryExpression(part) && part.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+        flatten(part.left);
+        flatten(part.right);
+      } else {
+        parts.push(part);
+      }
+    };
+    flatten(node);
+    if (parts.length < 2) return undefined;
+    const text = parts.map((part) => value(part, scope, new Set(), bindings) ?? "").join("");
+    return /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) ? text : undefined;
+  };
   const hasUnresolvedTemplate = (
     node: ts.Expression | undefined,
     scope?: Scope,
@@ -130,6 +150,11 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
         || hasUnresolvedTemplate(node.whenFalse, scope, seenDeclarations, bindings, seenBindings);
     }
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      if (node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+        const left = value(node.left, scope, seenDeclarations, bindings, seenBindings);
+        const right = value(node.right, scope, seenDeclarations, bindings, seenBindings);
+        if ((left !== undefined && right === undefined) || (right !== undefined && left === undefined)) return true;
+      }
       return hasUnresolvedTemplate(node.left, scope, seenDeclarations, bindings, seenBindings)
         || hasUnresolvedTemplate(node.right, scope, seenDeclarations, bindings, seenBindings);
     }
@@ -176,7 +201,8 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
   const inspectCoordinationError = (node: ts.Node, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     const bound = message && resolveBound(message, bindings);
     const unresolvedTemplate = !!bound && hasUnresolvedTemplate(bound, scopeByNode.get(bound), new Set(), bindings);
-    const text = value(bound, bound && scopeByNode.get(bound), new Set(), bindings);
+    const text = value(bound, bound && scopeByNode.get(bound), new Set(), bindings)
+      ?? concatenatedCommandText(bound, bound && scopeByNode.get(bound), bindings);
     if (unresolvedTemplate && text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text)) {
       reportFailure(node, unresolvedTemplateReason);
       return;

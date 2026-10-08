@@ -1942,5 +1942,35 @@
     "justification": "PR review round 9 positional-after-option parser candidate pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:cfdfbce865b3",
+    "justification": "PR review round 10 concatenated command candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:edcceb01813c",
+    "justification": "PR review round 10 concatenated command candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:87a3a9e8d511",
+    "justification": "PR review round 10 concatenated command candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:07f5984f45dc",
+    "justification": "PR review round 10 concatenated command candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:4d3f7385e5cc",
+    "justification": "PR review round 10 concatenated command candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
   }
 ]
