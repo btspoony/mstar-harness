@@ -1014,6 +1014,16 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
       expect(decisionRows(result)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
     } finally { chmodSync(fx.root, 0o755); rmSync(fx.root, { recursive: true, force: true }); }
   });
+  test("stopped-only plan-row attribution remains eligible", () => {
+    const fx = basicFixture("mstar-cleanup-stopped-only-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => { snapshot.status = "stopped"; snapshot.ended_at = "2026-09-13"; });
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+    } finally { chmodSync(fx.root, 0o755); rmSync(fx.root, { recursive: true, force: true }); }
+  });
+
 
   test("--remote adds remote candidates; dry-run still fetches/prunes/writes nothing", () => {
     const fx = remoteFixture("mstar-cleanup-dry-remote-");
