@@ -1,5 +1,5 @@
-import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
-import { redactSecrets } from "@mstar-harness/engine/src/audit";
+import { refusalEnvelope } from "./envelope.js";
+import { decodeInputDiagnostics } from "./input-diagnostics.js";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
@@ -173,107 +173,110 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
 }
 
 /**
- * One safe structured fact per schema violation, in the CLI payload decoder's
- * diagnostic shape: field path, stable issue code, message and the first array
- * index where relevant. Never carries submitted values.
+ * A successfully admitted request, bound to the definition that admitted it.
+ *
+ * The capability (not the caller) owns the binding: `definition`, its
+ * `contract`, the identity the definition's own selector resolved and the data
+ * parsed from the caller's input are fixed when admission runs, and `execute`
+ * runs that same definition's `execute` against that data. There is no public
+ * function that accepts a caller-assembled definition/contract/admission
+ * triple, and no post-admission mutator, so a success-shaped object or an
+ * admission for a different schema cannot select a handler, an identity or a
+ * different handler value: the only way to obtain an executable capability is
+ * `admitCommandInput`.
  */
-function redactInputScalar(value: string): string {
-  return redactSecrets(value).text
-    .replace(/\[REDACTED [^\]\r\n]+\]/g, "[REDACTED]")
-    .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
+export type AdmittedCommand = Readonly<{
+  /** The effective input admission parsed, after canonical defaults. */
+  readonly input: unknown;
+  /** The handler value, derived from the admission parse bound to the admitted definition's input schema. */
+  readonly data: unknown;
+  readonly required: readonly string[];
+  readonly sessionId?: string;
+  /** Execute the admitted request once against the bound definition. */
+  execute(context: InvocationContext): Promise<CommandEnvelope>;
+}>;
+
+export type CommandAdmission =
+  | ({ readonly success: true } & AdmittedCommand)
+  | { readonly success: false; readonly envelope: CommandEnvelope<never> };
+
+type AdmittedBindings = Readonly<{
+  definition: CommandDefinition;
+  contract: CommandSchemaDescriptor;
+  input: unknown;
+  data: unknown;
+  required: readonly string[];
+  sessionId?: string;
+}>;
+
+/** Execute one admission-produced capability, retaining the definition's own execution outcome. */
+async function runAdmitted(bindings: AdmittedBindings, context: InvocationContext): Promise<CommandEnvelope> {
+  const { definition, contract, data, required, sessionId } = bindings;
+  const id = definition.id;
+  // Overlay the admitted selector on a fresh frozen context: the caller's
+  // object is never mutated, and the top-level context stays frozen.
+  const request = sessionId === undefined ? context : Object.freeze({ ...context, sessionId });
+  try {
+    const envelope = await definition.execute(data, request);
+    if (!definition.output.safeParse(envelope).success) {
+      return { version: 1, command: id, status: "error", code: "command.output-invalid", exitCode: 1, message: "handler returned an invalid envelope" };
+    }
+    if (envelope.status === "usage" || envelope.status === "refused") {
+      return {
+        ...envelope,
+        details: {
+          ...envelope.details,
+          required,
+          defaults: contract.defaults,
+          requirements: contract.requirements,
+          conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
+        },
+      };
+    }
+    return envelope;
+  } catch (error) {
+    if (request.signal.aborted) {
+      return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
+    }
+    return { version: 1, command: id, status: "error", code: "command.internal", exitCode: 1, message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /**
- * Sanitize both messages and paths against secret-shaped strings anywhere in
- * the submitted input, including object keys quoted by strict-object issues.
- * Numeric/boolean scalars cannot contain secrets and need no redactor pass.
+ * The one capability factory. The returned object's `execute` closes over the
+ * bindings it was created from, so its behaviour is admission's, not the
+ * caller's: nothing outside this module can produce an object the library
+ * treats as an admitted request.
  */
-function issueMessageSanitizer(input: unknown): (message: string) => string {
-  const replacements: Record<string, string> = {};
-  const visit = (value: unknown): void => {
-    if (typeof value === "string") {
-      const redacted = redactInputScalar(value);
-      if (redacted !== value && replacements[value] === undefined) replacements[value] = redacted;
-    } else if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-    } else if (value !== null && typeof value === "object") {
-      for (const [key, item] of Object.entries(value)) {
-        visit(key);
-        visit(item);
-      }
-    }
-  };
-  visit(input);
-  const scalars = Object.keys(replacements);
-  const pattern = scalars.length === 0 ? undefined : new RegExp(scalars.map((scalar) =>
-    scalar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  ).join("|"), "g");
-  return (message) => {
-    const text = redactSecrets(message).text;
-    return pattern === undefined ? text : text.replace(pattern, (scalar) => replacements[scalar] ?? scalar);
-  };
+function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
+  return Object.freeze({
+    input: bindings.input,
+    data: bindings.data,
+    required: bindings.required,
+    ...(bindings.sessionId === undefined ? {} : { sessionId: bindings.sessionId }),
+    execute(context: InvocationContext): Promise<CommandEnvelope> {
+      return runAdmitted(bindings, context);
+    },
+  });
 }
 
-function inputDiagnostic(
-  issue: z.ZodError["issues"][number],
-  sanitize: (message: string) => string,
-  input: unknown,
-): RefusalDiagnostic {
-  const path = sanitize(inputPath(issue));
-  const index = issue.path.find((part) => typeof part === "number");
-  const facts = rejectionFacts(issue, input);
-  return {
-    path,
-    code: issue.code,
-    message: sanitize(issue.message),
-    expected: facts.expected,
-    received: facts.received,
-    ...(typeof index === "number" ? { index } : {}),
-  };
-}
-
-
-function inputValueAtPath(input: unknown, path: readonly (string | number | symbol)[]): unknown {
-  return path.reduce<unknown>((value, part) =>
-    value !== null && typeof value === "object" ? (value as Record<PropertyKey, unknown>)[part] : undefined,
-  input);
-}
-
-function inputPath(issue: z.ZodError["issues"][number]): string {
-  return issue.path.reduce((path: string, part: string | number | symbol) =>
-    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
-  "");
-}
-
-function rejectionFacts(issue: z.ZodError["issues"][number], input: unknown): { expected: string; received: string } {
-  const expected = issue.code === "invalid_type"
-    ? issue.expected
-    : issue.code === "invalid_value" && "values" in issue && Array.isArray(issue.values)
-      ? issue.values.map(String).join(" | ")
-      : issue.code === "too_small" && "minimum" in issue
-        ? `${issue.origin} ${issue.inclusive ? ">=" : ">"} ${String(issue.minimum)}`
-        : issue.code === "too_big" && "maximum" in issue
-          ? `${issue.origin} ${issue.inclusive ? "<=" : "<"} ${String(issue.maximum)}`
-          : issue.code === "unrecognized_keys"
-            ? "recognized keys"
-            : "valid value";
-  const value = inputValueAtPath(input, issue.path);
-  const received = value === undefined ? "undefined" : value === null ? "null" :
-    typeof value === "object" ? Array.isArray(value) ? "array" : "object" :
-      typeof value === "string" ? redactInputScalar(value) : String(value);
-  return { expected, received };
-}
-
-export type CommandAdmission =
-  | { success: true; input: unknown; data: unknown; sessionId?: string; required: readonly string[] }
-  | { success: false; envelope: CommandEnvelope<never> };
-
-/** Shared admission, including transport-composed schemas, without executing effects. */
+/**
+ * Shared admission, including transport-composed schemas, without executing
+ * effects.
+ *
+ * `shape` is the transport's handler-value projection (the MCP route removes
+ * its context selectors and maps the judgment document to stdin). It runs once,
+ * at admission, on the schema-validated value, and only its result is handed to
+ * the definition — so the executed value is always derived from the one parse
+ * this admission performed, never replaced afterwards. It cannot change the
+ * definition, the contract or the resolved identity.
+ */
 export function admitCommandInput(
   definition: CommandDefinition,
   input: unknown,
   contract: CommandSchemaDescriptor,
   schema: z.ZodType = definition.input,
+  shape: (data: unknown) => unknown = (data) => data,
 ): CommandAdmission {
   const isInputObject = input !== null && typeof input === "object" && !Array.isArray(input);
   const rawInput = isInputObject ? input as Record<string, unknown> : {};
@@ -290,9 +293,7 @@ export function admitCommandInput(
   }
   const effectiveRecord = isInputObject ? effectiveInput as Record<string, unknown> : {};
   const parsed = schema.safeParse(effectiveInput);
-  const issues = parsed.success ? [] : parsed.error.issues;
-  const sanitize = issueMessageSanitizer(effectiveInput);
-  const diagnostics = issues.map((issue) => inputDiagnostic(issue, sanitize, effectiveInput));
+  const diagnostics = parsed.success ? [] : decodeInputDiagnostics(parsed.error, effectiveInput);
   const selector = definition.cli.options.find((option) => option.context === "sessionId");
   const selectorValue = selector === undefined ? undefined : effectiveRecord[selector.key];
   const selectorInvalid = selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "");
@@ -352,8 +353,11 @@ export function admitCommandInput(
     }) };
   }
   return {
-    success: true, input: effectiveInput, data: parsed.data, required,
-    ...(typeof selectorValue === "string" ? { sessionId: selectorValue } : {}),
+    success: true,
+    ...admittedCommand({
+      definition, contract, input: effectiveInput, data: shape(parsed.data), required,
+      ...(typeof selectorValue === "string" ? { sessionId: selectorValue } : {}),
+    }),
   };
 }
 
@@ -365,41 +369,5 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   const contract = commandSchemasById.get(definition.id)!;
   const admitted = admitCommandInput(definition, input, contract);
   if (!admitted.success) return admitted.envelope;
-  return executeAdmittedCommand(definition, admitted, context, contract);
-}
-
-/** Execute a successfully admitted input once; transports may own admission. */
-export async function executeAdmittedCommand(
-  definition: CommandDefinition,
-  admitted: Extract<CommandAdmission, { success: true }>,
-  context: InvocationContext,
-  contract: CommandSchemaDescriptor,
-): Promise<CommandEnvelope> {
-  const id = definition.id;
-  const { required, sessionId } = admitted;
-  const request = sessionId === undefined ? context : { ...context, sessionId };
-  try {
-    const envelope = await definition.execute(admitted.data, request);
-    if (!definition.output.safeParse(envelope).success) {
-      return { version: 1, command: id, status: "error", code: "command.output-invalid", exitCode: 1, message: "handler returned an invalid envelope" };
-    }
-    if (envelope.status === "usage" || envelope.status === "refused") {
-      return {
-        ...envelope,
-        details: {
-          ...envelope.details,
-          required,
-          defaults: contract.defaults,
-          requirements: contract.requirements,
-          conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
-        },
-      };
-    }
-    return envelope;
-  } catch (error) {
-    if (request.signal.aborted) {
-      return { version: 1, command: id, status: "error", code: "command.cancelled", exitCode: 1, message: "cancelled" };
-    }
-    return { version: 1, command: id, status: "error", code: "command.internal", exitCode: 1, message: error instanceof Error ? error.message : String(error) };
-  }
+  return admitted.execute(context);
 }

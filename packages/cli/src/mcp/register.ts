@@ -1,5 +1,5 @@
 import type { McpServer, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
-import { admitCommandInput, executeAdmittedCommand, getCommandSchemas } from "@mstar-harness/commands";
+import { admitCommandInput, getCommandSchemas } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandAdmission, CommandDefinition, CommandSchemaDescriptor, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
@@ -117,7 +117,7 @@ export function registerMcpCommands(
         vendor: "mstar-harness",
         jsonSchema: { input: () => contract.jsonSchema, output: () => contract.jsonSchema },
         validate(input) {
-          const admitted = admitCommandInput(definition, input, descriptor, contract.schema);
+          const admitted = admitCommandInput(definition, input, descriptor, contract.schema, (data) => handlerInput(definition, data));
           return admitted.success ? { value: admitted } : { issues: [{ message: JSON.stringify(admitted.envelope) }] };
         },
       },
@@ -128,7 +128,6 @@ export function registerMcpCommands(
       outputSchema: definition.output,
     }, async (admitted, extra) => {
       const input = admitted.input;
-      const invocationInput = handlerInput(definition, admitted.data);
       const resolved = await resolveContext(definition, input, extra.mcpReq.signal, services, connectionEffects);
       const record = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
       const selector = definition.cli.options.find((option) => option.context === "sessionId");
@@ -146,7 +145,7 @@ export function registerMcpCommands(
         effects: connectionEffects,
       });
       const validated = await connectionEffects.withInput(input, requestContext, async () => {
-        const envelope = await executeAdmittedCommand(definition, { ...admitted, data: invocationInput }, requestContext, descriptor);
+        const envelope = await admitted.execute(requestContext);
         return validateCommandOutcome(definition, surfaceAssignmentRecovery(definition.id, envelope));
       });
       return {
