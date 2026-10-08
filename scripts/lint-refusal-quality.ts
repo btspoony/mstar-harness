@@ -44,24 +44,43 @@ function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
 }
 function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
-  const normalized = recovery.replace(/\bmstar\s+/g, "");
-  for (const verb of grammar.verbs) {
-    let start = normalized.indexOf(verb);
-    while (start >= 0) {
-      const before = normalized[start - 1];
-      const end = start + verb.length;
-      if ((before === undefined || !/[A-Za-z0-9]/.test(before)) && (normalized[end] === undefined || /\s|--/.test(normalized[end]!))) {
-        const rest = normalized.slice(end);
-        const stop = rest.search(/[.;,]|\bor\b/i);
-        const command = stop < 0 ? rest : rest.slice(0, stop);
-        const mentioned = [...command.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
-        const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
-        if (mentioned.every((flag) => flags.has(flag))) return true;
-      }
-      start = normalized.indexOf(verb, start + 1);
+  const normalized = recovery.replace(/\bmstar\s+/gi, "mstar ");
+  const stopClause = (text: string): string => {
+    const boundary = text.search(/[.;!?]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b/i);
+    return boundary < 0 ? text : text.slice(0, boundary);
+  };
+  const commandIsReachable = (text: string): boolean => {
+    const clause = stopClause(text).trim();
+    const tokens = clause.split(/\s+/).filter(Boolean);
+    const pathTokens: string[] = [];
+    let pathEnd = 0;
+    for (const token of tokens) {
+      if (token.startsWith("-") || /^(?:to|for|with|and|or|then|instead|otherwise|after|before|via)$/i.test(token)) break;
+      pathTokens.push(token.replace(/[,.)]+$/, ""));
+      pathEnd += token.length + 1;
     }
+    const verb = pathTokens.join(" ");
+    if (!grammar.verbs.has(verb)) return false;
+    const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
+    const optionText = clause.slice(Math.min(pathEnd, clause.length));
+    const mentioned = [...optionText.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
+    return mentioned.every((flag) => flags.has(flag));
+  };
+  const references = [...normalized.matchAll(/\bmstar\s+([A-Za-z][A-Za-z0-9.-]*)/gi)];
+  if (references.length > 0) {
+    for (const match of references) {
+      const start = (match.index ?? 0) + match[0].length;
+      const next = references.find((candidate) => (candidate.index ?? 0) > (match.index ?? 0));
+      if (!commandIsReachable(`${match[1]} ${normalized.slice(start, next?.index ?? normalized.length)}`)) return false;
+    }
+    return true;
   }
-  return false;
+  const actions = [...normalized.matchAll(/\b(?:run|use|supply|provide|resume|restore|recover|retry|invoke)\s+/gi)];
+  if (actions.length === 0) return false;
+  return actions.every((action) => {
+    const start = (action.index ?? 0) + action[0].length;
+    return commandIsReachable(normalized.slice(start).replace(/^mstar\s+/i, ""));
+  });
 }
 /** Bounded structured-channel scan: typed CoordinationError codes, recoveryRefusal messages,
  * and refusalEnvelope objects are agent-facing. Internal `violation(...)` results, arbitrary
@@ -150,7 +169,7 @@ export function scanSource(source: string, file: string, grammar: CliGrammar): R
         const recoveryNode = fields.get("recovery");
         if (status !== "usage" && !recoveryNode) add("missing-recovery", "Rule #341 class 3 (recovery): provide the refusal envelope's supported `recovery` field.");
         const recovery = codeValue(recoveryNode);
-        if (recovery && RECOVERY.test(recovery) && !recoveryIsReachable(recovery, grammar)) add("unreachable-recovery", "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.");
+        if (recovery && !recoveryIsReachable(recovery, grammar)) add("unreachable-recovery", "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.");
         return visitChildren(node);
       }
     }
@@ -160,15 +179,47 @@ export function scanSource(source: string, file: string, grammar: CliGrammar): R
   visit(sf);
   return findings;
 }
+const ALLOWLIST_CLASSES: Readonly<Record<string, true>> = {
+  "missing-cause-code": true,
+  "missing-recovery": true,
+  "unreachable-recovery": true,
+  "capability-unreachable": true,
+};
+export function validateAllowlistEntries(value: unknown): AllowlistEntry[] {
+  if (!Array.isArray(value)) throw new Error("Allowlist must be a JSON array");
+  const seen = new Set<string>();
+  return value.map((raw, index) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`Allowlist entry ${index + 1} must be an object`);
+    const entry = raw as Record<string, unknown>;
+    for (const field of ["justification", "trackingIssue"] as const) {
+      if (typeof entry[field] !== "string" || entry[field].trim() === "") throw new Error(`Allowlist entry ${index + 1} requires nonempty ${field}`);
+    }
+    if (typeof entry.signature !== "string") throw new Error(`Allowlist entry ${index + 1} requires a signature`);
+    const parts = entry.signature.split(":");
+    if (parts.length !== 3 || !ALLOWLIST_CLASSES[parts[0]!]) throw new Error(`Allowlist entry ${index + 1} has an invalid signature classification`);
+    const [, file, digest] = parts;
+    if (!file || file.startsWith("/") || file.includes("\\") || file.split("/").some((part) => part === "" || part === "." || part === "..") || !/^[a-f0-9]{12}$/.test(digest!)) {
+      throw new Error(`Allowlist entry ${index + 1} signature must be <classification>:<repo-relative file>:<12-hex>`);
+    }
+    if (seen.has(entry.signature)) throw new Error(`Allowlist contains duplicate signature ${entry.signature}`);
+    seen.add(entry.signature);
+    return { signature: entry.signature, justification: (entry.justification as string).trim(), trackingIssue: (entry.trackingIssue as string).trim() };
+  });
+}
+export function parseAllowlist(content: string): AllowlistEntry[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(content); }
+  catch (error) { throw new Error(`Invalid allowlist JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  return validateAllowlistEntries(parsed);
+}
 function loadAllowlist(path: string): AllowlistEntry[] {
   if (!statSafe(path)) return [];
-  const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!Array.isArray(parsed)) throw new Error(`${path}: allowlist must be a JSON array`);
-  return parsed as AllowlistEntry[];
+  return parseAllowlist(readFileSync(path, "utf8"));
 }
 function statSafe(path: string): boolean { try { return statSync(path).isFile(); } catch { return false; } }
 export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEntry[], repoRoot: string): { findings: RefusalFinding[]; stale: string[]; used: AllowlistEntry[] } {
-  const bySignature = new Map(entries.map((entry) => [entry.signature, entry]));
+  const validated = validateAllowlistEntries(entries);
+  const bySignature = new Map(validated.map((entry) => [entry.signature, entry]));
   const output: RefusalFinding[] = [];
   const matched = new Set<string>();
   for (const finding of findings) {
@@ -179,7 +230,13 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
     matched.add(signature);
     output.push({ ...finding, classification: "allowlisted", reason: `${finding.classification}: ${finding.reason} Allowlisted: ${entry.justification} (${entry.trackingIssue}).` });
   }
-  return { findings: output, stale: entries.filter((entry) => !matched.has(entry.signature)).map((entry) => entry.signature), used: entries.filter((entry) => matched.has(entry.signature)) };
+  return { findings: output, stale: validated.filter((entry) => !matched.has(entry.signature)).map((entry) => entry.signature), used: validated.filter((entry) => matched.has(entry.signature)) };
+}
+export function countViolations(findings: RefusalFinding[]): number {
+  return findings.filter((finding) => finding.classification !== "allowlisted").length;
+}
+export function exitCodeFor(findings: RefusalFinding[], stale: string[]): 0 | 1 {
+  return countViolations(findings) === 0 && stale.length === 0 ? 0 : 1;
 }
 function run(): number {
   const root = resolve(import.meta.dir, "..");
@@ -198,9 +255,9 @@ function run(): number {
       for (const finding of result.findings) console.log(`${finding.file}:${finding.line}:${finding.column} ${finding.classification} ${finding.reason}\n  ${finding.snippet}`);
       if (result.used.length) console.log(`Allowlist (${result.used.length}):\n${JSON.stringify(result.used, null, 2)}`);
       if (result.stale.length) console.error(`Stale allowlist entries: ${result.stale.join(", ")}`);
-      console.log(`Refusal-quality: ${result.findings.length - result.used.length} violations; ${result.used.length} allowlisted`);
+      console.log(`Refusal-quality: ${countViolations(result.findings)} violations; ${result.used.length} allowlisted`);
     }
-    return result.findings.length !== result.used.length || result.stale.length ? 1 : 0;
+    return exitCodeFor(result.findings, result.stale);
   } catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
 }
 if (import.meta.main) process.exit(run());
