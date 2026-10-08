@@ -970,6 +970,50 @@ describe("mstar worktree cleanup — dry-run is a byte-for-byte no-op", () => {
       rmSync(fx.root, { recursive: true, force: true });
     }
   });
+  test("stopped plan-row claimant leaves completed owner attributed", () => {
+    const fx = basicFixture("mstar-cleanup-stopped-claim-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => { snapshot.status = "completed"; snapshot.ended_at = "2026-09-13"; });
+      const dir = join(fx.root, "workflows", "wf-stopped");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: "wf-stopped", type: "iteration", status: "stopped", started_at: "2026-09-12", ended_at: "2026-09-13", updated_at: "2026-09-13", branch: { base: fx.mainBranch, target: fx.mainBranch }, plans: [{ id: "stopped-plan", title: "Stopped", file: "stopped.md", status: "Done", metadata: { working_branch: "feature/done-a", worktree_path: fx.doneWt } }] }));
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+    } finally { chmodSync(fx.root, 0o755); rmSync(fx.root, { recursive: true, force: true }); }
+  });
+  test("failed plan-row claimant leaves completed owner attributed", () => {
+    const fx = basicFixture("mstar-cleanup-failed-claim-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => { snapshot.status = "completed"; snapshot.ended_at = "2026-09-13"; });
+      const dir = join(fx.root, "workflows", "wf-failed");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: "wf-failed", type: "iteration", status: "failed", started_at: "2026-09-12", ended_at: "2026-09-13", updated_at: "2026-09-13", branch: { base: fx.mainBranch, target: fx.mainBranch }, plans: [{ id: "failed-plan", title: "Failed", file: "failed.md", status: "Done", metadata: { working_branch: "feature/done-a", worktree_path: fx.doneWt } }] }));
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+    } finally { chmodSync(fx.root, 0o755); rmSync(fx.root, { recursive: true, force: true }); }
+  });
+  test("two running plan-row claimants remain ambiguous and foreign", () => {
+    const fx = basicFixture("mstar-cleanup-running-claims-");
+    try {
+      const dir = join(fx.root, "workflows", "wf-running");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "snapshot.json"), JSON.stringify({ schema_version: 1, id: "wf-running", type: "iteration", status: "running", started_at: "2026-09-12", updated_at: "2026-09-12", branch: { base: fx.mainBranch, target: fx.mainBranch }, plans: [{ id: "running-plan", title: "Running", file: "running.md", status: "Done", metadata: { working_branch: "feature/done-a", worktree_path: fx.doneWt } }] }));
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root, "--all-workflows"], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result)).toContain(`refuse | worktree | ${fx.doneWt} | cleanup.refuse.foreign-worktree`);
+    } finally { chmodSync(fx.root, 0o755); rmSync(fx.root, { recursive: true, force: true }); }
+  });
+  test("completed-only plan-row attribution remains eligible", () => {
+    const fx = basicFixture("mstar-cleanup-completed-only-");
+    try {
+      updateWorkflow(fx.root, "wf-1", (snapshot) => { snapshot.status = "completed"; snapshot.ended_at = "2026-09-13"; });
+      const result = runCli(["worktree", "cleanup", "--workflow", "wf-1", "--harness", fx.root], fx.root);
+      expect(result.exitCode).toBe(0);
+      expect(decisionRows(result)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
+    } finally { chmodSync(fx.root, 0o755); rmSync(fx.root, { recursive: true, force: true }); }
+  });
 
   test("--remote adds remote candidates; dry-run still fetches/prunes/writes nothing", () => {
     const fx = remoteFixture("mstar-cleanup-dry-remote-");
