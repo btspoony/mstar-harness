@@ -8,6 +8,7 @@ import {
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore,
+  showPrepareWorkflow,
   type ActivationAttestation,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
@@ -138,9 +139,16 @@ function absolute(value: string | undefined, field: string): string {
 /**
  * The document is read here but validated by the engine. A malformed document
  * is reported with the parser's own grammatical cause and, only when the
- * parser actually reports one, its location. Quoted source excerpts and token
- * values are stripped so no credential travels into the refusal, and no
- * offset is invented when the parser reports none.
+ * parser actually reports one, its location.
+ *
+ * The supported runtimes quote source-derived content with double quotes: the
+ * unexpected identifier/token itself (`Unexpected identifier "<token>"`, Bun)
+ * and the excerpt Node appends before `is not valid JSON` (a truncated excerpt
+ * carries an embedded `...` and unescaped inner quotes). Every double-quoted
+ * span is therefore removed before the cause is published, so no document
+ * token travels into the refusal. The parser's own single-quoted grammar
+ * (`'}'`, `','`, `("'")`) is authored by the parser, not the document, and is
+ * preserved. No offset is invented when the parser reports none.
  */
 function jsonParseDiagnostic(error: unknown): { cause: string; location?: string } {
   const message = error instanceof Error ? error.message : "";
@@ -154,17 +162,17 @@ function jsonParseDiagnostic(error: unknown): { cause: string; location?: string
   const cause = message
     .replace(/^JSON Parse error:\s*/i, "")
     .replace(/^SyntaxError:\s*/i, "")
-    // The runtime appends the offending document as a double-quoted excerpt
-    // (`Unexpected token '}', "{\"secret\":...}" is not valid JSON`). Drop that
-    // excerpt — it carries the raw source/token bytes. The parser's own
-    // single-quoted grammar (`','`, `'}'`, `property name`) is authored by the
-    // parser, not the document, so it is preserved.
-    .replace(/[:,]?\s*"[\s\S]*"\s+is not valid JSON\s*$/i, "")
-    .replace(/[:,]?\s*\.\.\.\s*is not valid JSON\s*$/i, "")
+    // The document excerpt Node appends before `is not valid JSON`, including
+    // the truncated form whose excerpt ends in `...`. The clause carries raw
+    // source bytes, so the marker and everything from its opening double quote
+    // onward is dropped together.
+    .replace(/[:,]?\s*"[\s\S]*is not valid JSON\s*$/i, "")
+    .replace(/[,\s]+is not valid JSON\s*$/i, "")
     .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s*\(line \d+ column \d+\)/gi, "")
-    .replace(/[,\s]+is not valid JSON\s*$/i, "")
+    // A double-quoted span is the source-derived unexpected identifier/token.
+    .replace(/\s*"[^"]*"/g, "")
     .replace(/\s+/g, " ")
     .replace(/[\s,:;]+$/, "")
     .trim();
@@ -325,6 +333,9 @@ function makeDefinition(
             ownership: "caller" as const,
             route: "cli" as const,
             required: false,
+            // The explicit entry overrides the route-derived `expect` hint, so
+            // it is also the entry that must publish the CAS token kind.
+            ...(name === "expect" ? { tokenKind: "revision" as const } : {}),
             constraint: name === "expect"
               ? "optional positive header revision CAS; when omitted, the current addressed revision is derived inside the adoption transaction"
               : "optional replay identifier; when omitted, one operation id is generated for this invocation",
@@ -334,6 +345,7 @@ function makeDefinition(
             ownership: "caller" as const,
             route: "mcp" as const,
             required: false,
+            ...(name === "expect" ? { tokenKind: "revision" as const } : {}),
             constraint: name === "expect"
               ? "optional positive header revision CAS; when omitted, the current addressed revision is derived inside the adoption transaction"
               : "optional replay identifier; when omitted, one operation id is generated for this invocation",
