@@ -6,19 +6,7 @@
     "expectedCount": 1
   },
   {
-    "signature": "missing-recovery:packages/commands/src/families/validation.ts:4b94b5289a5e",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
     "signature": "missing-recovery:packages/commands/src/families/validation.ts:1e907be7ff2b",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/status.ts:ff44a66edec7",
     "justification": "pre-existing backlog cohort",
     "trackingIssue": "#422",
     "expectedCount": 1
@@ -85,18 +73,6 @@
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:d4122dfad150",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/dashboard.ts:8288733f75fb",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/session.ts:8acc31957293",
     "justification": "pre-existing backlog cohort",
     "trackingIssue": "#422",
     "expectedCount": 1
@@ -267,12 +243,6 @@
     "signature": "unreachable-recovery:packages/engine/src/workflow.ts:95f99e85a95a",
     "justification": "PR review scanner-discovered candidate pending triage.",
     "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/issue.ts:aef0768b769d",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
     "expectedCount": 1
   },
   {

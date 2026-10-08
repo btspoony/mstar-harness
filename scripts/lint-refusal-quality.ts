@@ -65,6 +65,7 @@ export interface ObjectAlternative {
   fields: Map<string, ts.Expression>;
   conditions: Map<string, boolean>;
   unprovenFields: Map<string, ts.Expression>;
+  independentPredicates: Set<string>;
 }
 export function objectAlternatives(expression: ts.Expression): ObjectAlternative[] {
   const mergeConditions = (left: Map<string, boolean>, right: Map<string, boolean>): Map<string, boolean> | undefined => {
@@ -77,40 +78,83 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
   };
   const mergeUnprovenFields = (left: Map<string, ts.Expression>, right: Map<string, ts.Expression>): Map<string, ts.Expression> =>
     new Map([...left, ...right]);
-  const unknownObject = (source: ts.Expression, conditions: Map<string, boolean>): ObjectAlternative => ({
+  const mergePredicates = (left: Set<string>, right: Set<string>): Set<string> => new Set([...left, ...right]);
+  const conditionKey = (condition: ts.Expression): string => {
+    let predicate = condition;
+    while (ts.isParenthesizedExpression(predicate) || ts.isAsExpression(predicate) || ts.isTypeAssertionExpression(predicate) || ts.isSatisfiesExpression(predicate)) {
+      predicate = predicate.expression;
+    }
+    if (ts.isIdentifier(predicate)) return `identifier:${predicate.text}`;
+    if (predicate.kind === ts.SyntaxKind.TrueKeyword || predicate.kind === ts.SyntaxKind.FalseKeyword
+      || predicate.kind === ts.SyntaxKind.NullKeyword || ts.isNumericLiteral(predicate)
+      || ts.isStringLiteralLike(predicate) || ts.isNoSubstitutionTemplateLiteral(predicate)) {
+      return `literal:${predicate.kind}:${predicate.getText()}`;
+    }
+    return `impure:${predicate.getStart()}`;
+  };
+  const unknownObject = (
+    source: ts.Expression,
+    conditions: Map<string, boolean>,
+    independentPredicates: Set<string>,
+  ): ObjectAlternative => ({
     fields: new Map(),
     conditions,
     unprovenFields: new Map(["code", "recovery", "status"].map((field) => [field, source])),
+    independentPredicates,
   });
-  const values = (expression: ts.Expression, conditions = new Map<string, boolean>()): { expression: ts.Expression; conditions: Map<string, boolean> }[] => {
-    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) return values(expression.expression, conditions);
+  const values = (
+    expression: ts.Expression,
+    conditions = new Map<string, boolean>(),
+    independentPredicates = new Set<string>(),
+  ): { expression: ts.Expression; conditions: Map<string, boolean>; independentPredicates: Set<string> }[] => {
+    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) {
+      return values(expression.expression, conditions, independentPredicates);
+    }
     if (ts.isConditionalExpression(expression)) {
-      const key = expression.condition.getText();
+      const key = conditionKey(expression.condition);
+      const independent = key.startsWith("impure:");
+      const predicates = independent
+        ? new Set([...independentPredicates, expression.condition.getText()])
+        : independentPredicates;
       const yes = mergeConditions(conditions, new Map([[key, true]]));
       const no = mergeConditions(conditions, new Map([[key, false]]));
-      return [...(yes ? values(expression.whenTrue, yes) : []), ...(no ? values(expression.whenFalse, no) : [])];
+      return [
+        ...(yes ? values(expression.whenTrue, yes, predicates) : []),
+        ...(no ? values(expression.whenFalse, no, predicates) : []),
+      ];
     }
-    return [{ expression, conditions }];
+    return [{ expression, conditions, independentPredicates }];
   };
   const fromObject = (object: ts.ObjectLiteralExpression): ObjectAlternative[] => {
     const spreadAlternatives = (spread: ts.Expression): ObjectAlternative[] =>
-      values(spread).flatMap(({ expression: branch, conditions }) => {
-        if (!ts.isObjectLiteralExpression(branch)) return [unknownObject(branch, conditions)];
+      values(spread).flatMap(({ expression: branch, conditions, independentPredicates }) => {
+        if (!ts.isObjectLiteralExpression(branch)) return [unknownObject(branch, conditions, independentPredicates)];
         return fromObject(branch).flatMap((alternative) => {
           const merged = mergeConditions(conditions, alternative.conditions);
-          return merged ? [{ ...alternative, conditions: merged }] : [];
+          return merged ? [{
+            ...alternative,
+            conditions: merged,
+            independentPredicates: mergePredicates(independentPredicates, alternative.independentPredicates),
+          }] : [];
         });
       });
-    let alternatives: ObjectAlternative[] = [{ fields: new Map(), conditions: new Map(), unprovenFields: new Map() }];
+    let alternatives: ObjectAlternative[] = [{
+      fields: new Map(), conditions: new Map(), unprovenFields: new Map(), independentPredicates: new Set(),
+    }];
     for (const property of object.properties) {
       if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
         const name = property.name.text;
-        alternatives = alternatives.flatMap((base) => values(property.initializer).flatMap(({ expression: value, conditions }) => {
+        alternatives = alternatives.flatMap((base) => values(property.initializer).flatMap(({ expression: value, conditions, independentPredicates }) => {
           const merged = mergeConditions(base.conditions, conditions);
           if (!merged) return [];
           const unprovenFields = new Map(base.unprovenFields);
           unprovenFields.delete(name);
-          return [{ fields: new Map([...base.fields, [name, value]]), conditions: merged, unprovenFields }];
+          return [{
+            fields: new Map([...base.fields, [name, value]]),
+            conditions: merged,
+            unprovenFields,
+            independentPredicates: mergePredicates(base.independentPredicates, independentPredicates),
+          }];
         }));
       } else if (ts.isShorthandPropertyAssignment(property)) {
         for (const alternative of alternatives) {
@@ -125,17 +169,22 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
             fields: new Map([...base.fields, ...choice.fields]),
             conditions: merged,
             unprovenFields: mergeUnprovenFields(base.unprovenFields, choice.unprovenFields),
+            independentPredicates: mergePredicates(base.independentPredicates, choice.independentPredicates),
           }] : [];
         }));
       }
     }
     return alternatives;
   };
-  return values(expression).flatMap(({ expression: branch, conditions }) => {
-    if (!ts.isObjectLiteralExpression(branch)) return [];
+  return values(expression).flatMap(({ expression: branch, conditions, independentPredicates }) => {
+    if (!ts.isObjectLiteralExpression(branch)) return [unknownObject(branch, conditions, independentPredicates)];
     return fromObject(branch).flatMap((alternative) => {
       const merged = mergeConditions(conditions, alternative.conditions);
-      return merged ? [{ ...alternative, conditions: merged }] : [];
+      return merged ? [{
+        ...alternative,
+        conditions: merged,
+        independentPredicates: mergePredicates(independentPredicates, alternative.independentPredicates),
+      }] : [];
     });
   });
 }
@@ -298,6 +347,16 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const findings: RefusalFinding[] = [];
   const wrappers = findRefusalWrappers(sf);
+  const wrapperInnerNodes = new Set([...wrappers.values()].filter(({ parameters, inner }) => {
+    const names = new Set(parameters.flatMap((parameter) => ts.isIdentifier(parameter.name) ? [parameter.name.text] : []));
+    let usesParameter = false;
+    const visitArgument = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && names.has(node.text)) usesParameter = true;
+      else ts.forEachChild(node, visitArgument);
+    };
+    for (const argument of inner.arguments ?? []) visitArgument(argument);
+    return usesParameter;
+  }).map(({ inner }) => inner));
   const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
@@ -391,6 +450,9 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const checkEnvelope = (node: ts.Node, input: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     const variants = envelopeInput(input, bindings);
+    const predicateNote = (alternative: ObjectAlternative): string => alternative.independentPredicates.size > 0
+      ? ` Distinct impure predicate evaluations (${[...alternative.independentPredicates].map((predicate) => `\`${predicate}\``).join(", ")}) are not correlated.`
+      : "";
     const missingCause = variants.find(({ fields, unprovenFields }) => unprovenFields.has("code") || !isCauseCode(fields.get("code")));
     if (missingCause) {
       const source = missingCause.unprovenFields.get("code");
@@ -398,8 +460,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         node,
         "missing-cause-code",
         source
-          ? `Rule #341 class 2 (named cause): code cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.`
-          : "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.",
+          ? `Rule #341 class 2 (named cause): code cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.${predicateNote(missingCause)}`
+          : `Rule #341 class 2 (named cause): provide a nonempty named \`code\` field on every refusal branch.${predicateNote(missingCause)}`,
       );
     }
     const missingRecovery = variants.find(({ fields, unprovenFields }) => {
@@ -415,8 +477,8 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         node,
         "missing-recovery",
         source
-          ? `Rule #341 class 3 (recovery): recovery presence cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.`
-          : "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.",
+          ? `Rule #341 class 3 (recovery): recovery presence cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.${predicateNote(missingRecovery)}`
+          : `Rule #341 class 3 (recovery): provide a nonempty supported \`recovery\` field on every refusal branch.${predicateNote(missingRecovery)}`,
       );
     }
   };
@@ -431,7 +493,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(sf).split(".").at(-1) === "CoordinationError") {
-      checkCoordinationError(node, node.arguments?.[0], node.arguments?.[1]);
+      if (!wrapperInnerNodes.has(node)) checkCoordinationError(node, node.arguments?.[0], node.arguments?.[1]);
       return visitChildren(node);
     }
     if (ts.isCallExpression(node)) {
@@ -441,7 +503,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         const bindings = callBindings(wrapper, node);
         if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings);
         else checkCoordinationError(node, wrapper.inner.arguments?.[0], wrapper.inner.arguments?.[1], bindings);
-      } else if (callee === "refusalEnvelope") {
+      } else if (callee === "refusalEnvelope" && !wrapperInnerNodes.has(node)) {
         checkEnvelope(node, node.arguments[0]);
       }
     }

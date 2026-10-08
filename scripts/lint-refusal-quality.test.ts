@@ -198,15 +198,13 @@ describe("refusal quality scanner", () => {
   });
   test("treats opaque object spreads as unprovable unless later literal fields override them", () => {
     const findings = scanSource(`
-      function refusal(overrides: object) {
-        return refusalEnvelope({
-          status: "refused",
-          code: "valid.code",
-          message: "Blocked",
-          recovery: "Run mstar workflow --resume",
-          ...overrides,
-        });
-      }
+      refusalEnvelope({
+        status: "refused",
+        code: "valid.code",
+        message: "Blocked",
+        recovery: "Run mstar workflow --resume",
+        ...overrides,
+      });
     `, "packages/engine/src/fixture.ts");
     expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
     expect(findings.every(({ reason }) => reason.includes("overrides"))).toBe(true);
@@ -235,5 +233,33 @@ describe("refusal quality scanner", () => {
         recovery: "Run mstar workflow --resume",
       });
     `, "packages/engine/src/fixture.ts")).toEqual([]);
+  });
+
+  test("fails closed on an opaque call-result envelope argument", () => {
+    const findings = scanSource("refusalEnvelope(buildRefusal())", "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+    expect(findings.every(({ reason }) => reason.includes("buildRefusal()"))).toBe(true);
+  });
+
+  test("does not correlate repeated impure predicate text across independent field evaluations", () => {
+    const findings = scanSource(`
+      refusalEnvelope({
+        status: coin() ? "usage" : "refused",
+        code: "valid.code",
+        message: "Blocked",
+        recovery: coin() ? "" : "Run mstar workflow --resume",
+      });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(findings[0]?.reason).toContain("coin()");
+    const stable = scanSource(`
+      refusalEnvelope({
+        status: flag ? "usage" : "refused",
+        code: "valid.code",
+        message: "Blocked",
+        recovery: flag ? "" : "Run mstar workflow --resume",
+      });
+    `, "packages/engine/src/fixture.ts");
+    expect(stable).toEqual([]);
   });
 });
