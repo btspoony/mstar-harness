@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -146,5 +146,61 @@ describe("workflow-note public routes", () => {
     expect(data.acceptedIds).toEqual(["note-3"]);
     expect(data.counts).toMatchObject({ accepted: 1 });
     expect(typeof data.fileSha256 === "string" ? data.fileSha256 : "").toMatch(/^[0-9a-f]{64}$/);
+  });
+  test("invalid append input returns shared input-aware diagnostics", async () => {
+    const fx = await activeFixture();
+    const result = await definition("workflow-note.append").execute(
+      { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "bad-note", text: 42, harness: fx.harnessDir },
+      context(fx.root, COORDINATOR),
+    );
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(result.details?.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "text", code: "invalid_type", expected: "string", received: "42" }),
+    ]));
+  });
+
+  test("same-workflow foreign invocation refuses without changing retained bytes", async () => {
+    const fx = await activeFixture();
+    const ledgerPath = path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl");
+    const accepted = await definition("workflow-note.append").execute(
+      { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-owner", text: "retained", ts: "2026-10-08T03:00:00.000Z", harness: fx.harnessDir },
+      context(fx.root, COORDINATOR),
+    );
+    expect(accepted.status).toBe("ok");
+    const before = readFileSync(ledgerPath);
+    const refused = await definition("workflow-note.append").execute(
+      { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-foreign", text: "must not append", harness: fx.harnessDir },
+      context(fx.root, "foreign-session"),
+    );
+    expect(refused).toMatchObject({ status: "refused", code: "execution.scope-mismatch", exitCode: 1 });
+    expect(readFileSync(ledgerPath)).toEqual(before);
+  });
+
+  test("coverage refuses symlinked and dangling retained leaves instead of reporting absence", async () => {
+    const fx = await activeFixture();
+    const coverage = definition("workflow-note.coverage");
+    const outside = path.join(fx.root, "outside.jsonl");
+    const link = path.join(fx.root, "linked.jsonl");
+    const dangling = path.join(fx.root, "dangling.jsonl");
+    writeFileSync(outside, '{"text":"outside-secret"}\n');
+    symlinkSync(outside, link);
+    symlinkSync(path.join(fx.root, "missing.jsonl"), dangling);
+
+    for (const file of [link, dangling]) {
+      const result = await coverage.execute({ workflow: WORKFLOW, file, harness: fx.harnessDir }, context(fx.root));
+      expect(result).toMatchObject({ status: "refused", code: "execution-ledgers.target-untrusted", exitCode: 1 });
+      expect(JSON.stringify(result)).not.toContain("outside-secret");
+    }
+  });
+
+  test("coverage preserves explicit regular-file behavior", async () => {
+    const fx = await activeFixture();
+    const file = path.join(fx.root, "explicit.jsonl");
+    writeFileSync(file, "");
+    const result = await definition("workflow-note.coverage").execute(
+      { workflow: WORKFLOW, file, harness: fx.harnessDir },
+      context(fx.root),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { format: "empty", bytes: 0, fileSha256: expect.any(String) } });
   });
 });

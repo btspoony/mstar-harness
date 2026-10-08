@@ -35,7 +35,7 @@
  * This rationale lives with the module that owns the route boundary; it is NOT
  * duplicated into command metadata of unrelated exports.
  */
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -50,7 +50,8 @@ import {
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
-import { decodeDiagnostics, engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
+import { engineErrorFacts } from "./family-refusal.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const APPEND_ID = "workflow-note.append";
@@ -79,11 +80,11 @@ function usage(id: string, message: string, path?: string): CommandEnvelope<neve
 }
 
 /** One usage refusal carrying every schema issue, in the shared shape. */
-function decodeUsage(id: string, error: z.ZodError): CommandEnvelope<never> {
+function decodeUsage(id: string, error: z.ZodError, input: unknown): CommandEnvelope<never> {
   return refusalEnvelope({
     command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-    message: error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; "),
-    diagnostics: decodeDiagnostics(error),
+    message: "Invalid input.",
+    diagnostics: decodeInputDiagnostics(error, input),
   });
 }
 
@@ -105,22 +106,48 @@ const coverageInput = z.object({
 });
 
 /**
- * Read the retained ledger bytes for `coverage`. Absent is `null` (a distinct
- * fact from an empty file); a symlink or a non-regular leaf is refused with the
- * ledger module's own `target-untrusted` code, the same trust stance the writer
- * takes (its `O_NOFOLLOW` open), so this reader never follows a link out of the
- * control root.
+ * Read retained ledger bytes from the same descriptor whose type was checked.
+ * The no-follow open rejects a substituted leaf link; fstat validates the
+ * opened object. Explicit files are intentionally not confined beneath root.
  */
 function readLedgerBytes(file: string): Uint8Array | null {
-  if (!existsSync(file)) return null;
-  const info = lstatSync(file);
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw new ExecutionLedgerError(
-      "execution-ledgers.target-untrusted",
-      `the retained notes ledger at ${file} is not a regular file (a symlink or a non-file is not a retained ledger leaf).`,
-    );
+  let fd: number;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-untrusted",
+        `the retained notes ledger at ${file} is a symbolic link.`,
+      );
+    }
+    if (code !== "ENOENT") throw error;
+    try {
+      const info = lstatSync(file);
+      if (info.isSymbolicLink() || !info.isFile()) {
+        throw new ExecutionLedgerError(
+          "execution-ledgers.target-untrusted",
+          `the retained notes ledger at ${file} is not a regular file.`,
+        );
+      }
+      return null;
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw statError;
+    }
   }
-  return readFileSync(file);
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-untrusted",
+        `the retained notes ledger at ${file} is not a regular file.`,
+      );
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export function getExecutionLedgerCommandDefinitions(): readonly CommandDefinition[] {
@@ -150,7 +177,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
           return usage(APPEND_ID, "appending a workflow note requires an acquired coordinator identity (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call).", "sessionId");
         }
         const parsed = appendInput.safeParse(raw);
-        if (!parsed.success) return decodeUsage(APPEND_ID, parsed.error);
+        if (!parsed.success) return decodeUsage(APPEND_ID, parsed.error, raw);
         const input = parsed.data;
         try {
           const root = resolveProcessHarnessDir(context.cwd, input.harness);
@@ -201,7 +228,7 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
       description: "Project one workflow's retained notes ledger into its normalized coverage facts (canonical path, format, file hash, ordered historical and accepted records, duplicate ids, unterminated tail, counts). Read-only; nothing is written.",
       async execute(raw, context) {
         const parsed = coverageInput.safeParse(raw);
-        if (!parsed.success) return decodeUsage(COVERAGE_ID, parsed.error);
+        if (!parsed.success) return decodeUsage(COVERAGE_ID, parsed.error, raw);
         const input = parsed.data;
         try {
           const root = resolveProcessHarnessDir(context.cwd, input.harness);

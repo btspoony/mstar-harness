@@ -24,8 +24,8 @@ import { z } from "zod";
 import { resolveCliPath } from "../host-health.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
-import { decodeDiagnostics, engineErrorFacts } from "./family-refusal.js";
-import type { CommandDefinition, CommandEffect, CommandEnvelope, InvocationContext } from "../types.js";
+import { engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 
 const verbs = ["scaffold", "promote", "secret-scan", "supply-chain"] as const;
 type Verb = (typeof verbs)[number];
@@ -241,8 +241,8 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
         ? execute(verb, parsed.data, context)
         : refusalEnvelope({
             command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-            message: parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; "),
-            diagnostics: decodeDiagnostics(parsed.error),
+            message: "Invalid input.",
+            diagnostics: decodeInputDiagnostics(parsed.error, raw),
           });
     },
   };

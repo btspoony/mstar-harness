@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
-import { decodeDiagnostics, engineErrorFacts } from "./family-refusal.js";
+import { engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEffects, CommandEnvelope, InvocationContext } from "../types.js";
 import type { RunningDashboard } from "../dashboard/server.js";
 const id = "dashboard";
@@ -79,8 +80,8 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
       status: "usage",
       code: "command.invalid-input",
       exitCode: 2,
-      message: parsed.error.message,
-      diagnostics: decodeDiagnostics(parsed.error),
+      message: "Invalid input.",
+      diagnostics: decodeInputDiagnostics(parsed.error, input),
     });
   }
   const harnessDir = context.controlRoot;

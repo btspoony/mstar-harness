@@ -9,7 +9,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
-import { decodeDiagnostics, engineErrorFacts } from "./family-refusal.js";
+import { engineErrorFacts } from "./family-refusal.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const verbs = ["tally", "report-path", "validate-report", "post", "worktree-cleanup", "size", "seat-prompt", "budget"] as const;
@@ -235,8 +236,8 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
         if (parsed.success) return execute(verb, parsed.data, context);
         return refusalEnvelope({
           command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-          message: parsed.error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; "),
-          diagnostics: decodeDiagnostics(parsed.error),
+          message: "Invalid input.",
+          diagnostics: decodeInputDiagnostics(parsed.error, raw),
         });
       },
     };

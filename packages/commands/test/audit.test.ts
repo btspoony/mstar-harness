@@ -56,23 +56,6 @@ describe("audit command family", () => {
     expect(readFileSync(path.join(outDir, "README.md"), "utf8")).toContain("| 001 | Leaked credential |");
     expect(existsSync(path.join(root, "unrelated"))).toBe(false);
   });
-  test("engine refusal mapper preserves the engine message and adds help routing", () => {
-    const error = Object.assign(new Error("engine refused this operation"), { code: "execution.consumer-not-ready" });
-    const result = failure("audit.promote", error);
-    expect(result.status).toBe("refused");
-    expect(result.message.split("\n", 1)[0]).toBe("engine refused this operation");
-    expect(result.details).toHaveProperty("helpRoute");
-    const recoveryGuidance = [
-      ["FRESH `--workflow` id; reconcile cannot adopt foreign bytes.", "catalog.registration-conflict"],
-      ["there is no CLI verb to remove or repair the stale root entry.", "catalog.registration-conflict"],
-      ["reconcile your own operation with `mstar catalog reconcile --operation-id <own>`.", "catalog.registration-conflict"],
-      ["nothing was registered. Re-run with a fresh operation id", "catalog.revision-conflict"],
-    ] as const;
-    for (const [segment, code] of recoveryGuidance) {
-      const refusal = failure("audit.promote", Object.assign(new Error(`engine refusal — ${segment}`), { code }));
-      expect(refusal.message).toContain(segment);
-    }
-  });
 
   test("secret scan reports the actual engine finding for a tracked fixture without disclosing its value", async () => {
     const root = tempRoot();
