@@ -157,4 +157,29 @@ describe("refusal quality scanner", () => {
       [6, "missing-cause-code"],
     ]);
   });
+
+  test("scans each whole conditional refusalEnvelope argument branch", () => {
+    const findings = scanSource(`
+      refusalEnvelope(flag
+        ? { status: "refused", code: "", message: "Missing" }
+        : { status: "refused", code: "valid.code", message: "Valid", recovery: "Run mstar status validate" });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+  });
+
+  test("resolves code and recovery values in their function-local scopes", () => {
+    const findings = scanSource(`
+      function first() {
+        const code = "";
+        const recovery = "";
+        refusalEnvelope({ status: "refused", code, message: "Missing", recovery });
+      }
+      function second() {
+        const code = "valid.code";
+        const recovery = "Run mstar status validate";
+        refusalEnvelope({ status: "refused", code, message: "Valid", recovery });
+      }
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+  });
 });

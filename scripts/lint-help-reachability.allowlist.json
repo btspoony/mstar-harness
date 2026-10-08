@@ -898,5 +898,1013 @@
     "justification": "PR review scanner-discovered candidate pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:f8141413a645",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:067e5e82cd77",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:5a56c9d77311",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:4f377a69d3e0",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:010b52469c4b",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:68e64b814e4e",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 2
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:7fc1e68b856d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:3643793785ae",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:fa574e3a7cd1",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:63b7f3821cee",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:c7e33debe072",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:261da2eeb773",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:e265fce72d58",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:da45c6b4a531",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:2bf0d2ca1674",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:f73703b9b678",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-store.ts:bdff86895b40",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:bf79631adac6",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 2
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:b47716d0a7ed",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:0638164b0f89",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:d3d2213c0ccf",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:66de2d409f83",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:bfc9d4e1927f",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:5ffbe6fc35a8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3a41ad445139",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:7bb037f3af59",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:31e0d2bee6c3",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:28a8ceb3b222",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:737dd69c5e75",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3748be0fc602",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:c22543e8ad74",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3a00c4f95e74",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:aa316e56b175",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 2
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:bfb45752ff8f",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:45541cf04dda",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3e96c6cf179f",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:2c58163e31ac",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:d88f2dfeb6cc",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:24c41708d3cc",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:af32d63222f3",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:6834adb48715",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:ee86d8ef8a4a",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:6c4b207b3a90",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:031a39f30d3f",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:9693aae6bb21",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3e47155caf36",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:40f7ac30b7ba",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:e2675d4db191",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:06de7b935fbe",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:c8c35e89d46f",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:393252c17da3",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:172701dd5eb0",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:ab9c9d7030b5",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:1883a8c43455",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:53549d889732",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:952adea26928",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:d5d30176d80d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:b5cdbf2e3371",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:5ca90823dccc",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:4227bd1396b9",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3c58bdabfa79",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:f9b4fffb158e",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:8e64ea956290",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:4a194d0f88ce",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:9900a9d0d97a",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:728dbfb98dc8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:087e022c84a6",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:f41c62cd4da7",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:dc805f339790",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:e74bae4193c9",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:5159f7705488",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:e8b8bab35573",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:5cefcaef9ebe",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:966686aab2e5",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:d5ede61b0158",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:5e90394c8b89",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:aa41b3bd65f4",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:979d46cd091d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:fafedf60e14b",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:7fe89c0241c8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:b849ee864920",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:93580aaa5c85",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:aba6fda932f8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:904a01663525",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:ddaae4e01718",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:27078bccd8e9",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:41860c5789f6",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:92902c5f621c",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3124835822eb",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:76274312c7cb",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:2b86f94ae47c",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:bf63ad115b38",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:af6e62619713",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:4059257daf0d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 2
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:01cca9f71172",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:e3af35d0e11d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:dd5631c6f3ae",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:5cda5161cba4",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:9b63529295c0",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:6170c0a1c02d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:75d098add6de",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:17f6546e4f54",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:80c0ae827d10",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:0e9389fe252e",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:f45d35047c79",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:c8560cc98c2e",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:d768459a1607",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:6e86af07075c",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:9b04de84b393",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:fbbb0f8590b9",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:6f15560446b8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3254deba79bb",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:d5c7aeac3e51",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:7140a4f0aad1",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3ee1be870136",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:0e7818b813ab",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3eabb1d1ad23",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:ffac14c7dcb6",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:a2e4f6a78364",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:c7eb356c3bf2",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:c87cd07da1b1",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:7f394c9c48af",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:19f88e051e32",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:b0b399272829",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination-transitions.ts:baafac392e5a",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:89bb33e08b38",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:c1f164932c58",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:43586e44dc11",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:258633ae67ec",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:00894766486b",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:17ad9996e4b4",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:75292643b6ef",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:c327278ca467",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:ac8ebe897b5f",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:ed6d8d4c4fb0",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:ad304ca3b7d8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:3e8ebcbb230d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:4e36d6a9246e",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-coordination.ts:86ae8d263415",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-read.ts:c5cead8910fd",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-read.ts:a998b4cd213c",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:995a2f792144",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:a86dd196c7f2",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:29a30b5d379e",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:9a94872481a7",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:94ce86d154ff",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:5f0dfce45396",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:0476dfcd5146",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:10f75cf20ed2",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:3b40aeb924da",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:76a666f503f9",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:7609ce0d3973",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:02952239c214",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:372a52361b04",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:5182cf3fba83",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:f66ebf2da080",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:b068a6515537",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:5a61d88eccf4",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:cfc4799b0175",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:968d4f933654",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:90433b09faf7",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:d41bfc95ed04",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:42dff8cf97fb",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:ea45179121ae",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:da9f5e12f017",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:59e58ef46f32",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:9301da2f4c9d",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/execution-workflow.ts:ea59e114cfd8",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
   }
 ]

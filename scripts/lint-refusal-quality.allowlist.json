@@ -544,5 +544,17 @@
     "justification": "One-level refusal-wrapper call site surfaced by review; pending cause/recovery triage.",
     "trackingIssue": "#422",
     "expectedCount": 1
+  },
+  {
+    "signature": "missing-cause-code:packages/commands/src/families/status.ts:21259cdc60a1",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#422",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-cause-code:packages/commands/src/families/coordination-checks.ts:ff44a66edec7",
+    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
+    "trackingIssue": "#422",
+    "expectedCount": 1
   }
 ]

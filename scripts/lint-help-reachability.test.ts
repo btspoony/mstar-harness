@@ -157,4 +157,13 @@ describe("help reachability lint", () => {
       "capability-unreachable",
     ]);
   });
+  test("checks one-level refusal wrapper reachability at the call site", () => {
+    const source = `
+      function refused(recovery: string) {
+        return refusalEnvelope({ code: "NO_STATE", status: "refused", message: "Blocked", recovery });
+      }
+      refused("Run mstar nonexistent");
+    `;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
 });

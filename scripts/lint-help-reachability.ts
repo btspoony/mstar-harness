@@ -2,11 +2,14 @@
 /**
  * Grammar bound: canonical registry + schema descriptors, not captured --help
  * text. If rendering diverges, extend the shared grammar helper, not a capture.
+ *
+ * One same-file wrapper level is followed only when a top-level helper has exactly one direct return of refusalEnvelope or CoordinationError.
+ * Its call-site arguments are substituted and checked; wrapper chains are not followed.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript";
-import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, objectAlternatives, recoveryFailure, type AllowlistEntry, type CliGrammar, type RefusalFinding } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, findRefusalWrappers, objectAlternatives, recoveryFailure, type AllowlistEntry, type CliGrammar, type RefusalFinding, type RefusalWrapperDescriptor } from "./lint-refusal-quality";
 
 export type HelpReachabilityFinding = RefusalFinding;
 
@@ -49,42 +52,89 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     }
     return undefined;
   };
-  const value = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
+  const wrappers = findRefusalWrappers(source);
+  const callBindings = (wrapper: RefusalWrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
+    const bindings = new Map<string, ts.Expression>();
+    wrapper.parameters.forEach((parameter, index) => {
+      if (ts.isIdentifier(parameter.name)) {
+        const actual = call.arguments[index] ?? parameter.initializer;
+        if (actual) bindings.set(parameter.name.text, actual);
+      }
+    });
+    return bindings;
+  };
+  const value = (
+    node: ts.Expression | undefined,
+    scope?: Scope,
+    seenDeclarations = new Set<ts.VariableDeclaration>(),
+    bindings = new Map<string, ts.Expression>(),
+    seenBindings = new Set<string>(),
+  ): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
     if (ts.isIdentifier(node)) {
       const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
-      if (!declaration?.initializer || seen.has(declaration)) return undefined;
-      seen.add(declaration);
-      return value(declaration.initializer, scopeByNode.get(declaration), seen);
+      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
+        return value(declaration.initializer, scopeByNode.get(declaration), new Set(seenDeclarations).add(declaration), bindings, seenBindings);
+      }
+      if (bindings.has(node.text) && !seenBindings.has(node.text)) {
+        const actual = bindings.get(node.text)!;
+        return value(actual, scopeByNode.get(actual), seenDeclarations, bindings, new Set(seenBindings).add(node.text));
+      }
     }
     return undefined;
+  };
+  const resolveBound = (node: ts.Expression, bindings: Map<string, ts.Expression>, seen = new Set<string>()): ts.Expression => {
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return resolveBound(node.expression, bindings, seen);
+    }
+    if (ts.isIdentifier(node)) {
+      const declaration = resolveDeclaration(scopeByNode.get(node), node.text);
+      if (declaration?.initializer) return resolveBound(declaration.initializer, bindings, seen);
+      if (bindings.has(node.text) && !seen.has(node.text)) {
+        return resolveBound(bindings.get(node.text)!, bindings, new Set(seen).add(node.text));
+      }
+    }
+    return node;
   };
   const findings: HelpReachabilityFinding[] = [];
   const inspect = (node: ts.Node, text: string): void => {
     const failure = recoveryFailure(text, grammar);
     if (failure !== undefined) findings.push(makeFinding(source, file, node, failure, node.getText(source)));
   };
+  const inspectEnvelope = (node: ts.Node, input: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
+    if (!input) return;
+    const alternatives = objectAlternatives(resolveBound(input, bindings));
+    const failures = alternatives.flatMap(({ fields }) => {
+      const recovery = fields.get("recovery");
+      const text = value(recovery, recovery && scopeByNode.get(recovery), new Set(), bindings);
+      if (!recovery || text === undefined) return [];
+      const failure = recoveryFailure(text, grammar);
+      return failure === undefined ? [] : [failure];
+    });
+    if (failures.length > 0) findings.push(makeFinding(source, file, node, failures[0]!, node.getText(source)));
+  };
+  const inspectCoordinationError = (node: ts.Node, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
+    const bound = message && resolveBound(message, bindings);
+    const text = value(bound, bound && scopeByNode.get(bound), new Set(), bindings);
+    if (text && !/\bmstar\s+[a-z][a-z0-9.-]*/i.test(text)) inspect(node, text);
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(source).split(".").at(-1) === "CoordinationError") {
-      const text = value(node.arguments?.[1]);
-      if (text && !/\bmstar\s+[a-z][a-z0-9.-]*/i.test(text)) inspect(node, text);
+      inspectCoordinationError(node, node.arguments?.[1]);
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(source).split(".").at(-1);
-      if (callee === "recoveryRefusal") {
+      const wrapper = callee ? wrappers.get(callee) : undefined;
+      if (wrapper) {
+        const bindings = callBindings(wrapper, node);
+        if (ts.isCallExpression(wrapper.inner)) inspectEnvelope(node, wrapper.inner.arguments[0], bindings);
+        else inspectCoordinationError(node, wrapper.inner.arguments?.[1], bindings);
+      } else if (callee === "recoveryRefusal") {
         const text = value(node.arguments[1]);
         if (text !== undefined) inspect(node, text);
-      } else if (callee === "refusalEnvelope" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
-        const alternatives = objectAlternatives(node.arguments[0]);
-        const failures = alternatives.flatMap(({ fields }) => {
-          const recovery = fields.get("recovery");
-          const text = value(recovery);
-          if (!recovery || text === undefined) return [];
-          const failure = recoveryFailure(text, grammar);
-          return failure === undefined ? [] : [failure];
-        });
-        if (failures.length > 0) findings.push(makeFinding(source, file, node, failures[0]!, node.getText(source)));
+      } else if (callee === "refusalEnvelope") {
+        inspectEnvelope(node, node.arguments[0]);
       }
     }
     ts.forEachChild(node, visit);

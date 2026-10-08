@@ -62,7 +62,7 @@ export function extractCliGrammar(): CliGrammar {
 }
 
 export interface ObjectAlternative { fields: Map<string, ts.Expression>; conditions: Map<string, boolean>; }
-export function objectAlternatives(object: ts.ObjectLiteralExpression): ObjectAlternative[] {
+export function objectAlternatives(expression: ts.Expression): ObjectAlternative[] {
   const mergeConditions = (left: Map<string, boolean>, right: Map<string, boolean>): Map<string, boolean> | undefined => {
     const merged = new Map(left);
     for (const [key, value] of right) {
@@ -81,34 +81,42 @@ export function objectAlternatives(object: ts.ObjectLiteralExpression): ObjectAl
     }
     return [{ expression, conditions }];
   };
-  const spreadAlternatives = (expression: ts.Expression): ObjectAlternative[] =>
-    values(expression).flatMap(({ expression: branch, conditions }) => {
-      if (!ts.isObjectLiteralExpression(branch)) return [{ fields: new Map(), conditions }];
-      return objectAlternatives(branch).flatMap((alternative) => {
-        const merged = mergeConditions(conditions, alternative.conditions);
-        return merged ? [{ fields: alternative.fields, conditions: merged }] : [];
+  const fromObject = (object: ts.ObjectLiteralExpression): ObjectAlternative[] => {
+    const spreadAlternatives = (spread: ts.Expression): ObjectAlternative[] =>
+      values(spread).flatMap(({ expression: branch, conditions }) => {
+        if (!ts.isObjectLiteralExpression(branch)) return [{ fields: new Map(), conditions }];
+        return fromObject(branch).flatMap((alternative) => {
+          const merged = mergeConditions(conditions, alternative.conditions);
+          return merged ? [{ fields: alternative.fields, conditions: merged }] : [];
+        });
       });
-    });
-  let alternatives: ObjectAlternative[] = [{ fields: new Map(), conditions: new Map() }];
-  for (const property of object.properties) {
-    if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
-      const name = property.name.text;
-      const initializer = property.initializer;
-      alternatives = alternatives.flatMap((base) => values(initializer).flatMap(({ expression, conditions }) => {
-        const merged = mergeConditions(base.conditions, conditions);
-        return merged ? [{ fields: new Map([...base.fields, [name, expression]]), conditions: merged }] : [];
-      }));
-    } else if (ts.isShorthandPropertyAssignment(property)) {
-      for (const alternative of alternatives) alternative.fields.set(property.name.text, property.name);
-    } else if (ts.isSpreadAssignment(property)) {
-      const choices = spreadAlternatives(property.expression);
-      alternatives = alternatives.flatMap((base) => choices.flatMap((choice) => {
-        const merged = mergeConditions(base.conditions, choice.conditions);
-        return merged ? [{ fields: new Map([...base.fields, ...choice.fields]), conditions: merged }] : [];
-      }));
+    let alternatives: ObjectAlternative[] = [{ fields: new Map(), conditions: new Map() }];
+    for (const property of object.properties) {
+      if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
+        const name = property.name.text;
+        alternatives = alternatives.flatMap((base) => values(property.initializer).flatMap(({ expression: value, conditions }) => {
+          const merged = mergeConditions(base.conditions, conditions);
+          return merged ? [{ fields: new Map([...base.fields, [name, value]]), conditions: merged }] : [];
+        }));
+      } else if (ts.isShorthandPropertyAssignment(property)) {
+        for (const alternative of alternatives) alternative.fields.set(property.name.text, property.name);
+      } else if (ts.isSpreadAssignment(property)) {
+        const choices = spreadAlternatives(property.expression);
+        alternatives = alternatives.flatMap((base) => choices.flatMap((choice) => {
+          const merged = mergeConditions(base.conditions, choice.conditions);
+          return merged ? [{ fields: new Map([...base.fields, ...choice.fields]), conditions: merged }] : [];
+        }));
+      }
     }
-  }
-  return alternatives;
+    return alternatives;
+  };
+  return values(expression).flatMap(({ expression: branch, conditions }) => {
+    if (!ts.isObjectLiteralExpression(branch)) return [];
+    return fromObject(branch).flatMap((alternative) => {
+      const merged = mergeConditions(conditions, alternative.conditions);
+      return merged ? [{ fields: alternative.fields, conditions: merged }] : [];
+    });
+  });
 }
 function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
@@ -194,25 +202,14 @@ export function recoveryFailure(recovery: string, grammar: CliGrammar): string |
 export function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
   return recoveryFailure(recovery, grammar) === undefined;
 }
-/**
- * Bounded structured-channel scan: validation violation() results, arbitrary helper calls,
- * and raw programmer-error throws are excluded. One same-file wrapper level is followed only
- * when a top-level helper has exactly one direct return of refusalEnvelope or CoordinationError;
- * its call-site arguments are substituted without recursively following wrapper chains.
- * Cause and recovery-presence checks apply only to the recognized refusal channels.
- */
-export function scanSource(source: string, file: string): RefusalFinding[] {
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const declarations = new Map<string, ts.Expression>();
-  const visitDeclarations = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) declarations.set(node.name.text, node.initializer);
-    ts.forEachChild(node, visitDeclarations);
-  };
-  visitDeclarations(sf);
-  const findings: RefusalFinding[] = [];
-  type WrapperDescriptor = { parameters: readonly ts.ParameterDeclaration[]; inner: ts.CallExpression | ts.NewExpression };
-  const wrappers = new Map<string, WrapperDescriptor>();
-  const registerWrapper = (name: string, parameters: readonly ts.ParameterDeclaration[], body: ts.ConciseBody): void => {
+export interface RefusalWrapperDescriptor {
+  parameters: readonly ts.ParameterDeclaration[];
+  inner: ts.CallExpression | ts.NewExpression;
+}
+
+export function findRefusalWrappers(source: ts.SourceFile): Map<string, RefusalWrapperDescriptor> {
+  const wrappers = new Map<string, RefusalWrapperDescriptor>();
+  const register = (name: string, parameters: readonly ts.ParameterDeclaration[], body: ts.ConciseBody): void => {
     const returned: ts.Expression[] = [];
     if (ts.isBlock(body)) {
       const collectReturns = (node: ts.Node): void => {
@@ -224,55 +221,94 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     } else returned.push(body);
     if (returned.length !== 1) return;
     const expression = returned[0]!;
-    const target = ts.isCallExpression(expression) && expression.expression.getText(sf).split(".").at(-1) === "refusalEnvelope"
+    const inner = ts.isCallExpression(expression) && expression.expression.getText(source).split(".").at(-1) === "refusalEnvelope"
       ? expression
-      : ts.isNewExpression(expression) && expression.expression.getText(sf).split(".").at(-1) === "CoordinationError"
+      : ts.isNewExpression(expression) && expression.expression.getText(source).split(".").at(-1) === "CoordinationError"
         ? expression
         : undefined;
-    if (target) wrappers.set(name, { parameters, inner: target });
+    if (inner) wrappers.set(name, { parameters, inner });
   };
-  for (const statement of sf.statements) {
+  for (const statement of source.statements) {
     if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
-      registerWrapper(statement.name.text, statement.parameters, statement.body);
+      register(statement.name.text, statement.parameters, statement.body);
     } else if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isFunctionLike(declaration.initializer) && declaration.initializer.body) {
-          registerWrapper(declaration.name.text, declaration.initializer.parameters, declaration.initializer.body);
+          register(declaration.name.text, declaration.initializer.parameters, declaration.initializer.body);
         }
       }
     }
   }
-  const codeValue = (node: ts.Expression | undefined): string | undefined => {
+  return wrappers;
+}
+
+/**
+ * Bounded structured-channel scan: validation violation() results, arbitrary helper calls,
+ * and raw programmer-error throws are excluded. One same-file wrapper level is followed only
+ * when a top-level helper has exactly one direct return of refusalEnvelope or CoordinationError.
+ * Its call-site arguments are substituted and checked; wrapper chains are not followed.
+ * Cause and recovery-presence checks apply only to the recognized refusal channels.
+ */
+export function scanSource(source: string, file: string): RefusalFinding[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  interface Scope { parent?: Scope; kind: "source" | "function" | "block"; declarations: Map<string, ts.VariableDeclaration>; }
+  const scopeByNode = new WeakMap<ts.Node, Scope>();
+  const sourceScope: Scope = { kind: "source", declarations: new Map() };
+  const buildScopes = (node: ts.Node, inherited: Scope): void => {
+    const kind = ts.isFunctionLike(node) ? "function" : ts.isBlock(node) ? "block" : undefined;
+    const scope: Scope = kind ? { parent: inherited, kind, declarations: new Map() } : inherited;
+    scopeByNode.set(node, scope);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      let target = scope;
+      if (!(node.parent.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let))) {
+        while (target.parent && target.kind === "block") target = target.parent;
+      }
+      target.declarations.set(node.name.text, node);
+    }
+    ts.forEachChild(node, (child) => buildScopes(child, scope));
+  };
+  buildScopes(sf, sourceScope);
+  const resolveDeclaration = (scope: Scope | undefined, name: string): ts.VariableDeclaration | undefined => {
+    for (let current = scope; current; current = current.parent) {
+      const declaration = current.declarations.get(name);
+      if (declaration) return declaration;
+    }
+    return undefined;
+  };
+  const findings: RefusalFinding[] = [];
+  const wrappers = findRefusalWrappers(sf);
+  const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
     if (ts.isIdentifier(node)) {
-      const value = declarations.get(node.text);
-      if (value && (ts.isStringLiteralLike(value) || ts.isNoSubstitutionTemplateLiteral(value))) return value.text;
-      if (value && ts.isTemplateExpression(value)) return codeValue(value);
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      if (!declaration?.initializer || seen.has(declaration)) return undefined;
+      seen.add(declaration);
+      return codeValue(declaration.initializer, scopeByNode.get(declaration), seen);
     }
     return undefined;
   };
-  const isCauseCode = (node: ts.Expression | undefined): boolean => {
+  const isCauseCode = (node: ts.Expression | undefined, scope?: Scope): boolean => {
     if (!node) return false;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text.trim().length > 0;
     if (ts.isIdentifier(node)) {
-      const resolved = declarations.get(node.text);
-      if (resolved && (ts.isStringLiteralLike(resolved) || ts.isNoSubstitutionTemplateLiteral(resolved))) return resolved.text.trim().length > 0;
+      const resolved = codeValue(node, scope);
+      if (resolved !== undefined) return resolved.trim().length > 0;
       return node.text !== "undefined";
     }
     if (ts.isPropertyAccessExpression(node)) return node.name.text === "code" || node.name.text === "refusal";
-    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isParenthesizedExpression(node)) return isCauseCode(node.expression);
-    if (ts.isConditionalExpression(node)) return isCauseCode(node.whenTrue) && isCauseCode(node.whenFalse);
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isParenthesizedExpression(node)) return isCauseCode(node.expression, scope);
+    if (ts.isConditionalExpression(node)) return isCauseCode(node.whenTrue, scope) && isCauseCode(node.whenFalse, scope);
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
-      return isCauseCode(node.left) && isCauseCode(node.right);
+      return isCauseCode(node.left, scope) && isCauseCode(node.right, scope);
     }
     if (ts.isTemplateExpression(node)) return node.head.text.trim().length > 0 || node.templateSpans.length > 0;
     return false;
   };
   let grammar: CliGrammar | undefined;
   const getGrammar = () => grammar ??= extractCliGrammar();
-  const callBindings = (wrapper: WrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
+  const callBindings = (wrapper: RefusalWrapperDescriptor, call: ts.CallExpression): Map<string, ts.Expression> => {
     const bindings = new Map<string, ts.Expression>();
     wrapper.parameters.forEach((parameter, index) => {
       if (ts.isIdentifier(parameter.name)) {
@@ -282,25 +318,39 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     });
     return bindings;
   };
-  const resolveBound = (expression: ts.Expression, bindings: Map<string, ts.Expression>, seen = new Set<string>()): ts.Expression => {
+  const resolveBound = (
+    expression: ts.Expression,
+    bindings: Map<string, ts.Expression>,
+    seenBindings = new Set<string>(),
+    seenDeclarations = new Set<ts.VariableDeclaration>(),
+  ): ts.Expression => {
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) {
-      return resolveBound(expression.expression, bindings, seen);
+      return resolveBound(expression.expression, bindings, seenBindings, seenDeclarations);
     }
-    if (ts.isIdentifier(expression) && bindings.has(expression.text) && !seen.has(expression.text)) {
-      const next = new Set(seen).add(expression.text);
-      return resolveBound(bindings.get(expression.text)!, bindings, next);
+    if (ts.isIdentifier(expression)) {
+      if (bindings.has(expression.text) && !seenBindings.has(expression.text)) {
+        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), seenDeclarations);
+      }
+      const declaration = resolveDeclaration(scopeByNode.get(expression), expression.text);
+      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
+        return resolveBound(declaration.initializer, bindings, seenBindings, new Set(seenDeclarations).add(declaration));
+      }
     }
     if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression) && bindings.has(expression.expression.text)) {
       const baseName = expression.expression.text;
-      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seen).add(baseName));
-      const object = ts.isIdentifier(actual) ? declarations.get(actual.text) : actual;
+      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seenBindings).add(baseName), seenDeclarations);
+      const object = ts.isIdentifier(actual)
+        ? resolveDeclaration(scopeByNode.get(actual), actual.text)?.initializer
+        : actual;
       if (object && ts.isObjectLiteralExpression(object)) {
         for (const property of object.properties) {
           if (ts.isPropertyAssignment(property)) {
             const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
-            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seen);
+            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, seenDeclarations);
           }
-          if (ts.isShorthandPropertyAssignment(property) && property.name.text === expression.name.text) return resolveBound(property.name, bindings, seen);
+          if (ts.isShorthandPropertyAssignment(property) && property.name.text === expression.name.text) {
+            return resolveBound(property.name, bindings, seenBindings, seenDeclarations);
+          }
         }
       }
     }
@@ -308,9 +358,7 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const envelopeInput = (input: ts.Expression | undefined, bindings: Map<string, ts.Expression>): ObjectAlternative[] => {
     if (!input) return [];
-    let resolved = resolveBound(input, bindings);
-    if (ts.isIdentifier(resolved)) resolved = declarations.get(resolved.text) ?? resolved;
-    if (!ts.isObjectLiteralExpression(resolved)) return [];
+    const resolved = resolveBound(input, bindings);
     return objectAlternatives(resolved).map((alternative) => ({
       ...alternative,
       fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings)])),
