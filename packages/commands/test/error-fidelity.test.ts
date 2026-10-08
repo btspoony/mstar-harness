@@ -115,16 +115,21 @@ describe("session.recover input discovery", () => {
   });
 
   test("a malformed attestation keeps its parser grammar but never echoes the submitted document", async () => {
-    // The supported runtimes echo the offending operand differently: Node wraps
-    // it in a double-quoted `..., "<source>" is not valid JSON` tail, while Bun's
-    // identifier form is `Unexpected identifier "<source>"` with no suffix. Both
-    // are the runtime echoing an OPERAND, so both must go; the parser's own
-    // single-quoted grammar must survive.
+    // The supported runtimes name the offending operand through different
+    // clauses: Node wraps it in a double-quoted `..., "<source>" is not valid
+    // JSON` tail and reports a source character as `Unexpected token 'F'`,
+    // while Bun reports `Unexpected identifier "<source>"` and, for a stray
+    // source token, `Unrecognized token '@'`. Every one of those operands is the
+    // SUBMITTED source, so all of them must go; the parser's own expected
+    // grammar (`Expected '}'`, `Single quotes (')`) must survive. The corpus
+    // therefore includes the real `{"version":@}` input so the Unrecognized
+    // branch is actually reached, not merely recognized by a regex.
     for (const [label, document] of [
       ["identifier operand (Bun shape)", '{"operator":{"actor":LEAKSENTINEL7QX9}}'],
       ["bare-word value (Node excerpt shape)", '{"actor":LEAKSENTINEL7QX9}'],
       ["unterminated document", '{"version":1,"actor":"LEAKSENTINEL7QX9"'],
       ["trailing garbage", '{"version":1} LEAKSENTINEL7QX9'],
+      ["unrecognized token (Bun shape)", '{"version":@}'],
       ["single-quoted document", "{'actor':'LEAKSENTINEL7QX9'}"],
     ] as const) {
       const { root, harness } = fixture();
@@ -148,18 +153,26 @@ describe("session.recover input discovery", () => {
         .replace(/\s*\(position \d+\)$/, "")
         .replace(/\s*\(line \d+ column \d+\)$/, "")
         .trim();
-      // The category is the load-bearing fact: a cause collapsed to a generic
-      // `syntax error` / bare not-valid-JSON statement fails it.
-      const category = rawMessage
+      // The oracle scans the runtime's message with its wrapper prefixes AND its
+      // coordinate trailer removed, because the production contract publishes
+      // reported coordinates separately: a no-quote diagnostic must not become a
+      // whole-prose or location pin. Only the operand-role removal the product
+      // performs under test is deliberately NOT applied here.
+      const strippedMessage = rawMessage
         .replace(/^JSON Parse error:\s*/i, "")
         .replace(/^JSON parse error:\s*/i, "")
         .replace(/^SyntaxError:\s*/i, "")
-        .split(/["']/)[0]!
+        .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+        .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+        .replace(/\s*\(line \d+ column \d+\)/gi, "")
         .trim();
+      // The category is the load-bearing fact: a cause collapsed to a generic
+      // `syntax error` / bare not-valid-JSON statement fails it.
+      const category = strippedMessage.split(/["']/)[0]!.trim();
       expect(cause, `${label}: the parser's own category ${JSON.stringify(category)} must open the published cause`).toContain(category);
       // Operands the parser NAMED as unexpected/unrecognized are submitted
       // source, so no single-quoted or double-quoted form of them may survive.
-      for (const operand of rawMessage.match(/\b(?:Unexpected|Unrecognized|Unrecognised)\s+(?:token|identifier|number|string|character)\s+(?:'[^']*'|"[^"]*")/gi) ?? []) {
+      for (const operand of strippedMessage.match(/\b(?:Unexpected|Unrecognized|Unrecognised)\s+(?:token|identifier|number|string|character)\s+(?:'[^']*'|"[^"]*")/gi) ?? []) {
         const inner = operand.match(/(?:'([^']*)'|"([^"]*)")/);
         const token = inner?.[1] ?? inner?.[2] ?? "";
         if (token === "") continue;
@@ -169,15 +182,15 @@ describe("session.recover input discovery", () => {
       // Grammar the parser AUTHORED (dangling delimiters it merely mentions)
       // must survive: every single-quoted operand the message does not name as
       // unexpected/unrecognized is expected-grammar.
-      const unexpectedSpans = (rawMessage.match(/\b(?:Unexpected|Unrecognized|Unrecognised)\s+\w+\s+'[^']*'/gi) ?? []);
-      for (const token of rawMessage.match(/'[^']*'/g) ?? []) {
+      const unexpectedSpans = (strippedMessage.match(/\b(?:Unexpected|Unrecognized|Unrecognised)\s+\w+\s+'[^']*'/gi) ?? []);
+      for (const token of strippedMessage.match(/'[^']*'/g) ?? []) {
         if (unexpectedSpans.some((span) => span.endsWith(token))) continue;
         expect(cause, `${label}: parser grammar ${token} must survive in the cause`).toContain(token);
       }
       // Every double-quoted operand the SAME runtime derives for this input is
       // gone from the published message; the sentinel is gone from the whole
       // serialized envelope, not just the cause.
-      for (const operand of rawMessage.match(/"[^"]*"/g) ?? []) {
+      for (const operand of strippedMessage.match(/"[^"]*"/g) ?? []) {
         // Only meaningful operands are checked: an empty match is contained in
         // every string and would assert nothing.
         if (operand.length <= 2) continue;
