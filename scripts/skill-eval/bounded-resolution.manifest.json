@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "24fc055475c7a7a65427d2d5ba2b6bc4f072d362bb48a314aa715e4413d37e9f",
+  "casesHash": "4347492b576946d1f3bb44ef1e223a243ea5d1020ed7c9269839129b6d71cc13",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -929,6 +929,58 @@
         "evidence": "no preloaded seat inventory"
       },
       "integrityHash": "7139377fed2b3d603c20cd630eba366400c6c21c2120c1c4659934e786e6f56e"
+    },
+    {
+      "id": "bounded-res-mcp-guess-path",
+      "route": "dev",
+      "split": "dev",
+      "fixture": {
+        "hash": "2e20aa740c94202a6bee0da7e31058349fea907710225a48c9fc2a399521b9a0",
+        "files": [
+          {
+            "path": "AGENTS.md",
+            "sha256": "30c0092ae5b6194a239522085d36d2ca294601e8d68b1b19172d0415c0797dad"
+          },
+          {
+            "path": "mcp.json",
+            "sha256": "231f75d6e2b21d6d95d27a9710fdbdf1c89f9823421c12c1408cb3f121de69c5"
+          }
+        ]
+      },
+      "prompt": "Use the stdio MCP server to look up the CaptureInput payload schema. Try the near-miss tool mstar_schem; if the server returns a -32602 correction, call tools/list, then call the named corrected tool with type CaptureInput. Report the refusal, catalog hint, and corrected result.",
+      "assertions": [
+        {
+          "id": "a-calls",
+          "kind": "calls_within",
+          "value": 3,
+          "note": "failed call, tools/list, and corrected call are the complete bounded guess path"
+        },
+        {
+          "id": "a-correction",
+          "kind": "final_contains",
+          "value": "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.",
+          "note": "the failed near-miss call must name its nearest tool and catalog recovery"
+        },
+        {
+          "id": "a-corrected-call",
+          "kind": "final_contains",
+          "value": "corrected call succeeded",
+          "note": "the scripted path reaches the corrected tool"
+        }
+      ],
+      "provenance": {
+        "note": "Exercise the real stdio MCP correction path: failed near-miss, tools/list, then corrected call.",
+        "coverage": [
+          "bounded-mcp-guess-path",
+          "false-pass-trap"
+        ]
+      },
+      "sandbox": "read-only",
+      "boundedResolution": {
+        "context": "cold",
+        "evidence": "failed call mstar_schem → -32602 naming mstar_schema and tools/list → tools/list → mstar_schema(type=CaptureInput)"
+      },
+      "integrityHash": "8be0a2cd974a9ff683534edefc180ef472e39289f0b98ce147ff825b0e03eae5"
     }
   ],
   "sandbox": "read-only",
@@ -940,6 +992,16 @@
     "note": "Authored bounded-resolution scenario set: an evaluation input consumed by the existing evaluator, never a production command registry.",
     "casesHashBasis": "sha256(canonicalJson(cases)) over the authored case set recorded in this file — this artifact is authored directly, so no separate cases-file byte source exists (unlike the frozen corpus manifest, whose casesHash binds the cases file bytes).",
     "inputsByScenario": {
+      "bounded-res-mcp-guess-path": {
+        "inputs": [
+          "stdio MCP server",
+          "near-miss tool name mstar_schem"
+        ],
+        "unavailable": [
+          "corrected tool name until the -32602 refusal",
+          "full catalog until tools/list"
+        ]
+      },
       "bounded-res-schema-read": {
         "inputs": [
           "payload type name CaptureInput",

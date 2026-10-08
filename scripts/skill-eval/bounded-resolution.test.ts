@@ -50,6 +50,12 @@ const SUPPLIED_STALE_TOKEN = `sha256:${"0".repeat(64)}`;
 const VERSIONED_DOCUMENT = JSON.stringify({ version: RECORDED_TOKEN, payload: { issueId: "I-000001", revision: 1 } });
 
 function fixtureFilesFor(caseId: string): { path: string; content: string }[] {
+  if (caseId === "bounded-res-mcp-guess-path") {
+    return [
+      { path: "AGENTS.md", content: "# Bounded-resolution MCP fixture (synthetic evaluation input).\n" },
+      { path: "mcp.json", content: "{\"command\":\"node\",\"args\":[\"${MSTAR_CLI_PATH}\",\"mcp\"]}\n" },
+    ];
+  }
   const store: Record<string, string> = {
     "bounded-res-schema-read": '{"issueId":"I-000001","revision":1}',
     "bounded-res-write-stale-constraint": VERSIONED_DOCUMENT,
@@ -438,12 +444,24 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-replay-partial": "outcome: upgrade still unfinished; the read-only replay withheld the write, receipt phase activated (sources pending) remains the recorded state\nnext: apply the sources phase, then retire",
   "bounded-res-slash-iteration-cold": "outcome: requested missing bootstrap facts",
   "bounded-res-slash-review-cold": "outcome: requested missing review facts",
+  "bounded-res-mcp-guess-path": "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.\ncorrected call succeeded",
 };
+
+const mcpCall = (id: string, name: string, failed = false): string => JSON.stringify({
+  type: "item.completed",
+  id,
+  item: {
+    type: "command_execution",
+    id,
+    command: ["mcp", "tools/call", name],
+    mcp_tool_call: { name },
+    status: failed ? "failed" : "completed",
+    exit_code: failed ? 1 : 0,
+  },
+});
 
 function finalFor(caseId: string): string {
   const lines: string[] = [];
-  // The adversarial twin deliberately emits a success-looking marker with the
-  // WRONG action: the oracle must catch it (budget stays valid).
   if (caseId === "bounded-res-adversarial-wrong-action") lines.push("SUCCESS-MARKER");
   const grouped = GROUPED_FINALS[caseId];
   if (grouped !== undefined) lines.push(grouped);
@@ -454,6 +472,15 @@ function finalFor(caseId: string): string {
 function scriptFor(caseId: string, fixtureText?: string): { events: string; final: string } {
   const final = finalFor(caseId);
   switch (caseId) {
+    case "bounded-res-mcp-guess-path":
+      return {
+        events: turn([
+          mcpCall("mcp-1", "mstar_schem", true),
+          mcpCall("mcp-2", "tools/list"),
+          mcpCall("mcp-3", "mstar_schema"),
+        ]),
+        final,
+      };
     case "bounded-res-lease-boundary": {
       const text = fixtureText ?? fixtureFilesFor(caseId).find((f) => f.path === "store/fixture.json")!.content;
       const { integration_merge_lease: lease } = JSON.parse(text) as {
@@ -474,10 +501,10 @@ function scriptFor(caseId: string, fixtureText?: string): { events: string; fina
         final,
       };
     case "bounded-res-schema-read":
+      return {
       // The trace observes the REAL fixture reads the outcome claims: the
       // published contract (its required field list) and the stored issue
       // document (its values) — not placeholder reads.
-      return {
         events: turn([
           invocation("item_1", ["cat", "contract/capture-input.json"]),
           invocation("item_2", ["cat", "store/fixture.json"]),
@@ -495,6 +522,7 @@ function scriptFor(caseId: string, fixtureText?: string): { events: string; fina
       return { events: turn([invocation("item_1")]), final };
   }
 }
+
 
 function syntheticSpawn(
   io: RunnerIo,
@@ -1246,5 +1274,82 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(markdown).toContain("Bounded-resolution accounting");
     // Declared contexts travel with the scenarios; the cold-start arms are cold.
     expect(report.report.boundedResolution.unitsDeclaredCold).toBeGreaterThanOrEqual(1);
+  });
+  test("mcp-guess-path case is selected and its native call evidence is graded honestly", async () => {
+    const selected = selectCases(manifest, "dev").find((item) => item.id === "bounded-res-mcp-guess-path");
+    expect(selected).toBeDefined();
+    expect(selected?.assertions.find((assertion) => assertion.kind === "calls_within")?.value).toBe(3);
+    expect(manifestText).toContain("failed call mstar_schem");
+
+    const caseManifest = cloneManifest();
+    caseManifest.cases = caseManifest.cases.filter((item) => item.id === "bounded-res-mcp-guess-path" || item.split === "heldout");
+    const successText = "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.\ncorrected call succeeded";
+    const makeEvents = (ids: boolean[], count = 3): string => {
+      const records: string[] = [JSON.stringify({ type: "thread.started", thread_id: "thr_mcp_guess" })];
+      const tools = ["mstar_schem", "tools/list", "mstar_schema", "tools/list"];
+      for (let index = 0; index < count; index++) {
+        const id = ids[index] === false ? undefined : `mcp-${index + 1}`;
+        const item: Record<string, unknown> = {
+          type: "command_execution",
+          command: ["mcp", "tools/call", tools[index]!],
+          mcp_tool_call: { name: tools[index]! },
+          status: index === 0 ? "failed" : "completed",
+          exit_code: index === 0 ? 1 : 0,
+        };
+        if (id !== undefined) item.id = id;
+        const record: Record<string, unknown> = { type: "item.completed", item };
+        if (id !== undefined) record.id = id;
+        records.push(JSON.stringify(record));
+      }
+      records.push(JSON.stringify({ type: "turn.completed", usage: {} }));
+      return `${records.join("\n")}\n`;
+    };
+    const evaluate = async (options: { ids: boolean[]; count?: number; final: string }) => {
+      const io = memoryIo();
+      seedRun(io, caseManifest);
+      const spawn: SpawnFn = async (request) => {
+        io.writeText(request.stdoutFile, makeEvents(options.ids, options.count));
+        io.writeText(request.stderrFile, "");
+        const output = request.argv[request.argv.indexOf("--output-last-message") + 1]!;
+        io.writeText(output, options.final);
+        return { code: 0, signal: null, timedOut: false, spawnError: null };
+      };
+      const result = await executeManifest({
+        manifestPath: RUN_MANIFEST_PATH,
+        split: "dev",
+        variants: ["baseline"],
+        repeats: 1,
+        repoRoot: REPO_ROOT,
+        io,
+        launchFn: spawn,
+      });
+      expect(result.errors).toEqual([]);
+      const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, repoRoot: REPO_ROOT, io });
+      const unit = Object.values(result.state.units)[0]!;
+      return {
+        grade: unit.grade,
+        calls: unit.grading!.assertions.find((item) => item.kind === "calls_within")!.grade,
+        report: report.report,
+      };
+    };
+
+    const compliantShape = await evaluate({ ids: [true, true, true], final: successText });
+    expect(compliantShape.grade).toBe("pass");
+    expect(compliantShape.report.units[0]!.grade).toBe("pass");
+
+    const noSuggestion = await evaluate({
+      ids: [true, true, true],
+      final: "error -32602: Tool mstar_schem not found. Call tools/list for the full catalog.\ncorrected call succeeded",
+    });
+    expect(noSuggestion.grade).toBe("fail");
+    expect(noSuggestion.report.units[0]!.failedAssertions).toContain("a-correction(final_contains)");
+    const overBudget = await evaluate({ ids: [true, true, true, true], count: 4, final: successText });
+    expect(overBudget.calls).toBe("fail");
+    expect(overBudget.grade).toBe("fail");
+
+    const identityMissing = await evaluate({ ids: [false, true, true], final: successText });
+    expect(identityMissing.calls).toBe("unverified");
+    expect(identityMissing.grade).toBe("unverified");
+    expect(identityMissing.report.units[0]!.unverifiedAssertions).toContain("a-calls(calls_within)");
   });
 });
