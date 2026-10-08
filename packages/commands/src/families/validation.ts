@@ -247,7 +247,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (await resolveExecutionReadRoute({ harnessDir: harness }) === "execution") {
           const graph = (await readExecutionState({ harnessDir: harness })).data;
           const registered = graph.workflows.find(({ state }) => state.id === workflow);
-          if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness }, "Rerun mstar worktree check --workflow <id> with a workflow id registered in the execution authority.");
+          if (!registered) return refusal(id, "worktree.l1.workflow-not-found", `workflow "${workflow}" not found in the active execution authority graph`, { workflowId: workflow, authorityGraph: harness }, "Rerun mstar worktree check --workflow <id> --plan <plan-id> with a workflow id registered in the execution authority.");
           const planView = input.planId === undefined
             ? registered.plans.length === 1 ? registered.plans[0] : undefined
             : registered.plans.find((candidate) => candidate.plan.id === plan);
@@ -255,11 +255,11 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           const selectedPlanId = planView.plan.id;
           if (typeof selectedPlanId !== "string") return refusal(id, "worktree.l1.plan-not-found", `the selected plan row in workflow "${workflow}" has no string id`, { workflowId: workflow, authorityGraph: harness }, "Correct the plan row named in the details, then rerun mstar worktree check --plan <plan-id> --workflow <id>.");
           const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
-          if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed", undefined, "Rerun mstar worktree check --workflow <id> after the main worktree and branch probes succeed.");
+          if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
           const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-          if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree", undefined, "Rerun mstar worktree check --workflow <id> after the main worktree and branch probes succeed.");
+          if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
           const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
-          if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed", undefined, "Rerun mstar worktree check --workflow <id> after the main worktree and branch probes succeed.");
+          if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
           const branch = registered.state.branch ?? {};
           const lifecycleBranches = activeGraphLifecycleBranches(graph);
           const metadata = isPlainRecord(planView.plan.metadata) ? planView.plan.metadata : {};
@@ -292,7 +292,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         } catch (error) {
           if (!(error instanceof WorkflowSnapshotValidationError)) throw error;
           const first = error.violations[0];
-          return refusal(id, first?.code ?? "workflow.snapshot.invalid", first?.message ?? "invalid workflow snapshot", { violations: error.violations }, "Correct each reported workflow snapshot violation, then rerun mstar worktree check --workflow <id>.");
+          return refusal(id, first?.code ?? "workflow.snapshot.invalid", first?.message ?? "invalid workflow snapshot", { violations: error.violations }, "Correct each reported workflow snapshot violation, then rerun mstar worktree check --workflow <id> --plan <plan-id>.");
         }
         for (const diagnostic of snapshotDiagnostics) {
           if (!diagnostic.ok) {
@@ -304,16 +304,16 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         if (!rows.length) return refusal(id, "worktree.l1.plan-not-found", `no plan row with id/plan_id ${plan}`, { snapshotPath, planId: plan }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a plan id present in the snapshot.");
         if (rows.length > 1) return refusal(id, "worktree.l1.ambiguous", "multiple plan rows match (id and plan_id both present)", { snapshotPath, planId: plan }, "Rerun mstar worktree check --plan <plan-id> --workflow <id> with a selector that matches exactly one row.");
         const main = await awaitSpawn(context, ["git", "worktree", "list", "--porcelain"]);
-        if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed", undefined, "Rerun mstar worktree check --workflow <id> after the main worktree and branch probes succeed.");
+        if (!main.ok) return refusal(id, "worktree.probe.unavailable", main.stderr || "main worktree probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
         const primary = main.stdout.split(/\r?\n/).find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
-        if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree", undefined, "Rerun mstar worktree check --workflow <id> after the main worktree and branch probes succeed.");
+        if (!primary) return refusal(id, "worktree.probe.unavailable", "main worktree probe returned no worktree", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
         const mainBranch = await awaitSpawn(context, ["git", "branch", "--show-current"], primary);
-        if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed", undefined, "Rerun mstar worktree check --workflow <id> after the main worktree and branch probes succeed.");
+        if (!mainBranch.ok) return refusal(id, "worktree.probe.unavailable", mainBranch.stderr || "branch probe failed", undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after the main worktree and branch probes succeed.");
         const observedMainBranch = mainBranch.stdout.trim();
         const rowMetadata = isPlainRecord(rows[0].metadata) ? rows[0].metadata : {};
         const lifecycleBranches: ActiveLifecycleBranch[] = [];
         const siblingScan = scanActiveLifecycleBranches(harness, workflow);
-        if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail, undefined, "Rerun mstar worktree check --workflow <id> after correcting the reported sibling-workflow problem.");
+        if (siblingScan.kind === "refusal") return refusal(id, siblingScan.code, siblingScan.detail, undefined, "Rerun mstar worktree check --workflow <id> --plan <plan-id> after correcting the reported sibling-workflow problem.");
         lifecycleBranches.push(...siblingScan.branches);
         // The selected row's source checkout/branch uses the dedicated identity
         // guard; its retained tracks and other snapshot ownership still block main.
