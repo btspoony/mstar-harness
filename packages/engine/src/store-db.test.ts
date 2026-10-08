@@ -508,8 +508,14 @@ describe("store-db schema-unsupported reports store / build / first-unknown dist
     insert.run(supportedMax + 2, "from-an-even-newer-build", "e".repeat(64), "2026-09-18T00:00:00.000Z");
     const highestApplied = supportedMax + 2;
     const firstUnsupported = supportedMax + 1;
-    const versionsBefore = handle.db.prepare("select version from schema_version order by version").all();
     handle.close();
+
+    // The baseline and the post-refusal read both go through the real driver,
+    // so the rows keep the driver's own shape and the comparison needs no
+    // annotation or suppression.
+    const baseline = new DatabaseSync(join(dir, "store.db"), { readOnly: true });
+    const versionsBefore = baseline.prepare("select version from schema_version order by version").all();
+    baseline.close();
 
     // The validation guard is unchanged: the read still refuses this store.
     const refusal: unknown = await openStore({ harnessDir: dir }, "read").then(() => null, (error: unknown) => error);
