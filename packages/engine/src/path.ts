@@ -563,10 +563,8 @@ async function scaffoldProtectedDoc(
     if (!gate.ok) {
       throw new CoordinationError(
         "coordination.invalid-input",
-        `refusing to scaffold ${target}: the document already exists but is invalid (${gate.violations
-          .map((violation) => violation.message)
-          .join("; ")}) \u2014 scaffold never replaces existing state`,
-        { path: target },
+        "The existing coordination document is invalid; scaffolding does not replace existing state. Inspect registered state with mstar status validate.",
+        { path: target, violations: gate.violations.map(({ code, message }) => ({ code, message })) },
       );
     }
   });

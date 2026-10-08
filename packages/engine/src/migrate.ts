@@ -1006,8 +1006,8 @@ export async function applyMigratePlan(plan: MigratePlan): Promise<MigrateResult
 function rawTargetStoreError(filePath: string, error: unknown): CoordinationError {
   return new CoordinationError(
     "coordination.store",
-    `cannot write migration target ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
-    { path: filePath },
+    "Cannot write the migration target. Inspect the reported path and filesystem cause, then rerun mstar store migrate --harness <harness-root>.",
+    { path: filePath, cause: error instanceof Error ? error.message : String(error) },
   );
 }
 

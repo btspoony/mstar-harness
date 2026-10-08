@@ -73,7 +73,7 @@ export function allowedOperations(_role: CoordinationRole, row: PlanRow): string
 
 export function assertPlanAddress(_seat: CoordinationSeat, planId: unknown): string {
   if (!isNonEmptyString(planId)) {
-    throw new CoordinationError("coordination.invalid-input", "a coordinator intent requires an explicit planId; select the row with plan show", { field: "planId" });
+    throw new CoordinationError("coordination.invalid-input", "Invalid coordinator intent: provide the explicit planId; inspect registered workflow state with mstar status validate.", { field: "planId" });
   }
   return planId;
 }
@@ -83,8 +83,8 @@ export function requireRowStatus(row: PlanRow, expected: string, planId: string,
   if (actual !== expected) {
     throw new CoordinationError(
       "coordination.plan-status",
-      `${what} requires plan ${planId} in ${expected}, not ${actual}; read plan show and use plan progress for its allowed transition`,
-      { plan_id: planId, expected, actual },
+      "The requested operation requires the plan to be in its allowed status. Inspect workflow and plan state with mstar status validate.",
+      { plan_id: planId, expected, actual, operation: what },
     );
   }
 }
@@ -94,7 +94,7 @@ export function requireProgressStatus(row: PlanRow, target: PlanProgress["status
   if (!PROGRESS_TRANSITIONS[current]?.includes(target)) {
     throw new CoordinationError(
       "coordination.progress-transition",
-      `plan ${planId} cannot progress ${current} -> ${target}; read plan show and use its current allowed status transition`,
+      "Plan progress transition is not allowed from its current status. Inspect current workflow and plan state with mstar status validate.",
       { plan_id: planId, current, target, allowed: PROGRESS_TRANSITIONS[current] ?? [] },
     );
   }
@@ -102,13 +102,13 @@ export function requireProgressStatus(row: PlanRow, target: PlanProgress["status
 
 export function assertOperationRole(seat: CoordinationSeat, kind: string): void {
   if (seat.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", `${kind} requires the workflow coordinator; use coordinator bind or recover the stopped workflow coordinator`, { role: seat.role, kind });
+    throw new CoordinationError("coordination.session-role", "This operation requires the workflow coordinator identity. Inspect the current binding with mstar status validate.", { role: seat.role, kind });
   }
 }
 
 export function assertPrepareAdmission(input: { planId: string; row: PlanRow }): void {
   if (rowStatusOf(input.row) === "Done") {
-    throw new CoordinationError("coordination.prepare-status", `plan ${input.planId} is Done; prepare cannot revise a completed row`, { plan_id: input.planId });
+    throw new CoordinationError("coordination.prepare-status", "A completed plan row cannot be revised by prepare. Inspect current workflow state with mstar status validate.", { plan_id: input.planId });
   }
 }
 
@@ -138,7 +138,7 @@ export function assertTrackBranches(
     if (!isNonEmptyString(branch) || protectedBranches.has(branch) || otherPlanBranches.has(branch) || seen.has(branch)) {
       throw new CoordinationError(
         "coordination.scope-mismatch",
-        `plan ${source.planId} track branch ${branch} is empty, duplicated, protected or owned by another plan; report distinct owned feature branches with plan progress`,
+        "Track branches must be distinct, unprotected feature branches owned by this plan. Inspect current plan ownership with mstar status validate.",
         { plan_id: source.planId, branch },
       );
     }
@@ -148,7 +148,7 @@ export function assertTrackBranches(
 
 export function assertGitObjectId(value: unknown, what: string): string {
   if (!isNonEmptyString(value) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) {
-    throw new CoordinationError("coordination.invalid-input", `${what} must be a full lowercase Git object id`, { field: what });
+    throw new CoordinationError("coordination.invalid-input", "Invalid Git object id: provide a full lowercase 40- or 64-character hexadecimal value. Inspect workflow state with mstar status validate.", { field: what, actual: value });
   }
   return value;
 }
@@ -167,23 +167,23 @@ export type ValidatedCompletionEvidence = {
 };
 
 export function readCompletionEvidence(value: unknown, route: RowValidationRoute = "integration"): ValidatedCompletionEvidence {
-  if (!isPlainObject(value)) throw new CoordinationError("coordination.invalid-input", "complete requires an evidence object");
+  if (!isPlainObject(value)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide an evidence object. Inspect workflow state with mstar status validate.");
   assertExactKeys(value, ["source_sha", "review_base", "review_head", "qc", "qa", "evidence_paths"], "completion evidence");
   const reportOnly = route === "standalone-report-only";
   const sourceSha = reportOnly && value.source_sha === undefined ? null : assertGitObjectId(value.source_sha, "source_sha");
   const reviewBase = reportOnly && value.review_base === undefined ? null : assertGitObjectId(value.review_base, "review_base");
   const reviewHead = reportOnly && value.review_head === undefined ? null : assertGitObjectId(value.review_head, "review_head");
-  if (!isPlainObject(value.qc)) throw new CoordinationError("coordination.invalid-input", "completion evidence requires qc");
+  if (!isPlainObject(value.qc)) throw new CoordinationError("coordination.invalid-input", "Completion evidence must include QC evidence. Inspect workflow state with mstar status validate.");
   assertExactKeys(value.qc, ["decision", "reports", "consolidated"], "completion evidence qc");
   const qc = value.qc;
   if (qc.decision !== "Approve" && qc.decision !== "Approve with residuals") {
-    throw new CoordinationError("coordination.invalid-input", "qc.decision must be the string Approve or Approve with residuals; correct the completion evidence and retry plan complete");
+    throw new CoordinationError("coordination.invalid-input", "Invalid QC decision: provide Approve or Approve with residuals. Inspect workflow state with mstar status validate.");
   }
   if (!Array.isArray(qc.reports) || qc.reports.length === 0 || !qc.reports.every(isNonEmptyString)) {
-    throw new CoordinationError("coordination.invalid-input", "qc.reports must name at least one report");
+    throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.reports must name at least one report. Inspect workflow state with mstar status validate.");
   }
-  if (!isNonEmptyString(qc.consolidated)) throw new CoordinationError("coordination.invalid-input", "qc.consolidated must name the plan QC decision report");
-  if (!isPlainObject(value.qa)) throw new CoordinationError("coordination.invalid-input", "completion evidence requires a QA or PM acceptance report");
+  if (!isNonEmptyString(qc.consolidated)) throw new CoordinationError("coordination.invalid-input", "Invalid QC evidence: qc.consolidated must name the plan QC decision report. Inspect workflow state with mstar status validate.");
+  if (!isPlainObject(value.qa)) throw new CoordinationError("coordination.invalid-input", "Invalid completion evidence: provide a QA or PM acceptance report. Inspect workflow state with mstar status validate.");
   assertExactKeys(value.qa, ["gate", "decision", "report"], "completion evidence qa");
   if ((value.qa.gate !== "mandatory" && value.qa.gate !== "pm-acceptance") || value.qa.decision !== "pass" || !isNonEmptyString(value.qa.report)) {
     throw new CoordinationError("coordination.invalid-input", "qa evidence requires string gate mandatory or pm-acceptance, decision pass and the acceptance report; correct the completion evidence and retry plan complete");
@@ -192,7 +192,7 @@ export function readCompletionEvidence(value: unknown, route: RowValidationRoute
   const qaReport = value.qa.report;
   const extra = value.evidence_paths === undefined ? [] : value.evidence_paths;
   if (!Array.isArray(extra) || !extra.every(isNonEmptyString)) {
-    throw new CoordinationError("coordination.invalid-input", "evidence_paths must be an array of absolute evidence paths");
+    throw new CoordinationError("coordination.invalid-input", "Invalid evidence_paths: provide an array of absolute evidence paths. Inspect workflow state with mstar status validate.");
   }
   const paths = new Set<string>([...qc.reports, qc.consolidated, ...extra]);
   paths.add(qaReport);
@@ -216,7 +216,7 @@ export function assertCompletionReviewDecision(
   qaGate: "mandatory" | "pm-acceptance",
 ): void {
   if (evidence.qa_gate !== qaGate) {
-    throw new CoordinationError("coordination.invalid-transition", `plan ${planId} requires ${qaGate} acceptance evidence; provide the matching QA or PM acceptance report`, { plan_id: planId, required: qaGate });
+    throw new CoordinationError("coordination.invalid-transition", "Plan requires the configured QA acceptance evidence; provide the matching QA or PM acceptance report. Inspect workflow state with mstar status validate.", { plan_id: planId, required: qaGate });
   }
 }
 
@@ -231,8 +231,8 @@ export function assertNoIntegrationContamination(input: {
   if (input.integration !== undefined || input.snapshot.integration_merge_lease !== undefined) {
     throw new CoordinationError(
       input.code ?? "coordination.invalid-transition",
-      `standalone ${input.what} for ${input.planId} does not consume an integration lane; remove the integration input and use its own source or report-policy completion route`,
-      { plan_id: input.planId, integration: input.integration, integration_merge_lease: input.snapshot.integration_merge_lease },
+      "Standalone operation does not consume an integration lane; omit integration input and follow its own source or report-policy completion route. Inspect workflow state with mstar status validate.",
+      { plan_id: input.planId, operation: input.what, integration: input.integration, integration_merge_lease: input.snapshot.integration_merge_lease },
     );
   }
 }
@@ -289,7 +289,7 @@ export function integrationAnchors(snapshot: WorkflowSnapshot, planId: string): 
   const branch = snapshot.branch?.integration;
   const worktreePath = snapshot.integration_worktree_path;
   if (!isNonEmptyString(branch) || !isNonEmptyString(worktreePath)) {
-    throw integrationUnresolved(`plan ${planId} requires its workflow integration branch and worktree; supply the missing anchors through workflow integration-worktree before merging`, { plan_id: planId });
+    throw integrationUnresolved("The workflow integration branch and worktree anchors are required before merging. Inspect workflow state with mstar status validate.", { plan_id: planId, integration_branch: branch, integration_worktree: worktreePath });
   }
   return { targetBranch: branch, worktreePath };
 }
@@ -302,7 +302,7 @@ export function standaloneDeliveryAnchors(snapshot: WorkflowSnapshot, planId: st
   const sourceBranch = snapshot.branch?.source;
   const targetBranch = snapshot.branch?.target;
   if (!isNonEmptyString(sourceBranch) || !isNonEmptyString(targetBranch) || !isNonEmptyString(worktreePath)) {
-    throw new CoordinationError("coordination.invalid-transition", `standalone development plan ${planId} requires its registered source/target branch and row worktree; supply source facts through plan prepare and workflow registration`, { plan_id: planId });
+    throw new CoordinationError("coordination.invalid-transition", "Standalone development requires registered source/target branches and a row worktree. Inspect workflow and plan registration with mstar status validate.", { plan_id: planId, source_branch: sourceBranch, target_branch: targetBranch, worktree_path: worktreePath });
   }
   return { sourceBranch, targetBranch, worktreePath };
 }
