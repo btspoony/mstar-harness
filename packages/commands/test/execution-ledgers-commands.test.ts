@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -182,11 +182,12 @@ describe("workflow-note public routes", () => {
     const outside = path.join(fx.root, "outside.jsonl");
     const link = path.join(fx.root, "linked.jsonl");
     const dangling = path.join(fx.root, "dangling.jsonl");
+    const nonRegular = path.join(fx.root, "directory-leaf");
     writeFileSync(outside, '{"text":"outside-secret"}\n');
     symlinkSync(outside, link);
     symlinkSync(path.join(fx.root, "missing.jsonl"), dangling);
-
-    for (const file of [link, dangling]) {
+    mkdirSync(nonRegular);
+    for (const file of [link, dangling, nonRegular]) {
       const result = await coverage.execute({ workflow: WORKFLOW, file, harness: fx.harnessDir }, context(fx.root));
       expect(result).toMatchObject({ status: "refused", code: "execution-ledgers.target-untrusted", exitCode: 1 });
       expect(JSON.stringify(result)).not.toContain("outside-secret");

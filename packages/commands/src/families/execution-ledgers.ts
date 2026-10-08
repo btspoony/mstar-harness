@@ -106,14 +106,14 @@ const coverageInput = z.object({
 });
 
 /**
- * Read retained ledger bytes from the same descriptor whose type was checked.
- * The no-follow open rejects a substituted leaf link; fstat validates the
- * opened object. Explicit files are intentionally not confined beneath root.
+ * The no-follow, nonblocking open prevents leaf-link races without waiting on
+ * a FIFO; fstat validates the opened object. Explicit files are intentionally
+ * not confined beneath root.
  */
 function readLedgerBytes(file: string): Uint8Array | null {
   let fd: number;
   try {
-    fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ELOOP") {
