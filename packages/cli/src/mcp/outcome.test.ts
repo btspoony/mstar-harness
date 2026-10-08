@@ -1,6 +1,7 @@
 import { commandEnvelopeSchema, executeCommand, getCommandDefinitions, getSddCommandDefinitions, getValidationCommandDefinitions, refusalEnvelope, sddFailed, type CommandDefinition, type InvocationContext } from "@mstar-harness/commands";
 import { SddScriptError } from "@mstar-harness/engine";
 import { validateCommandOutcome } from "./outcome.js";
+import { mcpToolInputSchema } from "./register.js";
 
 function context(cwd = "/tmp"): InvocationContext {
   return {
@@ -134,4 +135,15 @@ describe("MCP command outcome refusal contract", () => {
     expect(mcp.details?.helpRoute).toBe("mstar worktree qc-alignment --help");
     expect(mcp.details?.recovery).toBe("Run mstar worktree qc-alignment --help and correct the flagged input.");
   });
+  test("registered MCP schema requires the report file that shared admission rejects when omitted", async () => {
+    const definition = getCommandDefinitions().find((entry) => entry.id === "pr-review.validate-report");
+    if (definition === undefined) throw new Error("missing pr-review.validate-report definition");
+    const registeredInput = mcpToolInputSchema(definition);
+
+    expect(registeredInput.safeParse({}).success).toBe(false);
+    expect(registeredInput.safeParse({ reportFile: "review.json" }).success).toBe(true);
+    const admitted = await executeCommand(definition.id, {}, context());
+    expect(admitted).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+  });
+
 });

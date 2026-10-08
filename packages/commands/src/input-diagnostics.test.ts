@@ -73,12 +73,9 @@ describe("executeCommand input diagnostics", () => {
     expect(engine).not.toHaveProperty("index");
     // The flattened messages are identical; only the structured path tells them apart.
     expect(cli?.message).toBe(engine?.message);
-    // Diagnostics carry only safe facts: field path, stable code, message, array index.
-    for (const entry of diagnostics) {
-      expect(Object.keys(entry).every((key) => ["path", "code", "message", "index"].includes(key))).toBe(true);
-    }
+    expect(cli).toMatchObject({ expected: "number", received: "1" });
+    expect(engine).toMatchObject({ expected: "number", received: "2" });
   });
-
   test("invalid array item rejection includes formatter-generated expected and received facts", async () => {
     const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
     expect(envelope.status).toBe("usage");
@@ -100,14 +97,17 @@ describe("executeCommand input diagnostics", () => {
     expect(JSON.stringify(envelope)).not.toContain(secret);
     // The offending member is still identified by its safe path.
     expect(diagnostics.map((entry) => entry.path)).toContain("files[0]");
+    expect(at(diagnostics, "files[0]")).toMatchObject({ expected: "string", received: "object" });
   });
   test("secret-shaped scalar received values are redacted from the usage message", async () => {
     const secret = "sk-live-test-123";
     const envelope = await executeCommand("worktree.qc-alignment", { files: secret }, context());
+    const diagnostics = usageDiagnostics(envelope);
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
     expect(envelope.message).not.toContain(secret);
     expect(envelope.message).toContain("[REDACTED]");
+    expect(at(diagnostics, "files")).toMatchObject({ expected: "array", received: "[REDACTED]" });
   });
 
   test("non-secret scalar received values remain fully rendered", async () => {
@@ -187,9 +187,7 @@ describe("session selector admission", () => {
 });
 
 describe("CLI parser diagnostics", () => {
-  test("missing required argument reports the field and the leaf help route", async () => {
-    // `--key` is supplied so Commander deterministically reports the missing
-    // positional argument instead of the required option.
+  test("an omitted positional input reaches shared admission diagnostics", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "--key", "probe-key"]);
     expect(exitCode).toBe(2);
     const envelope = JSON.parse(stdout) as {
@@ -200,13 +198,12 @@ describe("CLI parser diagnostics", () => {
       details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
     };
     expect(envelope).toMatchObject({ command: "persist.get", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    const diagnostic = envelope.details?.diagnostics?.[0];
+    const diagnostic = envelope.details?.diagnostics?.find((entry) => entry.path === "kind");
     expect(diagnostic?.path).toBe("kind");
-    expect(diagnostic?.code).toBe("commander.missingArgument");
     expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
   });
 
-  test("a required option without its value reports the option's input field", async () => {
+  test("an omitted required option reaches shared admission diagnostics", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "json"]);
     expect(exitCode).toBe(2);
     const envelope = JSON.parse(stdout) as {
@@ -214,39 +211,39 @@ describe("CLI parser diagnostics", () => {
       details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
     };
     expect(envelope.status).toBe("usage");
-    const diagnostic = envelope.details?.diagnostics?.[0];
+    const diagnostic = envelope.details?.diagnostics?.find((entry) => entry.path === "key");
     expect(diagnostic?.path).toBe("key");
-    expect(diagnostic?.code).toBe("commander.missingMandatoryOptionValue");
     expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
   });
 
-  test("a flag present without its value reports the option's input field", async () => {
+  test("a flag present without its value reports missing-value facts", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key"]);
     expect(exitCode).toBe(2);
     const envelope = JSON.parse(stdout) as {
       status: string;
-      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
+      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; expected?: string; received?: string; helpRoute?: string }> };
     };
     expect(envelope.status).toBe("usage");
     const diagnostic = envelope.details?.diagnostics?.[0];
     expect(diagnostic?.path).toBe("key");
-    expect(diagnostic?.code).toBe("commander.optionMissingArgument");
     expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
+    expect(diagnostic?.expected).toBe("option value");
+    expect(diagnostic?.received).toBe("missing value");
   });
 
-  test("a malformed flag keeps the honest parser diagnostic without guessing a field", async () => {
+  test("an unknown option reports its argv location without inventing a field", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key", "probe-key", "--definitely-not-a-flag"]);
     expect(exitCode).toBe(2);
     const envelope = JSON.parse(stdout) as {
       status: string;
-      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
+      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; expected?: string; received?: string; helpRoute?: string }> };
     };
     expect(envelope.status).toBe("usage");
     const diagnostic = envelope.details?.diagnostics?.[0];
-    expect(diagnostic?.code).toBe("commander.unknownOption");
     expect(diagnostic?.message).toContain("--definitely-not-a-flag");
-    // An unknown flag is not a determinable input field: no path is invented.
-    expect(diagnostic).not.toHaveProperty("path");
+    expect(diagnostic?.path).toMatch(/^argv\[\d+\]$/);
+    expect(diagnostic?.expected).toBe("recognized option");
+    expect(diagnostic?.received).toBe("--definitely-not-a-flag");
     expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
   });
 });

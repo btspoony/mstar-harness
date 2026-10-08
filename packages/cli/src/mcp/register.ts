@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { executeCommand } from "@mstar-harness/commands";
+import { executeCommand, getCommandSchemas } from "@mstar-harness/commands";
 import { z } from "zod";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
 import { createMcpEffects, type McpEffects } from "./effects.js";
@@ -49,9 +49,15 @@ export function mcpToolInputSchema(definition: CommandDefinition) {
       return [[field, descriptor.schema.optional()] as const];
     }),
   );
-  const extended = Object.keys(composed).length > 0 ? input.extend(composed) : input;
-  if (definition.id === "judgment.review-advice") return extended.extend({ input: z.string().optional() });
-  return sessionId ? extended.extend({ sessionId: z.string().optional() }) : extended;
+  const requiredInputs = getCommandSchemas([definition])[0]?.required ?? [];
+  const requiredShape = Object.fromEntries(requiredInputs.flatMap((field) => {
+    const declared = extended.shape[field];
+    if (declared === undefined || !(declared instanceof z.ZodOptional)) return [];
+    return [[field, declared.unwrap()] as const];
+  }));
+  const required = Object.keys(requiredShape).length > 0 ? extended.extend(requiredShape) : extended;
+  if (definition.id === "judgment.review-advice") return required.extend({ input: z.string().optional() });
+  return sessionId ? required.extend({ sessionId: z.string().optional() }) : required;
 }
 
 function handlerInput(definition: CommandDefinition, input: unknown): unknown {

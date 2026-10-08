@@ -104,13 +104,24 @@ function parserDiagnostic(error: CommanderError, argv: readonly string[]): Recor
   const expected = option === undefined ? undefined :
     hasType(optionJsonSchema(definition!, option.key), "boolean") ? "boolean flag" : "option value";
   const rawArgs = argv.slice(2);
-  const rejectedValue = field === undefined ? undefined :
-    rawArgs.find((token) => option?.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === token));
+  const quoted = /'([^']+)'/.exec(error.message)?.[1];
+  const rejectedIndex = field === undefined ? undefined : rawArgs.findIndex((token) =>
+    option?.flags.split(/[ ,|]+/).some((flag) => flag.split(/[ =]/)[0] === token),
+  );
+  const missingValue = error.code === "commander.optionMissingArgument" || error.code === "commander.missingMandatoryOptionValue";
+  const unknownIndex = error.code === "commander.unknownOption"
+    ? rawArgs.findIndex((token) => token === quoted)
+    : -1;
+  const path = field ?? (unknownIndex >= 0 ? `argv[${unknownIndex + 2}]` : undefined);
   return {
-    ...(field === undefined ? {} : {
-      path: field,
-      ...(expected === undefined ? {} : { expected }),
-      ...(rejectedValue === undefined ? {} : { received: rejectedValue }),
+    ...(path === undefined ? {} : {
+      path,
+      ...(field === undefined
+        ? { expected: "recognized option", received: quoted ?? "unknown option" }
+        : {
+          expected,
+          received: missingValue ? "missing value" : rejectedIndex === -1 || rejectedIndex === undefined ? undefined : rawArgs[rejectedIndex + 1],
+        }),
     }),
     code: error.code,
     message: error.message,
