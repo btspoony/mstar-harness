@@ -71,26 +71,29 @@ describe("session.recover input discovery", () => {
 
   test("reports both addressable source fields as mutually exclusive", async () => {
     const { root, harness } = fixture();
+    // `sessionId` travels in the request exactly as the CLI adapter collects the
+    // session selector from the flag/environment, so this case isolates the
+    // source-cardinality fact.
     const result = await executeCommand("session.recover", {
-      workflow: "wf-recover", priorSession: "stopped-session", unowned: true,
+      workflow: "wf-recover", priorSession: "stopped-session", unowned: true, sessionId: "caller-session",
       reason: "recovery", attestation: path.join(root, "attestation.json"), expect: "token", operation: "recover-1", harness,
-    }, context(root, "caller-session"));
+    }, context(root));
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     const diagnostics = diagnosticsOf(result);
     expect(diagnostics).toContainEqual(expect.objectContaining({ path: "priorSession|unowned=true", code: "alternative-required" }));
     expect(diagnostics).not.toContainEqual(expect.objectContaining({ code: "required" }));
   });
 
-  test("an exactly-one source resolves past the gate and reaches the engine's own refusal", async () => {
+  test("an exactly-one source resolves past the gate and reaches the FILE boundary's own refusal", async () => {
     const { root, harness } = fixture();
-    // One source plus every other caller fact is a COMPLETE input: the gate has
-    // nothing to report, so the call runs the FILE consumer boundary instead of
+    // One source plus every other caller fact is a COMPLETE input: nothing is
+    // reported missing, so the call runs the FILE consumer boundary instead of
     // refusing the input — and the missing document refuses with its own real
     // POSIX code, not this family's synthetic fallback or a usage envelope.
     const result = await executeCommand("session.recover", {
-      workflow: "wf-recover", unowned: true,
+      workflow: "wf-recover", unowned: true, sessionId: "caller-session",
       reason: "recovery", attestation: path.join(root, "absent-attestation.json"), expect: "token", operation: "recover-1", harness,
-    }, context(root, "caller-session"));
+    }, context(root));
     expect(result).toMatchObject({ status: "refused", code: "ENOENT", exitCode: 1 });
     expect(result.status === "ok" ? undefined : result.details?.diagnostics).toBeUndefined();
     // Nothing was written by the refused call.
@@ -100,9 +103,10 @@ describe("session.recover input discovery", () => {
   test("a relative attestation path is a usage refusal before any read", async () => {
     const { root, harness } = fixture();
     const result = await executeCommand("session.recover", {
-      workflow: "wf-recover", priorSession: "stopped", reason: "recovery", attestation: "attestation.json",
+      workflow: "wf-recover", priorSession: "stopped", sessionId: "caller-session",
+      reason: "recovery", attestation: "attestation.json",
       expect: "token", operation: "recover-1", harness,
-    }, context(root, "caller-session"));
+    }, context(root));
     expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     if (result.status === "ok") throw new Error("expected a usage refusal");
     expect(result.message).toContain("--attestation must be an absolute path");
