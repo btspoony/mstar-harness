@@ -347,7 +347,6 @@ async function coordinatorHarness(
 ): Promise<{
   sessionId: string;
   runTool: (params: Record<string, unknown>) => Promise<ToolResult>;
-  validate: (params: Record<string, unknown>) => { success: boolean };
   runRawTool: (params: Record<string, unknown>) => Promise<ToolResult>;
   runHandoffTool: (params: Record<string, unknown>) => Promise<ToolResult>;
   validateHandoff: (params: Record<string, unknown>) => { success: boolean };
@@ -427,7 +426,6 @@ async function coordinatorHarness(
   return {
     sessionId: sessionManager.getSessionId(),
     runTool: async (params) => runRawTool(registered.definition.parameters.parse(params) as Record<string, unknown>),
-    validate: (params) => ({ success: registered.definition.parameters.safeParse(params).success }),
     runRawTool,
     runHandoffTool: async (params) =>
       (await handoffAdapter.execute(
@@ -493,14 +491,17 @@ describe("prerequisite handoff — readiness integration", () => {
     expect(details).toMatchObject({ priorSessionId: PRIOR_SESSION, allowed: true });
     expect(JSON.stringify(details)).not.toContain("/sessions/");
 
-    // A caller-chosen identity, root or prior path is refused by the registered
-    // schema AND by the handler's own boundary.
+    // A caller-chosen identity, root or prior path never reaches a mutation: the
+    // registered schema admits the raw key set and the handler's OWN boundary
+    // refuses the forbidden field by name through the real registered path.
     for (const forged of [
       { operation: "recover", workflowId: WORKFLOW_ID, sessionId: hostId },
       { operation: "recover", workflowId: WORKFLOW_ID, harnessRoot: "/elsewhere/.mstar" },
       { operation: "recover", workflowId: WORKFLOW_ID, priorSessionPath: "/tmp/creds.json" },
     ]) {
-      expect({ forged, valid: host.validate(forged).success }).toEqual({ forged, valid: false });
+      const refused = await host.runTool(forged);
+      expect({ forged, code: refused.details.mstarCoordinator?.code }).toEqual({ forged, code: "forbidden-field" });
+      expect(JSON.stringify(refused)).not.toContain("/tmp/creds.json");
     }
 
     const recovered = await host.runTool({

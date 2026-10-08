@@ -38,6 +38,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { ExtensionActions, ExtensionContext, ExtensionContextActions, ExtensionMode, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
   ExtensionRunner,
@@ -388,8 +389,6 @@ type Harness = Readonly<{
   runCoordinatorTool: (params: ToolParams) => Promise<ToolResult>;
   /** The coordinator tool's own registered input schema. */
   validateCoordinator: (params: ToolParams) => { success: boolean; message?: string };
-  /** The coordinator tool definition invoked directly, bypassing schema validation (forgery probe). */
-  runRawCoordinatorTool: (params: ToolParams) => Promise<ToolResult>;
   /** The tool definition invoked directly, bypassing schema validation (forgery probe). */
   runRawTool: (params: ToolParams) => Promise<ToolResult>;
   /** `safeParse` through the extension's own registered parameter schema. */
@@ -626,14 +625,6 @@ async function createHarness(options: {
       const parsed = coordinatorTool.definition.parameters.safeParse(params);
       return parsed.success ? { success: true } : { success: false, message: parsed.error?.message ?? "" };
     },
-    runRawCoordinatorTool: async (params: ToolParams) =>
-      (await coordinatorTool.definition.execute(
-        "fixture-coordinator-raw-call",
-        params,
-        undefined,
-        undefined,
-        runner.createContext(),
-      )) as ToolResult,
     runRawTool: async (params: ToolParams) =>
       (await registeredTool.definition.execute(
         "fixture-raw-call",
@@ -2426,8 +2417,13 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
       manager.getSessionId = realGetSessionId;
     }
 
-    // The registered schema rejects an identity-shaped field, and the raw
-    // handler refuses it too: the adapter owns its own boundary.
+    // The registered schema is a RAW ADMISSION of the documented keys: it must
+    // NOT reject a mixed call inside the host's own parameter parsing, because
+    // that replaces the handler's ONE aggregated refusal with a schema-library
+    // message naming a single class. The real registered path
+    // (`parameters.parse` → `RegisteredToolAdapter.execute` → the handler)
+    // therefore answers every one of these with the combined refusal, and the
+    // schema itself is not the gate.
     const lawful = await createHarness({
       cwd: repo.main,
       sessionDir: scratchDir("unused-"),
@@ -2441,10 +2437,24 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
       { operation: "bind", workflowId, authority: true },
       { operation: "bind", workflowId, credentialPath: "/tmp/creds.json" },
     ]) {
-      expect({ forged, valid: lawful.validateCoordinator(forged).success }).toEqual({ forged, valid: false });
-      const raw = await lawful.runRawCoordinatorTool(forged);
+      const raw = await lawful.runCoordinatorTool(forged);
       expect({ forged, code: coordinatorCodeOf(raw) }).toEqual({ forged, code: "forbidden-field" });
     }
+
+    // One call carrying all three classes at once: a forbidden identity key, an
+    // absent required key and an unusable supplied value. The registered path
+    // reports every one of them in a SINGLE refusal, so one repair is enough.
+    const combined = await lawful.runCoordinatorTool({
+      operation: "bind",
+      expected: 7,
+      sessionId: "attacker",
+    });
+    expect(coordinatorCodeOf(combined)).toBe("forbidden-field");
+    expect(combined.details.mstarCoordinator).toMatchObject({
+      forbidden: ["sessionId"],
+      missing: ["workflowId"],
+      fields: ["expected"],
+    });
 
     // Every refusal above wrote nothing.
     expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(before));
@@ -2744,9 +2754,10 @@ describe("prerequisite identity — registered coordinator recovery tool handler
     const snapshotPath = join(repo.harness, "workflows", workflowId, "snapshot.json");
     const before = readFileSync(snapshotPath, "utf8");
 
-    // The registered schema owns the union: an identity-shaped field — or one of
-    // the removed byte-version gate inputs — is refused by the schema AND by the
-    // raw handler's own boundary.
+    // The registered schema is a RAW ADMISSION, so a forged identity key — or a
+    // removed byte-version gate input — is refused by the handler's OWN combined
+    // boundary, in one refusal naming every unusable field rather than by the
+    // schema library naming one class. This traverses the real registered path.
     for (const forged of [
       { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), sessionId: hostId },
       { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), priorSessionPath: "/tmp/creds.json" },
@@ -2755,22 +2766,28 @@ describe("prerequisite identity — registered coordinator recovery tool handler
       { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), expectedSnapshotVersion: `sha256:${"0".repeat(64)}` },
       { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), expectedCompassVersion: `sha256:${"0".repeat(64)}` },
     ]) {
-      expect({ forged, valid: harness.validateCoordinator(forged).success }).toEqual({ forged, valid: false });
-      const raw = await harness.runRawCoordinatorTool(forged);
+      const raw = await harness.runCoordinatorTool(forged);
       expect({ forged, code: coordinatorCodeOf(raw) }).toEqual({ forged, code: "forbidden-field" });
     }
 
-    // A request that omits a required operation field is not recoverable at all:
-    // the registered schema refuses it and so does the raw handler.
+    // A request that combines a forbidden key with an absent required operation
+    // field and an unusable value is answered in ONE refusal naming all three.
     const incomplete = {
       operation: "recover",
       workflowId,
-      reason: "r",
+      reason: "",
       authorizationRef: "a",
       stoppedSessionIds: [RECOVERY_PRIOR_SESSION],
+      sessionId: "attacker",
     };
-    expect(harness.validateCoordinator(incomplete).success).toBe(false);
-    expect(coordinatorCodeOf(await harness.runRawCoordinatorTool(incomplete))).toBe("invalid-input");
+    const combined = await harness.runCoordinatorTool(incomplete);
+    expect(coordinatorCodeOf(combined)).toBe("forbidden-field");
+    expect(combined.details.mstarCoordinator).toMatchObject({
+      form: "json",
+      forbidden: ["sessionId"],
+      missing: ["operationId"],
+      fields: ["reason"],
+    });
 
     // A stop assertion that does not name the recorded holder is not proof: the
     // ENGINE refuses it (the host forwards the assertion verbatim, so the guard
@@ -2898,7 +2915,12 @@ async function seedBindableActiveWorkflow(
  * current coordinator consumer and names exactly the stopped prior holder —
  * never the replacement session that performs the recovery.
  */
-function activationAttestation(priorSessionId: string): Record<string, unknown> {
+function activationAttestation(
+  priorSessionId: string,
+  stoppedSessions: readonly Readonly<{ sessionId: string; host: string; state: "stopped" | "reloaded" }> = [
+    { sessionId: priorSessionId, host: "fixture-host", state: "stopped" },
+  ],
+): Record<string, unknown> {
   return {
     version: 1,
     attestedAt: "2026-09-16T00:00:00.000Z",
@@ -2915,7 +2937,7 @@ function activationAttestation(priorSessionId: string): Record<string, unknown> 
         disposition: "reloaded",
       },
     ],
-    stoppedSessions: [{ sessionId: priorSessionId, host: "fixture-host", state: "stopped" }],
+    stoppedSessions: [...stoppedSessions],
   };
 }
 
@@ -2924,6 +2946,22 @@ async function activeCoordinatorOf(repo: ControlRepo, workflowId: string): Promi
   const read = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
   const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
   return workflow?.coordinator?.sessionId ?? null;
+}
+
+/**
+ * The number of ACCEPTED execution operations the store records, read through
+ * the engine's own database (`store.db` beside the harness root). A refusal must
+ * never append here: a failed engine verb leaves no success receipt, and a
+ * replay restores the already-recorded receipt instead of committing a second.
+ */
+function executionOperationCount(repo: ControlRepo): number {
+  const db = new DatabaseSync(join(repo.harness, "store.db"), { readOnly: true });
+  try {
+    const row = db.prepare("select count(*) as n from execution_operations").get() as { n?: unknown } | undefined;
+    return typeof row?.n === "number" ? row.n : 0;
+  } finally {
+    db.close();
+  }
 }
 
 describe("native coordinator tool on the ACTIVE route", () => {
@@ -3021,6 +3059,96 @@ describe("native coordinator tool on the ACTIVE route", () => {
     const afterAllRefusals = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
     expect(afterAllRefusals.token).toBe(afterBind.token);
     expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerBefore);
+  }, 120_000);
+
+  test("a malformed and a stop-evidence-free recovery reach the real engine refusal with the owner and header intact", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-proof-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+    expect((await harness.runCoordinatorTool({ operation: "bind", workflowId })).isError).toBe(false);
+    const afterBind = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    const ownerBefore = await activeCoordinatorOf(repo, workflowId);
+    const operationsBefore = executionOperationCount(repo);
+
+    // A malformed operator document is not proof: the host forwards the object
+    // UNTOUCHED and the engine's own `validateActivationAttestation` refuses it
+    // BEFORE its write transaction. The reason here is non-empty and the holder
+    // is the real recorded owner, so only the document is defective.
+    const malformed = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId,
+      priorSessionId: hostId,
+      reason: "the recorded host session was stopped",
+      attestation: { version: 1 },
+    });
+    expect(malformed.isError).toBe(true);
+    expect(coordinatorCodeOf(malformed)).toBe("store.attestation-invalid");
+
+    // A well-formed attestation that omits stop evidence for the REAL recorded
+    // holder is refused INSIDE the transaction: the engine cannot observe a dead
+    // process, so a named holder nobody attested stopped is never replaced. This
+    // is the actual recorded prior holder with a valid nonempty reason.
+    const noStopEvidence = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId,
+      priorSessionId: hostId,
+      reason: "the recorded host session was stopped",
+      attestation: activationAttestation(hostId, []),
+    });
+    expect(noStopEvidence.isError).toBe(true);
+    expect(coordinatorCodeOf(noStopEvidence)).toBe("coordination.invalid-transition");
+
+    // Both refusals left the owner, the header revision and the accepted-operation
+    // log exactly as the successful bind left them: a refusal writes no receipt.
+    const after = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    expect(after.token).toBe(afterBind.token);
+    expect(after.epoch).toBe(afterBind.epoch);
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerBefore);
+    expect(executionOperationCount(repo)).toBe(operationsBefore);
+  }, 120_000);
+
+  test("an identical accepted recovery retry is the recorded replay and never a second commit", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-replay-iteration";
+    await seedActiveHandoffAuthority(repo, "recorded-owner", workflowId);
+
+    // The SAME accepted operation, invoked twice with identical supplied controls
+    // (the workflow token and an explicit operation id): the engine is the one
+    // that recognises the retry, so the host never re-runs the write.
+    const expected = (await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).token;
+    const operationId = "native-replay-op-1";
+    const request: Record<string, unknown> = {
+      operation: "recover",
+      workflowId,
+      priorSessionId: "recorded-owner",
+      reason: "the recorded host session was stopped",
+      attestation: activationAttestation("recorded-owner"),
+      expected,
+      operationId,
+    };
+
+    const first = await harness.runCoordinatorTool(request);
+    expect(first.isError).toBe(false);
+    expect((first.details.mstarCoordinator as Record<string, unknown>).replayed).toBe(false);
+    const ownerAfterFirst = await activeCoordinatorOf(repo, workflowId);
+    expect(ownerAfterFirst).toBe(hostId);
+    const headerAfterFirst = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    const operationsAfterFirst = executionOperationCount(repo);
+
+    const retry = await harness.runCoordinatorTool(request);
+    expect(retry.isError).toBe(false);
+    expect((retry.details.mstarCoordinator as Record<string, unknown>).replayed).toBe(true);
+    // The replay restored the RECORDED receipt: the owner, header and the accepted
+    // operation log are byte-for-byte the state the first commit produced.
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerAfterFirst);
+    expect((await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).token).toBe(headerAfterFirst.token);
+    expect(executionOperationCount(repo)).toBe(operationsAfterFirst);
   }, 120_000);
 
   test("show-recovery reads the ACTIVE authority through the registered handler", async () => {
