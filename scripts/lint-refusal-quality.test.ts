@@ -262,4 +262,27 @@ describe("refusal quality scanner", () => {
     `, "packages/engine/src/fixture.ts");
     expect(stable).toEqual([]);
   });
+
+  test("scans parameterized refusal wrappers that have no same-file callsite", () => {
+    const findings = scanSource(`
+      export function refuse(message: string) {
+        return refusalEnvelope({ status: "refused", code: "", message });
+      }
+    `, "packages/engine/src/exported-wrapper.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+  });
+
+  test("separates a stable predicate identifier after an intervening assignment", () => {
+    const findings = scanSource(`
+      let flag = false;
+      refusalEnvelope({
+        status: flag ? "usage" : "refused",
+        code: "valid.code",
+        message: (flag = true) ? "Changed" : "Unchanged",
+        recovery: flag ? "" : "Run mstar workflow --resume",
+      });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+    expect(findings[0]?.reason).toContain("flag = true");
+  });
 });

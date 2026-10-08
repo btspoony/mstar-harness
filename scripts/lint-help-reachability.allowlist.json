@@ -1930,5 +1930,17 @@
     "justification": "PR review round 6 unresolved CoordinationError command template pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:c86d71df64ef",
+    "justification": "PR review round 9 positional-after-option parser candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/coordination.ts:3c1892ce57ca",
+    "justification": "PR review round 9 positional-after-option parser candidate pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
   }
 ]

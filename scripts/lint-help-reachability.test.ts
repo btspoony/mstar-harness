@@ -8,6 +8,10 @@ describe("help reachability lint", () => {
       ["workflow", new Set(["--resume"])],
       ["workflow recover-coordinator", new Set(["--attestation"])],
     ]),
+    optionsByVerb: new Map([
+      ["workflow", [{ flags: ["--resume"], required: false, takesValue: false }]],
+      ["workflow recover-coordinator", [{ flags: ["--attestation"], required: false, takesValue: true }]],
+    ]),
   };
   const envelope = (recovery: string) => `refusalEnvelope({ command: "x", status: "refused", code: "NO_STATE", exitCode: 1, message: "Cannot continue", recovery: ${JSON.stringify(recovery)} });`;
 
@@ -107,6 +111,20 @@ describe("help reachability lint", () => {
     };
     const findings = scanRecoveryText(envelope("Run mstar status findings-cleanup"), "packages/engine/src/fixture.ts", positionalGrammar);
     expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("counts required positionals after option values", () => {
+    const positionalGrammar = {
+      verbs: new Set(["status findings-cleanup"]),
+      flagsByVerb: new Map([["status findings-cleanup", new Set(["--harness"])]]),
+      positionalsByVerb: new Map([["status findings-cleanup", [{ key: "planId", required: true, variadic: false }]]]),
+      optionsByVerb: new Map([["status findings-cleanup", [{ flags: ["--harness"], required: false, takesValue: true }]]]),
+    };
+    expect(scanRecoveryText(
+      envelope("Run mstar status findings-cleanup --harness /tmp plan-1"),
+      "packages/engine/src/fixture.ts",
+      positionalGrammar,
+    )).toEqual([]);
   });
 
   test("empty structured recovery is classified as unreachable", () => {

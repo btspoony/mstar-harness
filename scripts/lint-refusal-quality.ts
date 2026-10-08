@@ -79,18 +79,46 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
   const mergeUnprovenFields = (left: Map<string, ts.Expression>, right: Map<string, ts.Expression>): Map<string, ts.Expression> =>
     new Map([...left, ...right]);
   const mergePredicates = (left: Set<string>, right: Set<string>): Set<string> => new Set([...left, ...right]);
-  const conditionKey = (condition: ts.Expression): string => {
+  const writes = new Map<string, { position: number; source: string }[]>();
+  const recordWrite = (name: string, node: ts.Node): void => {
+    const previous = writes.get(name) ?? [];
+    previous.push({ position: node.getStart(), source: node.getText() });
+    writes.set(name, previous);
+  };
+  const collectWrites = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node)
+      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      && ts.isIdentifier(node.left)) recordWrite(node.left.text, node);
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node))
+      && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+      && ts.isIdentifier(node.operand)) recordWrite(node.operand.text, node);
+    ts.forEachChild(node, collectWrites);
+  };
+  collectWrites(expression);
+  const conditionInfo = (condition: ts.Expression): { key: string; note?: string } => {
     let predicate = condition;
     while (ts.isParenthesizedExpression(predicate) || ts.isAsExpression(predicate) || ts.isTypeAssertionExpression(predicate) || ts.isSatisfiesExpression(predicate)) {
       predicate = predicate.expression;
     }
-    if (ts.isIdentifier(predicate)) return `identifier:${predicate.text}`;
+    if (ts.isIdentifier(predicate)) {
+      const interveningWrites = (writes.get(predicate.text) ?? []).filter(({ position }) => position < condition.getStart());
+      return {
+        key: `identifier:${predicate.text}:${interveningWrites.length}`,
+        ...(interveningWrites.length > 0
+          ? { note: `identifier \`${predicate.text}\` was reassigned by ${interveningWrites.map(({ source }) => `\`${source}\``).join(", ")}` }
+          : {}),
+      };
+    }
     if (predicate.kind === ts.SyntaxKind.TrueKeyword || predicate.kind === ts.SyntaxKind.FalseKeyword
       || predicate.kind === ts.SyntaxKind.NullKeyword || ts.isNumericLiteral(predicate)
       || ts.isStringLiteralLike(predicate) || ts.isNoSubstitutionTemplateLiteral(predicate)) {
-      return `literal:${predicate.kind}:${predicate.getText()}`;
+      return { key: `literal:${predicate.kind}:${predicate.getText()}` };
     }
-    return `impure:${predicate.getStart()}`;
+    return {
+      key: `impure:${predicate.getStart()}`,
+      note: `impure predicate \`${predicate.getText()}\` is evaluated independently at each occurrence`,
+    };
   };
   const unknownObject = (
     source: ts.Expression,
@@ -111,11 +139,8 @@ export function objectAlternatives(expression: ts.Expression): ObjectAlternative
       return values(expression.expression, conditions, independentPredicates);
     }
     if (ts.isConditionalExpression(expression)) {
-      const key = conditionKey(expression.condition);
-      const independent = key.startsWith("impure:");
-      const predicates = independent
-        ? new Set([...independentPredicates, expression.condition.getText()])
-        : independentPredicates;
+      const { key, note } = conditionInfo(expression.condition);
+      const predicates = note ? new Set([...independentPredicates, note]) : independentPredicates;
       const yes = mergeConditions(conditions, new Map([[key, true]]));
       const no = mergeConditions(conditions, new Map([[key, false]]));
       return [
@@ -193,53 +218,61 @@ function walkFiles(path: string): string[] {
 }
 export function recoveryFailure(recovery: string, grammar: CliGrammar): string | undefined {
   const stopClause = (text: string): string => {
-    const boundary = text.search(/[.;,!?\uFF0C]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b/i);
+    const boundary = text.search(/[.;,!?\uFF0C]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b(?!\s+(?:(?:and|then)\s+)*--?[A-Za-z])/i);
     return boundary < 0 ? text : text.slice(0, boundary);
   };
   const commandFailure = (text: string): string | undefined => {
     const clause = stopClause(text.trim().replace(/^mstar\s+/i, "")).trim();
+    const tokens = clause.split(/\s+/).filter(Boolean);
+    const isOption = (token: string): boolean => /^--?[A-Za-z][A-Za-z0-9-]*(?:=[^\s,;.)!?]*)?$/.test(token.replace(/[,.)]+$/, ""));
+    const isBoundary = (token: string): boolean => /^(?:to|for|with|and|or|then|instead|otherwise|after|before|via)$/i.test(token);
+    const normalize = (token: string): string => token.replace(/[,.)]+$/, "");
     const pathTokens: string[] = [];
-    for (const token of clause.split(/\s+/).filter(Boolean)) {
-      if (token.startsWith("-") || /^(?:to|for|with|and|or|then|instead|otherwise|after|before|via)$/i.test(token)) break;
-      pathTokens.push(token.replace(/[,.)]+$/, ""));
+    for (const token of tokens) {
+      if (isOption(token) || isBoundary(token)) break;
+      pathTokens.push(normalize(token));
     }
     let verb: string | undefined;
-    let args: string[] = [];
+    let verbLength = 0;
     for (let end = pathTokens.length; end > 0; end -= 1) {
       const candidate = pathTokens.slice(0, end).join(" ");
       if (!grammar.verbs.has(candidate)) continue;
       verb = candidate;
-      args = pathTokens.slice(end);
+      verbLength = end;
       break;
     }
     if (!verb) return "recovery command path is absent from the help grammar";
     const positionals = grammar.positionalsByVerb?.get(verb) ?? [];
     const requiredPositionals = positionals.filter(({ required }) => required).length;
     const maxArgs = positionals.at(-1)?.variadic ? Number.POSITIVE_INFINITY : positionals.length;
-    if (args.length < requiredPositionals) return `recovery command is missing a required positional argument for ${verb}`;
-    if (args.length > maxArgs) return `recovery command has too many positional arguments for ${verb}`;
-
-    const continuation = [...text.matchAll(/\b(?:run|use|supply|provide|resume|restore|recover|retry|invoke)\s+(?:mstar\s+)?[A-Za-z][A-Za-z0-9.-]*/gi)]
-      .find((match) => (match.index ?? 0) > 0);
-    const optionText = continuation ? text.slice(0, continuation.index) : text;
     const options = grammar.optionsByVerb?.get(verb) ?? [];
     const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
     const supplied = new Set<string>();
-    const mentions = [...optionText.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*(?:=[^\s,;.)!?]+)?)/g)];
-    for (const mention of mentions) {
-      const token = mention[1]!;
-      const flag = token.split("=", 1)[0]!;
+    const args: string[] = [];
+    for (let index = verbLength; index < tokens.length; index += 1) {
+      const token = tokens[index]!;
+      if (isBoundary(token)) {
+        if (/^(?:and|or|then)$/i.test(token)) continue;
+        break;
+      }
+      if (!isOption(token)) {
+        args.push(normalize(token));
+        continue;
+      }
+      const equalsIndex = token.indexOf("=");
+      const flag = (equalsIndex < 0 ? token : token.slice(0, equalsIndex)).replace(/[,.)]+$/, "");
       if (!flags.has(flag)) return `recovery command references unsupported option ${flag}`;
       supplied.add(flag);
       const option = options.find(({ flags: aliases }) => aliases.includes(flag));
-      const equalsValue = token.includes("=") && token.slice(token.indexOf("=") + 1).length > 0;
-      if (option?.takesValue && !equalsValue) {
-        const flagPosition = (mention.index ?? 0) + mention[0].indexOf(token);
-        const afterFlag = optionText.slice(flagPosition + token.length).trimStart();
-        const next = afterFlag.split(/\s+/, 1)[0];
-        if (!next || next.startsWith("-")) return `${option.required ? "missing required option" : "option"} value for ${flag}`;
+      const attachedValue = equalsIndex >= 0 && token.slice(equalsIndex + 1).length > 0;
+      if (option?.takesValue && !attachedValue) {
+        const next = equalsIndex >= 0 ? "" : tokens[index + 1];
+        if (!next || isOption(next)) return `${option.required ? "missing required option" : "option"} value for ${flag}`;
+        if (equalsIndex < 0) index += 1;
       }
     }
+    if (args.length < requiredPositionals) return `recovery command is missing a required positional argument for ${verb}`;
+    if (args.length > maxArgs) return `recovery command has too many positional arguments for ${verb}`;
     for (const option of options.filter(({ required }) => required)) {
       if (!option.flags.some((flag) => supplied.has(flag))) return `recovery command is missing required option ${option.flags.join("/")}`;
     }
@@ -347,16 +380,26 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const findings: RefusalFinding[] = [];
   const wrappers = findRefusalWrappers(sf);
-  const wrapperInnerNodes = new Set([...wrappers.values()].filter(({ parameters, inner }) => {
-    const names = new Set(parameters.flatMap((parameter) => ts.isIdentifier(parameter.name) ? [parameter.name.text] : []));
+  const calledWrappers = new Set<string>();
+  const collectWrapperCalls = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = node.expression.getText(sf).split(".").at(-1);
+      if (name && wrappers.has(name)) calledWrappers.add(name);
+    }
+    ts.forEachChild(node, collectWrapperCalls);
+  };
+  collectWrapperCalls(sf);
+  const wrapperBodies = new Map<ts.Node, { name: string; parameters: Set<string> }>();
+  for (const [name, wrapper] of wrappers) {
+    const parameters = new Set(wrapper.parameters.flatMap((parameter) => ts.isIdentifier(parameter.name) ? [parameter.name.text] : []));
     let usesParameter = false;
     const visitArgument = (node: ts.Node): void => {
-      if (ts.isIdentifier(node) && names.has(node.text)) usesParameter = true;
+      if (ts.isIdentifier(node) && parameters.has(node.text)) usesParameter = true;
       else ts.forEachChild(node, visitArgument);
     };
-    for (const argument of inner.arguments ?? []) visitArgument(argument);
-    return usesParameter;
-  }).map(({ inner }) => inner));
+    for (const argument of wrapper.inner.arguments ?? []) visitArgument(argument);
+    if (usesParameter) wrapperBodies.set(wrapper.inner, { name, parameters });
+  }
   const codeValue = (node: ts.Expression | undefined, scope?: Scope, seen = new Set<ts.VariableDeclaration>()): string | undefined => {
     if (!node) return undefined;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
@@ -403,22 +446,24 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
     bindings: Map<string, ts.Expression>,
     seenBindings = new Set<string>(),
     seenDeclarations = new Set<ts.VariableDeclaration>(),
+    unprovenParameters: ReadonlySet<string> = new Set(),
   ): ts.Expression => {
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) {
-      return resolveBound(expression.expression, bindings, seenBindings, seenDeclarations);
+      return resolveBound(expression.expression, bindings, seenBindings, seenDeclarations, unprovenParameters);
     }
     if (ts.isIdentifier(expression)) {
+      if (unprovenParameters.has(expression.text)) return expression;
       if (bindings.has(expression.text) && !seenBindings.has(expression.text)) {
-        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), seenDeclarations);
+        return resolveBound(bindings.get(expression.text)!, bindings, new Set(seenBindings).add(expression.text), seenDeclarations, unprovenParameters);
       }
       const declaration = resolveDeclaration(scopeByNode.get(expression), expression.text);
       if (declaration?.initializer && !seenDeclarations.has(declaration)) {
-        return resolveBound(declaration.initializer, bindings, seenBindings, new Set(seenDeclarations).add(declaration));
+        return resolveBound(declaration.initializer, bindings, seenBindings, new Set(seenDeclarations).add(declaration), unprovenParameters);
       }
     }
     if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression) && bindings.has(expression.expression.text)) {
       const baseName = expression.expression.text;
-      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seenBindings).add(baseName), seenDeclarations);
+      const actual = resolveBound(bindings.get(baseName)!, bindings, new Set(seenBindings).add(baseName), seenDeclarations, unprovenParameters);
       const object = ts.isIdentifier(actual)
         ? resolveDeclaration(scopeByNode.get(actual), actual.text)?.initializer
         : actual;
@@ -426,66 +471,111 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         for (const property of object.properties) {
           if (ts.isPropertyAssignment(property)) {
             const name = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined;
-            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, seenDeclarations);
+            if (name === expression.name.text) return resolveBound(property.initializer, bindings, seenBindings, seenDeclarations, unprovenParameters);
           }
           if (ts.isShorthandPropertyAssignment(property) && property.name.text === expression.name.text) {
-            return resolveBound(property.name, bindings, seenBindings, seenDeclarations);
+            return resolveBound(property.name, bindings, seenBindings, seenDeclarations, unprovenParameters);
           }
         }
       }
     }
     return expression;
   };
-  const envelopeInput = (input: ts.Expression | undefined, bindings: Map<string, ts.Expression>): ObjectAlternative[] => {
+  const envelopeInput = (
+    input: ts.Expression | undefined,
+    bindings: Map<string, ts.Expression>,
+    unprovenParameters: ReadonlySet<string> = new Set(),
+  ): ObjectAlternative[] => {
     if (!input) return [];
-    const resolved = resolveBound(input, bindings);
+    const resolved = resolveBound(input, bindings, new Set(), new Set(), unprovenParameters);
     return objectAlternatives(resolved).map((alternative) => ({
       ...alternative,
-      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings)])),
+      fields: new Map([...alternative.fields].map(([key, value]) => [key, resolveBound(value, bindings, new Set(), new Set(), unprovenParameters)])),
     }));
   };
   const addFinding = (node: ts.Node, classification: RefusalClassification, reason: string): void => {
     const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
   };
-  const checkEnvelope = (node: ts.Node, input: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
-    const variants = envelopeInput(input, bindings);
+  const checkEnvelope = (
+    node: ts.Node,
+    input: ts.Expression | undefined,
+    bindings = new Map<string, ts.Expression>(),
+    unprovenParameters: ReadonlySet<string> = new Set(),
+  ): void => {
+    const variants = envelopeInput(input, bindings, unprovenParameters);
     const predicateNote = (alternative: ObjectAlternative): string => alternative.independentPredicates.size > 0
-      ? ` Distinct impure predicate evaluations (${[...alternative.independentPredicates].map((predicate) => `\`${predicate}\``).join(", ")}) are not correlated.`
+      ? ` Independent conditional evaluations were kept separate: ${[...alternative.independentPredicates].map((predicate) => `\`${predicate}\``).join(", ")}.`
       : "";
-    const missingCause = variants.find(({ fields, unprovenFields }) => unprovenFields.has("code") || !isCauseCode(fields.get("code")));
+    const missingCause = variants.find(({ fields, unprovenFields }) => {
+      const code = fields.get("code");
+      return unprovenFields.has("code")
+        || (!!code && ts.isIdentifier(code) && unprovenParameters.has(code.text))
+        || !isCauseCode(code);
+    });
     if (missingCause) {
+      const code = missingCause.fields.get("code");
       const source = missingCause.unprovenFields.get("code");
+      const parameter = code && ts.isIdentifier(code) && unprovenParameters.has(code.text) ? code : undefined;
       addFinding(
         node,
         "missing-cause-code",
         source
           ? `Rule #341 class 2 (named cause): code cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.${predicateNote(missingCause)}`
-          : `Rule #341 class 2 (named cause): provide a nonempty named \`code\` field on every refusal branch.${predicateNote(missingCause)}`,
+          : parameter
+            ? `Rule #341 class 2 (named cause): wrapper parameter \`${parameter.text}\` does not prove a named cause code.${predicateNote(missingCause)}`
+            : `Rule #341 class 2 (named cause): provide a nonempty named \`code\` field on every refusal branch.${predicateNote(missingCause)}`,
       );
     }
     const missingRecovery = variants.find(({ fields, unprovenFields }) => {
       const recovery = fields.get("recovery");
-      const status = codeValue(fields.get("status"));
-      const statusMayBeRefused = unprovenFields.has("status") || status !== "usage";
+      const status = fields.get("status");
+      const statusMayBeRefused = unprovenFields.has("status")
+        || (!!status && ts.isIdentifier(status) && unprovenParameters.has(status.text))
+        || codeValue(status) !== "usage";
       const recoveryText = codeValue(recovery);
-      return statusMayBeRefused && (unprovenFields.has("recovery") || !recovery || recoveryText === undefined || recoveryText.trim() === "");
+      return statusMayBeRefused && (
+        unprovenFields.has("recovery")
+        || (!!recovery && ts.isIdentifier(recovery) && unprovenParameters.has(recovery.text))
+        || !recovery
+        || recoveryText === undefined
+        || recoveryText.trim() === ""
+      );
     });
     if (missingRecovery) {
+      const recovery = missingRecovery.fields.get("recovery");
+      const status = missingRecovery.fields.get("status");
       const source = missingRecovery.unprovenFields.get("recovery") ?? missingRecovery.unprovenFields.get("status");
+      const parameter = recovery && ts.isIdentifier(recovery) && unprovenParameters.has(recovery.text)
+        ? recovery
+        : status && ts.isIdentifier(status) && unprovenParameters.has(status.text)
+          ? status
+          : undefined;
       addFinding(
         node,
         "missing-recovery",
         source
           ? `Rule #341 class 3 (recovery): recovery presence cannot be proven because object spread/source \`${source.getText(sf)}\` is not statically enumerable.${predicateNote(missingRecovery)}`
-          : `Rule #341 class 3 (recovery): provide a nonempty supported \`recovery\` field on every refusal branch.${predicateNote(missingRecovery)}`,
+          : parameter
+            ? `Rule #341 class 3 (recovery): wrapper parameter \`${parameter.text}\` does not prove reachable recovery text.${predicateNote(missingRecovery)}`
+            : `Rule #341 class 3 (recovery): provide a nonempty supported \`recovery\` field on every refusal branch.${predicateNote(missingRecovery)}`,
       );
     }
   };
-  const checkCoordinationError = (node: ts.Node, code: ts.Expression | undefined, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
-    const resolvedCode = code && resolveBound(code, bindings);
-    const resolvedMessage = message && resolveBound(message, bindings);
-    if (!isCauseCode(resolvedCode)) addFinding(node, "missing-cause-code", "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.");
+  const checkCoordinationError = (
+    node: ts.Node,
+    code: ts.Expression | undefined,
+    message: ts.Expression | undefined,
+    bindings = new Map<string, ts.Expression>(),
+    unprovenParameters: ReadonlySet<string> = new Set(),
+  ): void => {
+    const resolvedCode = code && resolveBound(code, bindings, new Set(), new Set(), unprovenParameters);
+    const unprovenCode = resolvedCode !== undefined && ts.isIdentifier(resolvedCode) && unprovenParameters.has(resolvedCode.text);
+    if (unprovenCode || !isCauseCode(resolvedCode)) {
+      const detail = unprovenCode ? ` wrapper parameter \`${resolvedCode.text}\` does not prove a stable cause code.` : " supply a stable code to CoordinationError.";
+      addFinding(node, "missing-cause-code", `Rule #341 class 2 (named cause):${detail}`);
+    }
+    const resolvedMessage = message && resolveBound(message, bindings, new Set(), new Set(), unprovenParameters);
     const text = codeValue(resolvedMessage);
     if (text && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, getGrammar())) {
       addFinding(node, "unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
@@ -493,7 +583,10 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   };
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(sf).split(".").at(-1) === "CoordinationError") {
-      if (!wrapperInnerNodes.has(node)) checkCoordinationError(node, node.arguments?.[0], node.arguments?.[1]);
+      const wrapperBody = wrapperBodies.get(node);
+      if (!wrapperBody || !calledWrappers.has(wrapperBody.name)) {
+        checkCoordinationError(node, node.arguments?.[0], node.arguments?.[1], new Map(), wrapperBody?.parameters);
+      }
       return visitChildren(node);
     }
     if (ts.isCallExpression(node)) {
@@ -503,8 +596,11 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         const bindings = callBindings(wrapper, node);
         if (ts.isCallExpression(wrapper.inner)) checkEnvelope(node, wrapper.inner.arguments[0], bindings);
         else checkCoordinationError(node, wrapper.inner.arguments?.[0], wrapper.inner.arguments?.[1], bindings);
-      } else if (callee === "refusalEnvelope" && !wrapperInnerNodes.has(node)) {
-        checkEnvelope(node, node.arguments[0]);
+      } else if (callee === "refusalEnvelope") {
+        const wrapperBody = wrapperBodies.get(node);
+        if (!wrapperBody || !calledWrappers.has(wrapperBody.name)) {
+          checkEnvelope(node, node.arguments[0], new Map(), wrapperBody?.parameters);
+        }
       }
     }
     visitChildren(node);
