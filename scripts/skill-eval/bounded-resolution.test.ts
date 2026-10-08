@@ -23,8 +23,9 @@
  * real-agent run records traces.
  */
 import { describe, expect, test, vi } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { getCommandDefinitions } from "../../packages/commands/src/index.ts";
 import { canonicalJson, sha256Hex, type EvalManifest } from "./manifest.ts";
 import { buildReport } from "./report.ts";
@@ -32,6 +33,7 @@ import { executeManifest, manifestIntegrityErrors, selectCases, type RunnerIo, t
 import {
   MCP_GUESS_PATH_ACTIONS,
   classifyMcpResponse,
+  createMcpClientLaunch,
   createMcpRpcDispatcher,
   mapMcpExchangeEvent,
   mapMcpInterruptedEvent,
@@ -1315,6 +1317,52 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
       vi.useRealTimers();
     }
   });
+  test("mcp-guess-path real adapter maps initialize and tool-call exchanges", async () => {
+    const root = join(tmpdir(), `mcp-adapter-${process.pid}-${Date.now()}`);
+    mkdirSync(root, { recursive: true });
+    try {
+      const serverPath = join(root, "server.mjs");
+      writeFileSync(serverPath, [
+        'import readline from "node:readline";',
+        'const input = readline.createInterface({ input: process.stdin });',
+        'input.on("line", (line) => {',
+        '  const request = JSON.parse(line);',
+        '  if (request.id === undefined) return;',
+        '  const result = request.method === "initialize"',
+        '    ? { serverInfo: { name: "fixture", version: "1" }, capabilities: { tools: {} } }',
+        '    : { content: [{ type: "text", text: "CaptureInput schema" }] };',
+        '  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");',
+        '});',
+      ].join("\n"));
+      writeFileSync(join(root, "mcp.json"), JSON.stringify({ command: "node", args: ["${MSTAR_CLI_PATH}"] }));
+      const output = join(root, "events.jsonl");
+      const final = join(root, "final.md");
+      const launch = createMcpClientLaunch({
+        cliPath: serverPath,
+        nodePath: "node",
+        actions: [{ method: "tools/call", name: "mstar_schema", arguments: { type: "CaptureInput" } }],
+      });
+      const result = await launch({
+        file: "node",
+        argv: ["mstar", "--output-last-message", final],
+        cwd: root,
+        stdinFile: join(root, "prompt.txt"),
+        stdoutFile: output,
+        stderrFile: join(root, "stderr.txt"),
+        timeoutMs: 5_000,
+      });
+      expect(result).toEqual({ code: 0, signal: null, timedOut: false, spawnError: null });
+      const events = readFileSync(output, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      const calls = events.filter((event) => event.type === "item.completed").map((event) => event.item.mcp_tool_call);
+      expect(calls).toEqual([
+        { id: "mcp-2", method: "tools/call", name: "mstar_schema", status: "completed", exit_code: 0 },
+      ]);
+      expect(events.at(-1)?.type).toBe("turn.completed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
 
   test("mcp-guess-path case is selected and its mapped call evidence is graded honestly", async () => {
     const selected = selectCases(manifest, "dev").find((item) => item.id === "bounded-res-mcp-guess-path");

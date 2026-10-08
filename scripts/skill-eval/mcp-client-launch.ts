@@ -334,7 +334,7 @@ export function createMcpClientLaunch(options: McpClientLaunchOptions): SpawnFn 
         capabilities: {},
         clientInfo: { name: "skill-eval-scripted-client", version: "1" },
       });
-      const { response: init } = await initialize.response;
+      const init = await initialize.response;
       if (init.jsonrpc !== "2.0" || init.id !== initialize.id || !Object.hasOwn(init, "result") || Object.hasOwn(init, "error")) {
         throw new Error("MCP initialize response has an invalid JSON-RPC envelope");
       }
