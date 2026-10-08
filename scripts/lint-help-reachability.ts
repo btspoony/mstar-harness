@@ -39,6 +39,28 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     if (ts.isIdentifier(node)) return value(declarations.get(node.text));
     return undefined;
   };
+  const properties = (object: ts.ObjectLiteralExpression): Map<string, ts.Expression> => {
+    const result = new Map<string, ts.Expression>();
+    const collectProperty = (property: ts.ObjectLiteralElementLike): void => {
+      if (ts.isPropertyAssignment(property)) {
+        const name = propertyName(property.name);
+        if (name) result.set(name, property.initializer);
+      } else if (ts.isShorthandPropertyAssignment(property)) result.set(property.name.text, property.name);
+      else if (ts.isSpreadAssignment(property)) {
+        const collectExpression = (expression: ts.Expression): void => {
+          if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) collectExpression(expression.expression);
+          else if (ts.isObjectLiteralExpression(expression)) expression.properties.forEach(collectProperty);
+          else if (ts.isConditionalExpression(expression)) {
+            collectExpression(expression.whenTrue);
+            collectExpression(expression.whenFalse);
+          }
+        };
+        collectExpression(property.expression);
+      }
+    };
+    object.properties.forEach(collectProperty);
+    return result;
+  };
   const findings: HelpReachabilityFinding[] = [];
   const inspect = (node: ts.Node, text: string): void => {
     if (/\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|invoke)\b|\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, grammar)) {
@@ -55,11 +77,9 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
         const text = value(node.arguments[1]);
         if (text) inspect(node, text);
       } else if (callee === "refusalEnvelope" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
-        const recovery = node.arguments[0].properties.find((item) => ts.isPropertyAssignment(item) && propertyName(item.name) === "recovery");
-        if (recovery && ts.isPropertyAssignment(recovery)) {
-          const text = value(recovery.initializer);
-          if (text) inspect(node, text);
-        }
+        const recovery = properties(node.arguments[0]).get("recovery");
+        const text = value(recovery);
+        if (text) inspect(node, text);
       }
     }
     ts.forEachChild(node, visit);

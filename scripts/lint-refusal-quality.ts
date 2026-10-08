@@ -11,7 +11,6 @@ export interface RefusalFinding { file: string; line: number; column: number; cl
 export interface CliGrammar { verbs: Set<string>; flagsByVerb: Map<string, Set<string>>; positionalsByVerb?: Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>; }
 export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; }
 
-const RECOVERY = /\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|invoke)\b/i;
 
 export function normalizeSnippet(snippet: string): string { return snippet.trim().replace(/\s+/g, " "); }
 export function signatureFor(classification: string, file: string, snippet: string): string {
@@ -90,8 +89,12 @@ export function recoveryIsReachable(recovery: string, grammar: CliGrammar): bool
   }
   return candidates.length > 0 && candidates.every(commandIsReachable);
 }
-/** Bounded structured-channel scan of named-cause and recovery-presence rules. */
-export function scanSource(source: string, file: string, grammar: CliGrammar): RefusalFinding[] {
+/**
+ * Bounded structured-channel scan: validation violation() results, arbitrary helper calls,
+ * and raw programmer-error throws are intentionally excluded. Cause and recovery-presence
+ * checks apply only to the recognized refusal channels.
+ */
+export function scanSource(source: string, file: string): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations = new Map<string, ts.Expression>();
   const visitDeclarations = (node: ts.Node): void => {
@@ -235,11 +238,10 @@ function run(): number {
   const input = process.argv.slice(2);
   if (input.some((arg) => arg !== "--json")) { console.error("Usage: bun scripts/lint-refusal-quality.ts [--json]"); return 2; }
   try {
-    const grammar = extractCliGrammar();
     const all: RefusalFinding[] = [];
     for (const dir of ["packages/engine/src", "packages/commands/src"]) for (const file of walkFiles(resolve(root, dir))) {
       const rel = relative(root, file).split("\\").join("/");
-      all.push(...scanSource(readFileSync(file, "utf8"), rel, grammar));
+      all.push(...scanSource(readFileSync(file, "utf8"), rel));
     }
     const result = applyAllowlist(all, loadAllowlist(resolve(root, "scripts/lint-refusal-quality.allowlist.json")), root);
     if (input.includes("--json")) console.log(JSON.stringify({ findings: result.findings, staleAllowlist: result.stale, allowlist: result.used }, null, 2));

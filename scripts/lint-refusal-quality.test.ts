@@ -8,17 +8,13 @@ describe("refusal quality scanner", () => {
       refusalEnvelope({ command: "x", status: "refused", code: "MISSING_STATE", exitCode: 1,
         message: "Cannot continue", recovery: "Run mstar workflow --resume" });
     `;
-    const findings = scanSource(source, "packages/engine/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    });
+    const findings = scanSource(source, "packages/engine/src/fixture.ts");
     expect(findings.map((finding) => finding.classification)).toEqual(["missing-cause-code"]);
   });
 
   test("accepts a refusal envelope with a supported recovery", () => {
     const source = `refusalEnvelope({ command: "x", status: "refused", code: "MISSING_STATE", exitCode: 1, message: "Cannot continue", recovery: "Run mstar workflow --resume" });`;
-    expect(scanSource(source, "packages/engine/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    })).toEqual([]);
+    expect(scanSource(source, "packages/engine/src/fixture.ts")).toEqual([]);
   });
 
   test("ignores internal validators and accepts one-level structured refusals", () => {
@@ -31,9 +27,7 @@ describe("refusal quality scanner", () => {
       refusalEnvelope({ command: "x", status: "refused", code, exitCode: 1, message: "Failure",
         ...(recovery === undefined ? {} : { recovery }) });
     `;
-    expect(scanSource(source, "packages/engine/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    })).toEqual([]);
+    expect(scanSource(source, "packages/engine/src/fixture.ts")).toEqual([]);
   });
 
   test("one allowlist signature suppresses repeated identical occurrences", () => {

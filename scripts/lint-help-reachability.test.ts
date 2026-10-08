@@ -25,6 +25,26 @@ describe("help reachability lint", () => {
     expect(findings.map((finding) => finding.classification)).toEqual(["capability-unreachable"]);
   });
 
+  test("rejects an unsupported child after a valid parent verb", () => {
+    const findings = scanRecoveryText(envelope("mstar workflow nonexistent"), "packages/commands/src/fixture.ts", { verbs: new Set(["workflow"]), flagsByVerb: new Map([ ["workflow", new Set<string>()] ]) });
+    expect(findings.map((finding) => finding.classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("rejects an invalid explicit command after a valid explicit command", () => {
+    const findings = scanRecoveryText(envelope("Run mstar workflow --resume; or run mstar nonexistent --bad"), "packages/commands/src/fixture.ts", grammar);
+    expect(findings.map((finding) => finding.classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("finds unsupported recovery through a shorthand field", () => {
+    const source = `const recovery = "Run mstar nonexistent --bad"; refusalEnvelope({ command: "x", status: "refused", code: "NO_STATE", exitCode: 1, message: "Cannot continue", recovery });`;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map((finding) => finding.classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("finds unsupported recovery through conditional literal spread fields", () => {
+    const source = `refusalEnvelope({ command: "x", status: "refused", code: "NO_STATE", exitCode: 1, message: "Cannot continue", ...(enabled ? { recovery: "Run mstar nonexistent --bad" } : {}) });`;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map((finding) => finding.classification)).toEqual(["capability-unreachable"]);
+  });
+
   test("a declared verb and flag absent from the help grammar are reported", () => {
     const source = `const definition = { cli: { path: ["workflow", "launch"], options: [{ flags: "--bogus" }] } };`;
     const findings = scanDeclaredCapabilities(source, "packages/commands/src/fixture.ts", grammar);
@@ -60,5 +80,5 @@ describe("help reachability lint", () => {
     const options = flag ? `options: [{ flags: ${JSON.stringify(flag)} }]` : "options: []";
     const definition = `const definition = { cli: { path: ${JSON.stringify(verb.split(" "))}, ${options} } };`;
     expect(scanDeclaredCapabilities(definition, "packages/commands/src/fixture.ts", surface)).toEqual([]);
-});
+  });
 });
