@@ -1,6 +1,6 @@
 ---
 category: Changed
-packages: commands
+packages: root, commands
 ---
 
 - **Issue revision conflicts** now include recovery instructions with the matching issue verb and the `--expect <current-revision>` CLI flag; CAS help is available for every issue verb.

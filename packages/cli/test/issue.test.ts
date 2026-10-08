@@ -299,6 +299,7 @@ describe("mstar issue CLI bundle", () => {
     ], root);
     expect(result.exitCode).toBe(0);
     expect(jsonOf(result).status).toBe("ok");
+    expect(jsonOf(result).data).toMatchObject({ revision: Number(expectedRevision) + 1 });
     const stale = runBundle("bun-shebang", [
       "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
       "--operation-id", "link-stale", "--actor", "project-manager", "--harness", harness,

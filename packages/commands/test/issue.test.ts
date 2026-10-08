@@ -129,9 +129,13 @@ describe("issue command family", () => {
     expect(command.effects).toEqual(["write"]);
     expect(definition("issue.export").effects).toEqual(["read"]);
   });
-  test("--expect help documents revision CAS for every issue verb", () => {
-    for (const verb of ["occurrence", "triage", "close", "reopen", "link"]) {
-      const expectOption = definition(`issue.${verb}`).cli.options.find((option) => option.key === "expect");
+  test("--expect help documents revision CAS for every issue command that exposes the option", () => {
+    const commands = getCommandDefinitions().filter((command) =>
+      command.id.startsWith("issue.") && command.cli.options.some((option) => option.key === "expect"),
+    );
+    expect(commands.length).toBeGreaterThan(0);
+    for (const command of commands) {
+      const expectOption = command.cli.options.find((option) => option.key === "expect");
       expect(expectOption?.help).toContain("revision CAS, not an execution token");
     }
   });
