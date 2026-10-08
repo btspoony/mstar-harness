@@ -1436,8 +1436,10 @@ const OPERATION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
  */
 export function assertOperationId(value: unknown): string {
   if (typeof value !== "string" || !OPERATION_ID_RE.test(value)) {
-    throw invalidInput(
+    throw new CoordinationError(
+      "coordination.invalid-input",
       "Invalid operation id: provide 1–128 ASCII characters from [A-Za-z0-9._:-]. Inspect workflow authority with mstar status validate.",
+      { rejectedValue: value },
     );
   }
   return value;
