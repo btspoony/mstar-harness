@@ -4566,32 +4566,32 @@ function readPlanAppend(
   },
 ): PlanRow {
   if (!isPlainObject(value)) {
-    throw prepareAmendmentRefusal("invalid-plan", "every appendPlans entry must be an object", { actual: value ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", "every appendPlans entry must be an object. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.", { actual: value ?? null });
   }
   const unexpected = Object.keys(value).filter((key) => !PREPARE_APPEND_KEYS.includes(key));
   if (unexpected.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `a plan append accepts only ${PREPARE_APPEND_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+      `a plan append accepts only ${PREPARE_APPEND_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.`,
       { allowed: [...PREPARE_APPEND_KEYS], unexpected },
     );
   }
   const id = value.id;
   if (!isNonEmptyString(id)) {
-    throw prepareAmendmentRefusal("invalid-plan", `a plan append requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}`, {
+    throw prepareAmendmentRefusal("invalid-plan", `a plan append requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan <plan-id>.`, {
       actual: id ?? null,
     });
   }
   try {
     assertSafePathComponent(id, "plan id");
   } catch (error) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}`, {
+    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`, {
       plan_id: id,
     });
   }
   const title = value.title;
   if (!isNonEmptyString(title)) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a non-empty title`, { plan_id: id, actual: title ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a non-empty title. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`, { plan_id: id, actual: title ?? null });
   }
   const declaredFile = value.file;
   // The PlanRow `file` convention belongs to the ONE registered-plan path
@@ -4610,7 +4610,7 @@ function readPlanAppend(
   // (including empty or whitespace-only) still reach the resolver, whose typed
   // path detail is attached below.
   if (typeof declaredFile !== "string") {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a file path as a string`, {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a file path as a string. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`, {
       plan_id: id,
       actual: declaredFile ?? null,
     });
@@ -4633,7 +4633,7 @@ function readPlanAppend(
 
   const metadata = value.metadata;
   if (!isPlainObject(metadata)) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} metadata must be an object`, { plan_id: id, actual: metadata ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} metadata must be an object. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`, { plan_id: id, actual: metadata ?? null });
   }
   // §5 metadata disposition. A key the engine READS AS AUTHORITY may not be
   // written through this verb: the catalog pin belongs to `prepare`, and
@@ -4644,7 +4644,7 @@ function readPlanAppend(
   if (reservedMetadata.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} metadata.${reservedMetadata.join(", metadata.")} is recorded authority, not custom metadata \u2014 it is written by the \`prepare\` transition and never by a Prepare append`,
+      `plan ${id} metadata.${reservedMetadata.join(", metadata.")} is recorded authority, not custom metadata \u2014 it is written by the \`prepare\` transition and never by a Prepare append. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, reserved: reservedMetadata },
     );
   }
@@ -4680,7 +4680,7 @@ function readPlanAppend(
   if (iterationCompass !== context.compass.path) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `plan ${id} metadata.iteration_compass ${iterationCompass} is not this workflow's reviewed compass ${context.compass.path}`,
+      `plan ${id} metadata.iteration_compass ${iterationCompass} is not this workflow's reviewed compass ${context.compass.path}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, expected: context.compass.path, actual: iterationCompass },
     );
   }
@@ -4693,7 +4693,7 @@ function readPlanAppend(
   if (intent.branch === undefined) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} markdown ${planPath} ${intent.source} \u2014 the appended row's branch metadata cannot be verified against the reviewed plan`,
+      `plan ${id} markdown ${planPath} ${intent.source} \u2014 the appended row's branch metadata cannot be verified against the reviewed plan. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, field: "metadata.working_branch", path: planPath, declared: intent.source },
     );
   }
@@ -4702,7 +4702,7 @@ function readPlanAppend(
   if (workingBranch !== intent.branch) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} metadata.working_branch ${workingBranch} does not match the branch ${planPath} ${intent.source} (${intent.branch})`,
+      `plan ${id} metadata.working_branch ${workingBranch} does not match the branch ${planPath} ${intent.source} (${intent.branch}). Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, expected: intent.branch, actual: workingBranch, path: planPath },
     );
   }
@@ -4729,7 +4729,7 @@ function readPlanAppend(
     if (isNonEmptyString(branch) && branch === workingBranch) {
       throw prepareAmendmentRefusal(
         "invalid-plan",
-        `plan ${id} metadata.working_branch ${workingBranch} is the workflow's ${label} \u2014 a plan row owns its own feature branch`,
+        `plan ${id} metadata.working_branch ${workingBranch} is the workflow's ${label} \u2014 a plan row owns its own feature branch. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
         { plan_id: id, field: "metadata.working_branch", actual: workingBranch },
       );
     }
@@ -4742,14 +4742,14 @@ function readPlanAppend(
   if (declaredMain === undefined) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} markdown ${planPath} declares no Main worktree branch header \u2014 the amendment cannot verify the branch the reviewed plan was written against`,
+      `plan ${id} markdown ${planPath} declares no Main worktree branch header \u2014 the amendment cannot verify the branch the reviewed plan was written against. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, field: "mainWorktreeBranch", path: planPath },
     );
   }
   if (declaredMain !== context.mainWorktreeBranch) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} metadata records main worktree branch ${context.mainWorktreeBranch}, but ${planPath} declares ${declaredMain}`,
+      `plan ${id} metadata records main worktree branch ${context.mainWorktreeBranch}, but ${planPath} declares ${declaredMain}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, expected: declaredMain, actual: context.mainWorktreeBranch, path: planPath },
     );
   }
@@ -4761,7 +4761,7 @@ function readPlanAppend(
       if (recorded !== anchors.integration) {
         throw prepareAmendmentRefusal(
           "invalid-plan",
-          `plan ${id} ${field} ${recorded} is not the workflow's integration branch ${anchors.integration}`,
+          `plan ${id} ${field} ${recorded} is not the workflow's integration branch ${anchors.integration}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
           { plan_id: id, expected: anchors.integration, actual: recorded },
         );
       }
@@ -4770,7 +4770,7 @@ function readPlanAppend(
   if (context.compass.specIntegrationBranch !== undefined && specIntegrationBranch !== context.compass.specIntegrationBranch) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `plan ${id} metadata.spec_integration_branch ${specIntegrationBranch} is not the reviewed compass integration branch ${context.compass.specIntegrationBranch}`,
+      `plan ${id} metadata.spec_integration_branch ${specIntegrationBranch} is not the reviewed compass integration branch ${context.compass.specIntegrationBranch}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, expected: context.compass.specIntegrationBranch, actual: specIntegrationBranch },
     );
   }
@@ -4799,7 +4799,7 @@ function readPlanAppend(
   };
   const gate = validatePlanRow(row);
   if (!gate.ok) {
-    throw prepareAmendmentRefusal("invalid-plan", `constructed row ${id} fails plan-row validation \u2014 ${summarize(gate.violations)}`, {
+    throw prepareAmendmentRefusal("invalid-plan", `constructed row ${id} fails plan-row validation \u2014 ${summarize(gate.violations)}. Correct the plan document/metadata to agree with the reviewed compass, then inspect the row with mstar plan show --plan ${id}.`, {
       plan_id: id,
       violations: gate.violations.map((entry) => entry.code),
     });
