@@ -6543,7 +6543,7 @@ export async function recoverPrepareCoordinator(
     attestation?: ActivationAttestation;
   }>,
 ): Promise<RecoverPrepareCoordinatorResult> {
-  if (!isPlainObject(input)) throw invalidInput("coordinator recovery input must be an object");
+  if (!isPlainObject(input)) throw invalidInput("coordinator recovery input must be an object. Correct the recovery request and retry mstar workflow recover-coordinator.");
   requireCwd(input.cwd);
   // Canonical authority discrimination precedes every other check (§4.3): the
   // active-store refusal must not be pre-empted by a payload, version or path
@@ -6571,7 +6571,7 @@ export async function recoverPrepareCoordinator(
     ? undefined
     : (await import("./store-activation.js")).validateActivationAttestation(input.attestation);
   if (attestation !== undefined && attestation.operator.authorizationRef !== authorizationRef) {
-    throw recoveryRefusal("unauthorized", "the stop attestation's operator authorization does not match authorizationRef; supply the actual operator-authorized attestation and retry recovery", { field: "attestation.operator.authorizationRef" });
+    throw recoveryRefusal("unauthorized", "the stop attestation's operator authorization does not match authorizationRef; supply the actual operator-authorized stop attestation and retry mstar workflow recover-coordinator", { field: "attestation.operator.authorizationRef" });
   }
   const attestedAt = attestation === undefined ? undefined : new Date(attestation.attestedAt).toISOString();
 
@@ -6584,8 +6584,7 @@ export async function recoverPrepareCoordinator(
     // the rule is stated with the received form and length instead.
     throw recoveryRefusal(
       "invalid-request",
-      "priorSessionPath must be the absolute path of the recorded coordinator envelope \u2014 the received value is " +
-        "not an absolute path and is not echoed in this diagnostic",
+      "priorSessionPath must be the absolute path of the recorded coordinator envelope \u2014 the received value is not an absolute path and is not echoed in this diagnostic. Correct the recovery request and retry mstar workflow recover-coordinator",
       {
         form: isNonEmptyString(input.priorSessionPath) ? "relative" : typeof input.priorSessionPath,
         length: isNonEmptyString(input.priorSessionPath) ? input.priorSessionPath.length : 0,
@@ -6610,7 +6609,7 @@ export async function recoverPrepareCoordinator(
     if (recorded === undefined) {
       throw recoveryRefusal(
         "not-prepare",
-        `workflow ${workflowId} has no recorded coordinator binding \u2014 recovery replaces a recorded binding and never creates one`,
+        `workflow ${workflowId} has no recorded coordinator binding \u2014 recovery replaces a recorded binding and never creates one. Inspect the active binding with mstar status validate; recovery requires the recorded prior envelope and explicit stop evidence.`,
         { workflow_id: workflowId },
       );
     }
@@ -6622,8 +6621,7 @@ export async function recoverPrepareCoordinator(
       if (replayedOperation.request_hash !== requestHash) {
         throw recoveryRefusal(
           "operation-conflict",
-          `operation ${operationId} was already recorded for workflow ${workflowId} with a different request \u2014 ` +
-            `an operation id names exactly one reviewed recovery`,
+          `operation ${operationId} was already recorded for workflow ${workflowId} with a different request \u2014 an operation id names exactly one reviewed recovery. Inspect the workflow with mstar status validate; use a new operation ID only after confirming the prior operation's state.`,
           { workflow_id: workflowId, operation_id: operationId, recorded: replayedOperation.request_hash, actual: requestHash },
         );
       }
@@ -6631,7 +6629,7 @@ export async function recoverPrepareCoordinator(
         throw recoveryRefusal(
           "operation-conflict",
           `operation ${operationId} was recorded for coordinator session ${replayedOperation.session_id}, but workflow ` +
-            `${workflowId} now records ${recorded.session_id} \u2014 the binding was superseded; the recorded receipt is no longer this workflow's state`,
+            `${workflowId} now records ${recorded.session_id} \u2014 the binding was superseded; the recorded receipt is no longer this workflow's state. Inspect the active binding with mstar status validate; use a new operation ID only after confirming the prior operation's state`,
           {
             workflow_id: workflowId,
             operation_id: operationId,
@@ -6650,7 +6648,7 @@ export async function recoverPrepareCoordinator(
         throw new CoordinationError(
           "coordination.session-not-found",
           `workflow ${workflowId} records recovered coordinator session ${recorded.session_id}, but that binding's ` +
-            `envelope is gone \u2014 the binding is broken; do not replay it`,
+            `envelope is gone \u2014 the binding is broken; do not replay it. Inspect the workflow with mstar status validate.`,
           { workflow_id: workflowId, session_id: recorded.session_id },
         );
       }
@@ -6668,8 +6666,7 @@ export async function recoverPrepareCoordinator(
     if (sessionId === recorded.session_id) {
       throw recoveryRefusal(
         "invalid-request",
-        `the replacement identity is the recorded coordinator session ${recorded.session_id} \u2014 a recovery replaces ` +
-          `a coordinator that can no longer authenticate and never re-binds the same one`,
+        `the replacement identity is the recorded coordinator session ${recorded.session_id} \u2014 a recovery replaces a coordinator that can no longer authenticate and never re-binds the same one. Correct the recovery request and retry mstar workflow recover-coordinator`,
         { prior_session_id: recorded.session_id },
       );
     }
@@ -6688,7 +6685,7 @@ export async function recoverPrepareCoordinator(
       throw recoveryRefusal(
         "unauthorized",
         `the stop assertion does not name the recorded coordinator ${recorded.session_id} \u2014 recovery requires an ` +
-          `explicit attestation that the prior holder stopped or reloaded`,
+          `explicit attestation that the prior holder stopped or reloaded. Supply the actual operator-authorized stop attestation and retry mstar workflow recover-coordinator`,
         { prior_session_id: recorded.session_id, stopped_session_ids: [...stoppedSessionIds] },
       );
     }
@@ -6696,7 +6693,7 @@ export async function recoverPrepareCoordinator(
       || attestation?.stoppedSessions.some((entry) => entry.sessionId === sessionId)) {
       throw recoveryRefusal(
         "unauthorized",
-        "the replacement coordinator is named as stopped; remove the replacement from the stop assertion and retry recovery",
+        "the replacement coordinator is named as stopped; remove the replacement from the stop assertion and retry mstar workflow recover-coordinator",
         { session_id: sessionId },
       );
     }
@@ -6723,7 +6720,7 @@ export async function recoverPrepareCoordinator(
     };
     const recoveredAt = nowIso();
     if (attestedAt !== undefined && Date.parse(attestedAt) > Date.parse(recoveredAt)) {
-      throw recoveryRefusal("unauthorized", "the stop attestation is in the future; supply the observed stop time and retry recovery", { attested_at: attestedAt, recovered_at: recoveredAt });
+      throw recoveryRefusal("unauthorized", "the stop attestation is in the future; supply the actual operator-authorized stop time and retry mstar workflow recover-coordinator", { attested_at: attestedAt, recovered_at: recoveredAt });
     }
     if (ownsInterruptedClaim && (attestation === undefined || attestedAt === undefined || lease === undefined
       || !attestation.stoppedSessions.some((entry) => entry.sessionId === recorded.session_id)
@@ -6731,7 +6728,7 @@ export async function recoverPrepareCoordinator(
       || Date.parse(lease.claimed_at) > Date.parse(attestedAt))) {
       throw recoveryRefusal(
         "unauthorized",
-        "interrupted integration recovery requires the operator's validated stop attestation naming this exact prior holder as stopped or reloaded after its claim; supply workflow recover-coordinator --attestation <absolute-json> and retry. A live, foreign or newer claim is not released",
+        "interrupted integration recovery requires the operator's validated stop attestation naming this exact prior holder as stopped or reloaded after its claim; supply workflow recover-coordinator --attestation <absolute-json> and retry. A live, foreign or newer claim is not released. Supply the actual operator-authorized stop attestation and retry mstar workflow recover-coordinator",
         { holder: recorded.session_id, claimed_at: lease?.claimed_at, attested_at: attestedAt ?? null },
       );
     }
@@ -6780,7 +6777,7 @@ export async function recoverPrepareCoordinator(
     if (written === undefined) {
       throw new CoordinationError(
         "coordination.store",
-        `snapshot ${snapshotPath} is unreadable after this call committed it`,
+        `snapshot ${snapshotPath} is unreadable after this call committed it. Inspect the workflow with mstar status validate; restore access to the recorded harness path before retrying mstar workflow recover-coordinator.`,
         { path: snapshotPath },
       );
     }
@@ -6861,7 +6858,7 @@ function readRecoveryCompass(harnessRoot: string, snapshot: WorkflowSnapshot): P
 /** One required non-empty recovery request field (a request-shape refusal). */
 function recoveryText(value: unknown, field: string): string {
   if (!isNonEmptyString(value)) {
-    throw recoveryRefusal("invalid-request", `coordinator recovery ${field} is required`, { field });
+    throw recoveryRefusal("invalid-request", `coordinator recovery ${field} is required. Correct the recovery request and retry mstar workflow recover-coordinator.`, { field });
   }
   return value;
 }
@@ -6880,14 +6877,14 @@ function recoveryStopList(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw recoveryRefusal(
       "unauthorized",
-      "stoppedSessionIds must name at least the prior holder this recovery replaces \u2014 an empty stop assertion is never an authorization",
+      "stoppedSessionIds must name at least the prior holder this recovery replaces \u2014 an empty stop assertion is never an authorization. Correct the recovery request and retry mstar workflow recover-coordinator; stoppedSessionIds must include the recorded prior coordinator.",
       { actual: Array.isArray(value) ? "array" : value === undefined ? null : typeof value },
     );
   }
   const ids: string[] = [];
   for (const [index, entry] of value.entries()) {
     if (!isNonEmptyString(entry)) {
-      throw recoveryRefusal("invalid-request", "every stoppedSessionIds entry must be a non-empty session id", {
+      throw recoveryRefusal("invalid-request", "every stoppedSessionIds entry must be a non-empty session id. Correct the recovery request and retry mstar workflow recover-coordinator; stoppedSessionIds must include the recorded prior coordinator.", {
         index,
         actual: typeof entry,
       });
@@ -6902,7 +6899,7 @@ function recoveryStopList(value: unknown): string[] {
       throw recoveryRefusal(
         "invalid-request",
         "every stoppedSessionIds entry must be a public session id \u2014 a single safe path component " +
-          "([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed in this diagnostic",
+          "([A-Za-z0-9._-]+) of at most 128 characters; the rejected value is not echoed in this diagnostic. Correct the recovery request and retry mstar workflow recover-coordinator; stoppedSessionIds must include the recorded prior coordinator",
         { index, length: entry.length },
       );
     }
