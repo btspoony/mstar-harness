@@ -2240,18 +2240,18 @@ export function planAreaRoots(harnessRoot: string, planId: string): string[] {
 export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: readonly string[]): void {
   for (const path of paths) {
     if (!isAbsolute(path)) {
-      throw invalidInput(`evidence path must be absolute: ${path}`, { path });
+      throw invalidInput(`evidence path must be absolute: ${path}; allowed roots: ${roots.join(", ")}. Inspect the plan scope with mstar plan show --plan <plan-id>.`, { path });
     }
     const abs = canonicalizeNearestExisting(path);
     if (!roots.some((root) => isWithin(root, abs))) {
       throw new CoordinationError(
         "coordination.path-mismatch",
-        `evidence path ${path} is outside this plan's own plan/SDD area (${roots.join(", ")})`,
+        `evidence path ${path} is outside this plan's own plan/SDD area (allowed roots: ${roots.join(", ")}). Inspect the plan scope with mstar plan show --plan <plan-id>.`,
         { path: abs, allowed: roots },
       );
     }
     if (!existsSync(abs)) {
-      throw new CoordinationError("coordination.invalid-input", `evidence path does not exist: ${path}`, { path: abs });
+      throw new CoordinationError("coordination.invalid-input", `evidence path does not exist: ${path}; allowed roots: ${roots.join(", ")}. Inspect the plan scope with mstar plan show --plan <plan-id>.`, { path: abs });
     }
   }
 }
@@ -2259,24 +2259,24 @@ export function assertEvidenceInsidePlanArea(roots: readonly string[], paths: re
 const PROTECTED_SOURCE_BRANCHES: Readonly<Record<string, true>> = { main: true, master: true, develop: true, dev: true };
 
 async function assertRecordedSourceCheckout(scope: ResolvedPlanScope, snapshot: WorkflowSnapshot, worktreePath: string, workingBranch: string): Promise<void> {
-  if (!isAbsolute(worktreePath)) throw invalidInput("config.worktreePath must be absolute; revise it with plan prepare");
+  if (!isAbsolute(worktreePath)) throw invalidInput("config.worktreePath must be absolute; correct the recorded source checkout/branch facts with mstar plan prepare");
   const root = gitRead(worktreePath, ["rev-parse", "--show-toplevel"]);
-  if (root === undefined) throw gitProof(`cannot read source checkout ${worktreePath}; restore the recorded Git checkout and retry prepare`);
+  if (root === undefined) throw gitProof(`cannot read source checkout ${worktreePath}; restore that recorded checkout before rerunning mstar plan prepare`);
   const checkoutRoot = canonicalTarget(root);
-  if (checkoutRoot !== canonicalTarget(worktreePath)) throw invalidInput("config.worktreePath must be the Git checkout root; revise it with plan prepare", { worktree_path: worktreePath, checkout_root: checkoutRoot });
+  if (checkoutRoot !== canonicalTarget(worktreePath)) throw invalidInput(`config.worktreePath must be the Git checkout root; correct the recorded source checkout/branch facts with mstar plan prepare; expected checkout root ${worktreePath}, actual checkout root ${checkoutRoot}, expected branch ${workingBranch}`, { worktree_path: worktreePath, checkout_root: checkoutRoot });
   const main = readMainWorktree(worktreePath);
   const control = readMainWorktree(scope.harnessRoot);
   if (main === null || (control !== null && canonicalTarget(main.root) !== canonicalTarget(control.root))) {
-    throw invalidInput("the recorded source checkout must belong to this workflow repository; select its owned feature checkout with plan prepare");
+    throw invalidInput("the recorded source checkout must belong to this workflow repository; correct the recorded source checkout/branch facts with mstar plan prepare");
   }
   if (canonicalTarget(main.root) === checkoutRoot || checkoutRoot === canonicalTarget(snapshot.integration_worktree_path ?? scope.harnessRoot)) {
-    throw invalidInput("the plan source must not be the primary or integration checkout; select its owned feature worktree with plan prepare");
+    throw invalidInput("the plan source must not be the primary or integration checkout; correct the recorded source checkout/branch facts with mstar plan prepare");
   }
   if (PROTECTED_SOURCE_BRANCHES[workingBranch] === true || workingBranch === snapshot.branch?.target || workingBranch === snapshot.branch?.integration) {
-    throw invalidInput("the plan source branch must differ from protected target and integration branches; revise workingBranch with plan prepare", { working_branch: workingBranch });
+    throw invalidInput("the plan source branch must differ from protected target and integration branches; correct the recorded source checkout/branch facts with mstar plan prepare", { working_branch: workingBranch });
   }
   const actual = gitRead(worktreePath, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  if (actual !== workingBranch) throw invalidInput("the source checkout does not match workingBranch; checkout the recorded branch or revise it with plan prepare", { working_branch: workingBranch, actual });
+  if (actual !== workingBranch) throw invalidInput(`the source checkout does not match workingBranch; correct the recorded source checkout/branch facts with mstar plan prepare; expected checkout root ${worktreePath}, actual checkout root ${checkoutRoot}, expected branch ${workingBranch}, actual branch ${actual ?? "unavailable"}`, { working_branch: workingBranch, actual });
 }
 
 async function mutatePrepare(
@@ -2286,12 +2286,12 @@ async function mutatePrepare(
   request: PrepareRequest,
 ): Promise<CoordinationResult> {
   const config = request.config ?? {};
-  if (!isPlainObject(config)) throw invalidInput("prepare config must be an object");
+  if (!isPlainObject(config)) throw invalidInput("prepare config must be an object. Correct the Prepare configuration with mstar plan prepare.");
   assertExactKeys(config, ["worktreePath", "workingBranch", "qaGate", "findingsCleanup"], "prepare config");
-  if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute(config.worktreePath))) throw invalidInput("config.worktreePath must be an absolute source checkout path");
-  if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) throw invalidInput("config.workingBranch must name the source feature branch");
-  if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) throw invalidInput("config.qaGate must be mandatory or pm-acceptance");
-  if (config.findingsCleanup !== undefined && !["allow-residual", "zero-residual"].includes(config.findingsCleanup)) throw invalidInput("config.findingsCleanup must be allow-residual or zero-residual");
+  if (config.worktreePath !== undefined && (!isNonEmptyString(config.worktreePath) || !isAbsolute(config.worktreePath))) throw invalidInput("config.worktreePath must be an absolute source checkout path. Correct the Prepare configuration with mstar plan prepare.");
+  if (config.workingBranch !== undefined && !isNonEmptyString(config.workingBranch)) throw invalidInput("config.workingBranch must name the source feature branch. Correct the Prepare configuration with mstar plan prepare.");
+  if (config.qaGate !== undefined && !["mandatory", "pm-acceptance"].includes(config.qaGate)) throw invalidInput("config.qaGate must be mandatory or pm-acceptance. Correct the Prepare configuration with mstar plan prepare.");
+  if (config.findingsCleanup !== undefined && !["allow-residual", "zero-residual"].includes(config.findingsCleanup)) throw invalidInput("config.findingsCleanup must be allow-residual or zero-residual. Correct the Prepare configuration with mstar plan prepare.");
   let prepared: PreparedCoordination;
   let metadata: Record<string, unknown>;
   const result = await withRowCommit(scope, {
@@ -2306,7 +2306,7 @@ async function mutatePrepare(
       const worktreePath = config.worktreePath !== undefined ? canonicalTarget(config.worktreePath) : recorded.worktree_path;
       const workingBranch = config.workingBranch ?? recorded.working_branch;
       if (config.worktreePath !== undefined || config.workingBranch !== undefined) {
-        if (!isNonEmptyString(worktreePath) || !isNonEmptyString(workingBranch)) throw invalidInput("source configuration needs both worktreePath and workingBranch; provide the missing source fact with plan prepare");
+        if (!isNonEmptyString(worktreePath) || !isNonEmptyString(workingBranch)) throw invalidInput("source configuration needs both worktreePath and workingBranch; specify both with mstar plan prepare");
         await assertRecordedSourceCheckout(scope, context.snapshot, worktreePath, workingBranch);
       }
       const qaGate = config.qaGate ?? current?.qa_gate ?? (recorded.qa_gate === "pm-acceptance" ? "pm-acceptance" : "mandatory");
