@@ -97,7 +97,6 @@ test("store.upgrade names the required operator input before writing", async () 
   }
 });
 
-
 test("a store usage refusal carries the shared factory metadata and keeps its code", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-usage-shape-"));
   try {
