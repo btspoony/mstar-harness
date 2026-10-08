@@ -933,8 +933,13 @@ function assertCoordinatedSnapshotWriter(
   if (sessionPath === undefined || typeof bound !== "string" || canonicalTarget(sessionPath) !== canonicalTarget(bound)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `snapshot ${snapshotPath} is coordinated \u2014 ${action} requires its currently bound coordinator envelope; retry the same operation with --session <coordinator envelope>`,
-      { path: snapshotPath, expected: bound, actual: sessionPath },
+      "The snapshot is coordinated; retry this operation with its currently bound coordinator session envelope. Inspect the workflow with mstar status validate.",
+      {
+        action,
+        path: snapshotPath,
+        expected: bound,
+        actual: sessionPath,
+      },
     );
   }
 }
@@ -950,7 +955,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   if (!isPlainObject(stored)) {
     throw new CoordinationError(
       "coordination.store",
-      "stored workflow snapshot is not an object \u2014 refusing a field-scoped rewrite over it",
+      "The stored workflow snapshot is not an object; refusing a field-scoped rewrite. Inspect the snapshot with mstar status validate.",
       {},
     );
   }
@@ -965,7 +970,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
     if (candidate[field] !== undefined && !isDeepStrictEqual(candidate[field], stored[field])) {
       throw new CoordinationError(
         "coordination.direct-write-refused",
-        `snapshot replacement cannot change workflow ${field}; use its authorized lifecycle operation`,
+        "Snapshot replacement cannot change a protected workflow field; use the authorized lifecycle operation. Inspect the workflow with mstar status validate.",
         { field },
       );
     }
@@ -985,7 +990,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   if (incomingRows.length !== rows.length) {
     throw new CoordinationError(
       "coordination.direct-write-refused",
-      "snapshot replacement cannot add or remove plan rows; use the authorized workflow amendment operation",
+      "Snapshot replacement cannot add or remove plan rows; use the authorized workflow amendment operation. Inspect the workflow with mstar status validate.",
       { field: "plans" },
     );
   }
@@ -993,18 +998,18 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
   const seenRows = new Set<string>();
   for (const row of incomingRows) {
     if (!isPlainObject(row) || typeof row.id !== "string" || seenRows.has(row.id)) {
-      throw new CoordinationError("coordination.direct-write-refused", "snapshot replacement contains an unidentified or duplicate plan row", { field: "plans" });
+      throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement contains an unidentified or duplicate plan row; inspect the workflow with mstar status validate.", { field: "plans" });
     }
     seenRows.add(row.id);
     const prior = byId.get(row.id);
     if (prior === undefined) {
-      throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot add plan row ${row.id}`, { field: "plans", plan_id: row.id });
+      throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot add a plan row; use the authorized workflow amendment operation. Inspect the workflow with mstar status validate.", { field: "plans", plan_id: row.id });
     }
     for (const field of rowFields) {
       if (row[field] !== undefined && !isDeepStrictEqual(row[field], prior[field])) {
         throw new CoordinationError(
           "coordination.direct-write-refused",
-          `snapshot replacement cannot change plan row ${row.id} ${field}; use its authorized lifecycle operation`,
+          "Snapshot replacement cannot change a plan row field; use the authorized plan operation. Inspect the workflow with mstar status validate.",
           { field: `plans.${field}`, plan_id: row.id },
         );
       }
@@ -1013,7 +1018,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
     const storedAuthority = isPlainObject(prior.coordination) ? prior.coordination : {};
     for (const field of ["revision"] as const) {
       if (incomingAuthority[field] !== undefined && !isDeepStrictEqual(incomingAuthority[field], storedAuthority[field])) {
-        throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} coordination.${field}; use its authorized plan operation`, { field: `plans.coordination.${field}`, plan_id: row.id });
+        throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change plan row coordination state; use the authorized plan operation. Inspect the workflow with mstar status validate.", { field: `plans.coordination.${field}`, plan_id: row.id });
       }
     }
     for (const [block, fields] of [
@@ -1025,7 +1030,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
       const held = isPlainObject(storedAuthority[block]) ? storedAuthority[block] : {};
       for (const field of fields) {
         if (proposed[field] !== undefined && !isDeepStrictEqual(proposed[field], held[field])) {
-          throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} coordination.${block}.${field}; use its authorized plan operation`, { field: `plans.coordination.${block}.${field}`, plan_id: row.id });
+          throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change plan row coordination state; use the authorized plan operation. Inspect the workflow with mstar status validate.", { field: `plans.coordination.${block}.${field}`, plan_id: row.id });
         }
       }
     }
@@ -1033,7 +1038,7 @@ function mergePhaseProjection(stored: unknown, incoming: WorkflowSnapshot): Work
     const storedMetadata = isPlainObject(prior.metadata) ? prior.metadata : {};
     for (const field of ["iteration_refs", "spec_integration_branch", "merge_target", "worktree_path", "working_branch"] as const) {
       if (incomingMetadata[field] !== undefined && !isDeepStrictEqual(incomingMetadata[field], storedMetadata[field])) {
-        throw new CoordinationError("coordination.direct-write-refused", `snapshot replacement cannot change plan row ${row.id} metadata.${field}`, { field: `plans.metadata.${field}`, plan_id: row.id });
+        throw new CoordinationError("coordination.direct-write-refused", "Snapshot replacement cannot change plan row metadata; use the authorized plan operation. Inspect the workflow with mstar status validate.", { field: `plans.metadata.${field}`, plan_id: row.id });
       }
     }
   }
@@ -1399,7 +1404,7 @@ export async function closeWorkflow(workflowId: string, dir: string, opts: Close
       if (!attestedStopped) {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `workflow ${workflowId} cannot become ${outcome} while the integration mutex holder is live or lacks a matching stop attestation at or after this claim; for pre-activation FILE authority, recover the recorded coordinator with \`mstar workflow recover-coordinator --session <prior-coordinator-envelope> --operation-id <id> --reason <reason> --authorization-ref <approved-reference> --stopped <prior-session-id> --attestation <absolute-ActivationAttestation.json>\`, then close as failed or stopped`,
+          "The workflow cannot become the requested status while its integration mutex holder is live or lacks a matching stop attestation at or after the claim; recover the recorded coordinator on the pre-activation FILE route with mstar workflow recover-coordinator. Inspect the workflow with mstar status validate.",
           { workflow_id: workflowId, status: outcome, holder: lease.holder, current_coordinator: coordinatorSessionId ?? null },
         );
       }
@@ -1562,15 +1567,23 @@ export async function recordWorkflowDelivery(
     if (nextPr !== undefined && isNonEmptyString(branch.source) && nextPr.head !== branch.source) {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `workflow ${workflowId} records delivery.pr.head ${JSON.stringify(nextPr.head)}, but the registered delivery source is ${JSON.stringify(branch.source)}`,
-        { workflow_id: workflowId },
+        "The workflow records a PR head that differs from the registered delivery source; inspect the workflow with mstar status validate.",
+        {
+          pr_head: nextPr.head,
+          registered_source: branch.source,
+          workflow_id: workflowId,
+        },
       );
     }
     if (nextPr !== undefined && isNonEmptyString(branch.target) && nextPr.target !== branch.target) {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `workflow ${workflowId} records delivery.pr.target ${JSON.stringify(nextPr.target)}, but the registered delivery target is ${JSON.stringify(branch.target)}`,
-        { workflow_id: workflowId },
+        "The workflow records a PR target that differs from the registered delivery target; inspect the workflow with mstar status validate.",
+        {
+          pr_target: nextPr.target,
+          registered_target: branch.target,
+          workflow_id: workflowId,
+        },
       );
     }
     if (
@@ -1580,8 +1593,12 @@ export async function recordWorkflowDelivery(
     ) {
       throw new CoordinationError(
         "coordination.invalid-transition",
-        `workflow ${workflowId} records PR identity ${JSON.stringify(previousPr)} once at submission \u2014 ${JSON.stringify(nextPr)} is a different delivery, not an evidence update`,
-        { workflow_id: workflowId },
+        "The workflow already records a PR identity; a different delivery is not an evidence update. Inspect the workflow with mstar status validate.",
+        {
+          previous_pr: previousPr,
+          incoming_pr: nextPr,
+          workflow_id: workflowId,
+        },
       );
     }
     const previousCompletion = isPlainObject(stored.completion) ? stored.completion : undefined;
@@ -1601,7 +1618,7 @@ export async function recordWorkflowDelivery(
     ) {
       throw new CoordinationError(
         "coordination.completion-frozen",
-        `workflow ${workflowId} has accepted completion evidence against its registered policy/reference; the accepted fulfilment cannot be replaced`,
+        "The workflow already has accepted completion evidence under its registered completion policy; that fulfilment cannot be replaced. Inspect the workflow with mstar status validate.",
         { workflow_id: workflowId, completion_policy: snapshot.completion_policy },
       );
     }

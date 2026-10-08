@@ -234,18 +234,6 @@
     "expectedCount": 1
   },
   {
-    "signature": "unreachable-recovery:packages/engine/src/workflow.ts:95f99e85a95a",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/workflow.ts:1bb4e17fc532",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
     "signature": "missing-cause-code:packages/commands/src/families/persist.ts:5c612bd43fec",
     "justification": "PR review scanner-discovered candidate pending triage.",
     "trackingIssue": "#422",
@@ -266,12 +254,6 @@
   {
     "signature": "missing-cause-code:packages/commands/src/families/persist.ts:25dc5b08222c",
     "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/issue.ts:5cb8fe0ab00c",
-    "justification": "One-level refusal-wrapper call site surfaced by review; pending cause/recovery triage.",
     "trackingIssue": "#422",
     "expectedCount": 1
   },

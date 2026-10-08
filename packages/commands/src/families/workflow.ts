@@ -50,30 +50,31 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     ? error.details as Record<string, unknown>
     : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  const recovery = code === "workflow.register.title-constraint"
-    ? "Use the title in the selected plan document's H1, or correct that document before registering."
-    : code === "execution.header-revision-conflict"
-      ? "Run `mstar status validate`, then retry `mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>`."
-      : code === "execution.adoption-refused" && message.includes("no terminal header")
-        ? "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection."
-        : code === "execution.adoption-refused" && message.includes("already registered")
-          ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
-          : code === "execution.adoption-refused" && message.includes("ACTIVE coordinator session")
-            ? "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
-            : code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")
-              ? "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
-              : code === "execution.adoption-refused" && message.includes("no recorded terminal reason")
-                ? "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header."
-                  : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
-                    ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                    : code.startsWith("execution.adoption")
-                      ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-                      : undefined;
+  let recovery = "Run mstar schema --command <id> to read this command's contract, then correct the reported condition and retry this operation.";
+  if (code === "workflow.register.title-constraint") {
+    recovery = "Inspect the plan with mstar plan show, then use the title in the selected plan document's H1 before registering.";
+  } else if (code === "execution.header-revision-conflict") {
+    recovery = "Run mstar status validate, then retry mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>.";
+  } else if (code === "execution.adoption-refused" && message.includes("no terminal header")) {
+    recovery = "Create a new workflow through mstar workflow register with a valid catalog selection.";
+  } else if (code === "execution.adoption-refused" && message.includes("already registered")) {
+    recovery = "Run mstar status validate, then close the existing registered workflow with mstar status workflow-close.";
+  } else if (code === "execution.adoption-refused" && message.includes("ACTIVE coordinator session")) {
+    recovery = "No supported exit exists for this terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.";
+  } else if (code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")) {
+    recovery = "No supported exit exists for this non-terminal header; inspect the workflow with mstar status validate, then capture the I-000397 residual surface with mstar issue add --operation-id <id> --actor project-manager.";
+  } else if (code === "execution.adoption-refused" && message.includes("no recorded terminal reason")) {
+    recovery = "No supported exit exists for this stopped or failed header; preserve the header and capture the residual with mstar issue add --operation-id <id> --actor project-manager.";
+  } else if (code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")) {
+    recovery = "Read mstar status validate; the existing terminal-adoption record is already the close receipt.";
+  } else if (code.startsWith("execution.adoption")) {
+    recovery = "Preserve the header and resolve the stated cause; re-read mstar status validate before retrying.";
+  }
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
     ...(details === undefined ? {} : { details }),
-    ...(recovery === undefined ? {} : { recovery }),
+    recovery,
   });
 }
 function object(value: unknown, field: string): Record<string, unknown> {
@@ -364,7 +365,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
               code: "execution.adoption-refused",
               exitCode: 1,
               message: "terminal adoption requires an active execution authority",
-              recovery: "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
+              recovery: "Run mstar status validate to inspect the harness, then mstar store upgrade --operator <name> to import legacy execution state and activate the execution authority before retrying adoption.",
             });
           }
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };

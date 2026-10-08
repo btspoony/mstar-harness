@@ -126,48 +126,6 @@
     "expectedCount": 1
   },
   {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:a858289edd5b",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:4196f7b6a73b",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:5b9c04fa8371",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:97ccb1218e71",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:f6009211a89c",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:022d0f39415b",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/commands/src/families/workflow.ts:77e7835ed891",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
     "signature": "capability-unreachable:packages/engine/src/status.ts:e92def1dafa5",
     "justification": "PR review scanner-discovered candidate pending triage.",
     "trackingIssue": "#423",
@@ -655,54 +613,6 @@
   },
   {
     "signature": "capability-unreachable:packages/engine/src/coordination-write.ts:3334cc0e584a",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:044706fe1216",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:72c41a53c3f7",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:720f522bde3e",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:51d7eb81c9fc",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:81ad63c76260",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:1988ec6059dd",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:20994ec82361",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:f5e997cae471",
     "justification": "PR review scanner-discovered candidate pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
@@ -1512,25 +1422,7 @@
     "expectedCount": 1
   },
   {
-    "signature": "capability-unreachable:packages/commands/src/families/issue.ts:aef0768b769d",
-    "justification": "PR review round 5 template recovery rejected pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/commands/src/families/issue.ts:5cb8fe0ab00c",
-    "justification": "PR review round 5 template recovery rejected pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
     "signature": "capability-unreachable:packages/engine/src/coordination.ts:7ade6b212bba",
-    "justification": "PR review round 6 unresolved CoordinationError command template pending triage.",
-    "trackingIssue": "#423",
-    "expectedCount": 1
-  },
-  {
-    "signature": "capability-unreachable:packages/engine/src/workflow.ts:c448ec400069",
     "justification": "PR review round 6 unresolved CoordinationError command template pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
