@@ -24,60 +24,6 @@
     "expectedCount": 1
   },
   {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:ff44a66edec7",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:4566432dab21",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:d26446f2bbe9",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:1305465ee306",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 2
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:dc01c9e9b2f7",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 2
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:948540b3beec",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:f7bb43a9c575",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 2
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:19100601e499",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/coordination-checks.ts:d4122dfad150",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
     "signature": "missing-recovery:packages/commands/src/families/local.ts:6b9782d4edd8",
     "justification": "pre-existing backlog cohort",
     "trackingIssue": "#422",
@@ -91,78 +37,6 @@
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/local.ts:370fee465836",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:c5e927cc8d89",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:3ddea836f451",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:d458647b44ee",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:9be2166c8a7a",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 3
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:d527db446c87",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:dd586300b6cb",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:5c612bd43fec",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:3673e300858f",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:e90d1c30043d",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:8d1e0f320dfa",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:cf3ca28cef90",
-    "justification": "pre-existing backlog cohort",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-recovery:packages/commands/src/families/persist.ts:25dc5b08222c",
     "justification": "pre-existing backlog cohort",
     "trackingIssue": "#422",
     "expectedCount": 1
@@ -247,30 +121,6 @@
   },
   {
     "signature": "missing-recovery:packages/commands/src/families/workflow.ts:1bb4e17fc532",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-cause-code:packages/commands/src/families/persist.ts:5c612bd43fec",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-cause-code:packages/commands/src/families/persist.ts:8d1e0f320dfa",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-cause-code:packages/commands/src/families/persist.ts:cf3ca28cef90",
-    "justification": "PR review scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-cause-code:packages/commands/src/families/persist.ts:25dc5b08222c",
     "justification": "PR review scanner-discovered candidate pending triage.",
     "trackingIssue": "#422",
     "expectedCount": 1
@@ -517,12 +367,6 @@
   },
   {
     "signature": "missing-cause-code:packages/commands/src/families/status.ts:21259cdc60a1",
-    "justification": "PR review round 4 scanner-discovered candidate pending triage.",
-    "trackingIssue": "#422",
-    "expectedCount": 1
-  },
-  {
-    "signature": "missing-cause-code:packages/commands/src/families/coordination-checks.ts:ff44a66edec7",
     "justification": "PR review round 4 scanner-discovered candidate pending triage.",
     "trackingIssue": "#422",
     "expectedCount": 1
