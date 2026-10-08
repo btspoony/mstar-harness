@@ -5504,7 +5504,7 @@ function readPrepareAmendment(
   },
 ): PrepareAmendmentPlan {
   if (!isPlainObject(patch)) {
-    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch must be an object", { actual: patch ?? null });
+    throw prepareAmendmentRefusal("invalid-patch", "the amendment patch must be an object. Correct the malformed caller input before retrying mstar workflow amend-prepare.", { actual: patch ?? null });
   }
   const invalidPatch = "coordination.prepare-amendment.invalid-patch";
   const wholePatchWithheld = "the whole patch is withheld; nothing was written";
@@ -5713,7 +5713,7 @@ function readPrepareAmendment(
   if (appends.length === 0 && correctionsIn.length === 0 && requestedPath === undefined && !policyRequested) {
     throw prepareAmendmentRefusal(
       "invalid-patch",
-      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism`,
+      `the patch changes nothing on workflow ${context.snapshot.id} \u2014 it appends no plan, corrects no plan file, records no new integration checkout and no different plan parallelism. Inspect workflow and plan rows with mstar status validate and mstar plan show --plan <plan-id>.`,
       { workflow_id: context.snapshot.id },
     );
   }
