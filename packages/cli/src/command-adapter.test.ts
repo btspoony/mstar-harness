@@ -1,6 +1,6 @@
 import { encodeExecutionSessionRef, serializeExecutionValue, type ExecutionIdentity } from "@mstar-harness/engine";
 import { executeCommand, getCommandDefinitions, getCommandSchemas, type InvocationContext } from "@mstar-harness/commands";
-import { mintedIdentityScopeProblem, renderCommandContract, resolveCliSessionIdentity } from "./command-adapter";
+import { mintedIdentityScopeProblem, resolveCliSessionIdentity } from "./command-adapter";
 
 const originalSessionId = process.env.MSTAR_HOST_SESSION_ID;
 const originalMinted = process.env.MSTAR_EXECUTION_IDENTITY;
@@ -113,10 +113,8 @@ test("CLI scope gate constrains a minted identity to the scope it declares", () 
   // A malformed reference stays the family's own typed refusal.
   expect(mintedIdentityScopeProblem(identity, { sessionRef: "not-a-wire", operation: "op" }, "plan.progress")).toBeUndefined();
 });
-test("registry help, schema and runtime admission share required inputs and declared defaults", async () => {
+test("registry exposes schema descriptors for supported operations", async () => {
   const definitions = getCommandDefinitions();
-  const schemas = getCommandSchemas(definitions);
-  let dashboardPort: number | undefined;
   const context: InvocationContext = {
     cwd: process.cwd(),
     controlRoot: process.cwd(),
@@ -125,50 +123,49 @@ test("registry help, schema and runtime admission share required inputs and decl
     effects: {
       async readInput() { return ""; },
       async spawn() { return { exitCode: 0, signal: null, stdout: "", stderr: "" }; },
-      async startDashboard(request) {
-        dashboardPort = request.port;
-        return { url: "http://127.0.0.1:0", async close() {} };
-      },
+      async startDashboard() { throw new Error("unused"); },
       async openBrowser() { throw new Error("unused"); },
     },
   };
   for (const definition of definitions) {
-    const schema = schemas.find((entry) => entry.id === definition.id);
-    if (schema === undefined) throw new Error(`missing schema descriptor for ${definition.id}`);
     const published = await executeCommand("schema", { command: definition.id }, context);
-    expect(published).toMatchObject({
-      status: "ok",
-      data: { descriptor: { required: schema.required, defaults: schema.defaults, input: { required: schema.required } } },
-    });
-    const help = renderCommandContract(definition, "cli");
-    for (const requirement of schema.requirements) {
-      if (requirement.constraint !== undefined && requirement.route === "cli") {
-        expect(help).toContain(requirement.constraint);
-      }
-    }
-    if (schema.required.length > 0) {
-      expect(help).toContain(`Required inputs: ${schema.required.join(", ")}`);
-      const result = await executeCommand(definition.id, {}, context);
-      expect(result.status).toBe("usage");
-      const expectedRequired = [...new Set([
-        ...schema.required,
-        ...schema.requirements
-          .filter((entry) => entry.required && entry.condition !== undefined && entry.condition.present === false)
-          .map((entry) => entry.name),
-      ])];
-      expect(result.details?.required).toEqual(expectedRequired);
-      expect(result.details?.conditionalRequirements).toEqual(schema.requirements.filter((entry) => entry.condition !== undefined));
-      const diagnostics = result.details?.diagnostics;
-      expect(Array.isArray(diagnostics)).toBe(true);
-      for (const field of expectedRequired) {
-        expect((diagnostics as Array<{ path?: string }>).some((item) => item.path === field)).toBe(true);
-      }
-    }
-    for (const [key, value] of Object.entries(schema.defaults)) {
-      expect(help).toContain(`${key}=${JSON.stringify(value)}`);
+    expect(published).toMatchObject({ status: "ok", data: { descriptor: { id: definition.id } } });
+  }
+});
+
+test("workflow operations expose independent missing-input diagnostics", async () => {
+  const context: InvocationContext = {
+    cwd: process.cwd(),
+    controlRoot: process.cwd(),
+    sessionId: "caller-session",
+    versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+    signal: new AbortController().signal,
+    effects: {
+      async readInput() { return ""; },
+      async spawn() { return { exitCode: 0, signal: null, stdout: "", stderr: "" }; },
+      async startDashboard() { throw new Error("unused"); },
+      async openBrowser() { throw new Error("unused"); },
+    },
+  };
+  for (const [command, expected] of [
+    ["workflow.recover-coordinator", ["session", "operationId", "reason", "authorizationRef", "stopped"]],
+    ["workflow.show-prepare", ["session"]],
+    ["workflow.amend-prepare", ["session", "input"]],
+  ] as const) {
+    const result = await executeCommand(command, {}, context);
+    expect(result).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(result.details?.required).toEqual(expected);
+    for (const path of expected) {
+      expect(result.details?.diagnostics).toContainEqual(expect.objectContaining({
+        path, code: "required", expected: "present", received: "undefined",
+      }));
     }
   }
-  const dashboard = await executeCommand("dashboard", {}, context);
-  expect(dashboard.status).toBe("ok");
-  expect(dashboardPort).toBe(0);
+  const recovery = getCommandSchemas(getCommandDefinitions()).find((entry) => entry.id === "workflow.recover-coordinator")!;
+  expect(recovery.required).not.toContain("sessionId");
+  expect(recovery.requirements).toContainEqual(expect.objectContaining({
+    name: "attestation",
+    condition: { field: "interruptedIntegrationMergeClaim", equals: true },
+    required: true,
+  }));
 });

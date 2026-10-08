@@ -182,6 +182,44 @@ function makeDefinition(
         },
       ],
     } : {}),
+    ...(id === "workflow.show-prepare" ? {
+      requirements: [
+        { name: "session", ownership: "caller" as const, route: "cli" as const, required: true },
+        { name: "session", ownership: "caller" as const, route: "mcp" as const, required: true },
+      ],
+    } : {}),
+    ...(id === "workflow.amend-prepare" ? {
+      requirements: [
+        { name: "session", ownership: "caller" as const, route: "cli" as const, required: true },
+        { name: "input", ownership: "caller" as const, route: "cli" as const, required: true },
+        { name: "session", ownership: "caller" as const, route: "mcp" as const, required: true },
+        { name: "input", ownership: "caller" as const, route: "mcp" as const, required: true },
+      ],
+    } : {}),
+    ...(id === "workflow.recover-coordinator" ? {
+      requirements: [
+        ...(["session", "operationId", "reason", "authorizationRef", "stopped"] as const).flatMap((name) => [
+          { name, ownership: "caller" as const, route: "cli" as const, required: true },
+          { name, ownership: "caller" as const, route: "mcp" as const, required: true },
+        ]),
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route: "cli" as const,
+          required: true,
+          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
+          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
+        },
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route: "mcp" as const,
+          required: true,
+          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
+          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
+        },
+      ],
+    } : {}),
     cli: {
       path: id.split("."),
       aliases: [],
