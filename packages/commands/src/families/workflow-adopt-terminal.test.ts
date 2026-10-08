@@ -474,8 +474,12 @@ test("the command transport refuses wrong, malformed and self-settling documents
     // words (not a generic wrapper, not an empty cause, not a bare non-empty
     // string). The category is read from the runtime message itself, never
     // mirrored from the production sanitizer.
-    const category = (actual.replace(/^(?:JSON Parse error|SyntaxError):\s*/i, "")
-      .match(/^[A-Za-z]+(?:-[A-Za-z]+)*(?:\s+[A-Za-z]+(?:-[A-Za-z]+)*)*/) ?? [""])[0].trim();
+    const actualBase = actual
+      .replace(/^(?:JSON Parse error|SyntaxError):\s*/i, "")
+      .replace(/\s+in JSON at position \d+.*$/i, "")
+      .replace(/\s+at position \d+.*$/i, "")
+      .replace(/\s*\(line \d+ column \d+\).*$/i, "");
+    const category = (actualBase.match(/^[A-Za-z]+(?:-[A-Za-z]+)*(?:\s+[A-Za-z]+(?:-[A-Za-z]+)*)*/) ?? [""])[0].trim();
     expect(category.length).toBeGreaterThan(0);
     expect(cause.startsWith(category)).toBe(true);
     // The document-derived operand the runtime quotes after an
