@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeExecutionAuthority, initializeStore, openStore, type StoreDb } from "@mstar-harness/engine";
@@ -62,6 +62,35 @@ async function withWriter(harness: string, action: (db: StoreDb) => void): Promi
   const writer = await openStore({ harnessDir: harness }, "write");
   try { action(writer.db); }
   finally { writer.close(); }
+}
+
+/** Plants one ACTIVE current-epoch coordinator holder row for the fixture workflow. */
+async function withActiveHolder(harness: string, sessionId: string): Promise<void> {
+  await withWriter(harness, (db) => {
+    const epoch = (db.prepare("select authority_epoch from store_meta where id = 1").get() as { authority_epoch: number }).authority_epoch;
+    db.prepare("insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) values (?, 'coordinator', ?, ?, 1, 'active', ?)")
+      .run("wf-command", sessionId, epoch, "2026-10-01T00:00:00.000Z");
+  });
+}
+
+/**
+ * The operator stop document the transport reads: the full ActivationAttestation
+ * the engine validates, naming exactly the given sessions stopped.
+ */
+function writeAttestation(root: string, stoppedSessionIds: readonly string[], overrides: Record<string, unknown> = {}): string {
+  const path = join(root, "attestation.json");
+  writeFileSync(path, JSON.stringify({
+    version: 1,
+    attestedAt: "2026-10-08T00:00:00.000Z",
+    operator: { actor: "recovery-operator", authorizationRef: "operator-authorization-fixture" },
+    consumers: [{
+      entryId: "mstar-cli", kind: "coordinator", entrypoint: "packages/cli/src/index.ts",
+      runtime: "bun", runtimeVersion: "99.0.0", version: "0.0.0-test", current: true, disposition: "reloaded",
+    }],
+    stoppedSessions: stoppedSessionIds.map((sessionId) => ({ sessionId, host: "fixture-host", state: "stopped" })),
+    ...overrides,
+  }, null, 2));
+  return path;
 }
 
 test("workflow adopt-terminal publishes revision source, replays, and reports adopted terminal state", async () => {
@@ -180,25 +209,182 @@ test("registered-row refusal advertises the existing close path", async () => {
   expect(close.status).toBe("ok");
 });
 
-test("ACTIVE-session refusal routes the existing holder to its close authority", async () => {
+test("ACTIVE-session refusal names the exact holder and the supported optional-attestation recovery", async () => {
   const { root, harness } = await fixture();
-  await withWriter(harness, (db) => {
-    const epoch = (db.prepare("select authority_epoch from store_meta where id = 1").get() as { authority_epoch: number }).authority_epoch;
-    db.prepare("insert into execution_sessions(workflow_id, role, session_id, epoch, revision, state, bound_at) values (?, 'coordinator', ?, ?, 1, 'active', ?)")
-      .run("wf-command", "caller-session", epoch, "2026-10-01T00:00:00.000Z");
-  });
+  await withActiveHolder(harness, "stranded-holder");
+  const before = await executeCommand("status.validate", {}, invocation(root));
+  expect(before.status).toBe("ok");
   const refused = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness, expect: "1", operation: "adopt-active", reason: "active holder",
   }, invocation(root));
-  expectAdoptionRefusal(
-    refused,
-    "[execution.adoption-refused] workflow wf-command has an ACTIVE coordinator session at the current epoch; no supported exit exists for a terminal header holding an ACTIVE session at the current epoch",
-    "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
-  );
-  expectDeadEndMarkers(
-    "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`.",
-    true,
-  );
+  expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused", exitCode: 1 });
+  if (refused.status !== "refused") throw new Error("expected the ACTIVE-holder refusal");
+  // The refusal names the actual holder, the required proof and the exact
+  // supported retry — it is no longer the retired dead end, so no dead-end
+  // marker may leak into its message or recovery.
+  expect(refused.message).toContain("stranded-holder");
+  expect(refused.message).toContain("ActivationAttestation");
+  expect(refused.message).not.toContain("No supported exit exists");
+  expect(refused.details).toMatchObject({
+    active_holder_sessions: ["stranded-holder"],
+    adoption_refusal: "active-session-proof-required",
+    helpRoute: "mstar workflow adopt-terminal --help",
+  });
+  if (refused.recovery === undefined) throw new Error("expected the supported recovery");
+  expect(refused.recovery).toContain("--attestation");
+  expect(refused.recovery).toContain("mstar schema workflow.adopt-terminal");
+  expect(refused.recovery).not.toContain("No supported exit exists");
+  // A refusal settles nothing: the holder row and the header stay untouched.
+  const after = await executeCommand("status.validate", {}, invocation(root));
+  expect(after).toEqual(before);
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
+      .toEqual({ state: "active", revision: 1 });
+    expect(db.prepare("select revision from execution_workflows where workflow_id = ?").get("wf-command"))
+      .toEqual({ revision: 1 });
+  });
+});
+
+test("workflow adopt-terminal settles the attested ACTIVE holder through the command transport", async () => {
+  const { root, harness } = await fixture();
+  await withActiveHolder(harness, "stranded-holder");
+  const attestation = writeAttestation(root, ["stranded-holder"]);
+  const input = {
+    workflow: "wf-command", harness, expect: "1", operation: "command-settle-1",
+    reason: "settle the stranded holder", attestation,
+  };
+  const applied = await executeCommand("workflow.adopt-terminal", input, invocation(root));
+  expect(applied).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
+  if (applied.status !== "ok") throw new Error("expected the settled adoption");
+  const receipt = applied.data as { replayed: boolean; recovery?: { outcome: string; applied: string[] } };
+  expect(receipt.replayed).toBe(false);
+  // The transport proof reached the real engine operation: the settled target
+  // and the approving operator are on the receipt, and the row is revoked.
+  expect(receipt.recovery).toMatchObject({
+    outcome: "applied",
+    applied: ["execution_sessions(wf-command, coordinator, stranded-holder) revoked"],
+    resolvedFrom: [{ path: "attestation.operator", source: "recovery-operator (operator-authorization-fixture)" }],
+  });
+  const replay = await executeCommand("workflow.adopt-terminal", input, invocation(root));
+  expect(replay).toMatchObject({ status: "ok" });
+  if (replay.status === "ok") expect((replay.data as { replayed: boolean }).replayed).toBe(true);
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
+      .toEqual({ state: "revoked", revision: 2 });
+    expect((db.prepare("select count(*) as n from execution_registry where workflow_id = ?").get("wf-command") as { n: number }).n).toBe(0);
+    expect((db.prepare("select count(*) as n from execution_operations where operation_id = ?").get("command-settle-1") as { n: number }).n).toBe(1);
+  });
+});
+
+test("the command transport refuses wrong, malformed and self-settling documents without mutation", async () => {
+  const wrongHolder = await fixture();
+  await withActiveHolder(wrongHolder.harness, "stranded-holder");
+  const wrongProof = writeAttestation(wrongHolder.root, ["foreign-session"]);
+  const wrong = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness: wrongHolder.harness, expect: "1", operation: "adopt-wrong", reason: "wrong holder",
+    attestation: wrongProof,
+  }, invocation(wrongHolder.root));
+  expect(wrong).toMatchObject({ status: "refused", code: "execution.adoption-refused" });
+  if (wrong.status !== "refused") throw new Error("expected the wrong-holder refusal");
+  expect(wrong.details).toMatchObject({
+    unattested_sessions: ["stranded-holder"],
+    adoption_refusal: "active-session-proof-incomplete",
+  });
+  await withWriter(wrongHolder.harness, (db) => {
+    expect(db.prepare("select state from execution_sessions where session_id = ?").get("stranded-holder"))
+      .toEqual({ state: "active" });
+  });
+
+  const malformed = await fixture();
+  await withActiveHolder(malformed.harness, "stranded-holder");
+  const brokenPath = join(malformed.root, "attestation.json");
+  writeFileSync(brokenPath, "{ not json");
+  const unparseable = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness: malformed.harness, expect: "1", operation: "adopt-broken", reason: "malformed",
+    attestation: brokenPath,
+  }, invocation(malformed.root));
+  expect(unparseable).toMatchObject({
+    status: "refused", code: "workflow.adopt-terminal.attestation-malformed", exitCode: 1,
+  });
+  // A relative document is caller input, not a filesystem read.
+  const relative = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness: malformed.harness, expect: "1", operation: "adopt-relative", reason: "relative",
+    attestation: "attestation.json",
+  }, invocation(malformed.root));
+  expect(relative).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+
+  const selfSettling = await fixture();
+  await withActiveHolder(selfSettling.harness, "caller-session");
+  const selfProof = writeAttestation(selfSettling.root, ["caller-session"]);
+  const refused = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness: selfSettling.harness, expect: "1", operation: "adopt-self", reason: "self-settlement",
+    attestation: selfProof,
+  }, invocation(selfSettling.root));
+  expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused" });
+  if (refused.status !== "refused") throw new Error("expected the self-settlement refusal");
+  expect(refused.details).toMatchObject({
+    caller_session_id: "caller-session",
+    adoption_refusal: "self-settlement",
+  });
+  expect(refused.recovery).toContain("distinct operator identity");
+  for (const probe of [malformed, selfSettling]) {
+    await withWriter(probe.harness, (db) => {
+      expect(db.prepare("select state from execution_sessions where session_id = ?").get(
+        probe === malformed ? "stranded-holder" : "caller-session",
+      )).toEqual({ state: "active" });
+    });
+  }
+});
+
+test("a changed proof under a committed operation id is an operation conflict, not a replay", async () => {
+  const { root, harness } = await fixture();
+  await withActiveHolder(harness, "stranded-holder");
+  const committed = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-proof-1", reason: "settled",
+    attestation: writeAttestation(root, ["stranded-holder"]),
+  }, invocation(root));
+  expect(committed.status).toBe("ok");
+  const changed = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, expect: "1", operation: "adopt-proof-1", reason: "settled",
+    attestation: writeAttestation(root, ["stranded-holder"], { attestedAt: "2026-10-08T09:00:00.000Z" }),
+  }, invocation(root));
+  expect(changed).toMatchObject({ status: "refused", code: "execution.operation-conflict" });
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
+      .toEqual({ state: "revoked", revision: 2 });
+  });
+});
+
+test("the settled-adoption proof contract is published by help and schema", async () => {
+  const { root } = await fixture();
+  const definition = getCommandDefinitions().find((entry) => entry.id === "workflow.adopt-terminal");
+  if (definition === undefined) throw new Error("missing workflow.adopt-terminal definition");
+  expect(definition.cli.options.find((option) => option.key === "attestation")?.help).toContain("ActivationAttestation");
+  // The document contract publishes the exact proof structure and allowed fields.
+  const payload = definition.payloads?.adoptionAttestation;
+  if (payload === undefined) throw new Error("missing the adoptionAttestation document contract");
+  const document = payload.schema.toJSONSchema() as {
+    properties?: Record<string, { properties?: Record<string, unknown> }>;
+    required?: string[];
+  };
+  expect(Object.keys(document.properties ?? {})).toEqual([
+    "version", "attestedAt", "operator", "consumers", "stoppedSessions",
+  ]);
+  expect(document.required).toEqual(["version", "attestedAt", "operator", "consumers", "stoppedSessions"]);
+  const stopped = document.properties?.stoppedSessions;
+  expect(JSON.stringify(stopped)).toContain('"sessionId"');
+  expect(JSON.stringify(stopped)).toContain('"stopped"');
+  expect(JSON.stringify(stopped)).toContain('"reloaded"');
+  // The conditional-requirement fact is published for both routes.
+  const schema = await executeCommand("schema", { command: "workflow.adopt-terminal" }, invocation(root));
+  expect(schema.status).toBe("ok");
+  if (schema.status !== "ok") throw new Error("expected the schema descriptor");
+  const descriptor = (schema.data as { descriptor: { requirements: Array<{ name: string; route: string; constraint?: string }> } }).descriptor;
+  for (const route of ["cli", "mcp"]) {
+    const attestation = descriptor.requirements.find((entry) => entry.name === "attestation" && entry.route === route);
+    expect(attestation?.constraint).toContain("ACTIVE coordinator session");
+    expect(attestation?.constraint).toContain("stoppedSessions");
+  }
 });
 
 test("nonterminal-header refusal routes through execution bind and normal close", async () => {
