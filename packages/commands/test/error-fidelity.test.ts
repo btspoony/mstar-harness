@@ -138,27 +138,40 @@ describe("session.recover input discovery", () => {
       // Stable, specific classification — not a generic usage envelope.
       expect(result, label).toMatchObject({ status: "refused", code: "session.recover.attestation-malformed", exitCode: 1 });
       if (result.status === "ok") throw new Error(label);
-      // The published cause must preserve the runtime's OWN parser-authored
-      // grammar, not a generic wrapper. The oracle is derived directly from the
-      // same runtime's raw message — its leading category phrase and its
-      // single-quoted grammar tokens — never by mirroring the production
-      // sanitizer, so a cause collapsed to `syntax error` or stripped of its
-      // grammar fails here.
+      // The published cause must preserve the runtime's own parser-authored
+      // grammar, not a generic wrapper. The oracle is the same runtime's raw
+      // message, read by the operand's DIAGNOSTIC ROLE — never by mirroring the
+      // production sanitizer and never by quote style.
       const rawMessage = (() => { try { JSON.parse(document); return ""; } catch (error) { return error instanceof Error ? error.message : String(error); } })();
+      const cause = result.message
+        .slice("--attestation is not valid JSON: ".length)
+        .replace(/\s*\(position \d+\)$/, "")
+        .replace(/\s*\(line \d+ column \d+\)$/, "")
+        .trim();
+      // The category is the load-bearing fact: a cause collapsed to a generic
+      // `syntax error` / bare not-valid-JSON statement fails it.
       const category = rawMessage
         .replace(/^JSON Parse error:\s*/i, "")
         .replace(/^JSON parse error:\s*/i, "")
         .replace(/^SyntaxError:\s*/i, "")
         .split(/["']/)[0]!
         .trim();
-      const cause = result.message
-        .slice("--attestation is not valid JSON: ".length)
-        .replace(/\s*\(position \d+\)$/, "")
-        .replace(/\s*\(line \d+ column \d+\)$/, "")
-        .trim();
-      expect(cause, `${label}: the concrete parser cause must not be empty`).not.toBe("");
       expect(cause, `${label}: the parser's own category ${JSON.stringify(category)} must open the published cause`).toContain(category);
+      // Operands the parser NAMED as unexpected are submitted source, so no
+      // single-quoted or double-quoted form of them may survive.
+      for (const operand of rawMessage.match(/\bUnexpected\s+(?:token|identifier|number|string|character)\s+(?:'[^']*'|"[^"]*")/gi) ?? []) {
+        const inner = operand.match(/(?:'([^']*)'|"([^"]*)")/);
+        const token = inner?.[1] ?? inner?.[2] ?? "";
+        if (token === "") continue;
+        expect(cause, `${label}: the unexpected source operand ${JSON.stringify(token)} must not survive`).not.toContain(token);
+        expect(result.message, `${label}: the unexpected source operand ${JSON.stringify(token)} must not reach the message`).not.toContain(token);
+      }
+      // Grammar the parser AUTHORED (dangling delimiters it merely mentions)
+      // must survive: every single-quoted operand the message does not name as
+      // unexpected is expected-grammar.
+      const unexpectedSpans = (rawMessage.match(/\bUnexpected\s+\w+\s+'[^']*'/gi) ?? []);
       for (const token of rawMessage.match(/'[^']*'/g) ?? []) {
+        if (unexpectedSpans.some((span) => span.endsWith(token))) continue;
         expect(cause, `${label}: parser grammar ${token} must survive in the cause`).toContain(token);
       }
       // Every double-quoted operand the SAME runtime derives for this input is
