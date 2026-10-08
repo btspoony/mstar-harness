@@ -367,20 +367,28 @@ test("workflow adopt-terminal settles the attested ACTIVE holder through the com
   if (applied.status !== "ok") throw new Error("expected the settled adoption");
   const receipt = applied.data as ExecutionReceipt<ExecutionState>;
   expect(receipt.replayed).toBe(false);
-  // The transport proof reached the real engine operation: the settled target
-  // and the approving operator are on the receipt, and the row is revoked.
-  expect(receipt.recovery).toMatchObject({
+  // The transport proof reached the real engine operation: the settlement
+  // outcome, the settled target, and the approving operator's provenance are
+  // asserted by their own fields. The operator entry is selected by path rather
+  // than matching the whole array, so the engine's derived entries
+  // (`attestation.attestedAt`) are not pinned to a fixed arity.
+  const recovery = receipt.recovery;
+  if (recovery === undefined) throw new Error("expected the settlement sidecar on the committed receipt");
+  expect(recovery).toMatchObject({
     outcome: "applied",
     applied: ["execution_sessions(wf-command, coordinator, stranded-holder) revoked"],
-    resolvedFrom: [{ path: "attestation.operator", source: "recovery-operator (operator-authorization-fixture)" }],
   });
+  expect(recovery.resolvedFrom)
+    .toContainEqual({ path: "attestation.operator", source: "recovery-operator (operator-authorization-fixture)" });
   const replay = await executeCommand("workflow.adopt-terminal", input, invocation(root));
-  expect(replay).toMatchObject({ status: "ok" });
+  expect(replay).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
   expect(applied.data).not.toHaveProperty("operationRecovery");
-  if (replay.status === "ok") {
-    expect(replay.data).not.toHaveProperty("operationRecovery");
-    expect({ ...adoptionReceiptSchema.parse(replay.data), replayed: false }).toEqual(applied.data);
-  }
+  if (replay.status !== "ok") throw new Error("expected the settled replay");
+  expect(replay.data).not.toHaveProperty("operationRecovery");
+  const replayedReceipt = replay.data as ExecutionReceipt<ExecutionState>;
+  expect(replayedReceipt.replayed).toBe(true);
+  // The genuine replay is the first frame identical modulo the replay flag.
+  expect({ ...replayedReceipt, replayed: false }).toEqual(applied.data);
   await withWriter(harness, (db) => {
     expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
       .toEqual({ state: "revoked", revision: 2 });
@@ -411,31 +419,25 @@ test("the command transport refuses wrong, malformed and self-settling documents
   const malformed = await fixture();
   await withActiveHolder(malformed.harness, "stranded-holder");
   const parserSchema = z.object({ parser: z.object({ cause: z.string().min(1), location: z.string().min(1).optional() }) });
-  // The synthetic token has the observed identifier shape (`Unexpected identifier
-  // "<token>"` on Bun 1.4.0, with no `is not valid JSON` suffix) so it is the
-  // source-token disclosure class this consumer must exclude on every supported
-  // runtime: bare-word, and inside a string value for the excerpt path.
+  // The synthetic token has the observed identifier shape, so it is the
+  // source-operand disclosure class this consumer must exclude on every
+  // supported runtime — the runtime quotes that operand in either quote style.
   const synthetic = "F5SYNTH9C41E7D2";
-  for (const [name, text] of [
-    ["identifier", `{"token":${synthetic}}`],
-    ["trailing-comma", `{"token":"${synthetic}",}`],
-    ["truncated", "{\"version\":1,"],
-    ["unexpected-token", "{\"version\":@}"],
-  ] as const) {
+  // Drive one malformed file through the real command and return the refusal
+  // plus the same input's own runtime message and published parser cause.
+  const driveMalformed = async (name: string, text: string): Promise<{ envelope: CommandEnvelope; actual: string; cause: string }> => {
     const brokenPath = join(malformed.root, `${name}.json`);
     writeFileSync(brokenPath, text);
-    const unparseable = await executeCommand("workflow.adopt-terminal", {
+    const envelope = await executeCommand("workflow.adopt-terminal", {
       workflow: "wf-command", harness: malformed.harness, expect: "1", operation: `adopt-broken-${name}`, reason: "malformed",
       attestation: brokenPath,
     }, invocation(malformed.root));
-    expect(unparseable).toMatchObject({ status: "refused", code: "workflow.adopt-terminal.attestation-malformed", exitCode: 1 });
-    if (unparseable.status !== "refused") throw new Error("expected the malformed-document refusal");
-    const parser = parserSchema.parse(unparseable.details).parser;
-    // Compare against the parser's own reported interface for the SAME input,
-    // independently of the production sanitizer.
+    expect(envelope).toMatchObject({ status: "refused", code: "workflow.adopt-terminal.attestation-malformed", exitCode: 1 });
+    if (envelope.status !== "refused") throw new Error("expected the malformed-document refusal");
     let actual = "";
     try { JSON.parse(text); } catch (error) { actual = error instanceof Error ? error.message : String(error); }
     expect(actual).not.toBe("");
+    const { parser } = parserSchema.parse(envelope.details);
     // Location is retained exactly when the runtime parser reports one, never
     // invented when it reports none.
     const actualPosition = actual.match(/\bposition\s+(\d+)\b/i)?.[1];
@@ -446,15 +448,36 @@ test("the command transport refuses wrong, malformed and self-settling documents
         ? undefined
         : `line ${actualLineColumn[1]} column ${actualLineColumn[2]}`;
     expect(parser.location).toBe(actualLocation);
-    // The parser's authored category survives (no collapse to one generic cause).
-    expect(parser.cause).not.toBe("syntax error");
-    // Every double-quoted operand this runtime derived from the document — the
-    // unexpected identifier/token itself, or the excerpt before
-    // `is not valid JSON` — is redacted from the published cause; single-quoted
-    // delimiters/keywords the parser authored are not document content.
-    for (const operand of actual.match(/"[^"]*"/g) ?? []) expect(parser.cause).not.toContain(operand);
+    return { envelope, actual, cause: parser.cause };
+  };
+  for (const [name, text] of [
+    ["identifier", `{"token":${synthetic}}`],
+    ["trailing-comma", `{"token":"${synthetic}",}`],
+    ["truncated", "{\"version\":1,"],
+    ["unexpected-token", "{\"version\":@}"],
+  ] as const) {
+    const { envelope, actual, cause } = await driveMalformed(name, text);
+    // The published cause is real parser-authored text — a substring of the
+    // runtime's own message, never an invented generic wrapper — so the
+    // diagnostic category survives the redaction.
+    expect(actual).toContain(cause);
+    // The document-derived operand the runtime quotes after an
+    // unexpected/unrecognized diagnostic is not published, whichever quote
+    // style the runtime used.
+    const operand = actual.match(/\b(?:Unexpected token|Unexpected identifier|Unrecognized token)\b\s*(?:'([^']*)'|"([^"]*)")/i)
+      ?.slice(1).find((capture): capture is string => capture !== undefined);
+    if (operand !== undefined) expect(cause).not.toContain(operand);
     // No source/token/credential excerpt is echoed anywhere in the refusal.
-    expect(JSON.stringify(unparseable)).not.toContain(synthetic);
+    expect(JSON.stringify(envelope)).not.toContain(synthetic);
+  }
+  // Expected-delimiter grammar the parser authored is preserved: for a shape
+  // whose runtime message is pure expected-delimiter grammar, every
+  // single-quoted delimiter it reports survives the redaction.
+  {
+    const { actual, cause } = await driveMalformed("unterminated", `{"actor":"${synthetic}"`);
+    const grammar = actual.match(/'[^']*'/g) ?? [];
+    expect(grammar.length).toBeGreaterThan(0);
+    for (const span of grammar) expect(cause).toContain(span);
   }
   // A relative document is caller input, not a filesystem read.
   const relative = await executeCommand("workflow.adopt-terminal", {

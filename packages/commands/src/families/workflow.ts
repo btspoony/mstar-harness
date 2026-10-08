@@ -141,14 +141,14 @@ function absolute(value: string | undefined, field: string): string {
  * is reported with the parser's own grammatical cause and, only when the
  * parser actually reports one, its location.
  *
- * The supported runtimes quote source-derived content with double quotes: the
- * unexpected identifier/token itself (`Unexpected identifier "<token>"`, Bun)
- * and the excerpt Node appends before `is not valid JSON` (a truncated excerpt
- * carries an embedded `...` and unescaped inner quotes). Every double-quoted
- * span is therefore removed before the cause is published, so no document
- * token travels into the refusal. The parser's own single-quoted grammar
- * (`'}'`, `','`, `("'")`) is authored by the parser, not the document, and is
- * preserved. No offset is invented when the parser reports none.
+ * Not every quoted span is grammar. A supported runtime quotes source-derived
+ * content after an unexpected/unrecognized diagnostic — the offending operand
+ * (`Unexpected token 'F'`, `Unrecognized token '@'`, `Unexpected identifier
+ * "<token>"`), in either quote style, plus the document excerpt Node appends
+ * before `is not valid JSON` — and those spans are removed. The parser's own
+ * Expected-delimiter/keyword grammar (`Expected '}'`, `Expected property name
+ * or '}'`, `("'")`) is never introduced by those roles and is preserved. No
+ * offset is invented when the parser reports none.
  */
 function jsonParseDiagnostic(error: unknown): { cause: string; location?: string } {
   const message = error instanceof Error ? error.message : "";
@@ -162,17 +162,22 @@ function jsonParseDiagnostic(error: unknown): { cause: string; location?: string
   const cause = message
     .replace(/^JSON Parse error:\s*/i, "")
     .replace(/^SyntaxError:\s*/i, "")
-    // The document excerpt Node appends before `is not valid JSON`, including
-    // the truncated form whose excerpt ends in `...`. The clause carries raw
-    // source bytes, so the marker and everything from its opening double quote
-    // onward is dropped together.
+    // The document excerpt Node appends before `is not valid JSON` (a truncated
+    // excerpt carries an embedded `...`). The clause carries raw document bytes,
+    // so the marker and everything from its opening double quote onward is
+    // dropped together.
     .replace(/[:,]?\s*"[\s\S]*is not valid JSON\s*$/i, "")
     .replace(/[,\s]+is not valid JSON\s*$/i, "")
     .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s*\(line \d+ column \d+\)/gi, "")
-    // A double-quoted span is the source-derived unexpected identifier/token.
-    .replace(/\s*"[^"]*"/g, "")
+    // The operand a runtime quotes after `Unexpected token` / `Unexpected
+    // identifier` / `Unrecognized token` is source-derived in EITHER quote style:
+    // `Unexpected token 'F'` quotes the submitted character and `Unexpected
+    // identifier "<token>"` quotes the submitted token. Drop the operand, keep
+    // the diagnostic's own words. Expected-delimiter grammar is not introduced
+    // by those roles, so it is never touched here.
+    .replace(/\b(Unexpected token|Unexpected identifier|Unrecognized token)\b\s*('[^']*'|"[^"]*")/gi, "$1")
     .replace(/\s+/g, " ")
     .replace(/[\s,:;]+$/, "")
     .trim();
