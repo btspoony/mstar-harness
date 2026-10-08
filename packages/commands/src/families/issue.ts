@@ -273,9 +273,12 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const mutationOperationHelp = payloadType[verb] === undefined
     ? undefined
     : "Replay id; if omitted, this command generates one fresh id for this invocation. Explicit values are preserved and blank values are not defaulted.";
-  const commandInput = inputSchema.extend({
-    ...(requiresIssueId ? { id: z.string().min(1) } : {}),
-    ...(expectedRevisionVerbs[verb] === true ? { expect: z.number().int().nonnegative() } : {}),
+  const commandInput = z.object({
+    ...inputSchema.shape,
+    id: requiresIssueId ? z.string().min(1) : z.string().optional(),
+    expect: expectedRevisionVerbs[verb] === true
+      ? z.number().int().nonnegative()
+      : z.number().int().nonnegative().optional(),
   });
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,
