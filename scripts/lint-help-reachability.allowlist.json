@@ -526,5 +526,29 @@
     "justification": "PR review round 10 concatenated command candidate pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:008ffefbd22b",
+    "justification": "legacy v1->v2 harness-layout migration has no CLI retry verb — command-free recovery is the honest form; retained-minimum per plan T9 (capability gap tracked)",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:bf79631adac6",
+    "justification": "legacy v1->v2 harness-layout migration has no CLI retry verb — command-free recovery is the honest form; retained-minimum per plan T9 (capability gap tracked)",
+    "trackingIssue": "#423",
+    "expectedCount": 2
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:b47716d0a7ed",
+    "justification": "legacy v1->v2 harness-layout migration has no CLI retry verb — command-free recovery is the honest form; retained-minimum per plan T9 (capability gap tracked)",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/engine/src/migrate.ts:0638164b0f89",
+    "justification": "legacy v1->v2 harness-layout migration has no CLI retry verb — command-free recovery is the honest form; retained-minimum per plan T9 (capability gap tracked)",
+    "trackingIssue": "#423",
+    "expectedCount": 1
   }
 ]
