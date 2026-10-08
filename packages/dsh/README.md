@@ -62,12 +62,6 @@ The shipped headless template auto-initializes on first use (`@deepseek-ai/dsh-b
 - **Default model resolution** — headless composes no fallbacks row, so an `agent-default-model` settings pin of `FallbacksChain` fails with `NO_ADAPTER` (the web-profile artifact). Point the default model at a real provider, or install `dsh-llm-fallbacks` into the headless profile too (note: on the published dsh 0.1.0-rc.6 the fallbacks settings integration predates the `SettingsProvider.installSection` API, so the virtual adapter does not register — this resolves with dsh ≥ 0.1.2-alpha).
 - **Config via the profile user layer** — profile-level `cordis.patch.yml` overrides work as documented (e.g. `enforcement: hard` + `dispatchBinding` on the mstar row); the mstar row's own `config: {}` stays neutral.
 
-### Direct plan coordination
-
-One primary workflow coordinator advances explicitly selected rows with ordinary prepare/progress/complete and native leaf dispatch. Configuration/source metadata remain revisable; defaults are mandatory QA and allow-residual cleanup, without sealed Assignment or per-row claim/bind. `/iteration-drive` accepts no arguments; unsupported scoped input refuses before boot, never launches a second primary or broadens scope.
-
-Iteration completion verifies the actual serial merge and leaves parent delivery intact. Standalone development verifies registered source and retains compound/PR/verified-merge/close. Report-only requires explicit matching policy fulfilment before Done and evidence-backed close, without invented Git/PR. SDD, QC tri, QA, L1/L2 isolation and coordinator transaction/CAS/receipts remain. Session run/recovery is coordinator-only. Exact shapes live in mstar-use-cli/references/plan-and-workflow.md.
-
 ### Configuration
 
 | Key | Type | Default | Meaning |
