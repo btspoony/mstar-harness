@@ -1,13 +1,17 @@
 // Build prerequisite: run `bun run --cwd packages/commands build` before this package test.
 // These adapter tests load @mstar-harness/commands through its generated package entry.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
-import { initializeStore, openStore, serializeExecutionValue } from "@mstar-harness/engine";
+import {
+  bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, executionContextFor,
+  initializeExecutionAuthority, initializeStore, openStore, serializeExecutionValue,
+  type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
+} from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
@@ -28,10 +32,15 @@ function context(): InvocationContext {
   };
 }
 
-async function run(args: string[], definitions: readonly CommandDefinition[] = getCommandDefinitions(), includeMcp = false): Promise<{ status: number; stdout: string; stderr: string }> {
+async function run(
+  args: string[],
+  definitions: readonly CommandDefinition[] = getCommandDefinitions(),
+  includeMcp = false,
+  invocation: InvocationContext = context(),
+): Promise<{ status: number; stdout: string; stderr: string }> {
   const program = new Command();
   program.name("mstar").exitOverride();
-  registerCliCommands(program, definitions, context());
+  registerCliCommands(program, definitions, invocation);
   if (includeMcp) registerMcpCommand(program);
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -71,6 +80,70 @@ test("mcp is a top-level CLI command and documents its stdio server purpose", as
 });
 
 describe("generated CLI adapter", () => {
+  test("registered workflow-note append accepts acquired CLI context identities and rejects unsafe selectors", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "cli-note-identity-"));
+    const harnessDir = path.join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    const storeContext = { harnessDir };
+    (await initializeStore(storeContext)).close();
+    const initialized = await initializeExecutionAuthority(storeContext);
+    const workflow = "wf-cli-note-identity";
+    const coordinator = "cli-note-coordinator";
+    const identity: ExecutionIdentity = { source: "local", sessionId: coordinator, workflowId: workflow, role: "coordinator" };
+    const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
+      entry: { id: workflow, type: "plan", status: "running", started_at: "2026-10-08T00:00:00Z", dir: `workflows/${workflow}` } as never,
+      snapshot: {
+        schema_version: 1, id: workflow, type: "plan", status: "running",
+        started_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:00Z",
+        plans: [{ id: "p-1", title: "Plan One", file: "plans/p-1.md", status: "InProgress" }],
+      } as never,
+      expected: initialized.token,
+      operationId: "create-cli-note-workflow",
+    });
+    const workflowToken = (created.data as unknown as { workflows: Array<{ workflowToken: ExecutionToken }> }).workflows[0]!.workflowToken;
+    const bound = await bindExecutionSession(executionContextFor(storeContext, identity), {
+      workflowId: workflow, expected: workflowToken, operationId: "bind-cli-note-coordinator",
+    });
+    const sessionRef = encodeExecutionSessionRef(bound.data as ExecutionSessionRef);
+    const priorHost = process.env.MSTAR_HOST_SESSION_ID;
+    const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
+    const ledgerPath = path.join(harnessDir, "workflows", workflow, "notes.jsonl");
+    const append = (id: string, flags: string[] = []) => run([
+      "workflow-note", "append", "--workflow", workflow, "--session-ref", sessionRef,
+      "--id", id, "--text", id, "--harness", harnessDir, ...flags,
+    ]);
+    try {
+      delete process.env.MSTAR_EXECUTION_IDENTITY;
+      process.env.MSTAR_HOST_SESSION_ID = coordinator;
+      const ambient = await append("ambient-note");
+      expect(ambient.status).toBe(0);
+      expect(JSON.parse(ambient.stdout)).toMatchObject({ status: "ok", data: { id: "ambient-note" } });
+
+      delete process.env.MSTAR_HOST_SESSION_ID;
+      process.env.MSTAR_EXECUTION_IDENTITY = JSON.stringify(identity);
+      const minted = await append("minted-note");
+      expect(minted.status).toBe(0);
+      expect(JSON.parse(minted.stdout)).toMatchObject({ status: "ok", data: { id: "minted-note" } });
+
+      delete process.env.MSTAR_EXECUTION_IDENTITY;
+      const beforeRefusals = readFileSync(ledgerPath);
+      const missing = await append("missing-identity");
+      expect(missing.status).toBe(2);
+      expect(JSON.parse(missing.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+
+      process.env.MSTAR_HOST_SESSION_ID = coordinator;
+      const malformedExplicit = await append("malformed-explicit", ["--session-id", ""]);
+      expect(malformedExplicit.status).toBe(2);
+      expect(JSON.parse(malformedExplicit.stdout)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      expect(readFileSync(ledgerPath)).toEqual(beforeRefusals);
+    } finally {
+      if (priorHost === undefined) delete process.env.MSTAR_HOST_SESSION_ID;
+      else process.env.MSTAR_HOST_SESSION_ID = priorHost;
+      if (priorMinted === undefined) delete process.env.MSTAR_EXECUTION_IDENTITY;
+      else process.env.MSTAR_EXECUTION_IDENTITY = priorMinted;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
 
   test("issue show positional parse errors retain their diagnostic shape", () => {

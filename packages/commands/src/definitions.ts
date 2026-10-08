@@ -312,6 +312,7 @@ export function admitCommandInput(
   contract: CommandSchemaDescriptor,
   schema: z.ZodType = definition.input,
   shape: (data: unknown) => unknown = (data) => data,
+  context?: Pick<InvocationContext, "sessionId">,
 ): CommandAdmission {
   const isInputObject = input !== null && typeof input === "object" && !Array.isArray(input);
   const rawInput = isInputObject ? input as Record<string, unknown> : {};
@@ -347,7 +348,13 @@ export function admitCommandInput(
     inputConditionMatches(entry.condition, effectiveRecord)
   );
   const required = [...new Set([...contract.required, ...conditionalRequired.map((entry) => entry.name)])];
-  const missing = required.filter((key) => effectiveRecord[key] === undefined && !diagnostics.some((entry) => entry.path === key));
+  const resolvedSelector = selector !== undefined &&
+    typeof context?.sessionId === "string" && context.sessionId.trim() !== "";
+  const missing = required.filter((key) =>
+    effectiveRecord[key] === undefined &&
+    !(resolvedSelector && selector?.key === key) &&
+    !diagnostics.some((entry) => entry.path === key)
+  );
   const requiredDiagnostics = missing.map((key) => ({
     path: key,
     code: "required",
@@ -439,7 +446,7 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
   }
   const contract = commandSchemasById.get(definition.id)!;
-  const admitted = admitCommandInput(definition, input, contract);
+  const admitted = admitCommandInput(definition, input, contract, undefined, undefined, context);
   if (!admitted.success) return admitted.envelope;
   return admitted.execute(context);
 }
