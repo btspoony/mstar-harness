@@ -4852,7 +4852,7 @@ function readIntegrationWorktreePath(
   if (controlMainRoot !== mainRoot) {
     return refuse(
       "this call runs from the main worktree of <value>, not the repository owning the control harness root <value> (<value>) — the recorded checkout must belong to that repository. Correct the recorded source checkout with mstar workflow amend-prepare.",
-      { path, expected: controlMainRoot, actual: mainRoot },
+      { path, harness_root: control, expected: controlMainRoot, actual: mainRoot },
     );
   }
   if (path === mainRoot || path === control) {
@@ -4867,6 +4867,7 @@ function readIntegrationWorktreePath(
       "integration checkout <value> is not a checkout of the repository owning the control harness root <value> (<value>). Correct the recorded source checkout with mstar workflow amend-prepare.",
       {
         path,
+        harness_root: control,
         expected: controlMainRoot,
         actual: repo === null ? null : canonicalTarget(repo.root),
       },
