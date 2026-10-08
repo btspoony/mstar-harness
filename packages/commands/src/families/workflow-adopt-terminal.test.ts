@@ -3,10 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import {
-  initializeExecutionAuthority, initializeStore, openStore,
-  type ExecutionReceipt, type ExecutionState, type StoreDb,
-} from "@mstar-harness/engine";
+import { initializeExecutionAuthority, initializeStore, openStore, type StoreDb } from "@mstar-harness/engine";
 import { activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { executeCommand } from "../definitions.js";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
@@ -79,6 +76,20 @@ const terminalStateSchema = z.object({
   })).optional(),
 });
 const adoptionReceiptSchema = z.object({ replayed: z.boolean() }).passthrough();
+/**
+ * The committed/replayed settlement receipt, validated at this boundary before
+ * it is read or compared: the asserted fields are checked and every other
+ * envelope key is preserved, so the comparison below is against the actual
+ * applied data rather than a fabricated partial shape.
+ */
+const settlementReceiptSchema = z.object({
+  replayed: z.boolean(),
+  recovery: z.object({
+    outcome: z.string(),
+    applied: z.array(z.string()),
+    resolvedFrom: z.array(z.object({ path: z.string(), source: z.string() })),
+  }).passthrough().optional(),
+}).passthrough();
 /**
  * A refusal's `details`; the recovery guidance and help route live here
  * (`envelope.ts` nests them inside `details`), not at the envelope top level.
@@ -365,7 +376,7 @@ test("workflow adopt-terminal settles the attested ACTIVE holder through the com
   const applied = await executeCommand("workflow.adopt-terminal", input, invocation(root));
   expect(applied).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
   if (applied.status !== "ok") throw new Error("expected the settled adoption");
-  const receipt = applied.data as ExecutionReceipt<ExecutionState>;
+  const receipt = settlementReceiptSchema.parse(applied.data);
   expect(receipt.replayed).toBe(false);
   // The transport proof reached the real engine operation: the settlement
   // outcome, the settled target, and the approving operator's provenance are
@@ -385,10 +396,11 @@ test("workflow adopt-terminal settles the attested ACTIVE holder through the com
   expect(applied.data).not.toHaveProperty("operationRecovery");
   if (replay.status !== "ok") throw new Error("expected the settled replay");
   expect(replay.data).not.toHaveProperty("operationRecovery");
-  const replayedReceipt = replay.data as ExecutionReceipt<ExecutionState>;
+  const replayedReceipt = settlementReceiptSchema.parse(replay.data);
   expect(replayedReceipt.replayed).toBe(true);
-  // The genuine replay is the first frame identical modulo the replay flag.
-  expect({ ...replayedReceipt, replayed: false }).toEqual(applied.data);
+  // The genuine replay is the applied frame identical modulo the replay flag;
+  // both sides are the actual validated envelope data.
+  expect({ ...replayedReceipt, replayed: false }).toEqual(receipt);
   await withWriter(harness, (db) => {
     expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
       .toEqual({ state: "revoked", revision: 2 });
@@ -457,10 +469,15 @@ test("the command transport refuses wrong, malformed and self-settling documents
     ["unexpected-token", "{\"version\":@}"],
   ] as const) {
     const { envelope, actual, cause } = await driveMalformed(name, text);
-    // The published cause is real parser-authored text — a substring of the
-    // runtime's own message, never an invented generic wrapper — so the
-    // diagnostic category survives the redaction.
-    expect(actual).toContain(cause);
+    // The real leading category fact of this runtime's own message survives the
+    // redaction: the published cause begins with the same diagnostic category
+    // words (not a generic wrapper, not an empty cause, not a bare non-empty
+    // string). The category is read from the runtime message itself, never
+    // mirrored from the production sanitizer.
+    const category = (actual.replace(/^(?:JSON Parse error|SyntaxError):\s*/i, "")
+      .match(/^[A-Za-z]+(?:-[A-Za-z]+)*(?:\s+[A-Za-z]+(?:-[A-Za-z]+)*)*/) ?? [""])[0].trim();
+    expect(category.length).toBeGreaterThan(0);
+    expect(cause.startsWith(category)).toBe(true);
     // The document-derived operand the runtime quotes after an
     // unexpected/unrecognized diagnostic is not published, whichever quote
     // style the runtime used.
