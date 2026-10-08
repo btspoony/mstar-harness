@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { initializeStore, openStore } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
+import type { CommandEffects, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
