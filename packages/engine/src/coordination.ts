@@ -1451,21 +1451,21 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
   if (coordinator === undefined) {
     throw new CoordinationError(
       "coordination.identity-missing",
-      `workflow ${snapshot.id} has no coordinator binding; use plan bind for this workflow first`,
+      `workflow ${snapshot.id} has no coordinator binding; bind its coordinator with mstar plan bind after inspecting mstar status validate`,
       { workflow_id: snapshot.id },
     );
   }
   if (coordinator.session_id !== session.session_id) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `workflow ${snapshot.id} is bound to coordinator ${coordinator.session_id}, not ${session.session_id}; resume the recorded envelope or recover the stopped coordinator through workflow recover-coordinator`,
+      `workflow ${snapshot.id} is bound to coordinator ${coordinator.session_id}, not ${session.session_id}; inspect the recorded binding with mstar status validate, then resume only its recorded session file with mstar plan bind --resume <session-file>`,
       { expected: coordinator.session_id, actual: session.session_id },
     );
   }
   if (canonicalTarget(coordinator.session_file) !== canonicalTarget(sessionPath)) {
     throw new CoordinationError(
       "coordination.identity-mismatch",
-      `coordinator envelope ${sessionPath} is not the recorded ${coordinator.session_file}; resume the recorded envelope with plan bind --resume`,
+      `coordinator envelope ${sessionPath} is not the recorded ${coordinator.session_file}; inspect the recorded binding with mstar status validate, then resume only its recorded session file with mstar plan bind --resume <session-file>`,
       { expected: coordinator.session_file, actual: canonicalTarget(sessionPath) },
     );
   }
@@ -1475,10 +1475,10 @@ function assertCoordinatorBinding(session: CoordinationSession, sessionPath: str
 function assertMutableRow(context: RowContext, session: CoordinationSession, sessionPath: string, what: string): void {
   assertCoordinatorBinding(session, sessionPath, context.snapshot);
   if (context.snapshot.status !== "running") {
-    throw new CoordinationError("coordination.workflow-not-running", `${what} requires running workflow ${context.snapshot.id}; resume it through workflow lifecycle before retrying`, { status: context.snapshot.status });
+    throw new CoordinationError("coordination.workflow-not-running", `${what} requires running workflow ${context.snapshot.id}; lifecycle is ${context.snapshot.status}. Inspect lifecycle with mstar status validate.`, { status: context.snapshot.status });
   }
   if (rowStatusOf(context.row) === "Done") {
-    throw new CoordinationError("coordination.plan-status", `${what} cannot revise completed plan ${context.scope.planId}; register a new plan for further work`, { plan_id: context.scope.planId });
+    throw new CoordinationError("coordination.plan-status", `${what} cannot revise completed plan ${context.scope.planId}; register a new plan for further work. Inspect the workflow with mstar status validate.`, { plan_id: context.scope.planId });
   }
 }
 
@@ -1539,7 +1539,7 @@ export async function readPlanCoordination(
 ): Promise<PlanCoordinationView> {
   const anchor = entryAnchor(sessionPath);
   assertExecutionFileReadAllowed({ harnessDir: anchor.harnessRoot });
-  if (!isNonEmptyString(planId)) throw invalidInput("planId is required to select a plan");
+  if (!isNonEmptyString(planId)) throw invalidInput("planId is required to select a plan. Inspect the harness authority with mstar status validate.");
   const session = anchor.session;
   const targetPlanId = safePlanId(planId, "planId");
   const rootResolution = resolveIntentRoot({ cwd, controlRoot }, { root: anchor.harnessRoot, source: "session.envelope" });
@@ -1548,7 +1548,7 @@ export async function readPlanCoordination(
   if (harnessRoot !== anchor.harnessRoot) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      `selected control root ${harnessRoot} does not match this coordinator envelope's root ${anchor.harnessRoot}; retry plan show with --harness ${JSON.stringify(anchor.harnessRoot)}, or use a coordinator envelope bound to the requested root`,
+      `selected control root ${harnessRoot} does not match this coordinator envelope's root ${anchor.harnessRoot}. Inspect the harness authority with mstar status validate; use a coordinator envelope bound to the requested root.`,
       { expected: anchor.harnessRoot, actual: harnessRoot },
     );
   }
@@ -1585,7 +1585,7 @@ export async function readCoordinatedArtifact(
     assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
   }
   if (!isPlainObject(ref) || !isNonEmptyString(ref.kind) || !isNonEmptyString(ref.key)) {
-    throw invalidInput("ref must be an ArtifactRef with kind and key");
+    throw invalidInput("ref must be an ArtifactRef with kind and key. Inspect the harness with mstar status validate.");
   }
   const root = canonicalizeNearestExisting(harnessRoot);
   localStore(root);
@@ -1608,7 +1608,7 @@ function assertStoredArtifact(kind: string, payload: unknown, path: string, harn
   if (gate === undefined || gate.ok) return;
   throw new CoordinationError(
     "coordination.store",
-    `${kind} ${path} fails validation \u2014 ${summarize(gate.violations)}`,
+    `${kind} ${path} fails validation \u2014 ${summarize(gate.violations)}. Inspect the harness authority with mstar status validate.`,
     { path, kind, violations: gate.violations.map((entry) => entry.code) },
   );
 }
@@ -1623,13 +1623,13 @@ function assertRootRegisterEntry(harnessRoot: string, workflowId: string): Recor
   const store = localStore(harnessRoot);
   const path = resolveArtifactPath(harnessRoot, { kind: "status", key: "root" });
   if (!existsSync(path)) {
-    throw new CoordinationError("coordination.workflow-not-found", `root status.json not found: ${path}`, { path });
+    throw new CoordinationError("coordination.workflow-not-found", `root status.json not found: ${path}. Inspect the harness authority with mstar status validate.`, { path });
   }
   let doc: unknown;
   try {
     doc = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
-    throw new CoordinationError("coordination.store", `root status.json is not valid JSON: ${path}: ${errorMessage(error)}`, {
+    throw new CoordinationError("coordination.store", `root status.json is not valid JSON: ${path}: ${errorMessage(error)}. Inspect the harness authority with mstar status validate.`, {
       path,
     });
   }
@@ -1640,7 +1640,7 @@ function assertRootRegisterEntry(harnessRoot: string, workflowId: string): Recor
   if (entry === undefined) {
     throw new CoordinationError(
       "coordination.workflow-not-found",
-      `workflow ${workflowId} is not an active entry of ${path} (kind ${store.root})`,
+      `workflow ${workflowId} is not an active entry of ${path} (kind ${store.root}). Inspect the harness authority with mstar status validate.`,
       { path, workflow_id: workflowId },
     );
   }
@@ -1662,7 +1662,7 @@ function assertCoordinatorResidency(cwd: string, snapshot: WorkflowSnapshot): Ma
   if (main === null) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `coordinator binding requires a Git process root \u2014 ${resolve(cwd)} has no readable main worktree`,
+      `coordinator binding requires a Git process root \u2014 ${resolve(cwd)} has no readable main worktree. Inspect the workflow with mstar status validate.`,
       { cwd: resolve(cwd) },
     );
   }
@@ -1679,7 +1679,7 @@ function assertCoordinatorCheckoutResidency(main: MainWorktreeInfo, cwd: string,
   if (!allowed.some((candidate) => isWithin(candidate, here))) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      `a coordinator session must be bound from the main worktree or the recorded integration worktree \u2014 ${here} is neither (${allowed.join(", ")})`,
+      `a coordinator session must be bound from the main worktree or the recorded integration worktree \u2014 ${here} is neither (${allowed.join(", ")}). Inspect the workflow with mstar status validate.`,
       { cwd: here, allowed },
     );
   }
@@ -1722,7 +1722,7 @@ async function bindCoordinatorSession(
       if (snapshot.status !== "running") {
         throw new CoordinationError(
           "coordination.invalid-transition",
-          `workflow ${workflowId} is ${String(snapshot.status)} \u2014 a coordinator session binds only to a running lifecycle`,
+          `workflow ${workflowId} is ${String(snapshot.status)} \u2014 a coordinator session binds only to a running lifecycle. Inspect lifecycle with mstar status validate.`,
           { workflow_id: workflowId, status: snapshot.status },
         );
       }
@@ -1734,7 +1734,7 @@ async function bindCoordinatorSession(
       if (existing !== undefined) {
         throw new CoordinationError(
           "coordination.identity-mismatch",
-          `workflow ${workflowId} already has coordinator ${existing.session_id}; use plan bind --resume ${existing.session_file}, or recover the stopped coordinator through workflow recover-coordinator`,
+          `workflow ${workflowId} already has coordinator ${existing.session_id}; use mstar plan bind --resume ${existing.session_file}, or mstar workflow recover-coordinator only for a stopped coordinator`,
           { holder: existing.session_id, session_file: existing.session_file },
         );
       }
@@ -1763,7 +1763,7 @@ function requireProcessRoot(cwd: string, harnessDir?: string): string {
   if (root === null) {
     throw new CoordinationError(
       "coordination.harness-not-found",
-      `no harness root is resolvable from ${resolve(cwd)} \u2014 pass the control harness root explicitly`,
+      `No control harness root is resolvable from ${resolve(cwd)}. Run mstar status validate from the control harness root, or pass that root explicitly to the caller.`,
       { cwd: resolve(cwd) },
     );
   }
@@ -1772,15 +1772,15 @@ function requireProcessRoot(cwd: string, harnessDir?: string): string {
 
 /** Bind the workflow coordinator, or verify its existing envelope read-only. */
 export async function bindPlanSession(input: BindPlanSessionInput): Promise<CoordinationResult> {
-  if (!isPlainObject(input)) throw invalidInput("bind input must be an object");
+  if (!isPlainObject(input)) throw invalidInput("bind input must be an object. Inspect the target with mstar status validate.");
   if ("resumePath" in input) {
     assertExactKeys(input, ["resumePath", "cwd"], "bind resume input");
     requireCwd(input.cwd);
     return resumeBoundSession(input.resumePath);
   }
   assertExactKeys(input, ["coordinator", "workflowId", "harnessDir", "source", "cwd", "sessionId"], "bind coordinator input");
-  if (input.coordinator !== undefined && input.coordinator !== true) throw invalidInput("only the workflow coordinator can bind; omit coordinator or set it to true");
-  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required");
+  if (input.coordinator !== undefined && input.coordinator !== true) throw invalidInput("only the workflow coordinator can bind; omit coordinator or set it to true. Inspect the target with mstar status validate.");
+  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId is required. Inspect the target with mstar status validate.");
   requireCwd(input.cwd);
   const sessionId = safeSessionId(input.sessionId);
   return bindCoordinatorSession(input.cwd, input.workflowId, input.harnessDir, sessionId, input.source);
@@ -1788,13 +1788,13 @@ export async function bindPlanSession(input: BindPlanSessionInput): Promise<Coor
 
 /** Every bind form is a cooperative local call: it needs a real cwd. */
 function requireCwd(cwd: string): void {
-  if (!isNonEmptyString(cwd) || !isAbsolute(cwd)) throw invalidInput("bind input requires an absolute cwd");
+  if (!isNonEmptyString(cwd) || !isAbsolute(cwd)) throw invalidInput("bind input requires an absolute cwd. Inspect the target with mstar status validate.");
 }
 
 /** Resume is a read-only verification of the workflow coordinator binding. */
 function resumeBoundSession(resumePath: string): CoordinationResult {
   if (!isNonEmptyString(resumePath) || !isAbsolute(resumePath)) {
-    throw invalidInput("resumePath must be an absolute path");
+    throw invalidInput("resumePath must be an absolute path. For an existing envelope use mstar plan bind --resume <absolute-session-file>; inspect the target with mstar status validate.");
   }
   const sessionPath = canonicalTarget(resumePath);
   const session = readSessionEnvelope(sessionPath);
