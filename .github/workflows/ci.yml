@@ -851,8 +851,7 @@ jobs:
       - name: Lint ASCII literals (src code)
         run: bun run lint:ascii-literals
       # Hash gates has 49 pre-existing frozen-rule violations on main — tracked
-      # in the control-harness issue store (hash-gates main-drift triage cohort);
-      # flip to blocking when that triage closes (fix or matcher calibration → main clean).
+      # as #424; flip to blocking when it closes (triage → fix → main clean).
       - name: Lint hash gates
         continue-on-error: true
         run: bun run lint:hash-gates
