@@ -12,6 +12,7 @@ import {
   type ActivationAttestation,
   type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
+import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
@@ -68,6 +69,7 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     ? details.active_holder_sessions.filter((value): value is string => typeof value === "string")
     : [];
   const holderList = holders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
+  const posixReadFailure = /^E[A-Z0-9]+$/.test(code);
   const proofRequired = adoptionRefusal === "active-session-proof-required";
   const proofIncomplete = adoptionRefusal === "active-session-proof-incomplete";
   const recovery = proofRequired
@@ -93,9 +95,14 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                     ? "No supported exit exists for a stopped/failed header missing the recorded terminal reason; capture an issue with `mstar issue add` and preserve the header."
                     : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
                       ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                      : code === "workflow.adopt-terminal.attestation-unreadable" || code === "workflow.adopt-terminal.attestation-malformed"
+                      : id === "workflow.adopt-terminal" &&
+                        (code === "workflow.adopt-terminal.attestation-unreadable" ||
+                          code === "workflow.adopt-terminal.attestation-malformed" || posixReadFailure)
                         ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
-                        : code === "store.attestation-invalid" || code === "store.activation-blocked"
+                        : (id === "workflow.evidence" || id === "workflow.execution-policy") &&
+                          (code === `${id}.file-malformed` || posixReadFailure)
+                          ? `Correct the absolute JSON path supplied with --file (the file must be readable and contain valid JSON), then retry \`mstar ${id.replaceAll(".", " ")} --workflow <id> --file <absolute-json>\`.`
+                          : code === "store.attestation-invalid" || code === "store.activation-blocked"
                           ? "The engine refused this operator attestation. Use `mstar schema --command workflow.adopt-terminal` for the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
                           : code.startsWith("execution.adoption")
                             ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
@@ -150,6 +157,17 @@ function absolute(value: string | undefined, field: string): string {
  * or '}'`, `("'")`) is never introduced by those roles and is preserved. No
  * offset is invented when the parser reports none.
  */
+function parseWorkflowJson<T>(text: string, label: string, code: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    const diagnostic = jsonParseDiagnostic(error);
+    throw Object.assign(
+      new Error(`${label} is not valid JSON (${diagnostic.cause}${diagnostic.location === undefined ? "" : ` at ${diagnostic.location}`})`),
+      { code, details: { parser: diagnostic } },
+    );
+  }
+}
 function jsonParseDiagnostic(error: unknown): { cause: string; location?: string } {
   const message = error instanceof Error ? error.message : "";
   const position = message.match(/\bposition\s+(\d+)\b/i)?.[1];
@@ -181,7 +199,8 @@ function jsonParseDiagnostic(error: unknown): { cause: string; location?: string
     .replace(/\s+/g, " ")
     .replace(/[\s,:;]+$/, "")
     .trim();
-  return { cause: cause === "" ? "syntax error" : cause, ...(location === undefined ? {} : { location }) };
+  const scrubbed = redactSecrets(cause === "" ? "syntax error" : cause).text;
+  return { cause: scrubbed, ...(location === undefined ? {} : { location }) };
 }
 
 function readAdoptionAttestation(documentPath: string): ActivationAttestation {
@@ -189,9 +208,9 @@ function readAdoptionAttestation(documentPath: string): ActivationAttestation {
   try { text = readFileSync(documentPath, "utf8"); }
   catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
-    throw Object.assign(new Error(`the attestation document ${documentPath} could not be read: ${cause}`), {
-      code: "workflow.adopt-terminal.attestation-unreadable",
-    });
+    const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code : "workflow.adopt-terminal.attestation-unreadable";
+    throw Object.assign(new Error(`the attestation document ${documentPath} could not be read: ${cause}`), { code });
   }
   try { return JSON.parse(text) as ActivationAttestation; }
   catch (error) {
@@ -509,7 +528,9 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           const result = await declareWorkflowDeliveryKind(input.workflow, workflowDir, { deliveryKind: input.declareKind as never, ...(input.branchSource === undefined ? {} : { branchSource: input.branchSource }), ...(input.branchTarget === undefined ? {} : { branchTarget: input.branchTarget }), ...(input.completionPolicy === undefined ? {} : { completionPolicy: input.completionPolicy }), ...(input.session === undefined ? {} : { sessionPath: absolute(input.session, "session") }), ...(input.at === undefined ? {} : { at: input.at }) });
           return ok("workflow.evidence", result);
         }
-        const evidence = JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) as Record<string, unknown>;
+        const evidence = parseWorkflowJson<Record<string, unknown>>(
+          readFileSync(absolute(input.file, "file"), "utf8"), "evidence file", "workflow.evidence.file-malformed",
+        );
         const active = (await resolveExecutionReadRoute({ harnessDir: root })) === "execution";
         if (input.sessionRef !== undefined || input.expect !== undefined || input.operation !== undefined || active) {
           if (context.sessionId === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: `active evidence requires an acquired coordinator identity: ${IDENTITY_RECOVERY} (${IDENTITY_SUPPLIES}).` });
@@ -566,7 +587,10 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
         // which transport applies.
         const attestation = input.attestation === undefined
           ? undefined
-          : JSON.parse(readFileSync(absolute(input.attestation, "attestation"), "utf8")) as ActivationAttestation;
+          : parseWorkflowJson<ActivationAttestation>(
+            readFileSync(absolute(input.attestation, "attestation"), "utf8"),
+            "attestation document", "workflow.recover-coordinator.attestation-malformed",
+          );
         const priorSessionPath = absolute(input.session, "session");
         const prior = readSessionEnvelope(priorSessionPath);
         // The ACTIVE authority is a different transport with its own supported
@@ -678,7 +702,9 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           : transition.name === "lifecycle"
             ? input.status === undefined || input.reason === undefined || !(WORKFLOW_LIFECYCLE_STATUSES as readonly string[]).includes(input.status) ? (() => { throw new Error("lifecycle requires a supported status and reason") })() : { kind: "lifecycle", status: input.status as never, reason: input.reason }
             : transition.name === "execution-policy"
-              ? { kind: "execution-policy", policy: JSON.parse(readFileSync(absolute(input.file, "file"), "utf8")) }
+              ? { kind: "execution-policy", policy: parseWorkflowJson<unknown>(
+                readFileSync(absolute(input.file, "file"), "utf8"), "execution policy file", `${id}.file-malformed`,
+              ) }
               : { kind: "integration-worktree", path: absolute(input.path, "path") };
         const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" };
         setArtifactStore(createFsStore(root));

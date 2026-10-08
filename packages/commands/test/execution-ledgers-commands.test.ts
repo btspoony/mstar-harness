@@ -120,6 +120,20 @@ describe("workflow-note public routes", () => {
       expect.objectContaining({ path: "sessionId", code: "required" }),
     ]));
   });
+  test("public executeCommand accepts a resolved context identity without an explicit selector", async () => {
+    const fx = await activeFixture();
+    const input = { workflow: WORKFLOW, sessionRef: fx.sessionRef, id: "note-context", text: "context identity", harness: fx.harnessDir };
+    const acquired = context(fx.root, COORDINATOR);
+    const accepted = await executeCommand("workflow-note.append", input, acquired);
+    expect(accepted).toMatchObject({ status: "ok", data: { id: "note-context", replayed: false } });
+
+    const before = readFileSync(path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl"));
+    const malformedExplicit = await executeCommand(
+      "workflow-note.append", { ...input, id: "note-malformed", sessionId: "   " }, acquired,
+    );
+    expect(malformedExplicit).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(readFileSync(path.join(fx.harnessDir, "workflows", WORKFLOW, "notes.jsonl"))).toEqual(before);
+  });
 
   test("coverage projects absent, then the accepted record, as distinct facts", async () => {
     const fx = await activeFixture();

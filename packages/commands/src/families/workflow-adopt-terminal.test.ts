@@ -45,6 +45,18 @@ function invocation(cwd: string): InvocationContext {
     },
   };
 }
+test("adoption attestation read refusals retain distinct POSIX codes", async () => {
+  const { root, harness } = await fixture();
+  const input = { workflow: "wf-command", harness, reason: "read failure", expect: "1" };
+  const missing = await executeCommand("workflow.adopt-terminal", {
+    ...input, attestation: join(root, "missing-attestation.json"),
+  }, invocation(root));
+  const directory = await executeCommand("workflow.adopt-terminal", {
+    ...input, attestation: harness,
+  }, invocation(root));
+  expect(missing).toMatchObject({ status: "refused", code: "ENOENT" });
+  expect(directory).toMatchObject({ status: "refused", code: "EISDIR" });
+});
 function expectAdoptionRefusal(result: CommandEnvelope, firstLine: string, recovery: string): void {
   if (result.status !== "refused") throw new Error(`expected refusal, received ${result.status}`);
   expect(result.message).toBe(

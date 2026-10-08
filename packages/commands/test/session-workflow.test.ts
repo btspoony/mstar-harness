@@ -6,6 +6,7 @@ import path from "node:path";
 import { consultDeliveryEvidence, encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore, readWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
+import { executeCommand } from "../src/definitions.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -48,6 +49,64 @@ describe("session and workflow command families", () => {
     expect(iteration.payloads?.row?.schema.safeParse({ id: "plan-a" }).success).toBe(false);
   });
 
+  test("public workflow FILE routes redact malformed source bytes", async () => {
+    const context = testContext({ sessionId: "caller-session" });
+    const harness = path.join(context.cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const secret = "sk-live-9f2c4ab1-secret";
+    const malformedFile = path.join(context.cwd, "malformed.json");
+    writeFileSync(malformedFile, `{"value":${secret}}`);
+
+    const evidence = await executeCommand("workflow.evidence", {
+      workflow: "wf-malformed", file: malformedFile, harness,
+    }, context);
+    expect(evidence).toMatchObject({ status: "refused", code: "workflow.evidence.file-malformed", recovery: expect.stringContaining("mstar workflow evidence") });
+    expect(JSON.stringify(evidence)).not.toContain(secret);
+    expect(JSON.stringify(evidence)).not.toContain("workflow adopt-terminal --attestation");
+
+    const policy = await executeCommand("workflow.execution-policy", {
+      workflow: "wf-malformed", file: malformedFile, harness,
+    }, context);
+    expect(policy).toMatchObject({ status: "refused", code: "workflow.execution-policy.file-malformed", recovery: expect.stringContaining("mstar workflow execution-policy") });
+    expect(JSON.stringify(policy)).not.toContain(secret);
+    expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
+
+    const attestation = path.join(context.cwd, "malformed-attestation.json");
+    writeFileSync(attestation, `{"operator":${secret}}`);
+    const recovery = await executeCommand("workflow.recover-coordinator", {
+      session: path.join(context.cwd, "unused-session.json"),
+      operationId: "recover-malformed",
+      reason: "malformed proof",
+      authorizationRef: "fixture-authorization",
+      stopped: ["prior-session"],
+      attestation,
+    }, context);
+    expect(recovery).toMatchObject({ status: "refused", code: "workflow.recover-coordinator.attestation-malformed" });
+    expect(JSON.stringify(recovery)).not.toContain(secret);
+  });
+  test("unreadable non-adoption workflow files recover through their own --file route", async () => {
+    const context = testContext({ sessionId: "caller-session" });
+    const harness = path.join(context.cwd, ".mstar");
+    mkdirSync(harness, { recursive: true });
+    const file = path.join(context.cwd, "missing.json");
+    const evidence = await executeCommand("workflow.evidence", {
+      workflow: "wf-missing-file", file, harness,
+    }, context);
+    expect(evidence).toMatchObject({
+      status: "refused", code: "ENOENT",
+      recovery: expect.stringContaining("mstar workflow evidence --workflow <id> --file <absolute-json>"),
+    });
+    expect(JSON.stringify(evidence)).not.toContain("workflow adopt-terminal --attestation");
+
+    const policy = await executeCommand("workflow.execution-policy", {
+      workflow: "wf-missing-file", file, harness,
+    }, context);
+    expect(policy).toMatchObject({
+      status: "refused", code: "ENOENT",
+      recovery: expect.stringContaining("mstar workflow execution-policy --workflow <id> --file <absolute-json>"),
+    });
+    expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
+  });
   test("workflow.evidence FILE consumers preserve revision paths, member boundaries, and completion freeze rules", async () => {
     const context = testContext();
     const harnessDir = path.join(context.cwd, ".mstar");
