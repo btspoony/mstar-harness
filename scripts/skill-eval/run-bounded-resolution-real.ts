@@ -110,4 +110,4 @@ const summary = {
 };
 writeFileSync(resolve(durable, "execution-summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
 console.log(JSON.stringify(summary, null, 2));
-process.exitCode = run.exit === 2 || report.exit === 2 ? 2 : 0;
+process.exitCode = Math.max(run.exit, report.exit);
