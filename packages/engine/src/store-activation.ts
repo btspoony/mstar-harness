@@ -1365,15 +1365,15 @@ export async function assertBackupDescribesStore(
 // Attestation validation — strict, credential-free, floor-checked
 // ---------------------------------------------------------------------------
 
-const CONSUMER_KINDS: Record<AttestationConsumerKind, true> = { cli: true, "host-plugin": true, hook: true, coordinator: true };
-const DISPOSITIONS: Record<AttestationDisposition, true> = {
+export const CONSUMER_KINDS: Record<AttestationConsumerKind, true> = { cli: true, "host-plugin": true, hook: true, coordinator: true };
+export const DISPOSITIONS: Record<AttestationDisposition, true> = {
   reloaded: true,
   upgraded: true,
   "excluded:not-this-control-root": true,
   "excluded:no-store-access": true,
   "excluded:superseded-binary": true,
 };
-const SESSION_STATES: Record<"stopped" | "reloaded", true> = { stopped: true, reloaded: true };
+export const SESSION_STATES: Record<"stopped" | "reloaded", true> = { stopped: true, reloaded: true };
 
 /**
  * Two refusal families, as contract §7 distinguishes them.
