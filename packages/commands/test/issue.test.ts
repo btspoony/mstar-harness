@@ -98,7 +98,7 @@ describe("issue command family", () => {
       id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
       operationId: "stale-triage", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
-    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\`, then rerun the original command with \`--expect <current-revision>\` in place of the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`);
+    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`);
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
@@ -114,7 +114,7 @@ describe("issue command family", () => {
       operationId: "stale-close", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
     expect(closed.status === "refused" ? closed.details?.recovery : undefined).toBe(
-      `Run \`mstar issue show --id ${receipt.issueId}\`, then rerun the original command with \`--expect <current-revision>\` in place of the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`,
+      `Run \`mstar issue show --id ${receipt.issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`,
     );
   });
 

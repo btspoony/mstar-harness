@@ -69,7 +69,7 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
     : [];
   const issueId = input?.id?.trim() || "<id>";
   const recovery = code === "issue.revision-conflict"
-    ? `Run \`mstar issue show --id ${issueId}\`, then rerun the original command with \`--expect <current-revision>\` in place of the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
+    ? `Run \`mstar issue show --id ${issueId}\` against the same harness selection if one was supplied, then rerun the original command with \`--expect <current-revision>\` added or replacing the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
     : id !== "issue.reopen"
       ? undefined
       : code === "store.operation-conflict"

@@ -259,7 +259,7 @@ describe("mstar issue CLI bundle", () => {
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
     expect(String(jsonOf(stale).message)).toContain(
-      "Recovery: Run `mstar issue show --id I-000001`, then rerun the original command with `--expect <current-revision>` in place of the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
+      "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
     );
     const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
@@ -309,7 +309,7 @@ describe("mstar issue CLI bundle", () => {
     expect(stale.exitCode).toBe(1);
     expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
     expect(String(jsonOf(stale).message)).toContain(
-      "Recovery: Run `mstar issue show --id I-000001`, then rerun the original command with `--expect <current-revision>` in place of the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
+      "Recovery: Run `mstar issue show --id I-000001` against the same harness selection if one was supplied, then rerun the original command with `--expect <current-revision>` added or replacing the stale value, keeping `--operation-id`, `--actor`, and the original payload unchanged.",
     );
   });
 
