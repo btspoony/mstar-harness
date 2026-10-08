@@ -8,7 +8,7 @@ import type { RunningDashboard } from "../dashboard/server.js";
 const id = "dashboard";
 const inputSchema = z.object({
   port: z.coerce.number().int().min(0).max(65535).default(0),
-  open: z.boolean().optional(),
+  open: z.boolean().default(false),
   project: z.string().optional(),
 });
 type Input = z.infer<typeof inputSchema>;
@@ -146,15 +146,23 @@ export function getDashboardCommandDefinitions(): readonly CommandDefinition[] {
       aliases: [],
       arguments: [],
       options: [
-        { key: "port", flags: "--port <port>", required: false, defaultValue: 0 },
-        { key: "open", flags: "--open", required: false },
+        { key: "port", flags: "--port <port>", required: false, defaultValue: 0, help: "Bind port 0 to request an available local port; values 0–65535 are accepted." },
+        { key: "open", flags: "--open", required: false, defaultValue: false, help: "Open the local dashboard in a browser; defaults to false." },
         { key: "project", flags: "--project <projectId>", required: false },
       ],
     },
     input: inputSchema,
     output: commandEnvelopeSchema,
     effects: ["service"],
-    description: "Start the read-only Morning Star dashboard on 127.0.0.1",
+    description: "Start the read-only Morning Star dashboard on 127.0.0.1; the listener lasts for the MCP connection.",
+    requirements: [
+      { name: "project", ownership: "caller", route: "cli", required: false },
+      { name: "project", ownership: "caller", route: "mcp", required: false },
+      { name: "port", ownership: "derivable", route: "cli", required: false, constraint: "defaults to 0 (an available local port)" },
+      { name: "port", ownership: "derivable", route: "mcp", required: false, constraint: "defaults to 0 (an available local port)" },
+      { name: "open", ownership: "derivable", route: "cli", required: false, constraint: "defaults to false; true requests browser opening" },
+      { name: "open", ownership: "derivable", route: "mcp", required: false, constraint: "defaults to false; true requests browser opening" },
+    ],
     execute,
   }];
 }

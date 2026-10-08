@@ -29,14 +29,14 @@ const inputSchema = z.object({
   base: z.string().optional(), head: z.string().optional(), largestFileTotal: z.string().optional(), domain: z.string().optional(), seat: z.string().optional(), worktree: z.string().optional(),
   security: z.boolean().optional(), skillRoot: z.string().optional(), recon: z.array(z.string()).optional(), tier: z.string().optional(), diffFile: z.string().optional(), collectFolded: z.boolean().optional(),
 });
-const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
-  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false }], effects: ["read", "validate"], description: "Compute PR-review tally and verdict from accepted findings." },
-  "report-path": { args: [], options: [{ key: "reportsDir", flags: "--reports-dir <dir>", required: true }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false }, { key: "slug", flags: "--slug <domain-seat>", required: false }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false }], effects: ["read"], description: "Resolve a local PR-review report path without writing." },
+const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandDefinition["effects"][number][]; description: string }> = {
+  tally: { args: [], options: [{ key: "findings", flags: "--findings <file.json>", required: true }, { key: "unverified", flags: "--unverified <n>", required: false, defaultValue: "0" }, { key: "unmetAcUnsafe", flags: "--unmet-ac-unsafe <n>", required: false, defaultValue: "0" }, { key: "unmetAcSafe", flags: "--unmet-ac-safe <n>", required: false, defaultValue: "0" }], effects: ["read", "validate"], description: "Compute PR-review tally from a JSON array of {mergeClass: must-fix|should-fix|nit}; all counts default to zero and are limited to 0–50." },
+  "report-path": { args: [], options: [{ key: "reportsDir", flags: "--reports-dir <dir>", required: true }, { key: "target", flags: "--target <spec>", required: true }, { key: "stage", flags: "--stage <1|2>", required: false }, { key: "slug", flags: "--slug <domain-seat>", required: false }, { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to the local calendar date." }], effects: ["read"], description: "Resolve a local PR-review report path without writing; stage and slug must be supplied together; same-stem files receive a revision suffix instead of overwrite." },
   "validate-report": { args: [{ key: "reportFile", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate a saved PR-review report." },
-  post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a GitHub PR review through the admitted gh process effect." },
-  "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false }], effects: ["read", "write", "process"], description: "Remove a recorded PR-review worktree after its report is saved." },
-  size: { args: [], options: [{ key: "base", flags: "--base <ref>", required: true }, { key: "head", flags: "--head <ref>", required: true }, { key: "largestFileTotal", flags: "--largest-file-total <n>", required: false }], effects: ["read", "process"], description: "Classify a PR-review changeset and derive tier and seats." },
-  "seat-prompt": { args: [], options: [{ key: "stage", flags: "--stage <1|2>", required: true }, { key: "domain", flags: "--domain <d>", required: true }, { key: "seat", flags: "--seat <id>", required: true }, { key: "worktree", flags: "--worktree <path>", required: true }, { key: "security", flags: "--security", required: false }, { key: "skillRoot", flags: "--skill-root <dir>", required: false }, { key: "recon", flags: "--recon <facts...>", required: false }, { key: "tier", flags: "--tier <quick|default|deep>", required: false }, { key: "diffFile", flags: "--diff-file <path>", required: false }, { key: "collectFolded", flags: "--collect-folded", required: false }], effects: ["read"], description: "Generate a read-only PR-review seat prompt." },
+  post: { args: [], options: [{ key: "pr", flags: "--pr <n>", required: true }, { key: "bodyFile", flags: "--body-file <path>", required: true }, { key: "findings", flags: "--findings <file.json>", required: false }], effects: ["read", "validate", "process", "service"], description: "Post a GitHub PR review using a body file and optionally a findings JSON array; resolves current PR head and refuses mismatched target." },
+  "worktree-cleanup": { args: [], options: [{ key: "worktreePath", flags: "--path <dir>", required: true }, { key: "branch", flags: "--branch <name>", required: true }, { key: "reportSaved", flags: "--report-saved", required: false, help: "Explicitly confirms that the report was saved; otherwise the recorded sidecar must already say true." }], effects: ["read", "write", "process"], description: "Remove the recorded PR-review worktree and branch only after report-saved evidence; supplied branch must match the recorded sidecar." },
+  size: { args: [], options: [{ key: "base", flags: "--base <ref>", required: true }, { key: "head", flags: "--head <ref>", required: true }, { key: "largestFileTotal", flags: "--largest-file-total <n>", required: false }], effects: ["read", "process"], description: "Classify a PR-review changeset from base and head; derives largest touched-file size from Git when omitted." },
+  "seat-prompt": { args: [], options: [{ key: "stage", flags: "--stage <1|2>", required: true }, { key: "domain", flags: "--domain <d>", required: true }, { key: "seat", flags: "--seat <id>", required: true }, { key: "worktree", flags: "--worktree <path>", required: false, help: "Defaults to the invocation current working directory." }, { key: "security", flags: "--security", required: false, defaultValue: false }, { key: "skillRoot", flags: "--skill-root <dir>", required: false, defaultValue: "skills/mstar-audit" }, { key: "recon", flags: "--recon <facts...>", required: false, defaultValue: [] }, { key: "tier", flags: "--tier <quick|default|deep>", required: false, defaultValue: "default" }, { key: "diffFile", flags: "--diff-file <path>", required: false }, { key: "collectFolded", flags: "--collect-folded", required: false, defaultValue: false }], effects: ["read"], description: "Generate a read-only PR-review seat prompt; worktree defaults to invocation cwd, skillRoot to skills/mstar-audit, recon to [], security and collectFolded to false, and tier to default." },
   budget: { args: [], options: [], effects: ["read"], description: "Print PR-review tier budgets." },
 };
 const idFor = (verb: Verb) => `pr-review.${verb}`;
@@ -227,10 +227,34 @@ export function getPrReviewCommandDefinitions(): readonly CommandDefinition[] {
   return verbs.map((verb) => {
     const contract = contracts[verb]; const id = idFor(verb);
     const fields = [...contract.args.map(({ key }) => key), ...contract.options.map(({ key }) => key)];
+    const requirements = (["cli", "mcp"] as const).flatMap((route) => [
+      ...contract.args.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
+      ...contract.options.filter(({ required }) => required).map(({ key }) => ({ name: key, ownership: "caller" as const, route, required: true })),
+      ...(verb === "report-path" ? [
+        { name: "stage", ownership: "caller" as const, route, required: true, condition: { field: "slug", present: true }, constraint: "stage and slug must be supplied together" },
+        { name: "slug", ownership: "caller" as const, route, required: true, condition: { field: "stage", present: true }, constraint: "stage and slug must be supplied together" },
+        { name: "date", ownership: "caller" as const, route, required: false, constraint: "defaults to local calendar date" },
+      ] : []),
+      ...(verb === "worktree-cleanup" ? [
+        { name: "reportSaved", ownership: "caller" as const, route, required: false, constraint: "true is an explicit saved-report assertion; if omitted, the recorded sidecar must say true" },
+      ] : []),
+      ...(verb === "size" ? [
+        { name: "largestFileTotal", ownership: "caller" as const, route, required: false, constraint: "when omitted, derive from touched files at head using Git" },
+        { name: "largestFileTotal", ownership: "derivable" as const, route, required: true, condition: { field: "largestFileTotal", present: false }, constraint: "the adapter measures the largest touched file at head" },
+      ] : []),
+      ...(verb === "seat-prompt" ? [
+        { name: "worktree", ownership: "derivable" as const, route, required: false, constraint: "defaults to invocation cwd; resolved to an absolute path" },
+        { name: "skillRoot", ownership: "derivable" as const, route, required: false, constraint: "defaults to skills/mstar-audit, resolved against cwd" },
+        { name: "recon", ownership: "derivable" as const, route, required: false, constraint: "defaults to an empty list" },
+        { name: "tier", ownership: "derivable" as const, route, required: false, constraint: "defaults to default" },
+        { name: "security", ownership: "derivable" as const, route, required: false, constraint: "defaults to false" },
+        { name: "collectFolded", ownership: "derivable" as const, route, required: false, constraint: "defaults to false; when true requires stage 2 and diffFile and cannot be a security seat" },
+      ] : []),
+    ]);
     return {
       id, cli: { path: ["pr-review", verb], aliases: [], arguments: contract.args, options: contract.options },
       input: inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never), output: commandEnvelopeSchema,
-      effects: contract.effects, description: contract.description,
+      requirements,
       async execute(raw, context) {
         const parsed = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never).safeParse(raw);
         if (parsed.success) return execute(verb, parsed.data, context);

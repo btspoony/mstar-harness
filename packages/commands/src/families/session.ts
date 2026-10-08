@@ -48,7 +48,13 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         { key: "harness", flags: "--harness <path>", required: false },
       ] },
       input: runInput, output: commandEnvelopeSchema, effects: ["process"],
-      description: "Launch argv under a freshly minted local execution identity; this is a launch, not a binding \u2014 it writes no session row or lease, and the child binds through the public `plan bind --execution --workflow <id> --coordinator` route, whose creator/ownerless/foreign-holder conditions still apply.",
+      requirements: [
+        ...(["workflow", "role", "argv"] as const).flatMap((name) => [
+          { name, ownership: "caller" as const, route: "cli" as const, required: true },
+          { name, ownership: "caller" as const, route: "mcp" as const, required: true },
+        ]),
+      ],
+      description: "Launch argv under a freshly minted local execution identity; this is a launch, not a binding — it writes no session row or lease, and the child binds through the public `plan bind --execution --workflow <id> --coordinator` route, whose creator/ownerless/foreign-holder conditions still apply.",
       async execute(raw, context) {
         const { workflow, role, argv = [], harness } = raw as z.infer<typeof runInput>;
         if (role !== "coordinator" || argv.length === 0 || argv[0]!.trim() === "") {
@@ -96,7 +102,18 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
         { key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" },
       ] },
       input: recoverInput, output: commandEnvelopeSchema, effects: ["write"],
-      description: "Recover a stopped workflow coordinator through active DB authority. Recovery never resumes a session.",
+      requirements: [
+        ...(["workflow", "reason", "attestation", "expect", "operation"] as const).flatMap((name) => [
+          { name, ownership: "caller" as const, route: "cli" as const, required: true, ...(name === "expect" ? { tokenKind: "workflow" as const } : {}) },
+          { name, ownership: "caller" as const, route: "mcp" as const, required: true, ...(name === "expect" ? { tokenKind: "workflow" as const } : {}) },
+        ]),
+        ...(["cli", "mcp"] as const).flatMap((route) => [
+          { name: "priorSession", ownership: "caller" as const, route, required: false, constraint: "exactly one of priorSession or unowned=true is required; priorSession is required unless unowned is true" },
+          { name: "unowned", ownership: "caller" as const, route, required: false, constraint: "only true selects ownerless recovery; false does not select this alternative" },
+          { name: "sessionId", ownership: "caller" as const, route, required: true, constraint: "current operator's acquired conversation identity; never derive or substitute it" },
+        ]),
+      ],
+      description: "Recover a stopped workflow coordinator through active DB authority. Requires the current operator identity, workflow CAS token, replay id, reason and operator attestation; specify exactly one prior session or --unowned=true. Recovery never resumes a session.",
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
         if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "Invalid input.", diagnostics: decodeInputDiagnostics(parsed.error, raw) });

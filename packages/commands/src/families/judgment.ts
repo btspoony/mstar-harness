@@ -12,6 +12,9 @@ type JudgmentCliResult = Readonly<{
   status: "disabled" | "recorded" | "unavailable" | "invalid" | "cancelled";
   advice: null;
   code?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  recovery?: string;
 }>;
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
@@ -75,7 +78,18 @@ async function execute(input: Input, context: InvocationContext, provider: Judgm
     return error("judgment.provider-failed", "Judgment provider invocation failed", cause instanceof Error ? cause.message : String(cause));
   }
 
-  if (result.status === "invalid") return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "Judgment input was rejected" });
+  if (result.status === "invalid") {
+    return {
+      version: 1,
+      command: id,
+      status: "error",
+      code: result.code ?? "judgment.provider-invalid",
+      exitCode: 1,
+      message: result.message ?? "Judgment provider rejected the request",
+      ...(result.details === undefined ? {} : { details: result.details }),
+      ...(result.recovery === undefined ? {} : { recovery: result.recovery }),
+    };
+  }
   if (result.status === "cancelled") {
     return { version: 1, command: id, status: "error", code: "judgment.cancelled", exitCode: 130, message: "Judgment review was cancelled", details: { boundary: result.code ?? "review-cancelled" } };
   }

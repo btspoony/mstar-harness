@@ -161,18 +161,28 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         arguments: [],
         options: [
           { key: "workflow", flags: "--workflow <id>", required: true },
-          { key: "sessionRef", flags: "--session-ref <wire>", required: true, help: "The active session reference returned by the `plan bind --execution` receipt: wire format exec-session-v1:<base64url JSON>." },
-          { key: "id", flags: "--id <id>", required: true, help: "The note's stable record identity (the dedup key); a retry with the same id and text replays instead of duplicating." },
+          { key: "sessionRef", flags: "--session-ref <wire>", required: true, help: "The active coordinator session reference from the `plan bind --execution` receipt; wire format exec-session-v1:<base64url JSON>." },
+          { key: "id", flags: "--id <id>", required: true, help: "Stable record identity and dedup key; retry the same id with identical text to replay, not duplicate." },
           { key: "text", flags: "--text <text>", required: true },
-          { key: "ts", flags: "--ts <rfc3339>", required: false, help: "Note timestamp; defaults to the current time." },
+          { key: "ts", flags: "--ts <rfc3339>", required: false, help: "RFC3339 timestamp; omitted timestamps default to current time." },
           { key: "harness", flags: "--harness <path>", required: false },
-          sessionOption,
+          { ...sessionOption, help: "Acquired coordinator identity; CLI flag or MSTAR_HOST_SESSION_ID. MCP requires sessionId on each call." },
         ],
       },
       input: appendInput,
       output: commandEnvelopeSchema,
       effects: ["write"],
-      description: "Append one note to the addressed workflow's retained notes ledger, or replay an already accepted record id. Active-route only: the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written.",
+      requirements: [
+        ...(["workflow", "sessionRef", "id", "text"] as const).flatMap((name) => [
+          { name, ownership: "caller" as const, route: "cli" as const, required: true },
+          { name, ownership: "caller" as const, route: "mcp" as const, required: true },
+        ]),
+        { name: "ts", ownership: "caller", route: "cli", required: false, constraint: "defaults to current time when omitted" },
+        { name: "ts", ownership: "caller", route: "mcp", required: false, constraint: "defaults to current time when omitted" },
+        { name: "sessionId", ownership: "caller", route: "cli", required: true, constraint: "acquired coordinator identity via flag or MSTAR_HOST_SESSION_ID" },
+        { name: "sessionId", ownership: "caller", route: "mcp", required: true, constraint: "host-supplied acquired coordinator identity per call" },
+      ],
+      description: "Append one note to the addressed workflow's retained notes ledger, or replay an already accepted record id. Requires acquired coordinator identity and a matching active coordinator session reference; the engine proves the bound session is current immediately before the fsynced append, so a stale, revoked or foreign session refuses and no byte is written.",
       async execute(raw, context) {
         if (context.sessionId === undefined || context.sessionId.trim() === "") {
           return usage(APPEND_ID, "appending a workflow note requires an acquired coordinator identity (CLI: pass --session-id or set MSTAR_HOST_SESSION_ID; MCP: the host must pass sessionId per call).", "sessionId");
@@ -219,14 +229,20 @@ export function getExecutionLedgerCommandDefinitions(): readonly CommandDefiniti
         arguments: [],
         options: [
           { key: "workflow", flags: "--workflow <id>", required: true },
-          { key: "file", flags: "--file <absolute-path>", required: false, help: "Read this absolute ledger path instead of the workflow's canonical notes.jsonl." },
+          { key: "file", flags: "--file <absolute-path>", required: false, help: "Read this absolute ledger path instead of the workflow's canonical notes.jsonl; omitted means the canonical path." },
           { key: "harness", flags: "--harness <path>", required: false },
         ],
       },
       input: coverageInput,
       output: commandEnvelopeSchema,
       effects: ["read"],
-      description: "Project one workflow's retained notes ledger into its normalized coverage facts (canonical path, format, file hash, ordered historical and accepted records, duplicate ids, unterminated tail, counts). Read-only; nothing is written.",
+      requirements: [
+        { name: "workflow", ownership: "caller", route: "cli", required: true },
+        { name: "workflow", ownership: "caller", route: "mcp", required: true },
+        { name: "file", ownership: "caller", route: "cli", required: false, constraint: "must be absolute when supplied; defaults to the workflow's canonical notes.jsonl" },
+        { name: "file", ownership: "caller", route: "mcp", required: false, constraint: "must be absolute when supplied; defaults to the workflow's canonical notes.jsonl" },
+      ],
+      description: "Project one workflow's retained notes ledger into normalized coverage facts (canonical path, format, file hash, ordered historical and accepted records, duplicate ids, unterminated tail, counts). Optional file must be absolute; omitted means workflow's canonical ledger path. Read-only; nothing is written.",
       async execute(raw, context) {
         const parsed = coverageInput.safeParse(raw);
         if (!parsed.success) return decodeUsage(COVERAGE_ID, parsed.error, raw);

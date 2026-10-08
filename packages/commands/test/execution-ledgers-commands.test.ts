@@ -13,7 +13,7 @@ import {
   type ExecutionToken,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
-import { getExecutionLedgerCommandDefinitions } from "../src/families/execution-ledgers.js";
+import { getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
@@ -78,14 +78,21 @@ function context(cwd: string, sessionId?: string): InvocationContext {
 }
 
 function definition(id: string) {
-  // The canonical append is deferred until slice A integration, so this round's
-  // routes are exercised through their own family module (they are already the
-  // same shared Registry shape `getCommandDefinitions()` will mount later).
-  const found = getExecutionLedgerCommandDefinitions().find((entry) => entry.id === id);
-  if (found === undefined) throw new Error(`Missing command definition: ${id}`);
+  const found = getCommandDefinitions().find((entry) => entry.id === id);
+  if (found === undefined) throw new Error(`Missing canonical command definition: ${id}`);
   return found;
 }
 
+test("ledger routes are discoverable from the canonical registry for CLI and schema consumers", () => {
+  const definitions = getCommandDefinitions();
+  for (const id of ["workflow-note.append", "workflow-note.coverage"]) {
+    const definition = definitions.find((entry) => entry.id === id);
+    expect(definition).toBeDefined();
+    const schema = getCommandSchemas(definitions).find((entry) => entry.id === id);
+    expect(schema?.cli.path.join(" ")).toBe(id === "workflow-note.append" ? "workflow-note append" : "workflow-note coverage");
+    expect(schema?.effects).toContain(id.endsWith("append") ? "write" : "read");
+  }
+});
 describe("workflow-note public routes", () => {
   test("append writes the accepted record, replays the same id, and never echoes a foreign scope", async () => {
     const fx = await activeFixture();

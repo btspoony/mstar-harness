@@ -20,7 +20,7 @@ import { getAuditCommandDefinitions } from "./families/audit.js";
 import { getPrReviewCommandDefinitions } from "./families/pr-review.js";
 import { getJudgmentCommandDefinitions } from "./families/judgment.js";
 import { getProcessCommandDefinitions } from "./families/process.js";
-
+import { getExecutionLedgerCommandDefinitions } from "./families/execution-ledgers.js";
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
 import { getLocalCommandDefinitions } from "./families/local.js";
 import { getReportCommandDefinitions } from "./families/report.js";
@@ -153,6 +153,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getCatalogCommandDefinitions(),
   ...getRoadmapCommandDefinitions(),
   ...getStoreCommandDefinitions(),
+  ...getExecutionLedgerCommandDefinitions(),
   ...getExecutionCommandDefinitions(),
   ...getSddCommandDefinitions(),
   ...getAuditCommandDefinitions(),

@@ -40,19 +40,19 @@ const inputSchema = z.object({
   plans: z.string().optional(), workflow: z.string().optional(), deliveryKind: z.string().optional(), branchSource: z.string().optional(), branchTarget: z.string().optional(), completionPolicy: z.string().optional(), harness: z.string().optional(),
   path: z.string().optional(),
 });
-const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean }[]; effects: readonly CommandEffect[]; description: string }> = {
-  scaffold: { args: [{ key: "findings", required: false, variadic: false }], options: [
-    { key: "dir", flags: "--dir <out-dir>", required: false }, { key: "sha", flags: "--sha <commit>", required: false },
-    { key: "date", flags: "--date <YYYY-MM-DD>", required: false }, { key: "repo", flags: "--repo <name>", required: false },
-  ], effects: ["read", "write"], description: "Scaffold audit plan artifacts in the declared output directory." },
-  promote: { args: [{ key: "path", required: false, variadic: false }], options: [
-    { key: "plans", flags: "--plans <ids>", required: false }, { key: "workflow", flags: "--workflow <id>", required: false },
-    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: false }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
+const contracts: Record<Verb, { args: { key: string; required: boolean; variadic: boolean }[]; options: { key: string; flags: string; required: boolean; help?: string; defaultValue?: unknown }[]; effects: readonly CommandEffect[]; description: string }> = {
+  scaffold: { args: [{ key: "findings", required: true, variadic: false }], options: [
+    { key: "dir", flags: "--dir <out-dir>", required: false, help: "Defaults to audit-<date> under the current directory." }, { key: "sha", flags: "--sha <commit>", required: false, help: "Defaults to the current Git HEAD short SHA; uses unknown if Git cannot resolve it." },
+    { key: "date", flags: "--date <YYYY-MM-DD>", required: false, help: "Defaults to today's UTC date." }, { key: "repo", flags: "--repo <name>", required: false },
+  ], effects: ["read", "write"], description: "Scaffold audit plan artifacts from a JSON findings array or {findings:[...]}; each finding requires non-empty title and description plus valid priority, effort, risk and category. Confidence defaults to MED and evidence defaults to []." },
+  promote: { args: [{ key: "path", required: true, variadic: false }], options: [
+    { key: "plans", flags: "--plans <ids>", required: false, help: "May be inferred only when the audit directory contains one plan; when it contains multiple plans, select explicitly." }, { key: "workflow", flags: "--workflow <id>", required: false },
+    { key: "deliveryKind", flags: "--delivery-kind <kind>", required: true, help: `One of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}.` }, { key: "branchSource", flags: "--branch-source <branch>", required: false },
     { key: "branchTarget", flags: "--branch-target <branch>", required: false }, { key: "completionPolicy", flags: "--completion-policy <text>", required: false },
     { key: "harness", flags: "--harness <dir>", required: false },
-  ], effects: ["read", "write"], description: "Promote selected audit plans into a declared v2 workflow lifecycle." },
-  "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values." },
-  "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root." },
+  ], effects: ["read", "write"], description: "Promote selected audit plans; development requires branchSource and branchTarget, while verification/report-only requires completionPolicy." },
+  "secret-scan": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate", "process"], description: "Scan git-tracked files for credential findings without printing secret values; path defaults to the current directory." },
+  "supply-chain": { args: [{ key: "path", required: false, variadic: false }], options: [], effects: ["read", "validate"], description: "Run existing read-only supply-chain checks on a repository root; path defaults to the current directory." },
 };
 function idFor(verb: Verb): string { return `audit.${verb}`; }
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
@@ -232,10 +232,30 @@ function makeDefinition(verb: Verb): CommandDefinition<Input, unknown> {
   const id = idFor(verb);
   const fields = [...contract.args.map(({ key }) => key), ...contract.options.map(({ key }) => key)];
   const input = inputSchema.pick(Object.fromEntries(fields.map((field) => [field, true])) as never);
+  const routes = ["cli", "mcp"] as const;
+  const requirements = routes.flatMap((route) => {
+    if (verb === "scaffold") return [
+      { name: "findings", ownership: "caller" as const, route, required: true, constraint: "JSON array or object with findings array; each finding needs title, description, priority, effort, risk and category; confidence defaults to MED and evidence to []" },
+      { name: "date", ownership: "derivable" as const, route, required: false, constraint: "defaults to today's UTC date" },
+      { name: "dir", ownership: "derivable" as const, route, required: false, constraint: "defaults to audit-<date> under cwd" },
+      { name: "sha", ownership: "derivable" as const, route, required: false, constraint: "defaults to current Git HEAD short SHA or unknown if unavailable" },
+    ];
+    if (verb === "promote") return [
+      { name: "path", ownership: "caller" as const, route, required: true, constraint: "audit output directory" },
+      { name: "deliveryKind", ownership: "caller" as const, route, required: true, constraint: `one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
+      { name: "plans", ownership: "caller" as const, route, required: false, constraint: "inferred only for exactly one plan; explicit selection required when multiple plans exist" },
+      { name: "branchSource", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "source branch for development delivery" },
+      { name: "branchTarget", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "development" }, constraint: "target branch for development delivery" },
+      { name: "completionPolicy", ownership: "caller" as const, route, required: true, condition: { field: "deliveryKind", equals: "verification/report-only" }, constraint: "registered alternative-completion policy for report-only delivery" },
+      { name: "workflow", ownership: "derivable" as const, route, required: false, constraint: "if omitted, defaults to the basename of audit output directory" },
+    ];
+    return [{ name: "path", ownership: "derivable" as const, route, required: false, constraint: "defaults to current working directory" }];
+  });
   return {
     id,
     cli: { path: ["audit", verb], aliases: [], arguments: contract.args, options: contract.options },
     input, output: commandEnvelopeSchema, effects: contract.effects, description: contract.description,
+    requirements,
     async execute(raw, context) {
       const parsed = input.safeParse(raw);
       return parsed.success

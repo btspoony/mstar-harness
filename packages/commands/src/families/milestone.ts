@@ -1,3 +1,4 @@
+import { engineErrorFacts } from "./family-refusal.js";
 import { refusalEnvelope } from "../envelope.js";
 import { addMilestone, assignIssueMilestone, queryMilestones, resolveProcessHarnessDir, updateMilestone, withStoreRead, type MilestonePatch, type MutationContext, type StoreContext } from "@mstar-harness/engine";
 import { z } from "zod";
@@ -40,4 +41,53 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
   return envelope(id,await assignIssueMilestone(store,requireValue(input.issue,"--issue"),{projectId,milestoneId:input.clear ? null : requireValue(input.id,"--id"),reason:requireValue(input.reason,"--reason")},mutation));
  } catch(error) { return failure(id, error); }
 }
-export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] { const descriptions: Record<(typeof verbs)[number],string> = { add:"Add a milestone record to the project store; its name, target and ordinal are authoritative.", update:"Update stored milestone fields using the observed store revision; roadmap document text is unchanged.", assign:"Assign or unassign an issue from a stored milestone with expected issue revision and a reason.", list:"List the project's stored milestones and linked-issue rollups.", status:"Show one milestone and linked issue rollup." }; return verbs.map(verb => { const id=`milestone.${verb}`; const opts=options[verb]; return { id,cli:{path:["milestone",verb],aliases:[],arguments:[],options:opts.map(key=>({key,flags:flags[key],required:required[verb].includes(key)}))},input:schema.pick(Object.fromEntries(opts.map(key=>[key,true])) as never),output:commandEnvelopeSchema,effects:verb === "list"||verb === "status" ? ["read"] : ["write"],description:descriptions[verb],execute:(input:Input,invocation:InvocationContext)=>run(id,input,invocation) }; }); }
+export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
+  const descriptions: Record<(typeof verbs)[number], string> = {
+    add: "Add a milestone record to the project store; its name, target and ordinal are authoritative.",
+    update: "Update stored milestone fields using the observed store revision; roadmap document text is unchanged.",
+    assign: "Assign or unassign an issue from a stored milestone with expected issue revision and a reason.",
+    list: "List the project's stored milestones and linked-issue rollups.",
+    status: "Show one milestone and linked issue rollup.",
+  };
+  return verbs.map((verb) => {
+    const id = `milestone.${verb}`;
+    const opts = options[verb];
+    const requirements = (["cli", "mcp"] as const).flatMap((route) => [
+      ...required[verb].map((name) => ({
+        name,
+        ownership: "caller" as const,
+        route,
+        required: true,
+        ...(name === "expectStore" || name === "expectIssue" ? { tokenKind: "revision" as const } : {}),
+      })),
+      ...(verb === "update" ? [
+        { name: "name", ownership: "caller" as const, route, required: false, constraint: "at least one of name, ordinal, status, target, or clearTarget=true is required" },
+        { name: "ordinal", ownership: "caller" as const, route, required: false, constraint: "at least one patch field is required; target and clearTarget are optional" },
+        { name: "status", ownership: "caller" as const, route, required: false, constraint: "at least one patch field is required; target and clearTarget are optional" },
+        { name: "target", ownership: "caller" as const, route, required: false, constraint: "optional patch; mutually exclusive with clearTarget" },
+        { name: "clearTarget", ownership: "caller" as const, route, required: false, constraint: "only true clears target; false does not select a patch or alternative" },
+      ] : []),
+      ...(verb === "assign" ? [
+        { name: "id", ownership: "caller" as const, route, required: false, constraint: "exactly one of id or clear=true is required" },
+        { name: "clear", ownership: "caller" as const, route, required: false, constraint: "only true selects unassignment; false does not select this alternative" },
+      ] : []),
+    ]);
+    return {
+      id,
+      cli: {
+        path: ["milestone", verb], aliases: [], arguments: [],
+        options: opts.map((key) => ({
+          key, flags: flags[key], required: required[verb].includes(key),
+          ...(verb === "update" && key === "clearTarget" ? { help: "Only true clears target; false does not select an alternative." } : {}),
+          ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target." } : {}),
+        })),
+      },
+      input: schema.pick(Object.fromEntries(opts.map((key) => [key, true])) as never),
+      output: commandEnvelopeSchema,
+      effects: verb === "list" || verb === "status" ? ["read"] : ["write"],
+      description: descriptions[verb],
+      requirements,
+      execute: (input: Input, invocation: InvocationContext) => run(id, input, invocation),
+    };
+  });
+}

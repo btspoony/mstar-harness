@@ -131,7 +131,7 @@ describe("issue command family", () => {
 
     const missingMutation = await command.execute({ payload: capture() }, context);
     expect(missingMutation.status).toBe("refused");
-    if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["operationId", "actor"]);
+    if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["actor"]);
   });
 
   test("a declared string-or-null payload field keeps its type instead of accepting any JSON", async () => {
@@ -156,6 +156,33 @@ describe("issue command family", () => {
     expect(typed.status).toBe("ok");
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     if (shown.status === "ok") expect(shown.data).toMatchObject({ owner: "reviewer" });
+  });
+  test("omitted replay ids are fresh per mutation while explicit blank remains invalid", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const first = await command.execute({
+      payload: capture({ sourceIdentity: "review/auto-1", rootCauseKey: "auto-root-1", occurrenceKey: "auto-occ-1" }),
+      actor: "project-manager",
+    }, context);
+    const second = await command.execute({
+      payload: capture({ sourceIdentity: "review/auto-2", rootCauseKey: "auto-root-2", occurrenceKey: "auto-occ-2" }),
+      actor: "project-manager",
+    }, context);
+    expect(first.status).toBe("ok");
+    expect(second.status).toBe("ok");
+    const blank = await command.execute({
+      payload: capture({ sourceIdentity: "review/blank", rootCauseKey: "blank-root", occurrenceKey: "blank-occ" }),
+      operationId: "",
+      actor: "project-manager",
+    }, context);
+    expect(blank.status).toBe("refused");
+    const option = command.cli.options.find(({ key }) => key === "operationId");
+    expect(option?.required).toBe(false);
+    expect(option?.defaultValue).toBeUndefined();
+    expect(option?.help).toContain("fresh id");
+    const requirement = command.requirements?.find(({ name, route }) => name === "operationId" && route === "mcp");
+    expect(requirement).toMatchObject({ required: false });
+    expect(requirement?.constraint).toContain("fresh id");
   });
 });
 

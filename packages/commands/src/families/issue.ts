@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -74,7 +75,7 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
         : code === "issue.invalid-disposition"
         ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
         : code === "issue.scope-refused"
-          ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
+          ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\`; \`--operation-id\` is optional and a fresh replay id is generated when omitted.`
           : code === "issue.invalid-payload"
             ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
             : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
@@ -87,23 +88,6 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
 function storeContext(input: IssueInput, invocation: InvocationContext): StoreContext {
   const root = resolveProcessHarnessDir(invocation.cwd, input.harness);
   return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd };
-}
-function mutation(input: IssueInput): MutationContext {
-  const missing = [
-    ...(input.operationId === undefined ? ["operationId"] : []),
-    ...(input.actor === undefined ? ["actor"] : []),
-  ];
-  if (missing.length > 0) {
-    const error = new Error(`${missing.join(" and ")} required for issue mutation`) as Error & { code: string; paths: string[] };
-    error.code = "issue.scope-refused";
-    error.paths = missing;
-    throw error;
-  }
-  return {
-    operationId: input.operationId!,
-    actor: input.actor!,
-    ...(input.expect !== undefined ? { expectedRevision: input.expect } : {}),
-  };
 }
 function payload<T>(input: IssueInput): T {
   let value = input.payload;
@@ -131,9 +115,18 @@ function payload<T>(input: IssueInput): T {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("payload must be a JSON object");
   return value as T;
 }
-function requiredId(input: IssueInput): string {
-  if (input.id === undefined || input.id.trim() === "") throw new Error("issue id is required");
-  return input.id.trim();
+function mutation(input: IssueInput): MutationContext {
+  if (input.actor === undefined) {
+    const error = new Error("actor required for issue mutation") as Error & { code: string; paths: string[] };
+    error.code = "issue.scope-refused";
+    error.paths = ["actor"];
+    throw error;
+  }
+  return {
+    operationId: input.operationId ?? randomUUID(),
+    actor: input.actor,
+    ...(input.expect !== undefined ? { expectedRevision: input.expect } : {}),
+  };
 }
 function issueFilter(input: IssueInput): IssueFilter {
   return {
@@ -246,19 +239,41 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     expect: "--expect <n>", payload: "--payload <json>",
   };
+  const mutationOperationHelp = payloadType[verb] === undefined
+    ? undefined
+    : "Replay id; if omitted, this command generates one fresh id for this invocation. Explicit values are preserved and blank values are not defaulted.";
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,
     flags: optionFlags[key]!,
-    required: (payloadType[verb] !== undefined && (key === "operationId" || key === "actor")) ||
+    required: (payloadType[verb] !== undefined && key === "actor") ||
+      (verb === "show" && key === "id") ||
       (verb === "reopen" && (key === "id" || key === "expect")),
+    ...(key === "operationId" && mutationOperationHelp !== undefined ? { help: mutationOperationHelp } : {}),
     ...(verb === "reopen" && key === "expect"
       ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
       : {}),
   }));
+  const isMutation = payloadType[verb] !== undefined;
+  const requirements = isMutation
+    ? (["cli", "mcp"] as const).flatMap((route) => [
+        { name: "actor", ownership: "caller" as const, route, required: true, constraint: "accepted actor vocabulary is project-manager" },
+        { name: "operationId", ownership: "caller" as const, route, required: false, constraint: mutationOperationHelp! },
+        { name: "payload", ownership: "caller" as const, route, required: true, condition: { field: "file", present: false }, constraint: `payload shape: mstar schema ${payloadType[verb]}` },
+        { name: "file", ownership: "caller" as const, route, required: true, condition: { field: "payload", present: false }, constraint: "absolute JSON file alternative to payload" },
+        ...(verb === "add" ? [] : [{ name: "id", ownership: "caller" as const, route, required: true }]),
+        ...(verb === "reopen" ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const }] : []),
+      ])
+    : verb === "show" || verb === "export"
+      ? (["cli", "mcp"] as const).map((route) => ({
+          name: "id", ownership: "caller" as const, route, required: verb === "show",
+          ...(verb === "show" ? { constraint: "non-empty issue id" } : { constraint: "optional id returns one issue; omitted returns the issue page" }),
+        }))
+      : [];
   return {
     id,
     cli: { path: ["issue", verb], aliases: [], arguments: [], options },
     input: inputSchema,
+    requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
     description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.`,

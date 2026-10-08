@@ -33,6 +33,48 @@ test("milestone commands register and use store revision CAS with replay", async
  const list=await call("milestone.list",{project:"proj"}); expect(list.status).toBe("ok"); expect((list.data as {data:{milestones:Array<{name:string}>}}).data.milestones.map(row=>row.name)).toEqual(["First"]);
  const bad=await call("milestone.update",{project:"proj",id:receipt.milestoneId,expectStore:2,operation:"bad"}); expect(bad.exitCode).toBe(2);
 });
+test("name-only update leaves target optional and false clearTarget does not select a patch", async () => {
+ const cwd = join(root, "update-patch");
+ const harness = join(cwd, ".mstar");
+ mkdirSync(harness, { recursive: true });
+ (await initializeStore({ harnessDir: harness })).close();
+ await registerCatalogEntity(
+  { harnessDir: harness },
+  { kind: "project", id: "proj-update", title: "Project", rootKind: "projects", relativePath: "proj" },
+  { operationId: "project-update", actor: "test" },
+ );
+ const added = await executeCommand("milestone.add", {
+  project: "proj-update", name: "Before", ordinal: 0, expectStore: 1, operation: "add-update",
+ }, invocation(cwd));
+ expect(added.status).toBe("ok");
+ if (added.status !== "ok") return;
+ const receipt = added.data as { milestoneId: string; storeRevision: number };
+ const renamed = await executeCommand("milestone.update", {
+  project: "proj-update", id: receipt.milestoneId, name: "After", expectStore: receipt.storeRevision, operation: "name-only",
+ }, invocation(cwd));
+ expect(renamed.status).toBe("ok");
+ const noPatch = await executeCommand("milestone.update", {
+  project: "proj-update", id: receipt.milestoneId, clearTarget: false, expectStore: receipt.storeRevision + 1, operation: "false-clear",
+ }, invocation(cwd));
+ expect(noPatch.status).toBe("usage");
+ const current = await executeCommand("milestone.list", {
+  project: "proj-update",
+ }, invocation(cwd));
+ expect(current.status).toBe("ok");
+ if (current.status === "ok") {
+  expect(current.data).toMatchObject({
+   data: { milestones: [expect.objectContaining({ name: "After", target: null })] },
+  });
+ }
+ const update = getCommandDefinitions().find((item) => item.id === "milestone.update");
+ expect(update?.cli.options.find((option) => option.key === "target")?.required).toBe(false);
+ expect(update?.cli.options.find((option) => option.key === "clearTarget")?.required).toBe(false);
+ expect(update?.requirements).toContainEqual(expect.objectContaining({
+  name: "clearTarget",
+  required: false,
+  constraint: expect.stringContaining("false does not select"),
+ }));
+});
 
 test("milestone family help succeeds without opening a store", () => {
  const cwd=join(root,"help-without-store");

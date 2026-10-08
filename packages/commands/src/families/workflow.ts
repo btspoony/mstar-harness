@@ -3,12 +3,12 @@ import path from "node:path";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import {
-  WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
+  WORKFLOW_COMPOUND_OUTCOMES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_LIFECYCLE_STATUSES, StoreError, amendPrepareWorkflow,
   adoptTerminalWorkflow, commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
   resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
-  type ActivationAttestation, type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowExecutionOperation,
+  type ActivationAttestation, type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
@@ -155,11 +155,24 @@ function makeDefinition(
     ...(id === "workflow.evidence" ? {
       requirements: [
         { name: "workflow", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "file", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "supply exactly one of file or declareKind" },
-        { name: "declareKind", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "file", present: false }, constraint: "supply exactly one of file or declareKind" },
+        { name: "file", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "absolute path to UTF-8 JSON file; supply exactly one of file or declareKind" },
+        { name: "declareKind", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "file", present: false }, constraint: `pre-activation one-time declaration; one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}; supply exactly one of file or declareKind` },
+        { name: "branchSource", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "source branch required for the one-time development declaration" },
+        { name: "branchTarget", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "target branch required for the one-time development declaration" },
+        { name: "completionPolicy", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", equals: "verification/report-only" }, constraint: "registered fulfilment policy required for report-only declaration" },
         { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
-        { name: "file", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "supply exactly one of file or declareKind" },
-        { name: "declareKind", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "file", present: false }, constraint: "supply exactly one of file or declareKind" },
+        { name: "file", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "absolute path to UTF-8 JSON file; supply exactly one of file or declareKind" },
+        { name: "declareKind", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "file", present: false }, constraint: `pre-activation one-time declaration; one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}; supply exactly one of file or declareKind` },
+        { name: "branchSource", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "source branch required for the one-time development declaration" },
+        { name: "branchTarget", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", equals: "development" }, constraint: "target branch required for the one-time development declaration" },
+        { name: "completionPolicy", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", equals: "verification/report-only" }, constraint: "registered fulfilment policy required for report-only declaration" },
+        ...(["cli", "mcp"] as const).flatMap((route) => [
+          { name: "sessionRef", ownership: "caller" as const, route, required: false, tokenKind: "workflow" as const, constraint: "when supplied, exec-session-v1 coordinator reference for this workflow; ACTIVE writes always require the acquired current operator identity" },
+          { name: "expect", ownership: "caller" as const, route, required: false, tokenKind: "workflow" as const, constraint: "optional workflow CAS token on the ACTIVE operation route" },
+          { name: "operation", ownership: "caller" as const, route, required: false, constraint: "ACTIVE write replay id; omitted creates one fresh id for this invocation; explicit values are preserved" },
+          { name: "session", ownership: "caller" as const, route, required: false, constraint: "optional legacy pre-activation session path; refused on ACTIVE writes" },
+          { name: "at", ownership: "caller" as const, route, required: false, constraint: "optional legacy pre-activation RFC3339 timestamp; omitted defaults to current time" },
+        ]),
       ],
     } : {}),
     ...(id === "workflow.recover-coordinator" ? {
@@ -249,7 +262,10 @@ function makeDefinition(
       // adapter reads the document), never an inline JSON field.
       ...Object.entries(payloadOverride)
         .filter(([key]) => !keys.includes(key))
-        .map(([key, schema]): [string, { schema: z.ZodType }] => [key, { schema }]),
+        .map(([key, schema]): [string, { schema: z.ZodType; help?: string }] => [key, {
+          schema,
+          ...(key === "delivery" ? { help: "UTF-8 JSON object loaded from --file (pathname, never inline JSON); supply at least one complete member. development allows any subset of compound {outcome: created|updated|skipped, reason?: non-empty; required for skipped}, pr {repo,head,target: non-empty}, merge {provider,evidence: non-empty}; verification/report-only allows completion {policy,evidence: non-empty}, with policy exactly matching registered completion_policy. Omit untouched members; supplied member blocks are complete, not sub-field patches. Members outside registered delivery_kind are refused. PR identity and accepted completion evidence become immutable under the engine's registered-state rules; merge data records checked provider evidence and does not verify the remote merge." } : {}),
+        }]),
     ]),
     output: commandEnvelopeSchema,
     effects: [effect],
@@ -259,17 +275,32 @@ function makeDefinition(
 }
 
 /**
- * The delivery-evidence document `workflow.evidence --file <absolute path>`
- * reads: the recorded completion fulfilment of a registered completion policy.
- * The CLI reads the file (it is a path, never inline JSON) and passes the parsed
- * object as the operation's delivery payload.
+ * Structural discovery shape for the engine-owned WorkflowDeliveryEvidence.
+ * `recordWorkflowDelivery` / `mutateExecutionWorkflow` remain the validators;
+ * the `WorkflowDeliveryEvidence` type and deliveryEvidenceViolations are the
+ * contract authorities for members, partial updates, lifecycle kind and
+ * provider/fulfilment invariants.
  */
-const deliveryEvidenceSchema = z.object({
-  completion: z.object({
-    policy: z.string().min(1),
-    evidence: z.string().min(1),
-  }),
+const nonBlankEvidenceText = z.string().regex(/\S/, "must be non-empty");
+const compoundEvidenceSchema = z.object({
+  outcome: z.enum(WORKFLOW_COMPOUND_OUTCOMES),
+  reason: nonBlankEvidenceText.optional(),
 });
+const prEvidenceSchema = z.object({ repo: nonBlankEvidenceText, head: nonBlankEvidenceText, target: nonBlankEvidenceText });
+const mergeEvidenceSchema = z.object({ provider: nonBlankEvidenceText, evidence: nonBlankEvidenceText });
+const completionEvidenceSchema = z.object({ policy: nonBlankEvidenceText, evidence: nonBlankEvidenceText });
+const deliveryEvidenceFields = {
+  compound: compoundEvidenceSchema.optional(),
+  pr: prEvidenceSchema.optional(),
+  merge: mergeEvidenceSchema.optional(),
+  completion: completionEvidenceSchema.optional(),
+};
+const deliveryEvidenceSchema: z.ZodType<WorkflowDeliveryEvidence> = z.union([
+  z.object({ ...deliveryEvidenceFields, compound: compoundEvidenceSchema }).strict(),
+  z.object({ ...deliveryEvidenceFields, pr: prEvidenceSchema }).strict(),
+  z.object({ ...deliveryEvidenceFields, merge: mergeEvidenceSchema }).strict(),
+  z.object({ ...deliveryEvidenceFields, completion: completionEvidenceSchema }).strict(),
+]);
 
 export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
   const commonRegister = ["workflow", "planId", "planTitle", "planFile", "deliveryKind", "project", "branchSource", "branchTarget", "completionPolicy", "startedAt", "harness", "expect", "operation", "json"] as const;
@@ -306,7 +337,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
       expect: `CAS expectation: ${TOKEN_SUPPLIES.root}`,
       planTitle: "Must match the selected plan document's H1; that document is the registration authority.",
     }),
-    makeDefinition("workflow.evidence", "Record delivery evidence or a one-time kind declaration. The `--file` document is the recorded completion fulfilment: an absolute JSON path holding {completion:{policy,evidence}} — policy is the workflow's registered completion_policy and evidence names the explicit fulfilment reference. On an ACTIVE authority use the acquired coordinator identity (--session-id or a minted launch) with --session-ref/--expect; --session and --at are the pre-activation FILE transports.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
+    makeDefinition("workflow.evidence", "Record delivery evidence or a one-time kind declaration. `--file` is a pathname (never inline JSON): it must be absolute and name a UTF-8 JSON file containing a non-empty object with at least one member. For `development`, members are any subset of compound {outcome: created|updated|skipped, reason?: non-empty string; reason is required for skipped}, pr {repo, head, target: non-empty strings}, and merge {provider, evidence: non-empty strings}; for `verification/report-only`, the only member is completion {policy, evidence: non-empty strings}. Omit untouched members; supplied members are complete blocks, not sub-field patches. policy must match the registered completion_policy. The selected lifecycle is authorized by its registered delivery_kind; evidence cannot be inferred from another member. The engine blocks changes to submitted PR identity and accepted report-only fulfilment after a row is Done; merge evidence records the provider facts the PM checked and the engine does not verify remote merge. Pre-activation `declareKind` is a distinct one-time declaration with kind-specific source/target/completionPolicy requirements. ACTIVE evidence needs acquired coordinator identity, workflow token and session-ref when selected; legacy session/at are pre-activation FILE transports.", "write", ["workflow", "file", "declareKind", "branchSource", "branchTarget", "completionPolicy", "session", "sessionRef", "expect", "operation", "at", "harness"], async (input, context) => {
       try {
         if (input.workflow === undefined) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow is required" });
         if ((input.file === undefined) === (input.declareKind === undefined)) return refusalEnvelope({ command: "workflow.evidence", status: "usage", code: "command.invalid-input", exitCode: 2, message: "provide exactly one of file or declareKind" });
@@ -352,6 +383,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }, [{ key: "sessionId", context: "sessionId" }], {
       expect: `CAS expectation: ${TOKEN_SUPPLIES.workflow}`,
       sessionRef: `session transport: ${SESSION_REF_SUPPLIES}`,
+      file: "Path-only wire: absolute path to a UTF-8 JSON file; inline JSON text is not accepted.",
     }, { delivery: deliveryEvidenceSchema }),
     makeDefinition("workflow.show-prepare", "Read the pre-activation Prepare workflow view from its coordinator session envelope.", "read", ["session"], async (input, context) => {
       try { if (input.session === undefined) return refusalEnvelope({ command: "workflow.show-prepare", status: "usage", code: "command.invalid-input", exitCode: 2, message: "session is required" }); return ok("workflow.show-prepare", await showPrepareWorkflow({ sessionPath: absolute(input.session, "session"), cwd: context.cwd })); } catch (error) { return engineRefusal("workflow.show-prepare", error); }
