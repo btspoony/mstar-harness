@@ -56,4 +56,41 @@ test("name-only update leaves target optional and false clearTarget does not sel
   });
  }
 });
+test("shared admission distinguishes zero, false, and true selectors at real milestone consumers", async () => {
+ const cwd=join(root,"shared-admission"), harness=join(cwd,".mstar"); mkdirSync(harness,{recursive:true});
+ (await initializeStore({harnessDir:harness})).close();
+ await registerCatalogEntity(
+  {harnessDir:harness},
+  {kind:"project",id:"proj-admission",title:"Project",rootKind:"projects",relativePath:"proj"},
+  {operationId:"project-admission",actor:"test"},
+ );
+ const added=await executeCommand("milestone.add",{
+  project:"proj-admission",name:"Admission",ordinal:0,expectStore:1,operation:"add-admission",harness,
+ },invocation(cwd));
+ expect(added.status).toBe("ok");
+ if (added.status!=="ok") return;
+ const {milestoneId,storeRevision}=added.data as {milestoneId:string;storeRevision:number};
+ const update=(overrides:Record<string,unknown>)=>executeCommand("milestone.update",{
+  project:"proj-admission",id:milestoneId,expectStore:storeRevision,operation:"update-admission",harness,...overrides,
+ },invocation(cwd));
+ const noPatch=await update({clearTarget:false});
+ expect(noPatch.details?.diagnostics).toContainEqual(expect.objectContaining({
+  code:"alternative-required",expected:expect.stringContaining("at least one of"),
+ }));
+ const zero=await update({ordinal:0});
+ expect(zero.status).toBe("ok");
+ const exclusive=await update({target:"2026-10-08",clearTarget:true});
+ expect(exclusive.details?.diagnostics).toContainEqual(expect.objectContaining({code:"exclusive"}));
+
+ const assignment=(clear:boolean)=>executeCommand("milestone.assign",{
+  project:"proj-admission",issue:"I-999999",clear,reason:"test",expectIssue:0,expectStore:storeRevision,
+  operation:`assign-${clear}`,session:"session.json",actor:"test",harness,
+ },invocation(cwd));
+ const falseSelector=await assignment(false);
+ expect(falseSelector.details?.diagnostics).toContainEqual(expect.objectContaining({
+  code:"alternative-required",expected:expect.stringContaining("exactly one of"),
+ }));
+ const trueSelector=await assignment(true);
+ expect(trueSelector.details?.diagnostics).not.toContainEqual(expect.objectContaining({code:"alternative-required"}));
+});
 

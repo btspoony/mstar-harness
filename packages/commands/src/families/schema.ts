@@ -140,7 +140,8 @@ function commandSchemaDescriptor(definition: CommandDefinition): CommandSchemaDe
     ...(definition.requirements ?? []).filter((entry) => entry.required && entry.condition === undefined).map((entry) => entry.name),
   ];
   const required = [...new Set(requiredFields)];
-  const input = { ...jsonSchema, required };
+  const requirements = commandRequirements(definition);
+  const input = { ...jsonSchema, required, "x-mstar-requirements": requirements };
   const properties = jsonSchema.properties !== null && typeof jsonSchema.properties === "object"
     ? Object.entries(jsonSchema.properties)
     : [];
@@ -158,7 +159,7 @@ function commandSchemaDescriptor(definition: CommandDefinition): CommandSchemaDe
     description: definition.description,
     effects: definition.effects,
     cli: definition.cli,
-    requirements: commandRequirements(definition),
+    requirements,
     required,
     defaults,
     input,

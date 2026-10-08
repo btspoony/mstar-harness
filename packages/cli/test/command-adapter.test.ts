@@ -1,13 +1,13 @@
 // Build prerequisite: run `bun run --cwd packages/commands build` before this package test.
 // These adapter tests load @mstar-harness/commands through its generated package entry.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
-import { serializeExecutionValue } from "@mstar-harness/engine";
+import { initializeStore, serializeExecutionValue } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
@@ -283,6 +283,43 @@ describe("generated CLI adapter", () => {
     expect(envelope.details?.recovery).toContain("mstar --help");
     expect(JSON.stringify(envelope)).not.toContain("mstar mstar --help");
   });
+test("workflow registration discloses missing plan identity and succeeds after the document correction", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "cli-workflow-registration-correction-"));
+  const harness = path.join(root, ".mstar");
+  const planFile = path.join(harness, "plans", "plan-public-registration.md");
+  mkdirSync(path.dirname(planFile), { recursive: true });
+  writeFileSync(planFile, "# Public registration plan\n");
+  (await initializeStore({ harnessDir: harness })).close();
+  const args = [
+    "workflow", "register",
+    "--workflow", "wf-public-registration",
+    "--plan-id", "plan-public-registration",
+    "--plan-title", "Public registration plan",
+    "--plan-file", "plans/plan-public-registration.md",
+    "--delivery-kind", "development",
+    "--project", "engine",
+    "--branch-source", "feature/plan-public-registration",
+    "--branch-target", "main",
+    "--harness", harness,
+  ];
+  try {
+    const missing = await run(args);
+    expect(missing.status).toBe(1);
+    const refusal = JSON.parse(missing.stdout) as { command: string; status: string; code: string; message?: string };
+    expect(refusal).toMatchObject({ command: "workflow.register", status: "refused", code: "plan-path.identity-mismatch" });
+    expect(refusal.message).toContain("declares no plan_id header");
+    expect(refusal.message).toContain("Help: mstar workflow register --help");
+
+    writeFileSync(planFile, "# Public registration plan\n\n**plan_id:** plan-public-registration\n");
+    const corrected = await run(args);
+    expect(corrected.status).toBe(0);
+    expect(JSON.parse(corrected.stdout)).toMatchObject({
+      command: "workflow.register", status: "ok", code: "workflow.register.ok",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
   test("an unknown command routes recovery to the root help, never an invented leaf route", async () => {
     const result = await run(["definitely-not-a-command"]);

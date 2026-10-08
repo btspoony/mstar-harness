@@ -22,6 +22,15 @@ function redactInputScalar(value: string): string {
     .replace(/\bsk-[A-Za-z0-9-]+\b/g, "[REDACTED]");
 }
 
+/** Render a rejected scalar without leaking secret-shaped input. */
+export function safeReceivedValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(redactInputScalar(value));
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "boolean" || typeof value === "number") return JSON.stringify(value);
+  return Array.isArray(value) ? "array" : "object";
+}
+
 /**
  * Sanitize both messages and paths against secret-shaped strings anywhere in
  * the submitted input, including object keys quoted by strict-object issues.

@@ -132,6 +132,16 @@ test("registry exposes schema descriptors for supported operations", async () =>
     expect(published).toMatchObject({ status: "ok", data: { descriptor: { id: definition.id } } });
   }
 });
+test("rendered CLI help consumes canonical group and accepted-value facts", () => {
+  const seatPrompt = getCommandDefinitions().find((entry) => entry.id === "pr-review.seat-prompt")!;
+  const seatHelp = renderCommandContract(seatPrompt, "cli");
+  expect(seatHelp).toContain("allowed values: \"1\" | \"2\"");
+  const milestoneUpdate = getCommandDefinitions().find((entry) => entry.id === "milestone.update")!;
+  const milestoneHelp = renderCommandContract(milestoneUpdate, "cli");
+  expect(milestoneHelp).toContain("CLI input alternatives: at least one of");
+  expect(milestoneHelp).toContain("clearTarget=true");
+  expect(milestoneHelp).toContain("CLI input alternatives: at most one of target | clearTarget=true");
+});
 
 test("workflow operations expose independent missing-input diagnostics", async () => {
   const context: InvocationContext = {

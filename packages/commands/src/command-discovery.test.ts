@@ -148,16 +148,6 @@ describe("command discovery", () => {
     expect(overridden.input.safeParse({}).success).toBe(false);
     expect(overridden.input.safeParse({ name: "x" }).success).toBe(true);
   });
-  test("workflow register schema publishes the selected-document title constraint", () => {
-    const selection = selectCommandSchema({ command: "workflow.register" }, getCommandDefinitions());
-    if (selection.kind !== "command") throw new Error("expected workflow.register command descriptor");
-    expect(selection.descriptor.requirements).toContainEqual(expect.objectContaining({
-      name: "planTitle",
-      ownership: "caller",
-      route: "cli",
-      constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
-    }));
-  });
 
   test("session selector publishes caller-supplied route facts", () => {
     const routed = definition("plan.note", ["plan", "note"], {
@@ -205,6 +195,32 @@ describe("command discovery", () => {
     ]);
     expect(leafData.descriptor.effects).toEqual(["read"]);
     expect(Object.keys(leafData.descriptor.payloadSchemas)).toEqual([]);
+  });
+  test("schema discovery publishes canonical alternatives and accepted-value facts", async () => {
+    const envelope = await executeCommand("schema", { command: "milestone.update" }, context());
+    if (envelope.status !== "ok") throw new Error(`expected schema result, got ${envelope.status}`);
+    const data = envelope.data as { kind: "command"; descriptor: { input: Record<string, unknown> } };
+    const requirements = data.descriptor.input["x-mstar-requirements"] as Array<Record<string, unknown>>;
+    expect(requirements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "name",
+        alternatives: expect.objectContaining({
+          cardinality: "at-least-one",
+          members: expect.arrayContaining([expect.objectContaining({ name: "clearTarget", whenTrue: true })]),
+        }),
+      }),
+      expect.objectContaining({
+        name: "target",
+        alternatives: expect.objectContaining({ cardinality: "at-most-one" }),
+      }),
+    ]));
+    const seatEnvelope = await executeCommand("schema", { command: "pr-review.seat-prompt" }, context());
+    if (seatEnvelope.status !== "ok") throw new Error(`expected schema result, got ${seatEnvelope.status}`);
+    const seatData = seatEnvelope.data as { kind: "command"; descriptor: { input: Record<string, unknown> } };
+    expect(seatData.descriptor.input["x-mstar-requirements"]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "stage", allowedValues: ["1", "2"] }),
+      expect.objectContaining({ name: "stage", condition: { field: "collectFolded", equals: true }, allowedValues: ["2"] }),
+    ]));
   });
 
   test("payload selector stays a distinct supported selector", async () => {

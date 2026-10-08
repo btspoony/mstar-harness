@@ -181,6 +181,49 @@ generated_at: 2026-01-02
       expect(refusal.details?.recovery).toContain("mstar fixture evaluate --help");
     });
   });
+  test("PR seat-prompt publishes and consumes conditional accepted-value facts through MCP", async () => {
+    await withClient([definition("pr-review.seat-prompt")], async (client, cwd) => {
+      const { tools } = await client.listTools();
+      const tool = tools.find((entry) => entry.name === "mstar_pr_review_seat_prompt")!;
+      expect(tool.description).toContain("allowed values: \"1\" | \"2\"");
+      expect(tool.inputSchema["x-mstar-requirements"]).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "stage", allowedValues: ["1", "2"] }),
+        expect.objectContaining({ name: "stage", condition: { field: "collectFolded", equals: true }, allowedValues: ["2"] }),
+        expect.objectContaining({ name: "diffFile", condition: { field: "collectFolded", equals: true }, required: true }),
+      ]));
+
+      const ordinary = await client.callTool({
+        name: "mstar_pr_review_seat_prompt",
+        arguments: { stage: "1", domain: "cli", seat: "reviewer", collectFolded: false },
+      });
+      expect(envelope(ordinary).status).toBe("ok");
+
+      const secret = "sk-live-consumer-secret";
+      const rejected = await client.callTool({
+        name: "mstar_pr_review_seat_prompt",
+        arguments: { stage: secret, domain: "cli", seat: "reviewer" },
+      });
+      expect(rejected.isError).toBe(true);
+      expect(JSON.stringify(rejected)).not.toContain(secret);
+      expect(diagnostics(envelope(rejected))).toContainEqual(expect.objectContaining({
+        path: "stage", code: "not_allowed", received: '"[REDACTED]"',
+      }));
+
+      const aggregate = await client.callTool({
+        name: "mstar_pr_review_seat_prompt",
+        arguments: { stage: secret, domain: { secret }, seat: "reviewer", collectFolded: true, security: true },
+      });
+      expect(aggregate.isError).toBe(true);
+      expect(JSON.stringify(aggregate)).not.toContain(secret);
+      const refusal = envelope(aggregate);
+      expect(diagnostics(refusal)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "domain", code: "invalid_type", received: "object" }),
+        expect.objectContaining({ path: "stage", code: "not_allowed", expected: '"2"', received: '"[REDACTED]"' }),
+        expect.objectContaining({ path: "diffFile", code: "required" }),
+        expect.objectContaining({ path: "security", code: "not_allowed", expected: "false" }),
+      ]));
+    });
+  });
 
   test("large SDK rejection keeps all safe diagnostics and a bounded truthful summary", async () => {
     await withClient([definition("worktree.qc-alignment")], async (client) => {

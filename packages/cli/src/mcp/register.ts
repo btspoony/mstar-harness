@@ -47,7 +47,7 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
   const jsonSchema = descriptor.input as Record<string, unknown>;
   if (!(input instanceof z.ZodObject)) return { schema: input, jsonSchema };
   const properties = { ...jsonSchema.properties as Record<string, Record<string, unknown>> };
-  const composed: Record<string, z.ZodType> = {};
+  const composed: Record<string, z.core.$ZodType> = {};
   for (const [field, payload] of Object.entries(definition.payloads ?? {})) {
     const declared = input.shape[field];
     const placeholder = declared instanceof z.ZodUnknown
@@ -57,13 +57,14 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
     properties[field] = descriptor.payloadSchemas[field] as Record<string, unknown>;
   }
   const extended = Object.keys(composed).length === 0 ? input : input.safeExtend(composed);
-  const requiredShape: Record<string, z.ZodType> = {};
+  const selector = definition.cli.options.find((option) => option.context === "sessionId");
+  const requiredShape: Record<string, z.core.$ZodType> = {};
   for (const field of descriptor.required) {
+    if (field === selector?.key) continue;
     const declared = extended.shape[field];
     if (declared instanceof z.ZodOptional) requiredShape[field] = declared.unwrap();
   }
   let schema = Object.keys(requiredShape).length === 0 ? extended : extended.safeExtend(requiredShape);
-  const selector = definition.cli.options.find((option) => option.context === "sessionId");
   if (selector !== undefined) {
     schema = schema.safeExtend({ [selector.key]: z.string().optional() });
     properties[selector.key] = { type: "string" };
@@ -75,7 +76,17 @@ function mcpInputContract(definition: CommandDefinition, descriptor: CommandSche
   for (const [field, value] of Object.entries(descriptor.defaults)) {
     if (properties[field] !== undefined) properties[field] = { ...properties[field], default: value };
   }
-  return { schema, jsonSchema: { ...jsonSchema, properties } };
+  const required = selector === undefined ? descriptor.required : descriptor.required.filter((field) => field !== selector.key);
+  const requirements = descriptor.requirements.filter((entry) => entry.route === "mcp");
+  return {
+    schema,
+    jsonSchema: {
+      ...jsonSchema,
+      required,
+      properties,
+      "x-mstar-requirements": requirements,
+    },
+  };
 }
 
 function handlerInput(definition: CommandDefinition, input: unknown): unknown {

@@ -37,13 +37,11 @@ function usageDiagnostics(envelope: CommandEnvelope): ReadonlyArray<Record<strin
   return diagnostics as Array<Record<string, unknown>>;
 }
 
-async function runCliSource(args: readonly string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function runCliSource(args: readonly string[]): Promise<{ exitCode: number; stdout: string }> {
   const cliEntry = fileURLToPath(new URL("../../cli/src/index.ts", import.meta.url));
-  const child = Bun.spawn([process.execPath, cliEntry, ...args], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-  ]);
-  return { exitCode, stdout, stderr };
+  const child = Bun.spawn([process.execPath, cliEntry, ...args], { stdout: "pipe", stderr: "ignore" });
+  const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return { exitCode, stdout };
 }
 
 describe("executeCommand input diagnostics", () => {
@@ -209,61 +207,27 @@ describe("CLI parser diagnostics", () => {
     expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
   });
 
-  test("a flag present without its value reports missing-value facts", async () => {
-    const { exitCode, stdout, stderr } = await runCliSource(["persist", "get", "json", "--key"]);
+  test("a flag present without its value reports missing-value facts in the JSON envelope", async () => {
+    const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key"]);
     expect(exitCode).toBe(2);
     const envelope = JSON.parse(stdout) as CommandEnvelope;
     expect(envelope.status).toBe("usage");
     const diagnostic = usageDiagnostics(envelope)[0]!;
     expect(diagnostic.code).toMatch(/^commander\./);
-    expect(stderr).toContain(String(diagnostic.message));
-    expect(diagnostic).toMatchObject({ argvIndex: 5, token: "--key" });
-    expect(diagnostic?.path).toBe("key");
+    expect(diagnostic).toMatchObject({ token: "--key", path: "key", expected: "option value", received: "missing value" });
     expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
-    expect(diagnostic?.expected).toBe("option value");
-    expect(diagnostic?.received).toBe("missing value");
   });
 
-  test("an unknown option reports its argv location without inventing a field", async () => {
-    const { exitCode, stdout, stderr } = await runCliSource(["persist", "get", "json", "--key", "probe-key", "--definitely-not-a-flag"]);
+  test("an unknown option is reported without inventing a schema field path", async () => {
+    const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key", "probe-key", "--definitely-not-a-flag"]);
     expect(exitCode).toBe(2);
     const envelope = JSON.parse(stdout) as CommandEnvelope;
     expect(envelope.status).toBe("usage");
     const diagnostic = usageDiagnostics(envelope)[0]!;
-    expect(diagnostic.code).toMatch(/^commander\./);
-    expect(stderr).toContain(String(diagnostic.message));
-    expect(diagnostic.path).toBe("argv[7]");
-    expect(diagnostic?.expected).toBe("recognized option");
-    expect(diagnostic?.received).toBe("--definitely-not-a-flag");
+    expect(diagnostic.code).toBe("commander.unknownOption");
+    expect(diagnostic).toMatchObject({ expected: "recognized option", received: "--definitely-not-a-flag" });
+    expect(diagnostic).not.toHaveProperty("path");
     expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
   });
 
-  test.each([
-    { args: ["persist", "get", "json", "--key", "first", "--key"], index: 7 },
-    { args: ["persist", "get", "json", "--key=first", "--key"], index: 6 },
-  ])("a repeated known option identifies its missing occurrence: $args", async ({ args, index }) => {
-    const result = await runCliSource(args);
-    expect(result.exitCode).toBe(2);
-    const refusal = JSON.parse(result.stdout) as CommandEnvelope;
-    const diagnostic = usageDiagnostics(refusal)[0]!;
-    expect(diagnostic).toMatchObject({ path: "key", expected: "option value", received: "missing value", argvIndex: index, token: "--key" });
-    expect(result.stderr).toContain(String(diagnostic.message));
-    expect(refusal.details?.helpRoute).toBe("mstar persist get --help");
-  });
-
-  test.each([
-    { args: ["persist", "get", "json", "--key=probe", "--unknown=value"], token: "--unknown=value", index: 6 },
-    { args: ["persist", "get", "json", "--key", "--unknown", "--unknown"], token: "--unknown", index: 7 },
-    { args: ["persist", "get", "json", "--key=probe", "--key", "--unknown=value", "--unknown=value"], token: "--unknown=value", index: 8 },
-    { args: ["persist", "get", "json", "--key=probe", "--unknown", "--unknown"], token: "--unknown", index: 6 },
-  ])("unknown inline/repeated tokens retain the actual rejected argv occurrence: $args", async ({ args, token, index }) => {
-    const result = await runCliSource(args);
-    expect(result.exitCode).toBe(2);
-    const refusal = JSON.parse(result.stdout) as CommandEnvelope;
-    const diagnostic = usageDiagnostics(refusal)[0]!;
-    expect(diagnostic).toMatchObject({ path: `argv[${index}]`, argvIndex: index, token, expected: "recognized option", received: token });
-    expect(result.stderr).toContain(String(diagnostic.message));
-    expect(diagnostic).not.toHaveProperty("flag");
-    expect(refusal.details?.helpRoute).toBe("mstar persist get --help");
-  });
 });

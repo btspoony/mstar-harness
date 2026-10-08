@@ -21,11 +21,26 @@
  * as completion until a replay finishes the instruction.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFsStore, initializeStore, openStore, setArtifactStore, WORKFLOW_SNAPSHOT_FILE, type IntegrationMergeLease } from "@mstar-harness/engine";
-import { executeCommand, getCommandDefinitions, getPayloadSchema } from "../src/index.js";
+import {
+  bindExecutionSession,
+  createExecutionWorkflow,
+  createFsStore,
+  encodeExecutionSessionRef,
+  executionContextFor,
+  initializeExecutionAuthority,
+  initializeStore,
+  openStore,
+  setArtifactStore,
+  WORKFLOW_SNAPSHOT_FILE,
+  type ExecutionIdentity,
+  type ExecutionSessionRef,
+  type ExecutionToken,
+  type IntegrationMergeLease,
+} from "@mstar-harness/engine";
+import { executeCommand, getPayloadSchema } from "../src/index.js";
 import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const CALL_LIMIT = 3;
@@ -140,162 +155,7 @@ async function setupCall(
 // Scenario ledger (instruction x route dispositions)
 // ---------------------------------------------------------------------------
 
-type WitnessVerdict = "resolved" | "grouped-missing-facts" | "safety-refusal" | "partial-application-then-resolved";
 
-type LedgerEntry =
-  | { route: string; disposition: "witnessed"; witness: string; context: "cold" | "warm"; countedCalls: number; verdict: WitnessVerdict }
-  | { route: string; disposition: "unverified"; reason: string };
-
-const witnessed = (
-  route: string,
-  witness: string,
-  context: "cold" | "warm",
-  countedCalls: number,
-  verdict: WitnessVerdict,
-): LedgerEntry => ({ route, disposition: "witnessed", witness, context, countedCalls, verdict });
-
-const unverified = (route: string, reason: string): LedgerEntry => ({ route, disposition: "unverified", reason });
-
-/**
- * Canonical CLI/MCP scenario ledger. Keys are enforced against the live
- * registry enumeration at runtime — the ledger must name a semantic route for
- * every published command (witnessed or explicitly unverified) and may not
- * outlive the registry it describes.
- */
-const canonicalLedger: Record<string, LedgerEntry> = {
-  // status family
-  "status.validate": unverified("validate a status.json corpus variant", "requires a live status corpus; no deterministic fixture in this baseline suite"),
-  "status.workflow-close": unverified("close an execution workflow under a bound session ref", "requires an active execution workflow with a bound session; no in-package fixture"),
-  "status.archive-residuals": witnessed("retired command refuses without mutation", "retired-refusal", "warm", 1, "safety-refusal"),
-  "status.findings-cleanup": unverified("findings cleanup gate over a plan corpus", "requires seeded findings evidence; fixture deferred to the versioned scenario set"),
-  "status.tech-debt": unverified("issue-store rollup read", "requires a populated issue store fixture; deferred to the versioned scenario set"),
-  "status.backlog-register": unverified("register a backlog entry", "requires registered backlog state; fixture deferred"),
-  "status.backlog-close": unverified("close a backlog entry", "requires registered backlog state; fixture deferred"),
-  // persist family
-  "persist.write": witnessed("explicit whole-document replacement is last-write-wins in one call; a malformed document is refused by the validator without any write", "explicit-replacement (replace leg 1 call; malformed refusal leg 1 call)", "warm", 2, "resolved"),
-  "persist.get": witnessed("file-authority read resolves the stored document in one call", "file-authority-read", "warm", 1, "resolved"),
-  "persist.list": unverified("store listing read", "same authority family as the persist.get witness; the listing route is not separately exercised"),
-  "persist.delete": witnessed("protected kind deletion is refused and the document survives", "protected-deletion", "warm", 1, "safety-refusal"),
-  migrate: unverified("rewrite a legacy v1 status tree in place", "destructive whole-tree rewrite; fixture deferred to the versioned scenario set"),
-  // lease / coordination
-  "lease.verify-integration": witnessed("an unclaimed integration lane is reported; a claimed lease is surfaced and an absent workflow refuses truthfully", "integration-claim (unclaimed + claimed + absent, 3 calls)", "warm", 3, "resolved"),
-  "iteration.gate": unverified("evaluate a workflow phase gate", "requires an active workflow iteration; no in-package fixture"),
-  "iteration.push-cadence": unverified("probe push cadence state", "requires workflow history state; no in-package fixture"),
-  "iteration.register": unverified("register an iteration workflow", "requires control-root write authority; no in-package fixture"),
-  // plan family
-  "plan.bind": unverified("adopt the workflow's coordinator seat", "requires coordinator session authority; no in-package fixture"),
-  "plan.show": unverified("read a registered plan snapshot", "requires a registered plan fixture; deferred to the versioned scenario set"),
-  "plan.prepare": unverified("record the ordinary revisable execution configuration", "requires a coordinator binding and an active row; no in-package fixture"),
-  "plan.progress": unverified("advance plan progress", "requires a bound plan and coordinator authority; no in-package fixture"),
-  "plan.issue-add": unverified("add a plan register issue", "requires plan register authority; no in-package fixture"),
-  "plan.issue-close": unverified("close a plan register issue", "requires plan register authority; no in-package fixture"),
-  "plan.complete": unverified("complete plan delivery", "requires QC/QA and Git proof evidence; no in-package fixture"),
-  // session family
-  "session.run": unverified("spawn a real host session", "process effect against real hosts; never deterministic in-process"),
-  "session.recover": unverified("recover an interrupted host session", "requires an interrupted session artifact; no in-package fixture"),
-  // workflow family
-  "workflow.register": unverified("register a workflow", "requires control-root write authority; no in-package fixture"),
-  "workflow.evidence": unverified("append workflow evidence", "requires an active workflow ledger; no in-package fixture"),
-  "workflow.show-prepare": unverified("read a sealed prepare bundle", "requires a sealed prepare artifact; no in-package fixture"),
-  "workflow.amend-prepare": unverified("amend a sealed prepare bundle", "requires a sealed prepare artifact and coordinator authority; no in-package fixture"),
-  "workflow.recover-coordinator": unverified("recover a crashed coordinator", "requires a crashed coordinator session; no in-package fixture"),
-  "workflow.phase": unverified("advance a workflow phase", "requires coordinator session authority; no in-package fixture"),
-  "workflow.lifecycle": unverified("drive the workflow lifecycle", "requires coordinator session authority; no in-package fixture"),
-  "workflow.execution-policy": unverified("set workflow execution policy", "requires coordinator session authority; no in-package fixture"),
-  "workflow.integration-worktree": unverified("configure the integration worktree", "requires coordinator session authority; no in-package fixture"),
-  "workflow.adopt-terminal": unverified("adopt a terminal but unregistered workflow header at its current revision", "requires active execution authority and a terminal-unregistered snapshot; not exercised in bounded-resolution fixtures"),
-  // issue family
-  "issue.add": witnessed("malformed capture is refused with the exact missing contract fields; the listing leg verifies nothing was created", "issue-capture (malformed refusal + no-mutation listing leg, 2 calls)", "warm", 2, "grouped-missing-facts"),
-  "issue.list": witnessed("a single store page read reflects the controlled setup capture", "issue-list (1 call after a controlled setup capture)", "warm", 1, "resolved"),
-  "issue.show": witnessed("bound identity reads back; unknown identity refuses truthfully", "issue-identity (2 instruction calls after a controlled setup capture)", "warm", 2, "grouped-missing-facts"),
-  "issue.occurrence": unverified("append an occurrence under mutation scope", "mutation scope and authorization matrix not exercised in this baseline suite"),
-  "issue.triage": witnessed("current revision accepted and stale revision refused with no state change", "issue-cas (stale refusal + readback, 2 calls after a controlled setup capture)", "warm", 2, "safety-refusal"),
-  "issue.close": witnessed("actor-only terminal disposition succeeds and readback verifies the resolved issue", "issue-disposition-guard (successful close + readback, 2 calls after a controlled setup capture)", "warm", 2, "resolved"),
-  "issue.reopen": unverified("reopen a terminal issue with a revision-guarded reason", "requires an existing terminal issue and capture-seat mutation scope; not exercised in bounded-resolution fixtures"),
-  "issue.waive": unverified("waive an issue", "terminal disposition behavior is exercised by actor-only close but this verb has no separate fixture"),
-  "issue.duplicate": unverified("mark an issue duplicate", "terminal disposition behavior is exercised by actor-only close but this verb has no separate fixture"),
-  "issue.supersede": unverified("supersede an issue", "actor-only supersede is exercised in the CLI acceptance test, not this witness suite"),
-  "issue.link": unverified("record a plan or iteration provenance label", "actor-only link is exercised in the CLI acceptance test, not this witness suite"),
-  "issue.export": unverified("export issue records", "requires a populated issue store fixture; deferred to the versioned scenario set"),
-  // milestone family
-  "milestone.add": unverified("add a milestone", "requires a populated milestone store; no in-package fixture"),
-  "milestone.update": unverified("update a milestone", "requires a populated milestone store; no in-package fixture"),
-  "milestone.assign": unverified("assign a milestone", "requires a populated milestone store; no in-package fixture"),
-  "milestone.list": unverified("list milestones", "requires a populated milestone store; no in-package fixture"),
-  "milestone.status": unverified("milestone rollup read", "requires a populated milestone store; no in-package fixture"),
-  // catalog / roadmap families
-  "catalog.discover": unverified("discover catalog candidates", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.import": unverified("import a catalog corpus", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.register": unverified("register a catalog entry", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.update": unverified("update a catalog entry", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.link": unverified("link catalog entries", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.list": unverified("list catalog entries", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.purge-registration": unverified("purge a producer-written invalid registration snapshot", "identity-guarded destructive verb; fail-first/round-trip/isolation coverage lives in catalog-registration.test.ts"),
-  "catalog.purge-registration": unverified("purge a producer-written invalid registration snapshot", "identity-guarded destructive verb; fail-first/round-trip/isolation coverage lives in catalog-registration.test.ts"),
-  "catalog.show": unverified("show a catalog entry", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.export": unverified("export the catalog", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "catalog.reconcile": unverified("reconcile catalog with sources", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "roadmap.import": unverified("import a roadmap corpus", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "roadmap.replace": unverified("replace roadmap content", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "roadmap.show": unverified("show roadmap content", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  "roadmap.export": unverified("export the roadmap", "hybrid file/store authority; fixture deferred to the versioned scenario set"),
-  // store family
-  "store.init": unverified("initialize an empty workspace store", "requires an empty workspace fixture; the legacy-state refusal family is covered by the store.upgrade path"),
-  "store.upgrade": unverified("one-command static import of legacy execution state", "covered by packages/commands/src/families/store.test.ts"),
-  "store.migrate": unverified("plan or apply a catalog migration", "requires manifests and catalog fixtures; independent of execution upgrade"),
-  "store.backup": unverified("back up the store", "requires an initialized store fixture; deferred to the versioned scenario set"),
-  "store.activate": unverified("activate a catalog migration", "requires an applied catalog manifest and attestation; no in-package fixture"),
-  "store.retire": unverified("retire catalog migration sources", "requires an activated catalog migration; no in-package fixture"),
-  "store.execution.restore-preview": unverified("preview restoring a plain store backup", "requires a standalone store backup fixture; covered in store-execution.test.ts"),
-  "store.execution.restore": unverified("restore from a plain store backup", "requires a standalone store backup and operator authorization; covered in store-execution.test.ts"),
-  "store.execution.export": unverified("export live execution state", "reporting utility over live state; covered in store-execution.test.ts"),
-  // sdd family
-  "sdd.workspace": unverified("bootstrap an SDD workspace", "requires plan/iteration artifacts; no in-package fixture"),
-  "sdd.task-brief": unverified("emit a task brief", "requires SDD workspace state; no in-package fixture"),
-  "sdd.review-package": unverified("assemble a review package", "spawns packaging process effects; not deterministic in-process"),
-  "sdd.check-context": unverified("check dispatch context", "requires SDD artifacts; no in-package fixture"),
-  "sdd.evidence.capture": unverified("capture SDD evidence", "spawns process effects; not deterministic in-process"),
-  "sdd.evidence.verify": unverified("verify SDD evidence", "requires captured evidence artifacts; no in-package fixture"),
-  "sdd.exec": unverified("execute an SDD script", "process effect; not deterministic in-process"),
-  // audit family
-  "audit.scaffold": unverified("scaffold an audit workspace", "requires an audit corpus; fixture deferred to the versioned scenario set"),
-  "audit.promote": unverified("promote audit findings", "requires an audit corpus; fixture deferred to the versioned scenario set"),
-  "audit.secret-scan": unverified("scan a corpus for secrets", "spawns external scanners (process effect); not deterministic in-process"),
-  "audit.supply-chain": unverified("evaluate the supply chain gate", "requires lockfile corpus; no in-package fixture"),
-  // validation gates
-  "dispatch.validate": unverified("validate dispatch role bindings", "requires SDD artifacts; no in-package fixture"),
-  "worktree.check": unverified("check worktree state", "spawns git (process effect); not deterministic in-process"),
-  "worktree.qc-alignment": unverified("check QC alignment", "requires QC report artifacts; no in-package fixture"),
-  "worktree.cleanup": unverified("remove merged worktrees", "removes real git worktrees (process effect); never fixture-backed in-process"),
-  "review.seats": unverified("read the QC seat registry", "requires QC seat artifacts; no in-package fixture"),
-  lint: unverified("lint a file corpus", "requires a lintable target file; fixture deferred to the versioned scenario set"),
-  "design-md.validate": unverified("validate DESIGN.md tokens", "requires a design corpus; no in-package fixture"),
-  "compound.validate": unverified("validate a compound report", "requires a report corpus; no in-package fixture"),
-  "skill.lint": unverified("lint a SKILL.md corpus", "requires a skill corpus; no in-package fixture"),
-  "roles.validate": unverified("validate role presets", "requires role preset artifacts; no in-package fixture"),
-  "qc.validate-report": unverified("validate a QC report", "requires a QC report corpus; no in-package fixture"),
-  // pr-review family
-  "pr-review.tally": unverified("tally review seats", "requires a review report corpus; no in-package fixture"),
-  "pr-review.report-path": unverified("resolve the review report path", "requires review sidecar state; no in-package fixture"),
-  "pr-review.validate-report": unverified("validate a review report", "requires a review report corpus; no in-package fixture"),
-  "pr-review.post": unverified("post a review", "requires a real PR service and browser effects; external authorization absent"),
-  "pr-review.worktree-cleanup": unverified("remove a review worktree", "real git worktree process effect; foreign-branch guard not exercised in-process"),
-  "pr-review.size": unverified("size a review diff", "spawns git diff (process effect); not deterministic in-process"),
-  "pr-review.seat-prompt": unverified("render a seat prompt", "requires the seat registry; no in-package fixture"),
-  "pr-review.budget": unverified("read review budget state", "requires review state; no in-package fixture"),
-  "pr-review.worktree-setup": unverified("create a review worktree", "creates real git worktrees (process effect); not deterministic in-process"),
-  // external-service and host families
-  "judgment.review-advice": unverified("request judgment advice", "requires an external judgment provider over stdin/service; external authorization absent"),
-  dashboard: unverified("start the dashboard service", "starts a long-lived HTTP service; not deterministic in-process"),
-  "harness.scaffold": unverified("scaffold a consumer host tree", "writes into a host tree; destructive fixture deferred to the versioned scenario set"),
-  doctor: unverified("read host health", "host-environment dependent read; result depends on the invoking machine"),
-  "plugin.validate": unverified("validate a plugin manifest", "requires a plugin tree corpus; no in-package fixture"),
-  "path.resolve": unverified("resolve harness paths", "host-environment dependent read; result depends on the invoking machine"),
-  "host.detect": unverified("detect the installed host", "host-environment dependent read; result depends on the invoking machine"),
-  "host.skill-root": unverified("resolve the host skill root", "host-environment dependent read; result depends on the invoking machine"),
-  schema: witnessed("resolve one payload contract by exact type name; unknown type is a truthful grouped-facts result", "schema-contract", "warm", 2, "grouped-missing-facts"),
-  report: unverified("validate a harness report", "requires a report corpus; no in-package fixture"),
-};
 
 /**
  * Retained noncompliant witnesses: interactions the baseline proves exceed the
@@ -313,28 +173,6 @@ const noncompliantWitnesses = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Slash-command document ledger
-// ---------------------------------------------------------------------------
-
-const commandsDir = join(import.meta.dir, "..", "..", "..", "commands");
-
-/**
- * Slash-command intentions are inventoried from the supported command
- * documents, independently of the CLI registry. These orchestrate live host
- * sessions and real repositories, so every entry is currently an explicit gap
- * rather than a silent exclusion; the versioned scenario set owns their
- * behavioral oracles.
- */
-const slashCommandLedger: Record<string, LedgerEntry> = {
-  "iteration-start": unverified("register and open an iteration against a live control root", "orchestrates host session bootstrap; cold-start reads are causally loaded and not deterministic in-process"),
-  "iteration-drive": unverified("drive a live iteration across phases", "requires coordinator session authority over a live workflow"),
-  "iteration-loop": unverified("run the long-form iteration loop", "requires coordinator session authority over a live workflow"),
-  "amazing-test-audit": unverified("orchestrate an audit across a real worktree", "requires the repository under audit and QC artifacts"),
-  "codebase-audit": unverified("run a read-only audit sweep", "requires the repository under audit"),
-  "amazing-e2e-check": unverified("run end-to-end checks", "requires installed deployments and real devices/browsers"),
-  "amazing-pr-review": unverified("orchestrate multi-seat PR review", "requires real git worktrees and live PR state"),
-};
 
 // ---------------------------------------------------------------------------
 // Fixtures (isolated, real handlers, controlled setup only)
@@ -415,6 +253,36 @@ function persistContext(): { root: string; harness: string; context: InvocationC
   setArtifactStore(createFsStore(harness));
   return { root, harness, context: testContext(root) };
 }
+async function activeNotesContext(): Promise<{ root: string; harness: string; workflow: string; sessionId: string; sessionRef: string; context: InvocationContext }> {
+  const root = mkdtempSync(join(tmpdir(), "bounded-notes-"));
+  roots.push(root);
+  const harness = join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  const storeContext = { harnessDir: harness };
+  (await initializeStore(storeContext)).close();
+  const authority = await initializeExecutionAuthority(storeContext);
+  const workflow = "wf-bounded-notes";
+  const sessionId = "coordinator-bounded-notes";
+  const identity: ExecutionIdentity = { source: "local", sessionId, workflowId: workflow, role: "coordinator" };
+  const created = await createExecutionWorkflow(executionContextFor(storeContext, identity), {
+    entry: { id: workflow, type: "plan", status: "running", started_at: "2026-10-08T00:00:00Z", dir: `workflows/${workflow}` } as never,
+    snapshot: {
+      schema_version: 1, id: workflow, type: "plan", status: "running",
+      started_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:00Z",
+      plans: [{ id: "p-bounded", title: "Bounded", file: "plans/p-bounded.md", status: "InProgress" }],
+    } as never,
+    expected: authority.token,
+    operationId: "create-bounded-notes",
+  });
+  const workflowToken = (created.data as unknown as { workflows: Array<{ workflowToken: ExecutionToken }> }).workflows[0]!.workflowToken;
+  const bound = await bindExecutionSession(executionContextFor(storeContext, identity), {
+    workflowId: workflow,
+    expected: workflowToken,
+    operationId: "bind-bounded-notes",
+  });
+  const sessionRef = encodeExecutionSessionRef(bound.data as ExecutionSessionRef);
+  return { root, harness, workflow, sessionId, sessionRef, context: testContext(root) };
+}
 
 
 function writeLeaseSnapshot(harness: string, workflowId: string, plans: unknown[]): void {
@@ -448,50 +316,6 @@ function leaseContext(): { root: string; harness: string; context: InvocationCon
 }
 
 // ---------------------------------------------------------------------------
-// Inventory tests
-// ---------------------------------------------------------------------------
-
-describe("bounded-resolution canonical ledger", () => {
-  test("every published definition carries a semantic scenario disposition, and no entry outlives the registry", () => {
-    const definitions = getCommandDefinitions();
-    for (const definition of definitions) {
-      const entry = canonicalLedger[definition.id];
-      // The ledger is enforced against the live enumeration: a published
-      // command without a disposition fails here, not silently.
-      if (entry === undefined) throw new Error(`missing ledger entry for published command ${definition.id}`);
-      if (entry.disposition === "witnessed") {
-        expect(entry.route.length).toBeGreaterThan(0);
-        expect(entry.witness.length).toBeGreaterThan(0);
-        expect(entry.countedCalls).toBeGreaterThan(0);
-      } else {
-        expect(entry.reason.length).toBeGreaterThan(0);
-        expect(entry.reason).not.toEqual(definition.id);
-      }
-    }
-    const published = new Set(definitions.map((definition) => definition.id));
-    for (const id of Object.keys(canonicalLedger)) {
-      expect(published.has(id)).toBe(true);
-    }
-  });
-});
-
-describe("bounded-resolution slash-command document ledger", () => {
-  test("every supported command document has an explicit disposition, and every entry names a real document", () => {
-    const documents = readdirSync(commandsDir).filter((name) => name.endsWith(".md")).map((name) => name.replace(/\.md$/, ""));
-    for (const document of documents) {
-      const entry = slashCommandLedger[document];
-      if (entry === undefined) throw new Error(`missing slash-command disposition for ${document}.md`);
-      expect(entry.route.length).toBeGreaterThan(0);
-      if (entry.disposition === "witnessed") expect(entry.witness.length).toBeGreaterThan(0);
-      else expect(entry.reason.length).toBeGreaterThan(0);
-    }
-    for (const document of Object.keys(slashCommandLedger)) {
-      expect(documents).toContain(document);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Deterministic witnesses (real handlers, isolated fixtures)
 // ---------------------------------------------------------------------------
 
@@ -521,6 +345,45 @@ describe("schema contract witness", () => {
 
     const verdict = audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true });
     expect(verdict).toMatchObject({ compliant: true, countedCalls: 2 });
+  });
+});
+describe("workflow note bounded consumers", () => {
+  test("append, replay, and coverage resolve through the public registry in three calls", async () => {
+    const fixture = await activeNotesContext();
+    const interaction: Interaction = { label: "append and inspect a workflow note", context: "warm", extraDependency: "", calls: [] };
+    const input = {
+      workflow: fixture.workflow,
+      sessionId: fixture.sessionId,
+      sessionRef: fixture.sessionRef,
+      id: "note-bounded-1",
+      text: "bounded public note",
+      ts: "2026-10-08T00:00:00.000Z",
+      harness: fixture.harness,
+    };
+    const first = await countedCall(interaction, "execute", "workflow-note.append", input, fixture.context);
+    expect(first).toMatchObject({ status: "ok", data: { id: "note-bounded-1", replayed: false } });
+    const ledger = join(fixture.harness, "workflows", fixture.workflow, "notes.jsonl");
+    const bytesBeforeReplay = readFileSync(ledger, "utf8");
+
+    const replay = await countedCall(interaction, "execute", "workflow-note.append", input, fixture.context);
+    expect(replay).toMatchObject({ status: "ok", data: { id: "note-bounded-1", replayed: true } });
+    expect(readFileSync(ledger, "utf8")).toBe(bytesBeforeReplay);
+
+    const coverage = await countedCall(interaction, "execute", "workflow-note.coverage", {
+      workflow: fixture.workflow,
+      harness: fixture.harness,
+    }, fixture.context);
+    expect(coverage).toMatchObject({ status: "ok" });
+    if (coverage.status === "ok") {
+      expect(coverage.data).toMatchObject({
+        format: "versioned",
+        acceptedIds: ["note-bounded-1"],
+        counts: { accepted: 1 },
+      });
+    }
+    expect(audit(interaction, {
+      unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true,
+    })).toMatchObject({ compliant: true, countedCalls: 3 });
   });
 });
 

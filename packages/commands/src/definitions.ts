@@ -1,5 +1,5 @@
 import { refusalEnvelope } from "./envelope.js";
-import { decodeInputDiagnostics } from "./input-diagnostics.js";
+import { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "./types.js";
 import { getStatusCommandDefinitions } from "./families/status.js";
@@ -365,7 +365,7 @@ export function admitCommandInput(
     allowedValueFacts.add(fact);
     if (entry.allowedValues.includes(value as string | boolean | number)) return [];
     const expected = entry.allowedValues.map((allowed) => JSON.stringify(allowed)).join(" | ");
-    return [{ path: entry.name, code: "not_allowed", message: `${entry.name} must be one of ${expected}`, expected, received: JSON.stringify(value) }];
+    return [{ path: entry.name, code: "not_allowed", message: `${entry.name} must be one of ${expected}`, expected, received: safeReceivedValue(value) }];
   });
   const alternativeGroups = new Set<string>();
   const alternativeDiagnostics = contract.requirements.flatMap((entry) => {

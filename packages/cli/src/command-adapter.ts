@@ -107,7 +107,7 @@ function parserDiagnostic(error: CommanderError, argv: readonly string[]): Recor
   const unknown = error.code === "commander.unknownOption";
   const rejectedIndex = (!unknown && !missingValue) || definition === undefined || quoted === undefined ? undefined
     : rejectedOptionIndex(argv, definition, quoted, missingValue ? option : undefined);
-  const path = field ?? (unknown && rejectedIndex !== undefined ? `argv[${rejectedIndex}]` : undefined);
+  const path = field;
   return {
     ...(path === undefined ? {} : { path }),
     ...(unknown ? { expected: "recognized option", received: quoted ?? "unknown option" } : {}),
@@ -242,7 +242,11 @@ export function renderCommandContract(
     const optionTokens = descriptor.cli.options.map((option) => ` ${option.flags}`).join("");
     lines.push(`CLI: mstar ${descriptor.cli.path.join(" ")}${argumentTokens}${optionTokens}`);
   }
-  const requiredLine = descriptor.required.length === 0 ? undefined : `Required inputs: ${descriptor.required.join(", ")}`;
+  const sessionSelector = definition.cli.options.find((option) => option.context === "sessionId")?.key;
+  const requiredInputs = route === "mcp" && sessionSelector !== undefined
+    ? descriptor.required.filter((field) => field !== sessionSelector)
+    : descriptor.required;
+  const requiredLine = requiredInputs.length === 0 ? undefined : `Required inputs: ${requiredInputs.join(", ")}`;
   if (requiredLine !== undefined) lines.push(requiredLine);
   const defaultEntries = Object.entries(descriptor.defaults);
   if (defaultEntries.length > 0) {
@@ -256,10 +260,27 @@ export function renderCommandContract(
         entry.help,
         entry.constraint === undefined ? undefined : `constraint: ${entry.constraint}`,
         entry.condition === undefined ? undefined : `when ${entry.condition.field}${entry.condition.equals !== undefined ? `=${JSON.stringify(entry.condition.equals)}` : entry.condition.present === false ? " is absent" : " is present"}`,
+        entry.allowedValues === undefined ? undefined : `allowed values: ${entry.allowedValues.map((value) => JSON.stringify(value)).join(" | ")}`,
       ].filter((value): value is string => value !== undefined).join("; ");
       return description === "" ? entry.name : `${entry.name} (${description})`;
     });
     lines.push(`${label}: ${parts.join(", ")}`);
+  }
+  const groups = new Map<string, {
+    condition: CommandSchemaDescriptor["requirements"][number]["condition"];
+    alternatives: NonNullable<CommandSchemaDescriptor["requirements"][number]["alternatives"]>;
+  }>();
+  for (const entry of descriptor.requirements) {
+    if (entry.route !== route || entry.alternatives === undefined) continue;
+    groups.set(JSON.stringify([entry.condition, entry.alternatives]), {
+      condition: entry.condition,
+      alternatives: entry.alternatives,
+    });
+  }
+  for (const { condition, alternatives } of groups.values()) {
+    const members = alternatives.members.map((member) => `${member.name}${member.whenTrue === true ? "=true" : ""}`);
+    const cardinality = alternatives.cardinality.replaceAll("-", " ");
+    lines.push(`${route.toUpperCase()} input alternatives: ${cardinality} of ${members.join(" | ")}${condition === undefined ? "" : ` when ${condition.field}${condition.equals !== undefined ? `=${JSON.stringify(condition.equals)}` : condition.present === false ? " is absent" : " is present"}`}`);
   }
   // Payload publication keeps the descriptor convention: only keys that are
   // declared input fields are advertised as fields (the handler accepts them
