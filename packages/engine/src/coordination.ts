@@ -4822,13 +4822,13 @@ function readIntegrationWorktreePath(
     throw prepareAmendmentRefusal("invalid-worktree", message, details);
   };
   if (!isNonEmptyString(value) || !isAbsolute(value)) {
-    return refuse(`integrationWorktreePath must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}`, {
+    return refuse(`integrationWorktreePath must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}. Correct the recorded source checkout with mstar workflow amend-prepare.`, {
       actual: value ?? null,
     });
   }
   const path = canonicalTarget(value);
   if (!existsSync(path) || !statSync(path).isDirectory()) {
-    return refuse(`integration checkout ${path} does not exist`, { path, expected: value });
+    return refuse(`integration checkout ${path} does not exist. Correct the recorded source checkout with mstar workflow amend-prepare.`, { path, expected: value });
   }
   const mainRoot = canonicalTarget(context.main.root);
   const control = canonicalizeNearestExisting(context.harnessRoot);
@@ -4842,19 +4842,19 @@ function readIntegrationWorktreePath(
   const controlRepo = readMainWorktree(control);
   if (controlRepo === null) {
     return refuse(
-      `the control harness root ${control} has no readable Git main worktree \u2014 the integration checkout cannot be proven to be a checkout of this repository`,
+      `the control harness root ${control} has no readable Git main worktree \u2014 the integration checkout cannot be proven to be a checkout of this repository. Correct the recorded source checkout with mstar workflow amend-prepare.`,
       { path, harness_root: control },
     );
   }
   const controlMainRoot = canonicalTarget(controlRepo.root);
   if (controlMainRoot !== mainRoot) {
     return refuse(
-      `this call runs from the main worktree of ${mainRoot}, not the repository owning the control harness root ${control} (${controlMainRoot}) \u2014 the recorded checkout must belong to that repository`,
+      `this call runs from the main worktree of ${mainRoot}, not the repository owning the control harness root ${control} (${controlMainRoot}) \u2014 the recorded checkout must belong to that repository. Correct the recorded source checkout with mstar workflow amend-prepare.`,
       { path, expected: controlMainRoot, actual: mainRoot },
     );
   }
   if (path === mainRoot || path === control) {
-    return refuse(`integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required`, {
+    return refuse(`integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required. Correct the recorded source checkout with mstar workflow amend-prepare.`, {
       path,
       expected: `a checkout distinct from ${mainRoot}`,
     });
@@ -4862,7 +4862,7 @@ function readIntegrationWorktreePath(
   const repo = readMainWorktree(path);
   if (repo === null || canonicalTarget(repo.root) !== controlMainRoot) {
     return refuse(
-      `integration checkout ${path} is not a checkout of the repository owning the control harness root ${control} (${controlMainRoot})`,
+      `integration checkout ${path} is not a checkout of the repository owning the control harness root ${control} (${controlMainRoot}). Correct the recorded source checkout with mstar workflow amend-prepare.`,
       {
         path,
         expected: controlMainRoot,
@@ -4871,7 +4871,7 @@ function readIntegrationWorktreePath(
     );
   }
   if (!isDistinctCheckout(context.main.root, path)) {
-    return refuse(`integration checkout ${path} is not a distinct checkout (same Git checkout as ${mainRoot})`, {
+    return refuse(`integration checkout ${path} is not a distinct checkout (same Git checkout as ${mainRoot}). Correct the recorded source checkout with mstar workflow amend-prepare.`, {
       path,
       expected: `a checkout distinct from ${mainRoot}`,
     });
@@ -4879,14 +4879,14 @@ function readIntegrationWorktreePath(
   const integrationBranch = context.snapshot.branch?.integration;
   if (!isNonEmptyString(integrationBranch)) {
     return refuse(
-      `workflow ${context.snapshot.id} records no branch.integration \u2014 the integration checkout cannot be verified`,
+      `workflow ${context.snapshot.id} records no branch.integration \u2014 the integration checkout cannot be verified. Correct the recorded source checkout with mstar workflow amend-prepare.`,
       { workflow_id: context.snapshot.id, path },
     );
   }
   const branch = gitRead(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== integrationBranch) {
     return refuse(
-      `integration checkout ${path} is on ${branch === undefined ? "an unreadable checkout" : branch || "a detached HEAD"}, not the recorded ${integrationBranch}`,
+      `integration checkout ${path} is on ${branch === undefined ? "an unreadable checkout" : branch || "a detached HEAD"}, not the recorded ${integrationBranch}. Correct the recorded source checkout with mstar workflow amend-prepare.`,
       { path, expected: integrationBranch, actual: branch ?? null },
     );
   }
@@ -4945,21 +4945,21 @@ function assertUnstartedAddressedRow(row: PlanRow, workflowId: string): void {
   if (status !== "Todo") {
     throw prepareAmendmentRefusal(
       "execution-started",
-      `plan ${planId} is ${status} \u2014 a plan-file correction repairs a registration pointer, never a row that has begun executing`,
+      `plan ${planId} is ${status} \u2014 a plan-file correction repairs a registration pointer, never a row that has begun executing. Inspect current row facts with mstar plan show --plan ${planId}, then retry mstar workflow amend-prepare with the observed revision.`,
       { workflow_id: workflowId, plan_id: planId, actual: status },
     );
   }
   if (row.progress !== undefined && row.progress !== 0) {
     throw prepareAmendmentRefusal(
       "execution-started",
-      `plan ${planId} reports progress ${JSON.stringify(row.progress)} \u2014 a plan-file correction must not rewrite executed work`,
+      `plan ${planId} reports progress ${JSON.stringify(row.progress)} \u2014 a plan-file correction must not rewrite executed work. Inspect current row facts with mstar plan show --plan ${planId}, then retry mstar workflow amend-prepare with the observed revision.`,
       { workflow_id: workflowId, plan_id: planId, actual: row.progress },
     );
   }
   if (row.coordination !== undefined) {
     throw prepareAmendmentRefusal(
       "execution-started",
-      `plan ${planId} carries a coordination block \u2014 preparation or execution evidence already exists for this row`,
+      `plan ${planId} carries a coordination block \u2014 preparation or execution evidence already exists for this row. Inspect current row facts with mstar plan show --plan ${planId}, then retry mstar workflow amend-prepare with the observed revision.`,
       { workflow_id: workflowId, plan_id: planId, revision: rowCoordinationOf(row)?.revision ?? null },
     );
   }
@@ -4989,26 +4989,26 @@ function readPlanFileCorrection(
   context: { harnessRoot: string; snapshot: WorkflowSnapshot },
 ): PreparePlanFileCorrectionOutcome {
   if (!isPlainObject(value)) {
-    throw prepareAmendmentRefusal("invalid-plan", "every correctPlanFiles entry must be an object", { actual: value ?? null });
+    throw prepareAmendmentRefusal("invalid-plan", "every correctPlanFiles entry must be an object; correct the malformed caller input before retrying workflow amend-prepare", { actual: value ?? null });
   }
   const unexpected = Object.keys(value).filter((key) => !PREPARE_CORRECTION_KEYS.includes(key));
   if (unexpected.length > 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `a plan-file correction accepts only ${PREPARE_CORRECTION_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}`,
+      `a plan-file correction accepts only ${PREPARE_CORRECTION_KEYS.join(", ")} \u2014 unexpected key(s): ${unexpected.join(", ")}. Correct the malformed caller input before retrying workflow amend-prepare.`,
       { allowed: [...PREPARE_CORRECTION_KEYS], unexpected },
     );
   }
   const id = value.id;
   if (!isNonEmptyString(id)) {
-    throw prepareAmendmentRefusal("invalid-plan", `a plan-file correction requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}`, {
+    throw prepareAmendmentRefusal("invalid-plan", `a plan-file correction requires a non-empty id \u2014 got ${JSON.stringify(id ?? null)}. Correct the malformed caller input before retrying workflow amend-prepare.`, {
       actual: id ?? null,
     });
   }
   try {
     assertSafePathComponent(id, "plan id");
   } catch (error) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}`, {
+    throw prepareAmendmentRefusal("invalid-plan", `plan id ${JSON.stringify(id)} is not a safe path component: ${errorMessage(error)}. Correct the malformed caller input before retrying workflow amend-prepare.`, {
       plan_id: id,
     });
   }
@@ -5018,14 +5018,14 @@ function readPlanFileCorrection(
   if (addressed.length === 0) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} is not a row of workflow ${context.snapshot.id} \u2014 a correction repairs an existing row's pointer and never creates one`,
+      `plan ${id} is not a row of workflow ${context.snapshot.id} \u2014 a correction repairs an existing row's pointer and never creates one. Inspect the addressed row with mstar plan show --plan ${id}.`,
       { plan_id: id, workflow_id: context.snapshot.id },
     );
   }
   if (addressed.length > 1) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} is addressed by ${addressed.length} rows of workflow ${context.snapshot.id} \u2014 the corrected row would be ambiguous`,
+      `plan ${id} is addressed by ${addressed.length} rows of workflow ${context.snapshot.id} \u2014 the corrected row would be ambiguous. Inspect the workflow with mstar status validate.`,
       { plan_id: id, workflow_id: context.snapshot.id, rows: addressed.length },
     );
   }
@@ -5037,7 +5037,7 @@ function readPlanFileCorrection(
   if (!isNonEmptyString(previous)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} records no readable file pointer \u2014 a correction cannot prove which pointer it replaces`,
+      `plan ${id} records no readable file pointer \u2014 a correction cannot prove which pointer it replaces. Inspect the addressed row with mstar plan show --plan ${id}.`,
       { plan_id: id, actual: previous ?? null },
     );
   }
@@ -5045,7 +5045,7 @@ function readPlanFileCorrection(
   if (typeof expectedFile !== "string") {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} correction requires expectedFile as a string \u2014 got ${JSON.stringify(expectedFile ?? null)}`,
+      `plan ${id} correction requires expectedFile as a string \u2014 got ${JSON.stringify(expectedFile ?? null)}. Correct the malformed caller input before retrying workflow amend-prepare.`,
       { plan_id: id, actual: expectedFile ?? null },
     );
   }
@@ -5053,7 +5053,7 @@ function readPlanFileCorrection(
   // Shape first, like the append path: the shared resolver names the pointer
   // form with `path.isAbsolute(file)` before its own type check.
   if (typeof declared !== "string") {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a corrected file path as a string`, {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${id} requires a corrected file path as a string. Correct the malformed caller input before retrying workflow amend-prepare.`, {
       plan_id: id,
       actual: declared ?? null,
     });
@@ -5094,7 +5094,7 @@ function readPlanFileCorrection(
   if (!expectedIdentifiesPlan) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} expectedFile ${JSON.stringify(expectedFile)} does not identify this plan's own file ${planPath} \u2014 a correction repairs a malformed pointer of the same plan, it never rebinds a row, and a replay must still name this plan's document`,
+      `plan ${id} expectedFile ${JSON.stringify(expectedFile)} does not identify this plan's own file ${planPath} \u2014 a correction repairs a malformed pointer of the same plan, it never rebinds a row, and a replay must still name this plan's document. Inspect the row with mstar plan show --plan ${id}.`,
       { plan_id: id, actual: expectedFile, expected: planPath },
     );
   }
@@ -5105,7 +5105,7 @@ function readPlanFileCorrection(
   if (previous !== expectedFile) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot and review the pointer again`,
+      `plan ${id} row holds file ${JSON.stringify(previous)}, not the expectedFile ${JSON.stringify(expectedFile)} this correction was reviewed against \u2014 re-read the snapshot with mstar plan show --plan ${id} and review the pointer again`,
       { plan_id: id, expected: expectedFile, actual: previous },
     );
   }
