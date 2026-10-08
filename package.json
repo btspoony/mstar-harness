@@ -32,7 +32,9 @@
     "validation:standalone": "bun run scripts/standalone-smoke.ts",
     "validation:drift": "bun run scripts/drift-lint.ts",
     "lint:ascii-literals": "bun scripts/lint-ascii-literals.ts",
-    "lint:hash-gates": "bun scripts/lint-hash-gates.ts"
+    "lint:hash-gates": "bun scripts/lint-hash-gates.ts",
+    "lint:refusal-quality": "bun scripts/lint-refusal-quality.ts",
+    "lint:help-reachability": "bun scripts/lint-help-reachability.ts"
   },
   "packageManager": "bun@1.4.0",
   "dependencies": {
@@ -45,6 +47,7 @@
     "@types/mdast": "^4.0.0",
     "@types/node": "^25.6.0",
     "github-slugger": "^2.0.0",
+    "typescript": "^5.9.3",
     "hast-util-from-html": "^2.0.3",
     "mdast-util-from-markdown": "^2.0.3",
     "mdast-util-gfm": "^3.1.0",

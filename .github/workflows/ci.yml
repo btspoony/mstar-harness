@@ -1015,7 +1015,7 @@ jobs:
         run: bun run cli:build
 
       - name: Test scripts
-        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/prepare-release.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/lint-overdesign-backtest.test.ts scripts/prepare-release.test.ts
 
       # ZCode write-gate source tests: spawn the TS entry with synthetic
       # PreToolUse stdin fixtures (engine dist is built above).
@@ -1027,6 +1027,17 @@ jobs:
       # Scans packages/{engine,cli}/src + hooks/src only (no build needed).
       - name: Lint ASCII literals (src code)
         run: bun run lint:ascii-literals
+      # Hash gates has 49 pre-existing frozen-rule violations on main — tracked
+      # as #424; flip to blocking when it closes (triage → fix → main clean).
+      - name: Lint hash gates
+        continue-on-error: true
+        run: bun run lint:hash-gates
+
+      - name: Lint refusal quality
+        run: bun run lint:refusal-quality
+
+      - name: Lint help reachability
+        run: bun run lint:help-reachability
 
   pack-consumers:
     runs-on: ubuntu-latest
