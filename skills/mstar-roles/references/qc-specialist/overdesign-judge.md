@@ -20,24 +20,24 @@ Use diff/read/grep and already supplied L1 evidence only. Do not run lints, test
 
 Preserve these source rules rather than inventing stricter ones:
 
-- [#340, two-path rule](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5934855290):
+- #340, two-path rule:
   > **Known violation code → a designed resolution** (normalize / re-pin / repair) — never a refusal.
   > **Unknown / unresolvable → archive the exact bytes, record the exclusion, complete the operation** — never a dead end.
   > Every refusal names its actual cause and an operator-executable recovery; generic catch-alls and "rerun" advices are defects.
   > A validation gate may not refuse a state its own documented contract calls importable.
-- [#341, four checkable classes](https://github.com/btspoony/mstar-harness/issues/341#issuecomment-5953850747):
+- #341, four checkable classes:
   > content hash / canonical-serialized equality may RECORD, never GATE or ASSERT — replay exemption only.
   > every `refuse`/`conflict`/`throw` carries (a) a named cause code, (b) a recovery referencing a command/flag that **exists**, (c) a repro test.
   > a parameter may be `required` only with recorded justification; everything else is optional with a safe default or context derivation. Omission errors must name the missing parameter and how to supply it.
   > a verb, flag, or recovery path absent from `--help` or refusal text is treated as absent. Lint fails any recovery string or feature that is not reachable from the help surface.
-- [#340, ordering invariant](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5934855290):
+- #340, ordering invariant:
   > **NEW (this session): any index-by-index comparison of an enumerated filesystem-derived set must be preceded by a canonical sort (or use keyed maps), with a regression that reorders enumeration and proves the identity/hash is unchanged.**
-- [#365, fault tolerance and discoverability](https://github.com/btspoony/mstar-harness/issues/365):
+- #365, fault tolerance and discoverability:
   > All document and content mutations in this system are performed by agents.
   > **Edits are revisable.** Any mutation can be corrected through ordinary public operations — no one-way doors, no states that require hidden or manual repair.
   > A capability that exists but is not discoverable does not exist.
 
-The #341 prepare-seal owner correction takes precedence over repairing that prohibited gate: deletion of the byte-hash refusal, not a reseal escape. Historical counts and examples below are source evidence, not current-tree findings or numeric thresholds. Do not revive protocols deleted by the [#340 program closure](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5982147502).
+The #341 prepare-seal owner correction takes precedence over repairing that prohibited gate: deletion of the byte-hash refusal, not a reseal escape. Historical counts and examples below are source evidence, not current-tree findings or numeric thresholds. Do not revive protocols deleted by the #340 program closure.
 
 ## Default operating-model premise (this repository)
 
@@ -54,7 +54,7 @@ Unless the reviewing Assignment explicitly supplies a different premise, apply t
 
 ### OD-J-MODEL — Gate necessity versus the declared operating model
 
-Frozen anchor: [#340 epic lesson](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5934855290):
+Frozen anchor: #340 epic lesson:
 
 > The cleanup should start by classifying every gate against the owner's actual operating model (local files, everything stopped, process data disposable), not by fixing gates one at a time.
 
@@ -64,7 +64,7 @@ Evidence must pair the exact premise with the gate's protected hazard and refusa
 
 ### OD-J-CONTRACT — Gate versus contract semantic agreement
 
-Frozen anchor: [#340 rule and instance 1](https://github.com/btspoony/mstar-harness/issues/340):
+Frozen anchor: #340 rule and instance 1:
 
 > A validation gate may not refuse a state its own documented contract calls importable.
 
@@ -78,7 +78,7 @@ Suggest deletion of a contradictory predicate or a designed resolution consisten
 
 ### OD-J-SELF-OUTPUT — Classification of self-written persisted output
 
-Frozen anchor: [#340 throw-site lesson](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5933407399):
+Frozen anchor: #340 throw-site lesson:
 
 > **flag refusals that re-validate the system's own persisted output** (self-written manifests, bindings, envelopes, journals) — those need resolutions or archive-exclusions, not refusals.
 
@@ -90,7 +90,7 @@ Suggest a designed normalization/repair for a known violation; for unknown/unres
 
 ### OD-J-PROTOCOL — Protocol sized for a nonexistent problem
 
-Frozen anchor: [#340 epic lesson](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5934855290):
+Frozen anchor: #340 epic lesson:
 
 > The failure was not 16 independent bugs. It was **one architectural premise** — "protect a live production migration" — applied to a **local, stopped, disposable workspace update**, generating ~485 fail-closed gates of which ~440 were correct-for-production and wrong-for-here.
 
@@ -133,19 +133,19 @@ These IDs identify judgment findings; they do not replace the mechanical lints' 
 
 - **rule-id:** OD-M-HASH
 - **severity:** Critical (blocking)
-- **evidence:** [#341 owner correction, comment 2](https://github.com/btspoony/mstar-harness/issues/341#issuecomment-5953290104) identifies `plan prepare` pinning Assignment/plan SHA-256, then recomputing them on every plan-row change and refusing with `coordination.assignment-stale`. Expected: hashes record reviewed bytes, never gate routine edits. Observed historically: document-byte drift refused the operation. This is the C-class external-document-versus-own-pin pattern; L1 hash-gate enforcement catches it, and L2 must not reinterpret it as mere missing recovery.
+- **evidence:** #341 owner correction, comment 2 identifies `plan prepare` pinning Assignment/plan SHA-256, then recomputing them on every plan-row change and refusing with `coordination.assignment-stale`. Expected: hashes record reviewed bytes, never gate routine edits. Observed historically: document-byte drift refused the operation. This is the C-class external-document-versus-own-pin pattern; L1 hash-gate enforcement catches it, and L2 must not reinterpret it as mere missing recovery.
 - **disposition suggestion:** Designed resolution: delete the `assignment_sha256` / `plan_sha256` refusal predicates (`assertPreparedFresh` and bind-adoption plan comparison); preserve record-only `assignment_path`, `prepared_by`, `prepared_at`, and apply necessary QA/cleanup/scope constraints by field values. Archive-and-complete: inapplicable to a prohibited comparison, not unresolvable material. Do not add a reseal route to repair the gate. This disposition is tightly bound to the owner correction, not the earlier #340 reseal suggestion.
 
 ### 2. Production-cutover protocol on a stopped local workspace — pure L2
 
 - **rule-id:** OD-J-PROTOCOL
 - **severity:** Suggestion (advisory; issue capture)
-- **evidence:** Assignment premise for this example: `local, stopped, disposable workspace update`. [#340 epic lesson](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5934855290) describes attestations, coverage closure, canonical digests, evidence barriers, and staged graphs protecting concurrent mutation despite everything being stopped; ~440 of ~485 gates were correct-for-production and wrong-for-here. Expected: protocol protects actual in-model hazards. Observed historically: live-production assumptions drove a local static update. AST can locate the gates but cannot decide whether that operating model makes the protocol necessary.
+- **evidence:** Assignment premise for this example: `local, stopped, disposable workspace update`. #340 epic lesson describes attestations, coverage closure, canonical digests, evidence barriers, and staged graphs protecting concurrent mutation despite everything being stopped; ~440 of ~485 gates were correct-for-production and wrong-for-here. Expected: protocol protects actual in-model hazards. Observed historically: live-production assumptions drove a local static update. AST can locate the gates but cannot decide whether that operating model makes the protocol necessary.
 - **disposition suggestion:** Designed resolution: remove the unnecessary cutover machinery in favor of the source's minimal operation: **stop → copy the dir aside (or discard it) → move the data → point at the new store → done.** Archive-and-complete: preserve exact unresolvable process-data bytes, durably record exclusions, and complete the static import when the contract permits it. Do not demand another attestation to resolve this advisory finding. A live/non-disposable Assignment would require a different judgment, not reuse of this conclusion.
 
 ### 3. Generic `store.upgrade-blocked` catch-all — blocking despite syntactic fields
 
 - **rule-id:** OD-CATCH-ALL
 - **severity:** Critical (blocking)
-- **evidence:** [#340 instance 4](https://github.com/btspoony/mstar-harness/issues/340) records: “One generic `store.upgrade-blocked` refusal masked every specific cause, with a "rerun" recovery that refused identically.” Expected: actual cause plus operator-executable recovery. Observed historically: identifiable causes collapsed into one message and an identical-failure retry. Even if a mechanical candidate has a literal code and recovery string, the judge confirms masking by tracing the specific cause into the catch-all and the retry back to the same rejection.
+- **evidence:** #340 instance 4 records: “One generic `store.upgrade-blocked` refusal masked every specific cause, with a "rerun" recovery that refused identically.” Expected: actual cause plus operator-executable recovery. Observed historically: identifiable causes collapsed into one message and an identical-failure retry. Even if a mechanical candidate has a literal code and recovery string, the judge confirms masking by tracing the specific cause into the catch-all and the retry back to the same rejection.
 - **disposition suggestion:** Designed resolution: preserve the structured specific cause and provide its supported, discoverable resolution instead of generic rerun advice. Archive-and-complete: for truly unknown/unresolvable import material, preserve exact bytes, record its exclusion, and complete; not for all errors indiscriminately. Do not swallow errors, relabel the catch-all, or claim the operation succeeded without its required work.
