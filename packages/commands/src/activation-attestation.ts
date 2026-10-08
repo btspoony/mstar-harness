@@ -20,7 +20,7 @@ export const activationAttestationDocumentConstraints: readonly Readonly<{ path:
 ];
 /**
  * Structural document contract for the engine-owned validator. Semantic rules
- * which cannot be represented by this transport schema are published below.
+ * which cannot be represented structurally are also published as descriptions.
  */
 export const activationAttestationDocumentSchema = z.object({
   version: z.literal(ACTIVATION_PROTOCOL_VERSION),
