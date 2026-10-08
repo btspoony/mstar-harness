@@ -4075,7 +4075,7 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
   if (session.role !== "coordinator") {
     throw new CoordinationError(
       "coordination.session-role",
-      `workflow Prepare verbs require a coordinator session, not ${session.role}`,
+      `workflow Prepare verbs require a coordinator session, not ${session.role}. Inspect authority with mstar status validate; for a valid existing coordinator envelope resume with mstar plan bind --resume <session-file>.`,
       { actual: session.role },
     );
   }
@@ -4103,7 +4103,7 @@ function prepareWorkflowScope(sessionPath: string, cwd: string, anchorSession?: 
 function readPrepareSnapshot(snapshotPath: string): { snapshot: WorkflowSnapshot; version: string; phaseDerived: boolean } {
   const bytes = readArtifactBytes(snapshotPath);
   if (bytes === undefined) {
-    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}`, {
+    throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot not found: ${snapshotPath}. Inspect authority with mstar status validate; for a valid existing coordinator envelope resume with mstar plan bind --resume <session-file>.`, {
       path: snapshotPath,
     });
   }
@@ -4150,7 +4150,7 @@ function prepareCompassDeclaration(
   if (!isNonEmptyString(value)) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${workflowId} compass ${path} declares a malformed ${key} \u2014 every declaration must be a non-empty string`,
+      `workflow ${workflowId} compass ${path} declares a malformed ${key} \u2014 every declaration must be a non-empty string. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: workflowId, path, field: key, actual: value },
     );
   }
@@ -4175,7 +4175,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
   if (!isNonEmptyString(ref)) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${snapshot.id} declares no usable compass_ref \u2014 the amendment requires the reviewed iteration compass`,
+      `workflow ${snapshot.id} declares no usable compass_ref \u2014 the amendment requires the reviewed iteration compass. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, actual: ref ?? null },
     );
   }
@@ -4193,7 +4193,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
     if (!isWithin(root, resolved)) {
       throw prepareAmendmentRefusal(
         "compass-mismatch",
-        `workflow ${snapshot.id} compass_ref resolves outside the harness root ${root}`,
+        `workflow ${snapshot.id} compass_ref resolves outside the harness root ${root}. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
         { workflow_id: snapshot.id, path: resolved, expected: "a compass document inside the harness root" },
       );
     }
@@ -4204,7 +4204,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
     if (!isWithin(root, path)) {
       throw prepareAmendmentRefusal(
         "compass-mismatch",
-        `workflow ${snapshot.id} compass_ref ${JSON.stringify(ref)} resolves outside the harness root ${root}`,
+        `workflow ${snapshot.id} compass_ref ${JSON.stringify(ref)} resolves outside the harness root ${root}. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
         { workflow_id: snapshot.id, path, expected: ref },
       );
     }
@@ -4215,7 +4215,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
   } catch (error) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${snapshot.id} compass ${path} is unreadable: ${errorMessage(error)}`,
+      `workflow ${snapshot.id} compass ${path} is unreadable: ${errorMessage(error)}. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, path },
     );
   }
@@ -4225,7 +4225,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
   } catch (error) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${snapshot.id} compass ${path} has no parsable frontmatter: ${errorMessage(error)}`,
+      `workflow ${snapshot.id} compass ${path} has no parsable frontmatter: ${errorMessage(error)}. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, path },
     );
   }
@@ -4237,14 +4237,14 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
   if (!isNonEmptyString(iterationId)) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${snapshot.id} compass ${path} declares no iteration_id \u2014 a lifecycle amends only its own compass`,
+      `workflow ${snapshot.id} compass ${path} declares no iteration_id \u2014 a lifecycle amends only its own compass. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, path, actual: iterationId ?? null },
     );
   }
   if (iterationId !== snapshot.id) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `compass ${path} declares iteration_id ${iterationId}, not workflow ${snapshot.id} \u2014 a lifecycle amends only its own compass`,
+      `compass ${path} declares iteration_id ${iterationId}, not workflow ${snapshot.id} \u2014 a lifecycle amends only its own compass. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, expected: snapshot.id, actual: iterationId },
     );
   }
@@ -4252,7 +4252,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
   if (!Array.isArray(declaredPlans) || declaredPlans.length === 0) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${snapshot.id} compass ${path} declares no plan ids in its frontmatter \u2014 the amendment cannot verify the approved plan set`,
+      `workflow ${snapshot.id} compass ${path} declares no plan ids in its frontmatter \u2014 the amendment cannot verify the approved plan set. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, path, actual: declaredPlans ?? null },
     );
   }
@@ -4260,7 +4260,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
   if (malformed.length > 0) {
     throw prepareAmendmentRefusal(
       "compass-mismatch",
-      `workflow ${snapshot.id} compass ${path} declares ${malformed.length} malformed plan id(s) \u2014 every plans entry must be a non-empty string`,
+      `workflow ${snapshot.id} compass ${path} declares ${malformed.length} malformed plan id(s) \u2014 every plans entry must be a non-empty string. Correct the reviewed iteration compass at the reported path and inspect the workflow with mstar status validate.`,
       { workflow_id: snapshot.id, path, plans: declaredPlans },
     );
   }
