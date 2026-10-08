@@ -113,4 +113,24 @@ describe("help reachability lint", () => {
     const findings = scanRecoveryText(`refusalEnvelope({ code: "NO_STATE", message: "Cannot continue", recovery: "" });`, "packages/engine/src/fixture.ts", grammar);
     expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
   });
+
+  test("checks both direct conditional recovery values", () => {
+    const source = `refusalEnvelope({ code: "NO_STATE", message: "Cannot continue", recovery: enabled ? "Run mstar nonexistent" : "Run mstar status validate" });`;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("rejects missing required options and values but accepts the complete option", () => {
+    const surface = extractCliGrammar();
+    for (const recovery of ["Run mstar lease verify-integration", "Run mstar lease verify-integration --workflow"]) {
+      const finding = scanRecoveryText(envelope(recovery), "packages/engine/src/fixture.ts", surface);
+      expect(finding.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+      expect(finding[0]?.reason).toMatch(/missing required option/i);
+    }
+    expect(scanRecoveryText(envelope("Run mstar lease verify-integration --workflow wf-1"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
+  });
+
+  test("validates flags after prose connectors rather than truncating them", () => {
+    const surface = extractCliGrammar();
+    expect(scanRecoveryText(envelope("Run mstar status validate and then --xyz"), "packages/engine/src/fixture.ts", surface).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
 });

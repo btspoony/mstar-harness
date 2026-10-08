@@ -9,6 +9,12 @@ import { getCommandSchemas } from "../packages/commands/src/families/schema";
 export type RefusalClassification = "missing-cause-code" | "missing-recovery" | "unreachable-recovery" | "capability-unreachable" | "allowlisted";
 export interface RefusalFinding { file: string; line: number; column: number; classification: RefusalClassification; reason: string; snippet: string; }
 export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; expectedCount?: number; }
+export interface CliGrammar {
+  verbs: Set<string>;
+  flagsByVerb: Map<string, Set<string>>;
+  positionalsByVerb?: Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>;
+  optionsByVerb?: Map<string, readonly { flags: readonly string[]; required: boolean; takesValue: boolean }[]>;
+}
 
 
 export function normalizeSnippet(snippet: string): string { return snippet.trim().replace(/\s+/g, " "); }
@@ -21,43 +27,85 @@ export function extractCliGrammar(): CliGrammar {
   const verbs = new Set<string>();
   const flagsByVerb = new Map<string, Set<string>>();
   const positionalsByVerb = new Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>();
+  const optionsByVerb = new Map<string, readonly { flags: readonly string[]; required: boolean; takesValue: boolean }[]>();
   for (const definition of definitions) {
     const verb = definition.cli.path.join(" ");
     verbs.add(verb);
     const flags = flagsByVerb.get(verb) ?? new Set<string>();
-    for (const option of definition.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter(Boolean)) flags.add(flag);
+    for (const option of definition.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter((token) => /^--?/.test(token))) flags.add(flag);
     flagsByVerb.set(verb, flags);
     positionalsByVerb.set(verb, definition.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
+    optionsByVerb.set(verb, definition.cli.options.map((option) => ({
+      flags: option.flags.match(/--?[A-Za-z][A-Za-z0-9-]*/g) ?? [],
+      required: option.required,
+      takesValue: /(?:<[^>]+>|\[[^\]]+\])/.test(option.flags),
+    })));
   }
-  // Schema descriptors are the authoritative companion surface for options and positionals.
   for (const schema of schemas) {
     const verb = schema.cli.path.join(" ");
     verbs.add(verb);
     const flags = flagsByVerb.get(verb) ?? new Set<string>();
-    for (const option of schema.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter(Boolean)) flags.add(flag);
+    for (const option of schema.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter((token) => /^--?/.test(token))) flags.add(flag);
     flagsByVerb.set(verb, flags);
     positionalsByVerb.set(verb, schema.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
+    optionsByVerb.set(verb, schema.cli.options.map((option) => ({
+      flags: option.flags.match(/--?[A-Za-z][A-Za-z0-9-]*/g) ?? [],
+      required: option.required,
+      takesValue: /(?:<[^>]+>|\[[^\]]+\])/.test(option.flags),
+    })));
   }
-  for (const flags of flagsByVerb.values()) flags.add("--help");
-  return { verbs, flagsByVerb, positionalsByVerb };
+  for (const [verb, flags] of flagsByVerb) {
+    flags.add("--help");
+    optionsByVerb.set(verb, [...(optionsByVerb.get(verb) ?? []), { flags: ["--help"], required: false, takesValue: false }]);
+  }
+  return { verbs, flagsByVerb, positionalsByVerb, optionsByVerb };
 }
 
-export function objectAlternatives(object: ts.ObjectLiteralExpression): Map<string, ts.Expression>[] {
-  let alternatives = [new Map<string, ts.Expression>()];
-  const spreadAlternatives = (expression: ts.Expression): Map<string, ts.Expression>[] => {
-    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) return spreadAlternatives(expression.expression);
-    if (ts.isObjectLiteralExpression(expression)) return objectAlternatives(expression);
-    if (ts.isConditionalExpression(expression)) return [...spreadAlternatives(expression.whenTrue), ...spreadAlternatives(expression.whenFalse)];
-    return [new Map<string, ts.Expression>()];
+export interface ObjectAlternative { fields: Map<string, ts.Expression>; conditions: Map<string, boolean>; }
+export function objectAlternatives(object: ts.ObjectLiteralExpression): ObjectAlternative[] {
+  const mergeConditions = (left: Map<string, boolean>, right: Map<string, boolean>): Map<string, boolean> | undefined => {
+    const merged = new Map(left);
+    for (const [key, value] of right) {
+      if (merged.has(key) && merged.get(key) !== value) return undefined;
+      merged.set(key, value);
+    }
+    return merged;
   };
+  const values = (expression: ts.Expression, conditions = new Map<string, boolean>()): { expression: ts.Expression; conditions: Map<string, boolean> }[] => {
+    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isSatisfiesExpression(expression)) return values(expression.expression, conditions);
+    if (ts.isConditionalExpression(expression)) {
+      const key = expression.condition.getText();
+      const yes = mergeConditions(conditions, new Map([[key, true]]));
+      const no = mergeConditions(conditions, new Map([[key, false]]));
+      return [...(yes ? values(expression.whenTrue, yes) : []), ...(no ? values(expression.whenFalse, no) : [])];
+    }
+    return [{ expression, conditions }];
+  };
+  const spreadAlternatives = (expression: ts.Expression): ObjectAlternative[] =>
+    values(expression).flatMap(({ expression: branch, conditions }) => {
+      if (!ts.isObjectLiteralExpression(branch)) return [{ fields: new Map(), conditions }];
+      return objectAlternatives(branch).flatMap((alternative) => {
+        const merged = mergeConditions(conditions, alternative.conditions);
+        return merged ? [{ fields: alternative.fields, conditions: merged }] : [];
+      });
+    });
+  let alternatives: ObjectAlternative[] = [{ fields: new Map(), conditions: new Map() }];
   for (const property of object.properties) {
     if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
-      for (const fields of alternatives) fields.set(property.name.text, property.initializer);
+      const name = property.name.text;
+      const initializer = property.initializer;
+      alternatives = alternatives.flatMap((base) => values(initializer).flatMap(({ expression, conditions }) => {
+        const merged = mergeConditions(base.conditions, conditions);
+        return merged ? [{ fields: new Map([...base.fields, [name, expression]]), conditions: merged }] : [];
+      }));
     } else if (ts.isShorthandPropertyAssignment(property)) {
-      for (const fields of alternatives) fields.set(property.name.text, property.name);
+      for (const alternative of alternatives) alternative.fields.set(property.name.text, property.name);
     } else if (ts.isSpreadAssignment(property)) {
       const choices = spreadAlternatives(property.expression);
-      alternatives = alternatives.flatMap((base) => choices.map((choice) => new Map([...base, ...choice])));
+      alternatives = alternatives.flatMap((base) => choices.flatMap((choice) => {
+        const merged = mergeConditions(base.conditions, choice.conditions);
+        return merged ? [{ fields: new Map([...base.fields, ...choice.fields]), conditions: merged }] : [];
+      }));
     }
   }
   return alternatives;
@@ -65,32 +113,59 @@ export function objectAlternatives(object: ts.ObjectLiteralExpression): Map<stri
 function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
 }
-export function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
+export function recoveryFailure(recovery: string, grammar: CliGrammar): string | undefined {
   const stopClause = (text: string): string => {
     const boundary = text.search(/[.;,!?\uFF0C]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b/i);
     return boundary < 0 ? text : text.slice(0, boundary);
   };
-  const commandIsReachable = (text: string): boolean => {
+  const commandFailure = (text: string): string | undefined => {
     const clause = stopClause(text.trim().replace(/^mstar\s+/i, "")).trim();
-    const tokens = clause.split(/\s+/).filter(Boolean);
     const pathTokens: string[] = [];
-    for (const token of tokens) {
+    for (const token of clause.split(/\s+/).filter(Boolean)) {
       if (token.startsWith("-") || /^(?:to|for|with|and|or|then|instead|otherwise|after|before|via)$/i.test(token)) break;
       pathTokens.push(token.replace(/[,.)]+$/, ""));
     }
+    let verb: string | undefined;
+    let args: string[] = [];
     for (let end = pathTokens.length; end > 0; end -= 1) {
-      const verb = pathTokens.slice(0, end).join(" ");
-      if (!grammar.verbs.has(verb)) continue;
-      const args = pathTokens.slice(end);
-      const positionals = grammar.positionalsByVerb?.get(verb) ?? [];
-      const maxArgs = positionals.at(-1)?.variadic ? Number.POSITIVE_INFINITY : positionals.length;
-      const requiredCount = positionals.filter(({ required }) => required).length;
-      if (args.length < requiredCount || args.length > maxArgs) continue;
-      const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
-      const mentioned = [...clause.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
-      if (mentioned.every((flag) => flags.has(flag))) return true;
+      const candidate = pathTokens.slice(0, end).join(" ");
+      if (!grammar.verbs.has(candidate)) continue;
+      verb = candidate;
+      args = pathTokens.slice(end);
+      break;
     }
-    return false;
+    if (!verb) return "recovery command path is absent from the help grammar";
+    const positionals = grammar.positionalsByVerb?.get(verb) ?? [];
+    const requiredPositionals = positionals.filter(({ required }) => required).length;
+    const maxArgs = positionals.at(-1)?.variadic ? Number.POSITIVE_INFINITY : positionals.length;
+    if (args.length < requiredPositionals) return `recovery command is missing a required positional argument for ${verb}`;
+    if (args.length > maxArgs) return `recovery command has too many positional arguments for ${verb}`;
+
+    const continuation = [...text.matchAll(/\b(?:run|use|supply|provide|resume|restore|recover|retry|invoke)\s+(?:mstar\s+)?[A-Za-z][A-Za-z0-9.-]*/gi)]
+      .find((match) => (match.index ?? 0) > 0);
+    const optionText = continuation ? text.slice(0, continuation.index) : text;
+    const options = grammar.optionsByVerb?.get(verb) ?? [];
+    const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
+    const supplied = new Set<string>();
+    const mentions = [...optionText.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*(?:=[^\s,;.)!?]+)?)/g)];
+    for (const mention of mentions) {
+      const token = mention[1]!;
+      const flag = token.split("=", 1)[0]!;
+      if (!flags.has(flag)) return `recovery command references unsupported option ${flag}`;
+      supplied.add(flag);
+      const option = options.find(({ flags: aliases }) => aliases.includes(flag));
+      const equalsValue = token.includes("=") && token.slice(token.indexOf("=") + 1).length > 0;
+      if (option?.takesValue && !equalsValue) {
+        const flagPosition = (mention.index ?? 0) + mention[0].indexOf(token);
+        const afterFlag = optionText.slice(flagPosition + token.length).trimStart();
+        const next = afterFlag.split(/\s+/, 1)[0];
+        if (!next || next.startsWith("-")) return `${option.required ? "missing required option" : "option"} value for ${flag}`;
+      }
+    }
+    for (const option of options.filter(({ required }) => required)) {
+      if (!option.flags.some((flag) => supplied.has(flag))) return `recovery command is missing required option ${option.flags.join("/")}`;
+    }
+    return undefined;
   };
   const candidates: string[] = [];
   const references = [...recovery.matchAll(/\bmstar\s+([A-Za-z][A-Za-z0-9.-]*)/gi)];
@@ -109,7 +184,15 @@ export function recoveryIsReachable(recovery: string, grammar: CliGrammar): bool
     const hasFlag = /(?:^|\s)--?[A-Za-z]/.test(phrase);
     if (explicit || firstWords.has(first ?? "") || action[0].trim().toLowerCase() === "run" || hasFlag) candidates.push(phrase);
   }
-  return candidates.length > 0 && candidates.every(commandIsReachable);
+  if (candidates.length === 0) return "recovery text names no CLI operation (manual-escape recovery)";
+  for (const candidate of candidates) {
+    const failure = commandFailure(candidate);
+    if (failure !== undefined) return failure;
+  }
+  return undefined;
+}
+export function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
+  return recoveryFailure(recovery, grammar) === undefined;
 }
 /**
  * Bounded structured-channel scan: validation violation() results, arbitrary helper calls,
@@ -178,14 +261,14 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
         const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
         const add = (classification: RefusalClassification, reason: string) =>
           findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
-        if (variants.some((fields) => !isCauseCode(fields.get("code")))) {
+        if (variants.some(({ fields }) => !isCauseCode(fields.get("code")))) {
           add("missing-cause-code", "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.");
         }
-        const recoveryMissing = variants.some((fields) => {
+        const recoveryMissing = variants.some(({ fields }) => {
           const recovery = fields.get("recovery");
           const status = codeValue(fields.get("status"));
           const text = codeValue(recovery);
-          return status !== "usage" && (!recovery || (text !== undefined && text.trim() === ""));
+          return status !== "usage" && (!recovery || text === undefined || text.trim() === "");
         });
         if (recoveryMissing) add("missing-recovery", "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.");
         return visitChildren(node);

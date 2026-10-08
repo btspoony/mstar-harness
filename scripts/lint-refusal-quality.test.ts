@@ -125,4 +125,22 @@ describe("refusal quality scanner", () => {
       }])).toThrow(/expectedCount must be a positive integer/);
     }
   });
+
+  test("flags empty recovery in a direct conditional branch", () => {
+    const findings = scanSource(`
+      refusalEnvelope({ code: "valid.code", status: "refused", recovery: enabled ? "Run mstar status validate" : "" });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery"]);
+  });
+
+  test("correlates status and recovery alternatives with the same condition", () => {
+    const findings = scanSource(`
+      refusalEnvelope({
+        code: "valid.code",
+        status: usage ? "usage" : "refused",
+        recovery: usage ? undefined : "Run mstar status validate",
+      });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings).toEqual([]);
+  });
 });

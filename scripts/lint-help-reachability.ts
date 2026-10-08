@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript";
-import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, objectAlternatives, recoveryIsReachable, type RefusalFinding } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, objectAlternatives, recoveryFailure, type AllowlistEntry, type CliGrammar, type RefusalFinding } from "./lint-refusal-quality";
 
 export type HelpReachabilityFinding = RefusalFinding;
 
@@ -40,12 +40,8 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
   };
   const findings: HelpReachabilityFinding[] = [];
   const inspect = (node: ts.Node, text: string): void => {
-    if (recoveryIsReachable(text, grammar)) return;
-    const hasOperationReference = /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) || /--[a-z][a-z0-9-]*/i.test(text);
-    const reason = hasOperationReference
-      ? "recovery text references a verb, flag, or required argument that is missing from the help grammar"
-      : "recovery text names no CLI operation (manual-escape recovery)";
-    findings.push(makeFinding(source, file, node, reason, node.getText(source)));
+    const failure = recoveryFailure(text, grammar);
+    if (failure !== undefined) findings.push(makeFinding(source, file, node, failure, node.getText(source)));
   };
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(source).split(".").at(-1) === "CoordinationError") {
@@ -58,23 +54,14 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
         if (text !== undefined) inspect(node, text);
       } else if (callee === "refusalEnvelope" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
         const alternatives = objectAlternatives(node.arguments[0]);
-        if (alternatives.some((fields) => {
+        const failures = alternatives.flatMap(({ fields }) => {
           const recovery = fields.get("recovery");
-          if (!recovery) return false;
           const text = value(recovery);
-          return text !== undefined && !recoveryIsReachable(text, grammar);
-        })) {
-          const fieldTexts = alternatives.flatMap((fields) => {
-            const recovery = fields.get("recovery");
-            const text = value(recovery);
-            return text === undefined ? [] : [text];
-          });
-          const noOperation = fieldTexts.some((text) => !/\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !/--[a-z][a-z0-9-]*/i.test(text));
-          const reason = noOperation
-            ? "recovery text names no CLI operation (manual-escape recovery)"
-            : "recovery text references a verb, flag, or required argument that is missing from the help grammar";
-          findings.push(makeFinding(source, file, node, reason, node.getText(source)));
-        }
+          if (!recovery || text === undefined) return [];
+          const failure = recoveryFailure(text, grammar);
+          return failure === undefined ? [] : [failure];
+        });
+        if (failures.length > 0) findings.push(makeFinding(source, file, node, failures[0]!, node.getText(source)));
       }
     }
     ts.forEachChild(node, visit);
@@ -105,7 +92,7 @@ export function scanDeclaredCapabilities(sourceText: string, file: string, gramm
           if (!flagsProperty || !ts.isPropertyAssignment(flagsProperty)) continue;
           const flagsText = literalText(flagsProperty.initializer as ts.Expression);
           if (flagsText === null) continue;
-          for (const flag of flagsText.split(/[ ,|]+/).filter(Boolean)) if (!(grammar.flagsByVerb.get(verb)?.has(flag) ?? false)) findings.push(makeFinding(source, file, flagsProperty.initializer, `declared flag “${flag}” for “${verb}” is absent from the help grammar`, flagsText));
+          for (const flag of flagsText.match(/--?[A-Za-z][A-Za-z0-9-]*/g) ?? []) if (!(grammar.flagsByVerb.get(verb)?.has(flag) ?? false)) findings.push(makeFinding(source, file, flagsProperty.initializer, `declared flag “${flag}” for “${verb}” is absent from the help grammar`, flagsText));
         }
       }
     }
@@ -131,7 +118,7 @@ function run(): number {
       const source = readFileSync(path, "utf8");
       findings.push(...scanRecoveryText(source, rel, grammar), ...scanDeclaredCapabilities(source, rel, grammar));
     }
-    let allowlist;
+    let allowlist: AllowlistEntry[];
     try { allowlist = parseAllowlist(readFileSync(resolve(root, "scripts/lint-help-reachability.allowlist.json"), "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") allowlist = []; else throw error; }
     const applied = applyAllowlist(findings, allowlist, root);
