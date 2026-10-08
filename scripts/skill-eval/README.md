@@ -284,6 +284,7 @@ as-is — no assertion was edited after these results:
 
 - Prepared the frozen 30-case corpus, then derived a disposable one-case selection (`bounded-res-mcp-guess-path`) for `selectCases` → `executeManifest` → `buildReport`; the immutable source ref and local CLI identity remain pinned in the run manifest.
 - Source HEAD: `cc9c454d705b88da6716c143f6e3c67461808e8a`.
+- Revision provenance: the run executed at worktree state `cc9c454d` (the reviewed Task 1 base). The tested built CLI contains the #366 correction surface; the Task 1 scenario and adapter remain unchanged in later commits. Commits `b786ae11` (docs) and `417a6ed9` (driver exit propagation) touch neither that correction surface nor the grading path, so this evidence remains valid for HEAD `417a6ed9`. The archived run predates `417a6ed9`; its driver-only exit propagation change does not alter grading semantics.
 - Built CLI: `@mstar-harness/cli 3.11.2` at `packages/cli/dist/mstar-harness.js`; `helpHash` `e01ebf398724fb2c1bbbe32727320b5fbc2d017f753812ea24953225df2ec707`.
 - Guess path: **3 counted calls** (near-miss failed call, `tools/list`, corrected `mstar_schema` call); case grade **pass**, run/report exit **0**.
 - Retained four-lookup negative control was separately executed against the same built CLI: **4 counted calls**, case grade fail as expected; the report also records its scripted final's independent grouped-facts and outcome assertion failures, so it is not represented as a model response.
