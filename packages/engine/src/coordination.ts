@@ -3323,10 +3323,10 @@ function assertReportOnlyCompletionEvidence(context: RowContext, planId: string,
   const policy = context.snapshot.completion_policy;
   const recorded = context.snapshot.delivery?.completion;
   if (!isNonEmptyString(policy) || recorded?.policy !== policy || !isNonEmptyString(recorded.evidence)) {
-    throw new CoordinationError("coordination.invalid-transition", `${what} requires plan ${planId}'s explicitly recorded fulfilment of its registered completion policy; record matching workflow evidence before plan complete`, { plan_id: planId, registered: policy ?? null, recorded: recorded ?? null });
+    throw new CoordinationError("coordination.invalid-transition", `${what} requires plan ${planId}'s explicitly recorded fulfilment of its registered completion policy; record fulfilment matching completion_policy with mstar workflow evidence, then retry mstar plan complete`, { plan_id: planId, registered: policy ?? null, recorded: recorded ?? null });
   }
   const failure = consultDeliveryEvidence(context.snapshot).find((entry) => !entry.ok);
-  if (failure !== undefined) throw new CoordinationError("coordination.invalid-transition", `${what} requires matching report-only completion evidence: ${failure.message}; correct it through workflow evidence`, { plan_id: planId, code: failure.code });
+  if (failure !== undefined) throw new CoordinationError("coordination.invalid-transition", `${what} requires matching report-only completion evidence: ${failure.message}; record fulfilment matching completion_policy with mstar workflow evidence, then retry mstar plan complete`, { plan_id: planId, code: failure.code });
 }
 let completeStandaloneMutateGapForTest: (() => void) | undefined;
 
@@ -3368,13 +3368,13 @@ async function mutateComplete(
           && (existing.integration === undefined
             ? request.integration === undefined
             : existing.integration.base_sha === request.integration?.base_sha && existing.integration.result_sha === request.integration?.result_sha);
-        if (!same) throw new CoordinationError("coordination.completion-frozen", `plan ${scope.planId} already records different completion evidence; read plan show and retry the original completion without replacing it`, { plan_id: scope.planId });
+        if (!same) throw new CoordinationError("coordination.completion-frozen", `plan ${scope.planId} already records different completion evidence; inspect with mstar plan show --plan ${scope.planId} and retry the originally recorded completion; do not replace its evidence`, { plan_id: scope.planId });
         return { field: "coordination.completion", source: "stored plan row" };
       }
       assertMutableRow(context, session, sessionPath, "complete");
       const status = rowStatusOf(context.row);
       if (status !== "InReview" && status !== "InProgress") {
-        throw new CoordinationError("coordination.plan-status", `complete requires ${scope.planId} in InProgress or InReview, not ${status}; record its start or unblock it through plan progress first`, { plan_id: scope.planId, status });
+        throw new CoordinationError("coordination.plan-status", `complete requires ${scope.planId} in InProgress or InReview, not ${status}; use mstar plan progress to record the start or unblock this row, then retry mstar plan complete`, { plan_id: scope.planId, status });
       }
       const metadata = isPlainObject(context.row.metadata) ? context.row.metadata : {};
       const configured = context.coordination?.prepared;
@@ -3401,7 +3401,7 @@ async function mutateComplete(
         assertReportOnlyCompletionEvidence(context, scope.planId, "complete");
       } else {
         if (!isNonEmptyString(metadata.worktree_path) || !isNonEmptyString(metadata.working_branch)) {
-          throw invalidInput("complete requires row source worktree and branch; supply the missing source facts with plan prepare");
+          throw invalidInput("complete requires row source worktree and branch; supply the missing source facts with mstar plan prepare, then retry mstar plan complete");
         }
         worktreePath = canonicalTarget(metadata.worktree_path);
         workingBranch = metadata.working_branch;
@@ -3409,7 +3409,7 @@ async function mutateComplete(
         const source = { source_sha: evidence.source_sha!, review_base: evidence.review_base!, review_head: evidence.review_head! };
         if (route === "standalone-development") {
           const anchors = standaloneDeliveryAnchors(context.snapshot, scope.planId);
-          if (workingBranch !== anchors.sourceBranch) throw new CoordinationError("coordination.scope-mismatch", `complete requires source branch ${anchors.sourceBranch}, not ${workingBranch}; revise source facts through plan prepare`, { plan_id: scope.planId });
+          if (workingBranch !== anchors.sourceBranch) throw new CoordinationError("coordination.scope-mismatch", `complete requires source branch ${anchors.sourceBranch}, not ${workingBranch}; correct the source facts with mstar plan prepare, then retry mstar plan complete`, { plan_id: scope.planId });
         }
         const sourcePath = worktreePath;
         const sourceBranch = workingBranch;
@@ -3418,21 +3418,21 @@ async function mutateComplete(
         witnesses = [captureGitProofWitness(sourcePath)];
         proveGit = sourceProof;
         if (route === "integration") {
-          if (!isPlainObject(request.integration)) throw invalidInput("iteration complete requires integration { base_sha, result_sha } naming the already-performed serial merge");
+          if (!isPlainObject(request.integration)) throw invalidInput("iteration complete requires integration { base_sha, result_sha } naming the already-performed serial merge; inspect anchors with mstar plan show --plan <plan-id>, perform the serial merge externally, then retry mstar plan complete with its actual base/result SHAs");
           assertExactKeys(request.integration, ["base_sha", "result_sha"], "completion integration");
           const baseSha = assertGitObjectId(request.integration.base_sha, "integration.base_sha");
           const resultSha = assertGitObjectId(request.integration.result_sha, "integration.result_sha");
           const anchors = integrationAnchors(context.snapshot, scope.planId);
           const lease = context.snapshot.integration_merge_lease;
           if (lease !== undefined && (lease.holder !== session.session_id || lease.plan_id !== scope.planId || lease.source_branch !== sourceBranch || lease.target_branch !== anchors.targetBranch)) {
-            throw new CoordinationError("coordination.merge-lease-foreign", `integration mutex belongs to ${lease.holder} for plan ${lease.plan_id}; complete that recorded plan's serial merge under its workflow coordinator before retrying this plan`, { plan_id: scope.planId, holder: lease.holder, owner_plan: lease.plan_id });
+            throw new CoordinationError("coordination.merge-lease-foreign", `integration mutex belongs to ${lease.holder} for plan ${lease.plan_id}; inspect the lease and anchors with mstar plan show --plan <plan-id>, complete that recorded plan's serial merge under its workflow coordinator, then retry mstar plan complete`, { plan_id: scope.planId, holder: lease.holder, owner_plan: lease.plan_id });
           }
           const integrationProofCheck = () => {
             sourceProof();
             const checkout = assertIntegrationCheckout(anchors, scope.planId);
             const parents = commitParents(anchors.worktreePath, resultSha);
             if (parents?.length !== 2 || parents[0] !== baseSha || parents[1] !== source.source_sha || !gitIsAncestor(anchors.worktreePath, resultSha, checkout.head)) {
-              throw integrationDiverged(`complete requires result ${resultSha} to be the two-parent merge [${baseSha}, ${source.source_sha}] reachable from ${anchors.targetBranch}; perform or correct the serial merge and retry with its actual result`, { plan_id: scope.planId, parents: parents ?? null, head: checkout.head });
+              throw integrationDiverged(`complete requires result ${resultSha} to be the two-parent merge [${baseSha}, ${source.source_sha}] reachable from ${anchors.targetBranch}; inspect anchors with mstar plan show --plan <plan-id>, perform or correct the serial merge externally, and retry mstar plan complete with its actual base/result SHAs`, { plan_id: scope.planId, parents: parents ?? null, head: checkout.head });
             }
           };
           integrationProofCheck();
@@ -3507,14 +3507,14 @@ export function setFileCloseGapForTest(callback: ((stage: "cleanup") => void) | 
 
 export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<FileWorkflowCloseResult> {
   assertExecutionFileWriteAllowed({ harnessDir: input.harnessRoot });
-  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId must be a non-empty string");
+  if (!isNonEmptyString(input.workflowId)) throw invalidInput("workflowId must be a non-empty string. Select the registered workflow with mstar status validate.");
   safePlanId(input.workflowId, "workflowId");
-  if (!isCloseTimestamp(input.endedAt)) throw invalidInput("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
+  if (!isCloseTimestamp(input.endedAt)) throw invalidInput("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp. Select the registered workflow with mstar status validate.");
   const harnessRoot = resolve(input.harnessRoot);
   const workflowDir = join(resolveWorkflowDir(harnessRoot, { harnessDir: harnessRoot }), input.workflowId);
   const statusPath = join(harnessRoot, "status.json");
   let snapshot = readWorkflowSnapshot(workflowDir).snapshot;
-  if (snapshot.id !== input.workflowId) throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot does not name ${input.workflowId}; select the registered workflow with status validate`);
+  if (snapshot.id !== input.workflowId) throw new CoordinationError("coordination.workflow-not-found", `workflow snapshot does not name ${input.workflowId}; select the registered workflow with mstar status validate`);
   const alreadyTerminal = isTerminalSnapshot(snapshot);
   if (!alreadyTerminal) {
     for (const row of snapshot.plans) {
@@ -3522,7 +3522,7 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
         throw missingDecision({
           planId: String(row.id), what: "close", component: "plan-completion",
           field: "coordination.completion", source: "stored plan row",
-          message: `close requires every owned row Done; plan ${row.id} is ${rowStatusOf(row)}. Complete it through plan complete with approved QC/QA and its delivery proof, then retry close`,
+          message: `close requires every owned row Done; plan ${row.id} is ${rowStatusOf(row)}. Complete it with mstar plan complete using approved evidence, then retry mstar workflow close`,
         });
       }
     }
@@ -3530,7 +3530,7 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
       const policy = snapshot.completion_policy;
       const recorded = snapshot.delivery?.completion;
       if (!isNonEmptyString(policy) || recorded?.policy !== policy || !isNonEmptyString(recorded.evidence)) {
-        throw new CoordinationError("coordination.invalid-transition", "report-only close requires explicitly recorded fulfilment matching completion_policy; record it through workflow evidence and retry close");
+        throw new CoordinationError("coordination.invalid-transition", "report-only close requires explicitly recorded fulfilment matching completion_policy; use mstar workflow evidence, then mstar workflow close");
       }
     }
     snapshot = await closeWorkflow(input.workflowId, workflowDir, {
@@ -3547,7 +3547,7 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
   } else if (!isV2RootRegister(statusPath)) {
     throw new CoordinationError(
       "coordination.root-register-unwritable",
-      `workflow ${input.workflowId} is terminal, but its root register is not writable as v2. Terminal state stands; run mstar migrate, then retry close to finish unregistering without rewriting ended_at`,
+      `workflow ${input.workflowId} is terminal, but its root register is not writable as v2. Terminal state stands; run mstar migrate, then retry mstar workflow close to finish unregistering without rewriting ended_at`,
       { workflow_id: input.workflowId, applied: ["terminal-snapshot"], rootRegister: "not-v2-register" },
     );
   }
