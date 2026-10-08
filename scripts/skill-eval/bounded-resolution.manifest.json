@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "4347492b576946d1f3bb44ef1e223a243ea5d1020ed7c9269839129b6d71cc13",
+  "casesHash": "c2a26b3da9a5d036d63dd3483081ce413df06e75d3c6aa55217fab8dde046822",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -962,6 +962,18 @@
           "note": "the failed near-miss call must name its nearest tool and catalog recovery"
         },
         {
+          "id": "a-catalog",
+          "kind": "final_contains",
+          "value": "tools/list catalog returned",
+          "note": "the bounded path must observe a successful catalog response"
+        },
+        {
+          "id": "a-catalog",
+          "kind": "final_contains",
+          "value": "tools/list catalog returned",
+          "note": "the bounded path must observe a successful catalog response"
+        },
+        {
           "id": "a-corrected-call",
           "kind": "final_contains",
           "value": "corrected call succeeded",
@@ -980,7 +992,7 @@
         "context": "cold",
         "evidence": "failed call mstar_schem → -32602 naming mstar_schema and tools/list → tools/list → mstar_schema(type=CaptureInput)"
       },
-      "integrityHash": "8be0a2cd974a9ff683534edefc180ef472e39289f0b98ce147ff825b0e03eae5"
+      "integrityHash": "521b7007c51654a0a9dd5fa1d8312a76a9f0da03cd58ad1712909217df70d517"
     }
   ],
   "sandbox": "read-only",

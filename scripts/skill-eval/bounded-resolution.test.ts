@@ -22,13 +22,20 @@
  * the bound. Universal/model compliance stays unverified until an authorized
  * real-agent run records traces.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getCommandDefinitions } from "../../packages/commands/src/index.ts";
 import { canonicalJson, sha256Hex, type EvalManifest } from "./manifest.ts";
 import { buildReport } from "./report.ts";
 import { executeManifest, manifestIntegrityErrors, selectCases, type RunnerIo, type SpawnFn, type SpawnRequest } from "./runner.ts";
+import {
+  createMcpRpcDispatcher,
+  mapMcpExchangeEvent,
+  summarizeMcpExchanges,
+  type McpExchangeOutcome,
+  type McpJsonRpcResponse,
+} from "./mcp-client-launch.ts";
 
 const MANIFEST_PATH = resolve(import.meta.dir, "bounded-resolution.manifest.json");
 const FROZEN_CASES_PATH = resolve(import.meta.dir, "cases.json");
@@ -447,22 +454,12 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-mcp-guess-path": "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.\ncorrected call succeeded",
 };
 
-const mcpCall = (id: string, name: string, failed = false): string => {
+const mcpCall = (id: string | null, name: string, failed = false): string => {
   const method = name === "tools/list" ? "tools/list" : "tools/call";
-  const status = failed ? "failed" : "completed";
-  const exitCode = failed ? 1 : 0;
-  return JSON.stringify({
-    type: "item.completed",
-    id,
-    item: {
-      type: "command_execution",
-      id,
-      command: ["mcp", method, name],
-      mcp_tool_call: { id, method, name, status, exit_code: exitCode },
-      status,
-      exit_code: exitCode,
-    },
-  });
+  const response: McpJsonRpcResponse = failed
+    ? { error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." } }
+    : { result: {} };
+  return JSON.stringify(mapMcpExchangeEvent(method, name, id, response));
 };
 
 function finalFor(caseId: string): string {
@@ -1280,7 +1277,27 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     // Declared contexts travel with the scenarios; the cold-start arms are cold.
     expect(report.report.boundedResolution.unitsDeclaredCold).toBeGreaterThanOrEqual(1);
   });
-  test("mcp-guess-path case is selected and its native call evidence is graded honestly", async () => {
+  test("mcp-guess-path dispatcher settles pending requests on close and timeout", async () => {
+    const closed = createMcpRpcDispatcher(() => {});
+    const onClose = closed.request("tools/list", {});
+    closed.stop(new Error("MCP server closed"));
+    await expect(onClose).rejects.toThrow("MCP server closed");
+    await expect(closed.request("tools/list", {})).rejects.toThrow("MCP server closed");
+
+    vi.useFakeTimers();
+    try {
+      const timedOut = createMcpRpcDispatcher(() => {});
+      const onTimeout = timedOut.request("tools/call", { name: "mstar_schema" });
+      setTimeout(() => timedOut.stop(new Error("MCP server request deadline exceeded")), 1);
+      vi.advanceTimersByTime(1);
+      await expect(onTimeout).rejects.toThrow("MCP server request deadline exceeded");
+      await expect(timedOut.request("tools/list", {})).rejects.toThrow("MCP server request deadline exceeded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("mcp-guess-path case is selected and its mapped call evidence is graded honestly", async () => {
     const selected = selectCases(manifest, "dev").find((item) => item.id === "bounded-res-mcp-guess-path");
     expect(selected).toBeDefined();
     expect(selected?.assertions.find((assertion) => assertion.kind === "calls_within")?.value).toBe(3);
@@ -1288,40 +1305,47 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
 
     const caseManifest = cloneManifest();
     caseManifest.cases = caseManifest.cases.filter((item) => item.id === "bounded-res-mcp-guess-path" || item.split === "heldout");
-    const successText = "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.\ncorrected call succeeded";
-    const makeEvents = (ids: boolean[], count = 3): string => {
+    const makeTrace = (ids: boolean[], count = 3, invalidOutcomeIndex?: number) => {
       const records: string[] = [JSON.stringify({ type: "thread.started", thread_id: "thr_mcp_guess" })];
+      const outcomes: McpExchangeOutcome[] = [];
       const tools = ["mstar_schem", "tools/list", "mstar_schema", "tools/list"];
       for (let index = 0; index < count; index++) {
-        const id = ids[index] === false ? undefined : `mcp-${index + 1}`;
-        const status = index === 0 ? "failed" : "completed";
-        const exitCode = index === 0 ? 1 : 0;
-        const method = tools[index] === "tools/list" ? "tools/list" : "tools/call";
-        const mcpToolCall: Record<string, unknown> = { method, name: tools[index]!, status, exit_code: exitCode };
-        if (id !== undefined) mcpToolCall.id = id;
-        const item: Record<string, unknown> = {
-          type: "command_execution",
-          command: ["mcp", method, tools[index]!],
-          mcp_tool_call: mcpToolCall,
-          status,
-          exit_code: exitCode,
-        };
-        if (id !== undefined) item.id = id;
-        const record: Record<string, unknown> = { type: "item.completed", item };
-        if (id !== undefined) record.id = id;
-        records.push(JSON.stringify(record));
+        const name = tools[index]!;
+        const method = name === "tools/list" ? "tools/list" : "tools/call";
+        const id = ids[index] === false ? null : `mcp-${index + 1}`;
+        const response: McpJsonRpcResponse = index === 0
+          ? { error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." } }
+          : index === invalidOutcomeIndex
+            ? { id: index + 1 }
+            : { result: {} };
+        const event = mapMcpExchangeEvent(method, name, id, response);
+        records.push(JSON.stringify(event));
+        const item = event.item as Record<string, unknown>;
+        outcomes.push({
+          method,
+          name,
+          succeeded: item.status === "completed",
+          ...(response.error?.code === undefined ? {} : { errorCode: response.error.code }),
+          ...(response.error?.message === undefined
+            ? (Object.hasOwn(response, "result") ? {} : { errorMessage: "MCP response omitted both result and error" })
+            : { errorMessage: response.error.message }),
+        });
       }
       records.push(JSON.stringify({ type: "turn.completed", usage: {} }));
-      return `${records.join("\n")}\n`;
+      return {
+        events: `${records.join("\n")}\n`,
+        final: summarizeMcpExchanges(outcomes),
+      };
     };
-    const evaluate = async (options: { ids: boolean[]; count?: number; final: string }) => {
+    const evaluate = async (options: { ids: boolean[]; count?: number; invalidOutcomeIndex?: number; final?: string }) => {
       const io = memoryIo();
       seedRun(io, caseManifest);
       const spawn: SpawnFn = async (request) => {
-        io.writeText(request.stdoutFile, makeEvents(options.ids, options.count));
+        const trace = makeTrace(options.ids, options.count, options.invalidOutcomeIndex);
+        io.writeText(request.stdoutFile, trace.events);
         io.writeText(request.stderrFile, "");
         const output = request.argv[request.argv.indexOf("--output-last-message") + 1]!;
-        io.writeText(output, options.final);
+        io.writeText(output, options.final ?? trace.final);
         return { code: 0, signal: null, timedOut: false, spawnError: null };
       };
       const result = await executeManifest({
@@ -1339,27 +1363,37 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
       return {
         grade: unit.grade,
         calls: unit.grading!.assertions.find((item) => item.kind === "calls_within")!.grade,
+        failedInvocations: Object.values(unit.turns)[0]!.metrics.invocations.failed,
         report: report.report,
       };
     };
 
-    const compliantShape = await evaluate({ ids: [true, true, true], final: successText });
+    const compliantShape = await evaluate({ ids: [true, true, true] });
     expect(compliantShape.grade).toBe("pass");
     expect(compliantShape.report.units[0]!.grade).toBe("pass");
+    expect(compliantShape.failedInvocations).toBe(1);
 
     const noSuggestion = await evaluate({
       ids: [true, true, true],
-      final: "error -32602: Tool mstar_schem not found. Call tools/list for the full catalog.\ncorrected call succeeded",
+      final: "error -32602: Tool mstar_schem not found. Call tools/list for the full catalog.\ntools/list catalog returned\ncorrected call succeeded",
     });
     expect(noSuggestion.grade).toBe("fail");
     expect(noSuggestion.report.units[0]!.failedAssertions).toContain("a-correction(final_contains)");
-    const overBudget = await evaluate({ ids: [true, true, true, true], count: 4, final: successText });
+
+    const overBudget = await evaluate({ ids: [true, true, true, true], count: 4 });
     expect(overBudget.calls).toBe("fail");
     expect(overBudget.grade).toBe("fail");
 
-    const identityMissing = await evaluate({ ids: [false, true, true], final: successText });
+    const identityMissing = await evaluate({ ids: [false, true, true] });
     expect(identityMissing.calls).toBe("unverified");
     expect(identityMissing.grade).toBe("unverified");
     expect(identityMissing.report.units[0]!.unverifiedAssertions).toContain("a-calls(calls_within)");
+
+    const invalidOutcome = await evaluate({ ids: [true, true, true], invalidOutcomeIndex: 1 });
+    expect(invalidOutcome.calls).toBe("pass");
+    expect(invalidOutcome.failedInvocations).toBe(2);
+    expect(invalidOutcome.grade).toBe("fail");
+    expect(invalidOutcome.report.units[0]!.failedAssertions).toContain("a-catalog(final_contains)");
+    expect(invalidOutcome.report.units[0]!.failedAssertions).toContain("a-corrected-call(final_contains)");
   });
 });
