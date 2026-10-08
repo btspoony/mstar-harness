@@ -97,6 +97,31 @@ test("store.upgrade names the required operator input before writing", async () 
   }
 });
 
+test("store.upgrade publishes proof admission rules through CLI help and command schema", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mstar-store-attestation-contract-"));
+  try {
+    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
+    if (definition === undefined) throw new Error("missing store.upgrade definition");
+    const help = definition.cli.options.find(({ key }) => key === "attestation")?.help ?? "";
+    expect(help).toContain("nonblank");
+    expect(help).toContain("Date.parse");
+    expect(help).toContain("24.18.0");
+    expect(help).toContain("Exactly one consumer is current");
+    expect(help).toContain("kind must be coordinator");
+
+    const published = await executeCommand("schema", { command: "store.upgrade" }, invocation(root));
+    expect(published.status).toBe("ok");
+    const rendered = JSON.stringify(published);
+    expect(rendered).toContain("nonblank");
+    expect(rendered).toContain("Date.parse");
+    expect(rendered).toContain("24.18.0");
+    expect(rendered).toContain("Exactly one consumer is current");
+    expect(rendered).toContain("kind must be coordinator");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a store usage refusal carries the shared factory metadata and keeps its code", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-usage-shape-"));
   try {
@@ -290,6 +315,7 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
         { ...validAttestation.consumers[0]!, entryId: "second-current" },
       ],
     };
+    const credentialMarker = "synthetic-secret-marker-do-not-disclose-9f3b";
     const invalidDocuments: unknown[] = [
       { ...validAttestation, operator: { ...validAttestation.operator, actor: "   " } },
       { ...validAttestation, attestedAt: "not-an-instant" },
@@ -297,8 +323,8 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
       { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, current: false }] },
       multipleCurrent,
       nonCoordinator,
-      { ...validAttestation, sessionCredential: "not-accepted" },
-      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, sessionCredential: "not-accepted" }] },
+      { ...validAttestation, sessionCredential: credentialMarker },
+      { ...validAttestation, consumers: [{ ...validAttestation.consumers[0]!, sessionCredential: credentialMarker }] },
     ];
     const attestationPath = join(root, "attestation.json");
     for (const invalidDocument of invalidDocuments) {
@@ -307,6 +333,7 @@ test("a held retired schema-8 claim refuses without mutation and settles on the 
         harness, operator: "fixture-operator", attestation: attestationPath,
       }, invocation(root));
       expect(invalid.status).toBe("refused");
+      expect(JSON.stringify(invalid)).not.toContain(credentialMarker);
       expect(await protectedStoreState(harness)).toEqual(before);
     }
     // The same actual consumer accepts the corrected proof after all failures.

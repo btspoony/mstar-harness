@@ -1,4 +1,4 @@
-import { activationAttestationDocumentSchema } from "../activation-attestation.js";
+import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -202,9 +202,10 @@ function cliDefinition(id: string): CommandDefinition<StoreInput, unknown> {
     activate: ["harness", "manifest", "attestation", "out"],
     retire: ["harness", "manifest", "out"],
   };
+  const attestationHelp = activationAttestationDocumentConstraints.map(({ path, rule }) => `${path}: ${rule}`).join(" ");
   const optionHelp: Partial<Record<keyof StoreInput, string>> = {
     harness: "project harness directory, including the canonical control root; defaults to discovery from the working directory",
-    attestation: "absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does \u2014 the same `mstar store upgrade --operator <name> --attestation <absolute-json>` call retries after a refusal",
+    attestation: `absolute path to the operator's full ActivationAttestation JSON; optional when no retired held claim exists, required when one does — retry with the same \`mstar store upgrade --operator <name> --attestation <absolute-json>\` call. ${attestationHelp}`,
   };
   const optionKeys = optionsByVerb[verb];
   const shape = Object.fromEntries(optionKeys.map((key) => [key, true])) as { [Key in keyof StoreInput]?: true };
