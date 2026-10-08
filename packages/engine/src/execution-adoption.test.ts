@@ -54,6 +54,20 @@ async function refusalOf(run: () => Promise<unknown>): Promise<{ message: string
   throw new Error("expected the adoption to refuse");
 }
 
+/** The scoped database state and revision snapshot used by no-mutation assertions. */
+async function footprint(context: StoreContext) {
+  const db = await openStore(context, "read");
+  try {
+    return {
+      headers: db.db.prepare("select workflow_id, revision, state_json, updated_at from execution_workflows order by workflow_id").all(),
+      sessions: db.db.prepare("select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions order by workflow_id, session_id").all(),
+      meta: db.db.prepare("select revision, root_updated_at from execution_meta where id = 1").get(),
+      store: db.db.prepare("select revision from store_meta where id = 1").get(),
+      operations: (db.db.prepare("select count(*) as n from execution_operations").get() as { n: number }).n,
+    };
+  } finally { db.close(); }
+}
+
 describe("terminal workflow adoption", () => {
   test("CAS-records adoption, preserves terminal state and registry absence, and replays idempotently", async () => {
     const { context, caller } = await strandedTerminal();
@@ -189,20 +203,6 @@ describe("terminal adoption session settlement", () => {
       ).run("wf-stranded", sessionId, stranded.epoch, "2026-10-01T00:00:00.000Z");
     } finally { writer.close(); }
     return stranded;
-  }
-
-  /** The scoped database state and revision snapshot used by no-mutation assertions. */
-  async function footprint(context: StrandedFixture["context"]) {
-    const db = await openStore(context, "read");
-    try {
-      return {
-        headers: db.db.prepare("select workflow_id, revision, state_json, updated_at from execution_workflows order by workflow_id").all(),
-        sessions: db.db.prepare("select workflow_id, role, session_id, epoch, revision, state, bound_at from execution_sessions order by workflow_id, session_id").all(),
-        meta: db.db.prepare("select revision, root_updated_at from execution_meta where id = 1").get(),
-        store: db.db.prepare("select revision from store_meta where id = 1").get(),
-        operations: (db.db.prepare("select count(*) as n from execution_operations").get() as { n: number }).n,
-      };
-    } finally { db.close(); }
   }
 
   /** The settled-adoption call: the fixture fixes workflow, reason and operation id. */

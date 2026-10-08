@@ -136,10 +136,39 @@ function absolute(value: string | undefined, field: string): string {
 
 
 /**
- * The document is read here but validated by the engine. Preserve parser
- * location when available without exposing a token or other source snippet
- * that some runtimes embed in SyntaxError.message.
+ * The document is read here but validated by the engine. A malformed document
+ * is reported with the parser's own grammatical cause and, only when the
+ * parser actually reports one, its location. Quoted source excerpts and token
+ * values are stripped so no credential travels into the refusal, and no
+ * offset is invented when the parser reports none.
  */
+function jsonParseDiagnostic(error: unknown): { cause: string; location?: string } {
+  const message = error instanceof Error ? error.message : "";
+  const position = message.match(/\bposition\s+(\d+)\b/i)?.[1];
+  const lineColumn = message.match(/\bline\s+(\d+)\s+column\s+(\d+)\b/i);
+  const location = position !== undefined
+    ? `position ${position}`
+    : lineColumn === null || lineColumn === undefined
+      ? undefined
+      : `line ${lineColumn[1]} column ${lineColumn[2]}`;
+  const cause = message
+    .replace(/^JSON Parse error:\s*/i, "")
+    .replace(/^SyntaxError:\s*/i, "")
+    // Drop an embedded document excerpt some runtimes append after the grammar
+    // cause (`..., "<source>" is not valid JSON`), keeping only the cause.
+    .replace(/[:,]?\s*"[\s\S]*"\s+is not valid JSON\s*$/i, "")
+    .replace(/[:,]?\s*\.\.\.\s*is not valid JSON\s*$/i, "")
+    .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+    .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+    .replace(/\s*\(line \d+ column \d+\)/gi, "")
+    .replace(/'[^']*'|"[^"]*"|`[^`]*`/g, "")
+    .replace(/[,\s]+is not valid JSON\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .replace(/[\s,:;]+$/, "")
+    .trim();
+  return { cause: cause === "" ? "syntax error" : cause, ...(location === undefined ? {} : { location }) };
+}
+
 function readAdoptionAttestation(documentPath: string): ActivationAttestation {
   let text: string;
   try { text = readFileSync(documentPath, "utf8"); }
@@ -151,22 +180,9 @@ function readAdoptionAttestation(documentPath: string): ActivationAttestation {
   }
   try { return JSON.parse(text) as ActivationAttestation; }
   catch (error) {
-    const parserMessage = error instanceof Error ? error.message : "";
-    const position = parserMessage.match(/\bposition\s+(\d+)\b/i)?.[1];
-    const lineColumn = parserMessage.match(/\bline\s+(\d+)\s+column\s+(\d+)\b/i);
-    const location = position !== undefined
-      ? `position ${position}`
-      : lineColumn === null || lineColumn === undefined
-        ? undefined
-        : `line ${lineColumn[1]} column ${lineColumn[2]}`;
-    const parser = error instanceof SyntaxError && /unexpected end/i.test(parserMessage)
-      ? "JSON parser reported unexpected end of input"
-      : error instanceof SyntaxError && /unexpected token/i.test(parserMessage)
-        ? "JSON parser reported an unexpected token"
-        : "JSON parser reported a syntax error";
-    const diagnostic = { parser, ...(location === undefined ? {} : { location }) };
+    const diagnostic = jsonParseDiagnostic(error);
     throw Object.assign(
-      new Error(`the attestation document ${documentPath} is not valid JSON (${parser}${location === undefined ? "" : ` at ${location}`}); --attestation must point at the operator's ActivationAttestation object`),
+      new Error(`the attestation document ${documentPath} is not valid JSON (${diagnostic.cause}${diagnostic.location === undefined ? "" : ` at ${diagnostic.location}`}); --attestation must point at the operator's ActivationAttestation object`),
       { code: "workflow.adopt-terminal.attestation-malformed", details: { parser: diagnostic } },
     );
   }
@@ -543,7 +559,7 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           if (workflowId === undefined || input.reason === undefined) {
             return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow and reason are required; expect and operation may be omitted safely" });
           }
-          if (input.expect !== undefined && (!/^[1-9]\\d*$/.test(input.expect) || !Number.isSafeInteger(Number(input.expect)))) {
+          if (input.expect !== undefined && (!/^[1-9]\d*$/.test(input.expect) || !Number.isSafeInteger(Number(input.expect)))) {
             return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--expect must be a positive integer header revision" });
           }
           if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator")) {
