@@ -50,6 +50,8 @@ If plan drift appears during implementation, request plan write-back before cont
 
 - Follow PM-defined `Working branch` / `Branch policy`
 - Same-repo concurrent writes require worktree isolation
+- When Assignment includes **`Worktree path`**: `cd` there **before** first repo write; do not use PM integration checkout or default repo root
+- Completion Report must state **`Worktree path used`** (absolute) when assigned
 - Do not self-decide branch pivots to default branch
 
 ## Skill Preset (PM-Activated)
