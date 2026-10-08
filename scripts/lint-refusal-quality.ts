@@ -8,7 +8,7 @@ import { getCommandSchemas } from "../packages/commands/src/families/schema";
 
 export type RefusalClassification = "missing-cause-code" | "missing-recovery" | "unreachable-recovery" | "capability-unreachable" | "allowlisted";
 export interface RefusalFinding { file: string; line: number; column: number; classification: RefusalClassification; reason: string; snippet: string; }
-export interface CliGrammar { verbs: Set<string>; flagsByVerb: Map<string, Set<string>>; }
+export interface CliGrammar { verbs: Set<string>; flagsByVerb: Map<string, Set<string>>; positionalsByVerb?: Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>; }
 export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; }
 
 const RECOVERY = /\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|invoke)\b/i;
@@ -22,65 +22,73 @@ export function extractCliGrammar(): CliGrammar {
   const schemas = getCommandSchemas(definitions);
   const verbs = new Set<string>();
   const flagsByVerb = new Map<string, Set<string>>();
+  const positionalsByVerb = new Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>();
   for (const definition of definitions) {
     const verb = definition.cli.path.join(" ");
     verbs.add(verb);
     const flags = flagsByVerb.get(verb) ?? new Set<string>();
     for (const option of definition.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter(Boolean)) flags.add(flag);
-    for (const argument of definition.cli.arguments) flags.add(argument.key);
     flagsByVerb.set(verb, flags);
+    positionalsByVerb.set(verb, definition.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
   }
-  // Schema descriptors are the authoritative companion surface for schema-provided options.
+  // Schema descriptors are the authoritative companion surface for options and positionals.
   for (const schema of schemas) {
     const verb = schema.cli.path.join(" ");
     verbs.add(verb);
     const flags = flagsByVerb.get(verb) ?? new Set<string>();
     for (const option of schema.cli.options) for (const flag of option.flags.split(/[ ,|]+/).filter(Boolean)) flags.add(flag);
     flagsByVerb.set(verb, flags);
+    positionalsByVerb.set(verb, schema.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
   }
-  return { verbs, flagsByVerb };
+  return { verbs, flagsByVerb, positionalsByVerb };
 }
 function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
 }
 function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
-  const normalized = recovery.replace(/\bmstar\s+/gi, "mstar ");
   const stopClause = (text: string): string => {
-    const boundary = text.search(/[.;!?]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b/i);
+    const boundary = text.search(/[.;,!?\uFF0C]|\b(?:or|and|then|with|instead|otherwise|before|after|via)\b/i);
     return boundary < 0 ? text : text.slice(0, boundary);
   };
   const commandIsReachable = (text: string): boolean => {
-    const clause = stopClause(text).trim();
+    const clause = stopClause(text.trim().replace(/^mstar\s+/i, "")).trim();
     const tokens = clause.split(/\s+/).filter(Boolean);
     const pathTokens: string[] = [];
-    let pathEnd = 0;
     for (const token of tokens) {
       if (token.startsWith("-") || /^(?:to|for|with|and|or|then|instead|otherwise|after|before|via)$/i.test(token)) break;
       pathTokens.push(token.replace(/[,.)]+$/, ""));
-      pathEnd += token.length + 1;
     }
-    const verb = pathTokens.join(" ");
-    if (!grammar.verbs.has(verb)) return false;
-    const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
-    const optionText = clause.slice(Math.min(pathEnd, clause.length));
-    const mentioned = [...optionText.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
-    return mentioned.every((flag) => flags.has(flag));
+    for (let end = pathTokens.length; end > 0; end -= 1) {
+      const verb = pathTokens.slice(0, end).join(" ");
+      if (!grammar.verbs.has(verb)) continue;
+      const args = pathTokens.slice(end);
+      const positionals = grammar.positionalsByVerb?.get(verb) ?? [];
+      const maxArgs = positionals.at(-1)?.variadic ? Number.POSITIVE_INFINITY : positionals.length;
+      if (args.length > maxArgs) continue;
+      const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
+      const mentioned = [...clause.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
+      if (mentioned.every((flag) => flags.has(flag))) return true;
+    }
+    return false;
   };
-  const references = [...normalized.matchAll(/\bmstar\s+([A-Za-z][A-Za-z0-9.-]*)/gi)];
-  if (references.length > 0) {
-    for (const match of references) {
-      const start = (match.index ?? 0) + match[0].length;
-      const next = references.find((candidate) => (candidate.index ?? 0) > (match.index ?? 0));
-      if (!commandIsReachable(`${match[1]} ${normalized.slice(start, next?.index ?? normalized.length)}`)) return false;
-    }
-    return true;
+  const candidates: string[] = [];
+  const references = [...recovery.matchAll(/\bmstar\s+([A-Za-z][A-Za-z0-9.-]*)/gi)];
+  for (const [index, match] of references.entries()) {
+    const start = (match.index ?? 0) + match[0].length;
+    const next = references[index + 1];
+    candidates.push(`${match[1]} ${recovery.slice(start, next?.index ?? recovery.length)}`);
   }
-  const actions = [...normalized.matchAll(/\b(?:run|use|supply|provide|resume|restore|recover|retry|invoke)\s+/gi)];
-  if (actions.length === 0) return false;
-  return actions.every((action) => {
+  const firstWords = new Set([...grammar.verbs].map((verb) => verb.split(" ")[0]!));
+  for (const action of recovery.matchAll(/\b(?:run|use|supply|provide|resume|restore|recover|retry|invoke)\s+/gi)) {
     const start = (action.index ?? 0) + action[0].length;
-    return commandIsReachable(normalized.slice(start).replace(/^mstar\s+/i, ""));
-  });
+    let phrase = recovery.slice(start);
+    const explicit = /^mstar\s+/i.test(phrase);
+    phrase = phrase.replace(/^mstar\s+/i, "");
+    const first = phrase.match(/^[A-Za-z][A-Za-z0-9.-]*/)?.[0]?.toLowerCase();
+    const hasFlag = /(?:^|\s)--?[A-Za-z]/.test(phrase);
+    if (explicit || firstWords.has(first ?? "") || action[0].trim().toLowerCase() === "run" || hasFlag) candidates.push(phrase);
+  }
+  return candidates.length > 0 && candidates.every(commandIsReachable);
 }
 /** Bounded structured-channel scan: typed CoordinationError codes, recoveryRefusal messages,
  * and refusalEnvelope objects are agent-facing. Internal `violation(...)` results, arbitrary

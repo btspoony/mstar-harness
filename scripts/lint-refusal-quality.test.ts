@@ -71,6 +71,22 @@ describe("refusal quality scanner", () => {
     }).map((finding) => finding.classification)).toEqual(["unreachable-recovery"]);
   });
 
+
+  test("rejects bare action-command alternatives after an explicit command", () => {
+    const source = `refusalEnvelope({ command: "x", status: "refused", code: "x.bad", exitCode: 1, message: "x", recovery: "Run mstar workflow --resume; or run nonexistent --bad" });`;
+    expect(scanSource(source, "packages/commands/src/fixture.ts", {
+      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
+    }).map((finding) => finding.classification)).toEqual(["unreachable-recovery"]);
+  });
+
+  test("accepts a supported positional argument after a command verb", () => {
+    const source = `refusalEnvelope({ command: "schema", status: "refused", code: "schema.invalid", exitCode: 1, message: "x", recovery: "Run mstar schema ExampleType" });`;
+    expect(scanSource(source, "packages/commands/src/fixture.ts", {
+      verbs: new Set(["schema"]),
+      flagsByVerb: new Map([["schema", new Set<string>()]]),
+      positionalsByVerb: new Map([["schema", [{ key: "type", variadic: false }]]]),
+    }).map((finding) => finding.classification)).toEqual([]);
+  });
   test("one allowlist signature suppresses repeated identical occurrences", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const findings = [1, 8].map((line) => ({
