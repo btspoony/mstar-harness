@@ -15,7 +15,7 @@ async function withClient(definitions: readonly CommandDefinition[], run: (clien
   const client = new Client({ name: "independent-command-consumer", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
   try {
-    registerMcpCommands(server, definitions, (_definition, _input, signal, _services, effects): InvocationContext => ({
+    registerMcpCommands(server, definitions, (_definition, _sessionId, signal, _services, effects): InvocationContext => ({
       cwd, controlRoot: null, signal, effects,
       versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
     }));
@@ -224,6 +224,42 @@ generated_at: 2026-01-02
       expect(properties).toHaveProperty("file");
       for (const kind of ["status", "snapshot", "review", "json"]) expect(properties).not.toHaveProperty(kind);
     });
+  });
+
+  test("the resolver receives only the primitive session selector while the handler runs on the admitted value", async () => {
+    const selections: Array<{ sessionId: string | undefined }> = [];
+    const cwd = mkdtempSync(join(tmpdir(), "mstar-mcp-selection-"));
+    const server = new McpServer({ name: "selection-server", version: "1.0.0" });
+    const client = new Client({ name: "selection-consumer", version: "1.0.0" });
+    const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+    try {
+      registerMcpCommands(server, [evaluate], (_definition, sessionId, signal, _services, effects): InvocationContext => {
+        selections.push({ sessionId });
+        return {
+          cwd, controlRoot: null, signal, effects,
+          versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+          // A resolver default the admitted selector must override.
+          sessionId: "resolver-default",
+        };
+      });
+      await server.connect(serverEnd);
+      await client.connect(clientEnd);
+      const result = await client.callTool({
+        name: "mstar_fixture_evaluate",
+        arguments: { payload: { numbers: [2, 3] }, sessionId: "caller-seat" },
+      });
+      expect(result.isError).not.toBe(true);
+      // The handler observed the schema-validated value and the admitted
+      // selector, not the resolver default and not a caller-replaceable alias.
+      expect(envelope(result)).toMatchObject({ status: "ok", data: { total: 15, owner: "caller-seat" } });
+      // Only the primitive fact admission validated reached the resolver: no
+      // parsed handler value is available to it at all.
+      expect(selections).toEqual([{ sessionId: "caller-seat" }]);
+    } finally {
+      await client.close();
+      await server.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   test("the actual schema tool admits each selector alternative and preserves invalid-input recovery", async () => {

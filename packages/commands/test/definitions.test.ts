@@ -171,6 +171,96 @@ describe("admitted execution capability", () => {
     expect(betaCalls.count).toBe(0);
   });
 
+  test("a genuine admission keeps its validated scalar and nested payload private to execution", async () => {
+    const observed: Array<{ name: string; total: number }> = [];
+    const fixture: CommandDefinition<{ name: string; payload?: { numbers: number[] } }, { greeting: string; total: number }> = {
+      id: "fixture.private-data",
+      cli: { path: ["fixture", "private-data"], aliases: [], arguments: [{ key: "name", required: true, variadic: false }], options: [] },
+      input: z.object({
+        name: z.string().min(1),
+        payload: z.object({ numbers: z.array(z.number().int().min(0)).min(1) }).optional(),
+      }),
+      output: commandEnvelopeSchema,
+      effects: ["read"],
+      description: "private handler data fixture",
+      async execute(input) {
+        const total = input.payload!.numbers.reduce((sum, number) => sum + number, 0);
+        observed.push({ name: input.name, total });
+        return {
+          version: 1, command: "fixture.private-data", status: "ok", code: "fixture.private-data.ok", exitCode: 0,
+          data: { greeting: `Hello ${input.name}`, total },
+        };
+      },
+    };
+    const original = { name: "Ada", payload: { numbers: [2, 3] } };
+    const admitted = admit(fixture, original);
+    if (!admitted.success) throw new Error("expected admission to succeed");
+    // The capability publishes no handler value: there is no member holding the
+    // parsed scalar or the nested payload to replace after admission.
+    expect(Object.keys(admitted).sort()).toEqual(["execute", "success"]);
+    expect("data" in admitted).toBe(false);
+    expect("input" in admitted).toBe(false);
+
+    // Replace the validated scalar and the nested payload through the caller's
+    // own input object. A schema-invalid replacement must not reach execution:
+    // the handler still observes the value admission validated.
+    original.name = "";
+    original.payload.numbers.length = 0;
+    original.payload.numbers.push(-5);
+    const envelope = await admitted.execute(context());
+    expect(envelope).toMatchObject({ status: "ok", data: { greeting: "Hello Ada", total: 5 } });
+    expect(observed).toEqual([{ name: "Ada", total: 5 }]);
+    // A second invocation still observes the admitted value, not the mutation.
+    expect(await admitted.execute(context())).toMatchObject({ data: { greeting: "Hello Ada", total: 5 } });
+    expect(observed).toEqual([{ name: "Ada", total: 5 }, { name: "Ada", total: 5 }]);
+  });
+
+  test("a transport projection runs inside admission and cannot be replaced afterwards", async () => {
+    const observed: unknown[] = [];
+    const fixture: CommandDefinition<{ name: string; sessionId?: string; payload?: { numbers: number[] } }, { keys: string[]; total: number }> = {
+      id: "fixture.projected",
+      cli: {
+        path: ["fixture", "projected"], aliases: [], arguments: [{ key: "name", required: true, variadic: false }],
+        options: [{ key: "sessionId", flags: "--session-id <value>", required: false, context: "sessionId" }],
+      },
+      input: z.object({
+        name: z.string().min(1), sessionId: z.string().optional(),
+        payload: z.object({ numbers: z.array(z.number().int().min(0)).min(1) }).optional(),
+      }),
+      output: commandEnvelopeSchema,
+      effects: ["read"],
+      description: "projection fixture",
+      async execute(input) {
+        observed.push(input);
+        return {
+          version: 1, command: "fixture.projected", status: "ok", code: "fixture.projected.ok", exitCode: 0,
+          data: { keys: Object.keys(input).sort(), total: input.payload!.numbers.reduce((sum, number) => sum + number, 0) },
+        };
+      },
+    };
+    const original = {
+      name: "Ada", sessionId: "seat-1",
+      payload: { numbers: [2, 3] },
+    };
+    // The MCP route's projection: strip the context selector the resolver owns.
+    const admitted = admitCommandInput(fixture, original, getCommandSchemas([fixture])[0]!, undefined,
+      (data) => {
+        const record = { ...(data as Record<string, unknown>) };
+        delete record.sessionId;
+        return record;
+      });
+    if (!admitted.success) throw new Error("expected admission to succeed");
+    // The strip happened inside admission, and the admitted selector rode along.
+    expect(admitted.sessionId).toBe("seat-1");
+
+    original.name = "";
+    original.payload.numbers.length = 0;
+    const envelope = await admitted.execute(context());
+    expect(envelope).toMatchObject({ status: "ok", data: { keys: ["name", "payload"], total: 5 } });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toEqual({ name: "Ada", payload: { numbers: [2, 3] } });
+  });
+
   test("retains the definition's output validation, cancellation and thrown-error outcomes", async () => {
     const fixture: CommandDefinition<{ name: string }, unknown> = {
       id: "fixture.outcomes",

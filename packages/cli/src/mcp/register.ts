@@ -5,9 +5,15 @@ import type { CommandAdmission, CommandDefinition, CommandSchemaDescriptor, Invo
 import { createMcpEffects, type McpEffects } from "./effects.js";
 import { renderCommandContract, surfaceAssignmentRecovery } from "../command-adapter.js";
 import { validateCommandOutcome } from "./outcome.js";
+/**
+ * Resolve the invocation context for one admitted call. It receives only the
+ * immutable primitive session selector admission already validated — never the
+ * handler value — so a resolver cannot reach or replace what the handler will
+ * observe.
+ */
 export type ResolveContext = (
   definition: CommandDefinition,
-  input: unknown,
+  sessionId: string | undefined,
   signal: AbortSignal,
   services: Array<{ close(): Promise<void> }>,
   effects: McpEffects,
@@ -127,24 +133,19 @@ export function registerMcpCommands(
       inputSchema,
       outputSchema: definition.output,
     }, async (admitted, extra) => {
-      const input = admitted.input;
-      const resolved = await resolveContext(definition, input, extra.mcpReq.signal, services, connectionEffects);
-      const record = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
-      const selector = definition.cli.options.find((option) => option.context === "sessionId");
-      const sessionId = selector === undefined ? resolved.sessionId : record[selector.key] as string | undefined ?? resolved.sessionId;
-      const host = definition.id !== "report" && definition.input instanceof z.ZodObject
-        && Object.hasOwn(definition.input.shape, "host") && typeof record.host === "string"
-        ? record.host
-        : resolved.host;
+      // The resolver and the context consume only the primitive session
+      // selector; the handler value itself never leaves the capability.
+      const resolved = await resolveContext(definition, admitted.sessionId, extra.mcpReq.signal, services, connectionEffects);
+      const sessionId = admitted.sessionId ?? resolved.sessionId;
       const requestContext: InvocationContext = Object.freeze({
         ...resolved,
         ...(sessionId === undefined ? {} : { sessionId }),
-        ...(host === undefined ? {} : { host }),
+        ...(resolved.host === undefined ? {} : { host: resolved.host }),
         versions: Object.freeze({ ...resolved.versions }),
         signal: extra.mcpReq.signal,
         effects: connectionEffects,
       });
-      const validated = await connectionEffects.withInput(input, requestContext, async () => {
+      const validated = await connectionEffects.withInput(admitted.stdinText, requestContext, async () => {
         const envelope = await admitted.execute(requestContext);
         return validateCommandOutcome(definition, surfaceAssignmentRecovery(definition.id, envelope));
       });

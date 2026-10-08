@@ -176,22 +176,36 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
  * A successfully admitted request, bound to the definition that admitted it.
  *
  * The capability (not the caller) owns the binding: `definition`, its
- * `contract`, the identity the definition's own selector resolved and the data
- * parsed from the caller's input are fixed when admission runs, and `execute`
- * runs that same definition's `execute` against that data. There is no public
- * function that accepts a caller-assembled definition/contract/admission
- * triple, and no post-admission mutator, so a success-shaped object or an
- * admission for a different schema cannot select a handler, an identity or a
- * different handler value: the only way to obtain an executable capability is
- * `admitCommandInput`.
+ * `contract`, the identity the definition's own selector resolved, the required
+ * names the contract computed and the value parsed from the caller's input are
+ * fixed when admission runs, and `execute` runs that same definition's
+ * `execute` against them. The parsed value stays private to that execution: it
+ * is captured lexically and no property, getter or parameter hands it back, so
+ * a caller cannot replace an admitted value after admission and thereby bypass
+ * the schema that admitted it. There is likewise no public function that
+ * accepts a caller-assembled definition/contract/admission triple, and no
+ * post-admission mutator, so a success-shaped object or an admission for a
+ * different schema cannot select a handler or an identity: the only way to
+ * obtain an executable capability is `admitCommandInput`.
+ *
+ * The capability publishes only `execute` and the immutable primitive facts a
+ * transport needs before execution (the resolved session selector and a
+ * command's stdin content). Everything the handler consumes stays reachable
+ * only from inside `execute`.
  */
 export type AdmittedCommand = Readonly<{
-  /** The effective input admission parsed, after canonical defaults. */
-  readonly input: unknown;
-  /** The handler value, derived from the admission parse bound to the admitted definition's input schema. */
-  readonly data: unknown;
-  readonly required: readonly string[];
+  /**
+   * The session-selector value this admission validated, present only when the
+   * definition declares a `sessionId` context selector and the input supplied
+   * a non-empty string. An immutable primitive context fact, not handler data.
+   */
   readonly sessionId?: string;
+  /**
+   * The caller-supplied `input` string: the content a command's `stdin` effect
+   * reads (the MCP route sends it in the call's `input` field). A primitive
+   * copy, never the parsed handler value.
+   */
+  readonly stdinText?: string;
   /** Execute the admitted request once against the bound definition. */
   execute(context: InvocationContext): Promise<CommandEnvelope>;
 }>;
@@ -203,10 +217,10 @@ export type CommandAdmission =
 type AdmittedBindings = Readonly<{
   definition: CommandDefinition;
   contract: CommandSchemaDescriptor;
-  input: unknown;
   data: unknown;
   required: readonly string[];
   sessionId?: string;
+  stdinText?: string;
 }>;
 
 /** Execute one admission-produced capability, retaining the definition's own execution outcome. */
@@ -246,14 +260,14 @@ async function runAdmitted(bindings: AdmittedBindings, context: InvocationContex
  * The one capability factory. The returned object's `execute` closes over the
  * bindings it was created from, so its behaviour is admission's, not the
  * caller's: nothing outside this module can produce an object the library
- * treats as an admitted request.
+ * treats as an admitted request. The handler value itself is never copied onto
+ * the returned object, so no caller can replace a schema-validated value after
+ * admission and have execution observe it.
  */
 function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
   return Object.freeze({
-    input: bindings.input,
-    data: bindings.data,
-    required: bindings.required,
     ...(bindings.sessionId === undefined ? {} : { sessionId: bindings.sessionId }),
+    ...(bindings.stdinText === undefined ? {} : { stdinText: bindings.stdinText }),
     execute(context: InvocationContext): Promise<CommandEnvelope> {
       return runAdmitted(bindings, context);
     },
@@ -267,9 +281,10 @@ function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
  * `shape` is the transport's handler-value projection (the MCP route removes
  * its context selectors and maps the judgment document to stdin). It runs once,
  * at admission, on the schema-validated value, and only its result is handed to
- * the definition — so the executed value is always derived from the one parse
- * this admission performed, never replaced afterwards. It cannot change the
- * definition, the contract or the resolved identity.
+ * the definition as the private handler value — so the executed value is always
+ * derived from the one parse this admission performed, never replaced
+ * afterwards. It cannot change the definition, the contract or the resolved
+ * identity.
  */
 export function admitCommandInput(
   definition: CommandDefinition,
@@ -352,11 +367,15 @@ export function admitCommandInput(
       ...(rejected === undefined ? {} : { rejected }),
     }) };
   }
+  const parsedRecord = parsed.data !== null && typeof parsed.data === "object" ? parsed.data as Record<string, unknown> : {};
+  const stdinText = definition.effects.includes("stdin") && typeof parsedRecord.input === "string"
+    ? parsedRecord.input : undefined;
   return {
     success: true,
     ...admittedCommand({
-      definition, contract, input: effectiveInput, data: shape(parsed.data), required,
+      definition, contract, data: shape(parsed.data), required,
       ...(typeof selectorValue === "string" ? { sessionId: selectorValue } : {}),
+      ...(stdinText === undefined ? {} : { stdinText }),
     }),
   };
 }
