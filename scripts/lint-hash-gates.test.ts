@@ -51,6 +51,20 @@ describe("hash-gate scope and authorization", () => {
       expect(scanSource("packages/engine/src/hash.ts", source).map(({ classification }) => classification)).toEqual(["hash-gate"]);
     }
   });
+  test("does not treat multiline block-comment continuations or template text as markers", () => {
+    const sources = [
+      `/*
+// hash-gate: authorized — diagnostic */
+if (expectedDigest !== observedDigest) throw new Error("mismatch");`,
+      `const note = \`example
+// hash-gate: authorized — diagnostic\`;
+if (expectedDigest !== observedDigest) throw new Error("mismatch");`,
+    ];
+    for (const source of sources) {
+      expect(scanSource("packages/engine/src/hash.ts", source).map(({ classification }) => classification)).toEqual(["hash-gate"]);
+    }
+  });
+
 
   test("keeps unmarked gates as violations", () => {
     expect(scanSource("packages/engine/src/hash.ts", gate()).map(({ classification }) => classification)).toEqual(["hash-gate"]);

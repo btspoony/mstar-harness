@@ -582,16 +582,40 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
   const local = collectLocalFunctions(sf);
   const reachable = reachableHelpers(sf, contexts, local);
   const findings: HashGateFinding[] = [];
+  const commentRanges = new Map<number, ts.CommentRange>();
+  const collectCommentRanges = (node: ts.Node): void => {
+    for (const range of [
+      ...(ts.getLeadingCommentRanges(text, node.getFullStart()) ?? []),
+      ...(ts.getTrailingCommentRanges(text, node.end) ?? []),
+    ]) commentRanges.set(range.pos, range);
+    ts.forEachChild(node, collectCommentRanges);
+  };
+  collectCommentRanges(sf);
 
   const add = (node: ts.Node, classification: HashGateClassification, kind: ValueKind, extra: string): void => {
     const pos = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     const raw = node.getText(sf).replace(/\s+/g, " ");
+    let effectiveClassification = classification;
+    let reason = classifyReason(classification, kind, enclosingFunctionName(node), extra);
+    if (Object.hasOwn(VIOLATION_CLASSES, classification)) {
+      const marker = [...commentRanges.values()].find((range) => {
+        if (range.kind !== ts.SyntaxKind.SingleLineCommentTrivia) return false;
+        const markerLine = sf.getLineAndCharacterOfPosition(range.pos).line + 1;
+        return (markerLine === pos.line + 1 || markerLine === pos.line) &&
+          /^\s*\/\/ hash-gate: authorized —/.test(text.slice(range.pos, range.end));
+      });
+      if (marker !== undefined) {
+        const value = text.slice(marker.pos, marker.end).match(/^\s*\/\/ hash-gate: authorized —(.*)$/)?.[1]?.trim() ?? "";
+        effectiveClassification = value.length > 0 ? "authorized-gate" : "invalid-authorized-marker";
+        reason = value.length > 0 ? value : "authorized marker requires a non-empty reason";
+      }
+    }
     findings.push({
       file: rel,
       line: pos.line + 1,
       column: pos.character + 1,
-      classification,
-      reason: classifyReason(classification, kind, enclosingFunctionName(node), extra),
+      classification: effectiveClassification,
+      reason,
       snippet: raw.length > 140 ? `${raw.slice(0, 137)}...` : raw,
     });
   };
@@ -637,28 +661,7 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
     }
     add(node, "record-only", kind, "");
   }
-  const lines = text.split(/\r?\n/);
-  const markerOnLine = (lineNumber: number): string | undefined => {
-    const line = lines[lineNumber - 1];
-    if (line === undefined) return undefined;
-    const scanner = ts.createScanner(ts.ScriptTarget.ES2022, false, ts.LanguageVariant.Standard, line);
-    while (scanner.scan() !== ts.SyntaxKind.EndOfFileToken) {
-      if (scanner.getToken() === ts.SyntaxKind.SingleLineCommentTrivia) {
-        const comment = scanner.getTokenText();
-        if (/^\s*\/\/ hash-gate: authorized —/.test(comment)) return comment;
-      }
-    }
-    return undefined;
-  };
-  const marked = findings.map((finding) => {
-    if (!Object.hasOwn(VIOLATION_CLASSES, finding.classification) || finding.classification === "invalid-authorized-marker") return finding;
-    const marker = markerOnLine(finding.line) ?? markerOnLine(finding.line - 1);
-    if (marker === undefined) return finding;
-    const match = marker.match(/^\s*\/\/ hash-gate: authorized —(.*)$/);
-    const reason = match?.[1]?.trim() ?? "";
-    return { ...finding, classification: reason.length > 0 ? "authorized-gate" as const : "invalid-authorized-marker" as const, reason: reason.length > 0 ? reason : "authorized marker requires a non-empty reason" };
-  });
-  return marked.sort((a, b) => (a.line - b.line) || (a.column - b.column));
+  return findings.sort((a, b) => (a.line - b.line) || (a.column - b.column));
 }
 
 function collectTsFiles(dir: string, out: string[]): void {
