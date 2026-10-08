@@ -168,6 +168,7 @@ function nonTerminalRefuses(
     if (doc.integration_worktree_path !== undefined && doc.integration_worktree_path === target.ref) return true;
   }
   for (const doc of snapshots) {
+    if (isTerminalSnapshot(doc)) continue;
     if (!Array.isArray(doc.plans)) continue;
     for (const row of doc.plans) {
       if (!isPlainObject(row) || row.status === "Done") continue;
