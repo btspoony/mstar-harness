@@ -1702,36 +1702,48 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     // call (a forbidden identity key, an absent required key, an unusable value)
     // inside the host's own parameter parsing, so the caller got a schema-library
     // message naming one class at a time instead of the ONE aggregated refusal
-    // the handler owns. Every arm is therefore `.passthrough()` and every value
-    // is left untyped, so the canonical `CoordinatorShapeContract` classifier in
-    // `../coordinator-identity.ts` stays the single place the valid-field rules
-    // live (forbidden → missing → invalid, plus the separate `unauthorized`
-    // proof verdict) and every invalid value — a wrong-typed `priorSessionId`
-    // included — reaches it BY NAME instead of dying in the schema library.
+    // the handler owns. Every arm is therefore `.passthrough()`, and every value
+    // except `priorSessionId` is left untyped, so the canonical
+    // `CoordinatorShapeContract` classifier in `../coordinator-identity.ts` stays
+    // the single place the valid-field rules live (forbidden → missing → invalid,
+    // plus the separate `unauthorized` proof verdict) and every invalid value
+    // reaches it BY NAME instead of dying in the schema library.
     //
     // Split into two arms for ONE measured reason: this host's own
     // `validateToolArguments` runs `normalizeOptionalNullsForSchema` first and
-    // DELETES a supplied `null` from any field an arm declares OPTIONAL. A
-    // `priorSessionId:null` is the documented explicit "this workflow records no
-    // coordinator at all" claim that must survive to the handler, so the recover
-    // arm declares it REQUIRED (a required field is never stripped) and UNTYPED
-    // (`z.unknown()`, so `null` and every invalid type pass). The general arm
-    // covers bind / show-recovery / a holderless recover and deliberately does
-    // NOT declare `priorSessionId`: a later arm that declared it (even as
+    // DELETES a supplied `null` from any field an arm declares OPTIONAL, while a
+    // REQUIRED field is never stripped. `priorSessionId:null` is the documented
+    // explicit "this workflow records no coordinator at all" claim, so the
+    // recover arm declares `priorSessionId` REQUIRED. It is NOT left `z.unknown()`
+    // either: an untyped declaration vanishes from the wire advertisement, so the
+    // field would stop being discoverable to the model. It is declared as the
+    // explicit JSON-value union above — required AND named — which is the one
+    // shape that keeps `null`, admits every wrong type (number, boolean, array,
+    // object) so the classifier can name it, and still advertises the field. The
+    // general arm covers bind / show-recovery / a holderless recover and
+    // deliberately does NOT declare `priorSessionId`: any declaration there (even
     // `unknown().optional()`) would re-introduce the optional-null strip, and a
-    // typed declaration (e.g. `z.string()`) would re-reject the invalid value.
-    // The field stays documented in the tool description and is named by the
-    // classifier whenever it is unusable, so the wire schema omitting it here is
-    // a host-normalizer limitation, not a lost contract. `operation` stays the
-    // one enumerated discriminator, so a call carrying no operation is the only
-    // shape this schema itself refuses.
+    // narrower one would re-reject an invalid value. `operation` stays the one
+    // enumerated discriminator, so a call carrying no operation is the only shape
+    // this schema itself refuses.
     parameters: z
       .union([
         z
           .object({
             operation: z.literal("recover").describe("The coordinator operation this call performs."),
+            // The one field with a NON-string legitimate shape. It is REQUIRED
+            // (so this host's own optional-null normalization cannot delete the
+            // explicit `null` "records no coordinator at all" claim) and declared
+            // as an explicit JSON-value union over the SDK's own scalar builders —
+            // NOT `z.unknown()` — so the wire advertisement still NAMES the field.
+            // The union admits every JSON value a caller could wrongly supply
+            // (number, boolean, array, object) and `null`, so each reaches the
+            // classifier and is named; `undefined` absence is the general arm's
+            // business. This is a transport-shape declaration only: the
+            // string-vs-null MEANING is still decided solely by the classifier,
+            // and no second DSL is added.
             priorSessionId: z
-              .unknown()
+              .union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown()), z.record(z.unknown())])
               .describe(
                 "string|null: the ACTIVE recovery's recorded holder, or null only when the workflow records none.",
               ),

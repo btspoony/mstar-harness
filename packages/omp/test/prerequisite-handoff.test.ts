@@ -46,6 +46,14 @@ import {
   RegisteredToolAdapter,
   loadExtensionFromFactory,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+// The host validates a registered tool's arguments with `validateToolArguments`
+// BEFORE `RegisteredToolAdapter.execute` (pi-agent-core `agent-loop.ts`), not with
+// the raw schema's own `.parse`. That validator only applies this host's argument
+// normalization (optional-null stripping, unknown-key handling, coercion), so a
+// fixture that calls `.parse` alone can miss a real registered-boundary refusal.
+// `pi-coding-agent` re-exports pi-ai's validator through its legacy-pi-ai shim,
+// which is resolvable from this package without adding a dependency.
+import { validateToolArguments as validateHostToolArguments } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -425,7 +433,23 @@ async function coordinatorHarness(
 
   return {
     sessionId: sessionManager.getSessionId(),
-    runTool: async (params) => runRawTool(registered.definition.parameters.parse(params) as Record<string, unknown>),
+    // The host's own registered-tool call order: normalize+validate the arguments
+    // against the registered schema (`validateToolArguments`), then hand the
+    // normalized object to `RegisteredToolAdapter.execute`. A schema-normalization
+    // refusal (which is NOT the handler's aggregated refusal) therefore surfaces
+    // here exactly as it would in a live host process.
+    runTool: async (params) =>
+      (await adapter.execute(
+        "fixture-call",
+        validateHostToolArguments(registered.definition as never, {
+          type: "toolCall",
+          id: "fixture-call",
+          name: registered.definition.name,
+          arguments: params,
+        }) as Record<string, unknown>,
+        undefined,
+        undefined,
+      )) as ToolResult,
     runRawTool,
     runHandoffTool: async (params) =>
       (await handoffAdapter.execute(

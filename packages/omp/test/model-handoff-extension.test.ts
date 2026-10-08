@@ -45,6 +45,12 @@ import {
   RegisteredToolAdapter,
   loadExtensionFromFactory,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+// The live host validates a registered tool's arguments with
+// `validateToolArguments` (pi-agent-core `agent-loop.ts`) BEFORE
+// `RegisteredToolAdapter.execute`; the raw schema's `.parse` alone is not the
+// registered boundary. `pi-coding-agent` re-exports pi-ai's validator through its
+// legacy-pi-ai shim, resolvable here without adding a dependency.
+import { validateToolArguments as validateHostToolArguments } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -556,10 +562,17 @@ async function createHarness(options: {
   const coordinatorAdapter = new RegisteredToolAdapter(coordinatorTool, runner);
 
   const runToolCall = async (params: ToolParams): Promise<ToolResult> => {
-    const parsed = registeredTool.definition.parameters.parse(params);
-    // `RegisteredToolAdapter` is the host's adapter: it forwards to the
-    // definition with the host's own parameter order and context.
-    return (await adapter.execute("fixture-tool-call", parsed, undefined, undefined)) as ToolResult;
+    // The host's own registered-tool call order: normalize+validate the arguments
+    // against the registered schema (`validateToolArguments`), then forward the
+    // normalized object to `RegisteredToolAdapter.execute`. Validation is the real
+    // gate — a schema-level refusal is not the handler's aggregated refusal.
+    const validated = validateHostToolArguments(registeredTool.definition as never, {
+      type: "toolCall",
+      id: "fixture-tool-call",
+      name: registeredTool.definition.name,
+      arguments: params,
+    });
+    return (await adapter.execute("fixture-tool-call", validated, undefined, undefined)) as ToolResult;
   };
 
   return {
@@ -618,8 +631,18 @@ async function createHarness(options: {
       runner.emitToolResult({ type: "tool_result", toolCallId, toolName, input: {}, content: [], isError } as never),
     runTool: runToolCall,
     runCoordinatorTool: async (params: ToolParams) => {
-      const parsed = coordinatorTool.definition.parameters.parse(params);
-      return (await coordinatorAdapter.execute("fixture-coordinator-call", parsed, undefined, undefined)) as ToolResult;
+      const validated = validateHostToolArguments(coordinatorTool.definition as never, {
+        type: "toolCall",
+        id: "fixture-coordinator-call",
+        name: coordinatorTool.definition.name,
+        arguments: params,
+      });
+      return (await coordinatorAdapter.execute(
+        "fixture-coordinator-call",
+        validated,
+        undefined,
+        undefined,
+      )) as ToolResult;
     },
     validateCoordinator: (params: ToolParams) => {
       const parsed = coordinatorTool.definition.parameters.safeParse(params);
