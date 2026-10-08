@@ -336,8 +336,8 @@ function refusalOf(error: unknown, facts: Record<string, unknown> = {}): Coordin
 /**
  * The supported recovery for a store the LOADED build cannot read, stated on
  * the refusal itself. The advice distinguishes the three things callers conflate:
- * loading a refreshed extension registration (a NEW host process/session, never
- * this running one), the session identity a new process acquires (its own — it
+ * loading a refreshed extension registration (a NEW host process, never merely
+ * a new chat/session in this process), the session identity a new process acquires (its own — it
  * does not inherit an existing coordinator binding), and the supported recovery
  * of an existing holder (the prior holder named with its stop attestation).
  * The engine's own facts stay first; this is additive routing guidance only.
@@ -349,11 +349,13 @@ const INCOMPATIBLE_LOADED_ENGINE_CODES: Record<string, true> = {
 const INCOMPATIBLE_LOADED_ENGINE_RECOVERY =
   "The loaded entry below is the build that answered, and this process keeps the extension registration it already " +
   "loaded: refreshing repository sources changes nothing here. Refresh the installed @mstar-harness/omp package to a " +
-  "build that reads this store schema, then start a NEW host process/session so the registration is loaded from it — " +
-  "that new session acquires its own native identity and never inherits an existing coordinator binding, so an existing " +
-  "holder is replaced only through the supported recovery naming the prior holder with its stop attestation. Where an " +
-  "independently acquired session identity is acceptable, the public MCP coordinator route serves the same operations " +
-  "from the refreshed CLI.";
+  "build that reads this store schema, then start a NEW host process so the registration is loaded from it — a new " +
+  "chat/session in the same process is not equivalent. This registration-lifetime guidance is based on the readable " +
+  "OMP 18.3 SDK, not proof of unknown live 18.8 replacement mechanics. The new host session acquires its own native " +
+  "identity and never inherits an existing coordinator binding, so an existing holder is replaced only through the " +
+  "supported recovery with authorization to stop the exact prior holder and its stop attestation/proof. Where an " +
+  "independently acquired session identity is acceptable, the separately launched public MCP coordinator route serves " +
+  "the same operations from the refreshed CLI.";
 
 /** The refusal for one thrown engine error, with incompatible-loaded-build recovery added. */
 function engineRefusal(error: unknown, facts: Record<string, unknown> = {}): CoordinatorIdentityOutcome {
