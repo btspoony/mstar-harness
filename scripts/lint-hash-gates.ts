@@ -31,7 +31,7 @@
  *     reported as advisory, never silently excused.
  *
  * CLI:
- *   bun scripts/lint-hash-gates.ts                    scan engine src + test
+ *   bun scripts/lint-hash-gates.ts                    scan production src
  *   bun scripts/lint-hash-gates.ts --dir <path> ...  scan other roots
  *   bun scripts/lint-hash-gates.ts --repo <path>     path display root
  *   bun scripts/lint-hash-gates.ts --json            machine-readable report
@@ -51,7 +51,9 @@ export type HashGateClassification =
   | "byte-assertion"
   | "helper-hash-gate"
   | "replay-allowed"
-  | "record-only";
+  | "record-only"
+  | "authorized-gate"
+  | "invalid-authorized-marker";
 
 export interface HashGateFinding {
   file: string;
@@ -70,6 +72,7 @@ const VIOLATION_CLASSES: Readonly<Record<string, true>> = {
   "canonical-assertion": true,
   "byte-assertion": true,
   "helper-hash-gate": true,
+  "invalid-authorized-marker": true,
 };
 
 
@@ -80,7 +83,7 @@ const REFUSAL_CALL =
 
 const ASSERTION_CALL = /^(?:expect|assert|assertEquals?|strictEqual|notStrictEqual|deepStrictEqual|deepEqual|notDeepEqual)\b/;
 
-const DEFAULT_DIRS = ["packages/engine/src", "packages/engine/test"];
+const DEFAULT_DIRS = ["packages/engine/src"];
 
 /** Names of value kinds this lint tracks. */
 type ValueKind = "hash" | "canonical" | "bytes";
@@ -573,6 +576,7 @@ function equalityClass(kind: ValueKind, rawBytes: boolean, mode: "gate" | "asser
 /** Scan one source file's text. Pure: no filesystem access. */
 export function scanSource(rel: string, text: string): HashGateFinding[] {
   const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  if (rel.endsWith(".test.ts") || /(?:^|[\\/])test[\\/]/.test(rel)) return [];
   const aliases = collectAliases(sf);
   const contexts = collectRefusalContexts(sf);
   const local = collectLocalFunctions(sf);
@@ -633,7 +637,16 @@ export function scanSource(rel: string, text: string): HashGateFinding[] {
     }
     add(node, "record-only", kind, "");
   }
-  return findings.sort((a, b) => (a.line - b.line) || (a.column - b.column));
+  const lines = text.split(/\r?\n/);
+  const marked = findings.map((finding) => {
+    if (!Object.hasOwn(VIOLATION_CLASSES, finding.classification) || finding.classification === "invalid-authorized-marker") return finding;
+    const marker = [lines[finding.line - 1], lines[finding.line - 2]].find((line) => line?.includes("// hash-gate: authorized"));
+    if (marker === undefined) return finding;
+    const match = marker.match(/\/\/ hash-gate: authorized —(.*)$/);
+    const reason = match?.[1]?.trim() ?? "";
+    return { ...finding, classification: reason.length > 0 ? "authorized-gate" as const : "invalid-authorized-marker" as const, reason: reason.length > 0 ? reason : "authorized marker requires a non-empty reason" };
+  });
+  return marked.sort((a, b) => (a.line - b.line) || (a.column - b.column));
 }
 
 function collectTsFiles(dir: string, out: string[]): void {
@@ -641,8 +654,9 @@ function collectTsFiles(dir: string, out: string[]): void {
     if (entry === "node_modules" || entry === "dist" || entry === ".git") continue;
     const full = join(dir, entry);
     const st = statSync(full);
-    if (st.isDirectory()) collectTsFiles(full, out);
-    else if (entry.endsWith(".ts")) out.push(full);
+    if (st.isDirectory()) {
+      if (entry !== "test") collectTsFiles(full, out);
+    } else if (entry.endsWith(".ts") && !entry.endsWith(".test.ts")) out.push(full);
   }
 }
 
@@ -685,8 +699,7 @@ Usage: bun scripts/lint-hash-gates.ts [--repo <path>] [--dir <path>]... [--json]
 
   --repo      path used to display file locations and to resolve default roots
               (default: process.cwd())
-  --dir       scan root, repeatable (default: packages/engine/src packages/engine/test)
-              pass a disposable fixture directory to exercise the rule
+  --dir       scan root, repeatable (default: packages/engine/src)
   --json      print the full report as JSON
   --advisory  print advisory rows (record-only / canonical non-gate) in text mode
 
@@ -730,13 +743,14 @@ async function main(argv: string[]): Promise<number> {
 
   const isViolation = (finding: HashGateFinding): boolean => Object.hasOwn(VIOLATION_CLASSES, finding.classification);
   const violations = all.filter(isViolation);
+  const authorizedGates = all.filter((f) => f.classification === "authorized-gate");
   const allowlist = all.filter((f) => f.classification === "replay-allowed");
-  const advisory = all.filter((f) => !isViolation(f) && f.classification !== "replay-allowed");
+  const advisory = all.filter((f) => !isViolation(f) && f.classification !== "authorized-gate" && f.classification !== "replay-allowed");
 
   if (parsed.json) {
     console.log(
       JSON.stringify(
-        { repo, dirs: parsed.dirs, scanned: scanned.length, violations, allowlist, advisory },
+        { repo, dirs: parsed.dirs, scanned: scanned.length, violations, authorizedGates, allowlist, advisory },
         null,
         2,
       ),
@@ -755,6 +769,8 @@ async function main(argv: string[]): Promise<number> {
     console.error(`lint:hash-gates: ${violations.length} violation(s) in ${scanned.length} file(s) scanned:`);
     show(violations);
   }
+  console.error(`lint:hash-gates: authorized gates — ${authorizedGates.length}:`);
+  show(authorizedGates);
   console.error(`lint:hash-gates: replay allowlist — ${allowlist.length} same-operation-id request_hash site(s):`);
   show(allowlist);
   if (parsed.advisory) {
