@@ -7,7 +7,7 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
-import { initializeStore, serializeExecutionValue } from "@mstar-harness/engine";
+import { initializeStore, openStore, serializeExecutionValue } from "@mstar-harness/engine";
 import { registerMcpCommand } from "../src/mcp/command";
 import { mapParserError, registerCliCommands, renderCommandContract } from "../src/command-adapter";
 import type { CommandDefinition, InvocationContext } from "@mstar-harness/commands";
@@ -290,6 +290,13 @@ test("workflow registration discloses missing plan identity and succeeds after t
   mkdirSync(path.dirname(planFile), { recursive: true });
   writeFileSync(planFile, "# Public registration plan\n");
   (await initializeStore({ harnessDir: harness })).close();
+  // A registered CLI invocation opens the store query-only. On Bun 1.4.0 the
+  // just-closed writer's deferred cleanup can still remove the WAL sidecars
+  // WHILE that read-only open runs, so its first open intermittently refuses
+  // `store.corrupt` (`SQLITE_CANTOPEN`). One read in this process settles the
+  // file into its readable shape before the adapter runs, exactly as the
+  // sibling fixture helper `sealStoreForReaders` does.
+  (await openStore({ harnessDir: harness }, "read")).close();
   const args = [
     "workflow", "register",
     "--workflow", "wf-public-registration",

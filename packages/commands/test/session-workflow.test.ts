@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { consultDeliveryEvidence, encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore, readWorkflowSnapshot, writeWorkflowSnapshot } from "@mstar-harness/engine";
+import { consultDeliveryEvidence, encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore, readWorkflowSnapshot, WORKFLOW_SNAPSHOT_FILE } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 
@@ -69,13 +69,17 @@ describe("session and workflow command families", () => {
     const close = (workflow: string) => definition("status.workflow-close").execute({
       workflow, harness: harnessDir, endedAt: "2026-10-08T00:00:00.000Z",
     }, context);
-    const markDone = async (workflow: string) => {
+    // The FILE route's plan status is moved only by the coordinator's authorized
+    // lifecycle operations; this fixture instead plants the initial condition
+    // directly on disk, exactly as the sibling close/process fixtures do, so the
+    // evidence consumer is exercised against a row already at Done.
+    const markDone = (workflow: string) => {
       const dir = snapshotDir(workflow);
       const snapshot = readWorkflowSnapshot(dir).snapshot;
-      await writeWorkflowSnapshot({
+      writeFileSync(path.join(dir, WORKFLOW_SNAPSHOT_FILE), JSON.stringify({
         ...snapshot,
         plans: snapshot.plans.map((row) => ({ ...row, status: "Done" })),
-      }, dir);
+      }));
     };
 
     const development = await definition("workflow.register").execute({
