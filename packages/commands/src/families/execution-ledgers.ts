@@ -123,19 +123,20 @@ function readLedgerBytes(file: string): Uint8Array | null {
       );
     }
     if (code !== "ENOENT") throw error;
+    let info;
     try {
-      const info = lstatSync(file);
-      if (info.isSymbolicLink() || !info.isFile()) {
-        throw new ExecutionLedgerError(
-          "execution-ledgers.target-untrusted",
-          `the retained notes ledger at ${file} is not a regular file.`,
-        );
-      }
-      return null;
+      info = lstatSync(file);
     } catch (statError) {
       if ((statError as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw statError;
     }
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new ExecutionLedgerError(
+        "execution-ledgers.target-untrusted",
+        `the retained notes ledger at ${file} is not a regular file.`,
+      );
+    }
+    throw error;
   }
   try {
     if (!fstatSync(fd).isFile()) {
