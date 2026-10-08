@@ -38,7 +38,7 @@ describe("refusal quality scanner", () => {
     }));
     const allowlist = [{
       signature: signatureFor("missing-recovery", "packages/commands/src/fixture.ts", snippet),
-      justification: "Tracked structured refusal cleanup.", trackingIssue: "I-000434",
+      justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT",
     }];
     const result = applyAllowlist(findings, allowlist, "/repo");
     expect(result.findings.map((finding) => finding.classification)).toEqual(["allowlisted", "allowlisted"]);
@@ -55,7 +55,7 @@ describe("refusal quality scanner", () => {
     ];
     const allowlist = [{
       signature: signatureFor("missing-recovery", "scripts/a.ts", "same()"),
-      justification: "Tracked issue.", trackingIssue: "I-000435",
+      justification: "Tracked issue.", trackingIssue: "SYNTH-REACHABILITY-COHORT",
     }];
     const result = applyAllowlist(findings, allowlist, "/repo");
     expect(countViolations(result.findings)).toBe(1);
@@ -63,11 +63,11 @@ describe("refusal quality scanner", () => {
   });
 
   test("rejects malformed allowlist entries and duplicate signatures", () => {
-    expect(() => parseAllowlist(JSON.stringify([{ signature: "bad", justification: "reason", trackingIssue: "I-000434" }]))).toThrow(/signature/i);
-    expect(() => parseAllowlist(JSON.stringify([{ signature: "missing-recovery:scripts/a.ts:123456789abc", justification: " ", trackingIssue: "I-000434" }]))).toThrow(/justification/i);
+    expect(() => parseAllowlist(JSON.stringify([{ signature: "bad", justification: "reason", trackingIssue: "SYNTH-REFUSAL-COHORT" }]))).toThrow(/signature/i);
+    expect(() => parseAllowlist(JSON.stringify([{ signature: "missing-recovery:scripts/a.ts:123456789abc", justification: " ", trackingIssue: "SYNTH-REFUSAL-COHORT" }]))).toThrow(/justification/i);
     const entry = {
       signature: "missing-recovery:scripts/a.ts:123456789abc",
-      justification: "Tracked issue.", trackingIssue: "I-000434",
+      justification: "Tracked issue.", trackingIssue: "SYNTH-REFUSAL-COHORT",
     };
     expect(() => parseAllowlist(JSON.stringify([entry, entry]))).toThrow(/duplicate/i);
   });
