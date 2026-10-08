@@ -157,9 +157,9 @@ describe("session.recover input discovery", () => {
         .split(/["']/)[0]!
         .trim();
       expect(cause, `${label}: the parser's own category ${JSON.stringify(category)} must open the published cause`).toContain(category);
-      // Operands the parser NAMED as unexpected are submitted source, so no
-      // single-quoted or double-quoted form of them may survive.
-      for (const operand of rawMessage.match(/\bUnexpected\s+(?:token|identifier|number|string|character)\s+(?:'[^']*'|"[^"]*")/gi) ?? []) {
+      // Operands the parser NAMED as unexpected/unrecognized are submitted
+      // source, so no single-quoted or double-quoted form of them may survive.
+      for (const operand of rawMessage.match(/\b(?:Unexpected|Unrecognized|Unrecognised)\s+(?:token|identifier|number|string|character)\s+(?:'[^']*'|"[^"]*")/gi) ?? []) {
         const inner = operand.match(/(?:'([^']*)'|"([^"]*)")/);
         const token = inner?.[1] ?? inner?.[2] ?? "";
         if (token === "") continue;
@@ -168,8 +168,8 @@ describe("session.recover input discovery", () => {
       }
       // Grammar the parser AUTHORED (dangling delimiters it merely mentions)
       // must survive: every single-quoted operand the message does not name as
-      // unexpected is expected-grammar.
-      const unexpectedSpans = (rawMessage.match(/\bUnexpected\s+\w+\s+'[^']*'/gi) ?? []);
+      // unexpected/unrecognized is expected-grammar.
+      const unexpectedSpans = (rawMessage.match(/\b(?:Unexpected|Unrecognized|Unrecognised)\s+\w+\s+'[^']*'/gi) ?? []);
       for (const token of rawMessage.match(/'[^']*'/g) ?? []) {
         if (unexpectedSpans.some((span) => span.endsWith(token))) continue;
         expect(cause, `${label}: parser grammar ${token} must survive in the cause`).toContain(token);

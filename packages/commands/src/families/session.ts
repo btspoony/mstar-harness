@@ -78,15 +78,16 @@ function parserLocation(message: string): string | undefined {
  * offending source bytes.
  *
  * The safe discriminator is the operand's DIAGNOSTIC ROLE, not its quote style:
- * an operand named by an "Unexpected …" clause is the SUBMITTED SOURCE token the
- * parser tripped over — Node's `Unexpected token 'F', "…" is not valid JSON`
- * quotes the offending character, and Bun's `Unexpected identifier "<token>"`
- * quotes the offending token — so it is removed whichever quote style carries
- * it. An operand named by an "Expected …" clause, or a delimiter the message
- * merely mentions, is grammar the PARSER authored (`','`, `'}'`, `')'`) and is
- * preserved. Node's trailing document excerpt and any other double-quoted echo
- * are removed too. The reported position/location is published separately and
- * kept only when this runtime supplies it.
+ * an operand named by an "Unexpected …" or "Unrecognized …" clause is the
+ * SUBMITTED SOURCE token the parser tripped over — Node's
+ * `Unexpected token 'F', "…" is not valid JSON` quotes the offending character,
+ * Bun's `Unexpected identifier "<token>"` quotes the offending token, and Bun's
+ * `Unrecognized token '@'` quotes the offending character too — so it is removed
+ * whichever quote style carries it. An operand named by an "Expected …" clause,
+ * or a delimiter the message merely mentions, is grammar the PARSER authored
+ * (`','`, `'}'`, `')'`) and is preserved. Node's trailing document excerpt and
+ * any other double-quoted echo are removed too. The reported position/location
+ * is published separately and kept only when this runtime supplies it.
  */
 function attestationParserCause(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -99,10 +100,12 @@ function attestationParserCause(error: unknown): string {
     // quotes and a truncated trailing ellipsis.
     .replace(/,?\s*"[\s\S]*"\s*\.{0,3}\s*is not valid JSON\s*$/i, "")
     .replace(/,?\s*\.{0,3}\s*is not valid JSON\s*$/i, "")
-    // By role: the operand an "Unexpected …" clause names is the submitted
-    // source token, so it goes whatever its quote style, while the category
-    // words that classify the failure survive.
-    .replace(/(Unexpected\s+(?:token|identifier|number|string|character|end of input)\s+)(?:'[^']*'|"[^"]*")/gi, "$1")
+    // By role: the operand an "Unexpected …" / "Unrecognized …" clause names is
+    // the submitted source token — Node's `Unexpected token 'F'`, Bun's
+    // `Unexpected identifier "<token>"` and Bun's `Unrecognized token '@'` — so
+    // it goes whatever its quote style, while the category words that classify
+    // the failure survive.
+    .replace(/((?:Unexpected|Unrecognized|Unrecognised)\s+(?:token|identifier|number|string|character|end of input)\s+)(?:'[^']*'|"[^"]*")/gi, "$1")
     // Any remaining double-quoted span is a runtime echo of an operand too.
     .replace(/\s*"[^"]*"/g, "")
     .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
