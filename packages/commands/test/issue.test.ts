@@ -98,7 +98,7 @@ describe("issue command family", () => {
       id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
       operationId: "stale-triage", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
-    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\`, then retry \`mstar issue triage --id ${receipt.issueId} --expect <current-revision>\``);
+    expect(triaged.status === "refused" ? triaged.details?.recovery : undefined).toBe(`Run \`mstar issue show --id ${receipt.issueId}\`, then rerun the original command with \`--expect <current-revision>\` in place of the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`);
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     expect(shown.status).toBe("ok");
     if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision, severity: "high" });
@@ -114,7 +114,7 @@ describe("issue command family", () => {
       operationId: "stale-close", actor: "project-manager", expect: receipt.revision - 1,
     }, context);
     expect(closed.status === "refused" ? closed.details?.recovery : undefined).toBe(
-      `Run \`mstar issue show --id ${receipt.issueId}\`, then retry \`mstar issue close --id ${receipt.issueId} --expect <current-revision>\``,
+      `Run \`mstar issue show --id ${receipt.issueId}\`, then rerun the original command with \`--expect <current-revision>\` in place of the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`,
     );
   });
 
@@ -129,14 +129,23 @@ describe("issue command family", () => {
     expect(command.effects).toEqual(["write"]);
     expect(definition("issue.export").effects).toEqual(["read"]);
   });
-  test("--expect help documents revision CAS for every issue command that exposes the option", () => {
+  test("--expect help documents revision CAS only for CAS-enforcing issue commands", () => {
     const commands = getCommandDefinitions().filter((command) =>
       command.id.startsWith("issue.") && command.cli.options.some((option) => option.key === "expect"),
     );
-    expect(commands.length).toBeGreaterThan(0);
-    for (const command of commands) {
-      const expectOption = command.cli.options.find((option) => option.key === "expect");
-      expect(expectOption?.help).toContain("revision CAS, not an execution token");
+    const casVerbs = ["triage", "close", "waive", "duplicate", "supersede", "reopen", "link"];
+    const nonCasVerbs = ["add", "list", "show", "export", "occurrence"];
+    for (const verb of casVerbs) {
+      const command = commands.find((item) => item.id === `issue.${verb}`);
+      expect(command).toBeDefined();
+      const help = command?.cli.options.find((option) => option.key === "expect")?.help ?? "";
+      expect(help).toContain("revision CAS, not an execution token");
+    }
+    for (const verb of nonCasVerbs) {
+      const command = commands.find((item) => item.id === `issue.${verb}`);
+      expect(command).toBeDefined();
+      const help = command?.cli.options.find((option) => option.key === "expect")?.help ?? "";
+      expect(help).not.toContain("revision CAS");
     }
   });
 

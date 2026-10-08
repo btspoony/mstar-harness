@@ -54,6 +54,9 @@ const terminalDisposition: Record<string, TerminalDisposition> = {
   supersede: "superseded",
 };
 const readVerbs: Record<string, true> = { list: true, show: true, export: true };
+const revisionCasVerbs: Record<string, true> = {
+  triage: true, close: true, waive: true, duplicate: true, supersede: true, reopen: true, link: true,
+};
 
 function ok<T>(id: string, data: T): CommandEnvelope<T> {
   return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data };
@@ -65,9 +68,8 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
     ? error.paths as string[]
     : [];
   const issueId = input?.id?.trim() || "<id>";
-  const verb = id.slice("issue.".length);
   const recovery = code === "issue.revision-conflict"
-    ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue ${verb} --id ${issueId} --expect <current-revision>\`${id === "issue.reopen" ? " with the same non-empty reason payload." : ""}`
+    ? `Run \`mstar issue show --id ${issueId}\`, then rerun the original command with \`--expect <current-revision>\` in place of the stale value, keeping \`--operation-id\`, \`--actor\`, and the original payload unchanged.`
     : id !== "issue.reopen"
       ? undefined
       : code === "store.operation-conflict"
@@ -252,7 +254,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "operationId" || key === "actor")) ||
       (verb === "reopen" && (key === "id" || key === "expect")),
-    ...(key === "expect"
+    ...(key === "expect" && revisionCasVerbs[verb] === true
       ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
       : {}),
   }));
