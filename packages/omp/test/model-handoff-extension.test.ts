@@ -2850,6 +2850,192 @@ describe("prerequisite identity — registered coordinator recovery tool handler
   }, 120000);
 });
 
+/* ------------------------------------------------------- native ACTIVE handler --- */
+
+/**
+ * A REAL active execution authority whose workflow is created by
+ * `creatorSessionId` and holds NO coordinator row — the state an ordinary
+ * minimal bind addresses. No root register and no workflow snapshot exist on
+ * this route.
+ */
+async function seedBindableActiveWorkflow(repo: ControlRepo, creatorSessionId: string, workflowId: string): Promise<void> {
+  const harness = repo.harness;
+  mkdirSync(join(harness, "plans"), { recursive: true });
+  setArtifactStore(createFsStore(harness));
+  const store = await initializeStore({ harnessDir: harness });
+  store.close();
+  const initialized = await initializeExecutionAuthority({ harnessDir: harness });
+  const context: ExecutionContext = {
+    harnessDir: harness,
+    caller: { sessionId: creatorSessionId, role: "coordinator", workflowId } satisfies ExecutionCaller,
+  };
+  await createExecutionWorkflow(context, {
+    entry: { id: workflowId, type: "iteration", started_at: "2026-09-16T00:00:00Z", dir: `workflows/${workflowId}` },
+    snapshot: {
+      schema_version: 1,
+      id: workflowId,
+      type: "iteration",
+      status: "running",
+      phase: "phase-1-prepare",
+      started_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      plans: [],
+    } as never,
+    expected: initialized.token,
+    operationId: `create-${workflowId}`,
+  });
+}
+
+/**
+ * A valid operator `ActivationAttestation` for one recovery: it attests the
+ * current coordinator consumer and names exactly the stopped prior holder —
+ * never the replacement session that performs the recovery.
+ */
+function activationAttestation(priorSessionId: string): Record<string, unknown> {
+  return {
+    version: 1,
+    attestedAt: "2026-09-16T00:00:00.000Z",
+    operator: { actor: "fixture-operator", authorizationRef: "fixture-authorization-1" },
+    consumers: [
+      {
+        entryId: "omp-model-handoff",
+        kind: "coordinator",
+        entrypoint: "extensions/model-handoff.js",
+        runtime: "bun",
+        runtimeVersion: "1.4.0",
+        version: "3.11.2",
+        current: true,
+        disposition: "reloaded",
+      },
+    ],
+    stoppedSessions: [{ sessionId: priorSessionId, host: "fixture-host", state: "stopped" }],
+  };
+}
+
+/** The DB coordinator seat of one workflow, read through the engine's own authority. */
+async function activeCoordinatorOf(repo: ControlRepo, workflowId: string): Promise<string | null> {
+  const read = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+  const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
+  return workflow?.coordinator?.sessionId ?? null;
+}
+
+describe("native coordinator tool on the ACTIVE route", () => {
+  test("the registered handler performs an ordinary minimal bind and keeps exactly one owner", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-bind-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+
+    // The registered schema accepts the minimal pair, and the handler binds
+    // through the DB verb with the controls it derived itself.
+    expect(harness.validateCoordinator({ operation: "bind", workflowId }).success).toBe(true);
+    const bound = await harness.runCoordinatorTool({ operation: "bind", workflowId });
+    expect(bound.isError).toBe(false);
+    expect(bound.details.mstarCoordinator).toMatchObject({
+      workflowId,
+      sessionId: hostId,
+      role: "coordinator",
+      replayed: false,
+    });
+    expect(String((bound.details.mstarCoordinator as Record<string, unknown>).operationId)).toMatch(/^coordinator-bind-/);
+    expect(JSON.stringify(bound.details)).not.toContain("sessions/");
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(hostId);
+
+    // A second bind is the ENGINE's own ownership refusal — with the recorded
+    // holder and its structured recovery problem preserved — and nothing moves.
+    const again = await harness.runCoordinatorTool({ operation: "bind", workflowId });
+    expect(again.isError).toBe(true);
+    expect(coordinatorCodeOf(again)).toBe("execution.session-unavailable");
+    const refusal = again.details.mstarCoordinator as Record<string, unknown>;
+    expect(refusal.holder).toBe(hostId);
+    expect(Array.isArray(refusal.available_work)).toBe(true);
+    expect(typeof refusal.loadedEntry).toBe("string");
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(hostId);
+  }, 120_000);
+
+  test("show-recovery reads the ACTIVE authority through the registered handler", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-show-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+    expect((await harness.runCoordinatorTool({ operation: "bind", workflowId })).isError).toBe(false);
+
+    const shown = await harness.runCoordinatorTool({ operation: "show-recovery", workflowId });
+    expect(shown.isError).toBe(false);
+    expect(shown.details.mstarCoordinator).toMatchObject({
+      workflowId,
+      status: "running",
+      coordinatorSessionId: hostId,
+    });
+    expect(JSON.stringify(shown.details)).not.toContain("sessions/");
+  }, 120_000);
+
+  test("a minimal ACTIVE recovery replaces the recorded holder through the registered handler", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const state = await seedActiveHandoffAuthority(repo, "recorded-owner", "native-recovery-iteration");
+
+    // The schema accepts the ACTIVE recovery shape, and the handler derives the
+    // token and operation id itself: the operator supplies only the holder, the
+    // reason and the attestation document.
+    expect(
+      harness.validateCoordinator({
+        operation: "recover",
+        workflowId: state.workflowId,
+        priorSessionId: "recorded-owner",
+        reason: "the recorded host session was stopped",
+        attestation: activationAttestation("recorded-owner"),
+      }).success,
+    ).toBe(true);
+    const recovered = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId: state.workflowId,
+      priorSessionId: "recorded-owner",
+      reason: "the recorded host session was stopped",
+      attestation: activationAttestation("recorded-owner"),
+    });
+    expect(recovered.isError).toBe(false);
+    expect(recovered.details.mstarCoordinator).toMatchObject({
+      workflowId: state.workflowId,
+      priorSessionId: "recorded-owner",
+      sessionId: hostId,
+      replayed: false,
+    });
+    expect(String((recovered.details.mstarCoordinator as Record<string, unknown>).operationId)).toMatch(/^coordinator-bind-/);
+    expect(await activeCoordinatorOf(repo, state.workflowId)).toBe(hostId);
+  }, 120_000);
+
+  test("a newer store schema surfaces the loaded build's own refusal with its provenance", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const harness = await createHarness({
+      cwd: repo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(repo.main),
+    });
+    const store = await initializeStore({ harnessDir: repo.harness });
+    store.db.exec("insert into schema_version values(999, 'future', 'future', 'now')");
+    store.close();
+
+    // The route probe refuses with the engine's OWN code and message — never a
+    // masked Prepare refusal or generic text — and the details carry the loaded
+    // entry that answered plus the supported host recovery.
+    const refused = await harness.runCoordinatorTool({ operation: "bind", workflowId: "native-schema-iteration" });
+    expect(refused.isError).toBe(true);
+    expect(coordinatorCodeOf(refused)).toBe("store.schema-unsupported");
+    expect(String(refused.content[0]?.text)).toContain("which this build does not know");
+    expect(String(refused.content[0]?.text)).toContain("NEW host process/session");
+    const details = refused.details.mstarCoordinator as Record<string, unknown>;
+    expect(typeof details.loadedEntry).toBe("string");
+    expect(String(details.loadedEntry).length).toBeGreaterThan(0);
+  }, 120_000);
+});
+
 /* ------------------------------------------------------------------------ *
  * The ACTIVE route (§6): the host adapter takes its start authority from the
  * DB workflow/coordinator view, carries the adopted binding in the durable

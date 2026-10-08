@@ -14,25 +14,34 @@
  * through `bash` is refused with a redirect to this tool instead of being
  * silently authorized by an injected environment variable.
  *
- * ## Two authority-selected forms of the same operations (§6, phase 2b)
+ * ## One ordinary shape; the addressed root decides the authority (§6, phase 2b)
  *
  * The control root this call addresses decides WHICH authority answers, and the
- * caller never selects one:
+ * caller never selects one. An ordinary call carries only the operation and the
+ * explicitly named workflow, and works on both routes:
  *
- * - an ACTIVE execution authority (`resolveExecutionReadRoute` → `execution`)
- *   answers through the DB session API: `bind {workflowId, expected,
- *   operationId}` and `recover {workflowId, priorSessionId, reason, attestation,
- *   expected, operationId}` call the existing engine verbs directly under an
- *   independently acquired host identity. `expected` is the full workflow
- *   execution token and `attestation` is the existing `ActivationAttestation`
- *   document, projected by the engine's own validator.
- * - the pre-activation file route (`files`, and only it) keeps the managed
- *   Prepare bootstrap `bind {workflowId}` and the JSON recovery, unchanged.
+ * - `bind {workflowId}` under an ACTIVE execution authority
+ *   (`resolveExecutionReadRoute` → `execution`) reads the workflow's current
+ *   execution token from that authority and mints an engine-safe operation id,
+ *   so no caller ever has to discover/read/copy a token first; explicit
+ *   `expected`/`operationId` values are still honored and re-checked by the
+ *   engine. The pre-activation file route answers the same shape with the
+ *   unchanged managed Prepare bootstrap.
+ * - `recover` keeps the two authority-specific proofs: the ACTIVE form calls the
+ *   existing DB recovery verb with `priorSessionId`, `reason` and the operator's
+ *   own `ActivationAttestation` document (its token and operation id are
+ *   derived exactly like the bind's), while the pre-activation file route keeps
+ *   the audited `authorizationRef`/`stoppedSessionIds` JSON recovery, unchanged.
  *
- * The two forms are told apart by their own fields and then confirmed against
- * the route: a mixed key set, a missing field, an active form on a root with no
- * active authority, or a JSON form on an ACTIVE root all refuse *before* any
- * IO — a fallback authority is never selected on the caller's behalf.
+ * A field the answering authority cannot honor refuses by name — an active CAS
+ * field on a file root, a JSON stop proof on an ACTIVE root — so a fallback
+ * authority is never selected on the caller's behalf, and every unusable field
+ * of one call is reported in a single aggregated refusal.
+ *
+ * Every engine-sourced refusal carries the engine's own code, message and
+ * COMPLETE structured details, plus the URL of the module the host actually
+ * loaded: an incompatible loaded build is diagnosed from what is running, never
+ * from installed-plugin inventory.
  */
 import {
   assertExecutionFileReadAllowed,
@@ -61,16 +70,34 @@ import {
   type PrepareCoordinatorRecoveryView,
   type RecoverPrepareCoordinatorResult,
 } from "@mstar-harness/engine";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 /** The host-owned tool name (the only advertised managed bootstrap route). */
 export const COORDINATOR_TOOL_NAME = "mstar_coordinator";
 
-/** The exact `bind` input: no session id, root, role, authority flag or credential path. */
-export type CoordinatorBindRequest = Readonly<{ operation: "bind"; workflowId: string }>;
+/**
+ * The ordinary `bind` input: the operation, the explicitly named workflow and —
+ * never required — the caller's own CAS values. Under an ACTIVE authority the
+ * adapter derives a missing `expected` from the addressed authority itself and
+ * mints a missing `operationId`, so an ordinary call needs no discover/read/copy
+ * ladder; supplied values are forwarded verbatim and re-checked by the engine.
+ */
+export type CoordinatorBindRequest = Readonly<{
+  operation: "bind";
+  workflowId: string;
+  /** Full `exec-v1:workflow:…` token of the addressed workflow, re-checked by the engine. */
+  expected?: string;
+  /** Operation id: an identical retry is a replay, a different request refuses. */
+  operationId?: string;
+}>;
 
-/** The only keys the input union accepts; anything else is refused by name. */
-export const COORDINATOR_BIND_INPUT_KEYS = ["operation", "workflowId"] as const;
+/**
+ * The only keys `bind` accepts, on either route; anything else is refused by
+ * name. `expected`/`operationId` are ACTIVE-authority CAS values and are
+ * refused on a pre-activation root instead of being silently ignored.
+ */
+export const COORDINATOR_BIND_INPUT_KEYS = ["operation", "workflowId", "expected", "operationId"] as const;
 
 /** The read-only recovery view input: the same two caller-chosen fields as `bind`. */
 export type CoordinatorShowRecoveryRequest = Readonly<{ operation: "show-recovery"; workflowId: string }>;
@@ -143,25 +170,6 @@ export type CoordinatorBindFn = (input: {
  * ------------------------------------------------------------------------- */
 
 /**
- * The active `bind`: the managed bootstrap has no envelope here — the DB session
- * API records the binding under the host-derived identity. The caller supplies
- * the exact workflow execution token it read from the current authority and the
- * operation id that makes an identical retry a replay; it still supplies no
- * session id, root, role, authority flag or credential path.
- */
-export type CoordinatorActiveBindRequest = Readonly<{
-  operation: "bind";
-  workflowId: string;
-  /** Full `exec-v1:workflow:…` token of the addressed workflow, re-checked by the engine. */
-  expected: string;
-  /** Operation id: an identical retry is a replay, a different request refuses. */
-  operationId: string;
-}>;
-
-/** The only keys the active `bind` accepts. */
-export const COORDINATOR_ACTIVE_BIND_INPUT_KEYS = ["operation", "workflowId", "expected", "operationId"] as const;
-
-/**
  * The active `recover`: the DB recovery verb replaces the named holder under the
  * operator's own attestation document. `priorSessionId` is explicit — the JSON
  * form resolves it from the stored binding, while the DB form records what the
@@ -176,9 +184,10 @@ export type CoordinatorActiveRecoverRequest = Readonly<{
   reason: string;
   /** The operator's own `ActivationAttestation` document; validated by the engine, never manufactured here. */
   attestation: unknown;
-  /** Full `exec-v1:workflow:…` token of the addressed workflow. */
-  expected: string;
-  operationId: string;
+  /** Full `exec-v1:workflow:…` token; derived from the addressed authority when omitted. */
+  expected?: string;
+  /** Operation id; a fresh host-minted id when omitted. */
+  operationId?: string;
 }>;
 
 /** The only keys the active `recover` accepts. */
@@ -192,8 +201,8 @@ export const COORDINATOR_ACTIVE_RECOVER_INPUT_KEYS = [
   "operationId",
 ] as const;
 
-/** The two fields that mark the active form of `bind`/`recover`. */
-const ACTIVE_FORM_MARKERS = ["expected", "operationId"] as const;
+/** The fields only the ACTIVE `recover` declares (the JSON form has none of them). */
+const ACTIVE_RECOVER_MARKERS = ["priorSessionId", "attestation"] as const;
 
 /**
  * The engine/route surface the active forms call; injectable so a fixture proves
@@ -290,6 +299,78 @@ function refuse(code: string, text: string, details: Record<string, unknown> = {
   return { ok: false, isError: true, code, text, details: { ...details, code } };
 }
 
+/**
+ * The provenance a refusal carries about the adapter the host ACTUALLY loaded:
+ * the URL of the module this outcome was produced from, as the running module
+ * itself reports it. It is never inferred from installed-plugin inventory and
+ * never read from disk metadata that merely claims to describe a cached closure
+ * — the one thing a caller must be able to check when a loaded build refuses a
+ * store its repository sources already know how to read.
+ */
+export const LOADED_ENTRY: string = import.meta.url;
+
+/** The engine's own structured diagnostic record, or `{}` when it carries none. */
+function engineDetailsOf(error: unknown): Record<string, unknown> {
+  const details = (error as { details?: unknown } | null)?.details;
+  return isPlainObject(details) ? { ...details } : {};
+}
+
+/**
+ * One refusal for a thrown engine error: the engine's own code, message and
+ * COMPLETE structured details travel with it unchanged, and the loaded entry
+ * names the module that answered. Nothing is rewritten, summarized or replaced
+ * with generic text — the structured facts (a schema refusal's applied and
+ * supported bounds, an ownership refusal's recorded holder and its recovery
+ * problem) are the caller's evidence.
+ */
+function refusalOf(error: unknown, facts: Record<string, unknown> = {}): CoordinatorIdentityOutcome {
+  return refuse(codeOf(error), messageOf(error), {
+    ...engineDetailsOf(error),
+    ...facts,
+    loadedEntry: LOADED_ENTRY,
+  });
+}
+
+/**
+ * The supported recovery for a store the LOADED build cannot read, stated on
+ * the refusal itself. The advice distinguishes the three things callers conflate:
+ * loading a refreshed extension registration (a NEW host process/session, never
+ * this running one), the session identity a new process acquires (its own — it
+ * does not inherit an existing coordinator binding), and the supported recovery
+ * of an existing holder (the prior holder named with its stop attestation).
+ * The engine's own facts stay first; this is additive routing guidance only.
+ */
+const INCOMPATIBLE_LOADED_ENGINE_CODES: Record<string, true> = {
+  "store.schema-unsupported": true,
+  "store.schema-drift": true,
+};
+const INCOMPATIBLE_LOADED_ENGINE_RECOVERY =
+  "The loaded entry below is the build that answered, and this process keeps the extension registration it already " +
+  "loaded: refreshing repository sources changes nothing here. Refresh the installed @mstar-harness/omp package to a " +
+  "build that reads this store schema, then start a NEW host process/session so the registration is loaded from it — " +
+  "that new session acquires its own native identity and never inherits an existing coordinator binding, so an existing " +
+  "holder is replaced only through the supported recovery naming the prior holder with its stop attestation. Where an " +
+  "independently acquired session identity is acceptable, the public MCP coordinator route serves the same operations " +
+  "from the refreshed CLI.";
+
+/** The refusal for one thrown engine error, with incompatible-loaded-build recovery added. */
+function engineRefusal(error: unknown, facts: Record<string, unknown> = {}): CoordinatorIdentityOutcome {
+  const outcome = refusalOf(error, facts);
+  if (INCOMPATIBLE_LOADED_ENGINE_CODES[outcome.code] !== true) return outcome;
+  return { ...outcome, text: `${outcome.text} ${INCOMPATIBLE_LOADED_ENGINE_RECOVERY}` };
+}
+
+/**
+ * The supplied fields of one request whose value is not the non-empty string
+ * their contract requires. An absent field is never unusable — omission is what
+ * the ACTIVE route derives — so a caller who supplies a value always has it
+ * checked. Reported together so the caller repairs the whole shape in one round
+ * trip instead of one field per call.
+ */
+function unusableFieldsOf(request: Record<string, unknown>, fields: readonly string[]): string[] {
+  return fields.filter((field) => request[field] !== undefined && !isNonEmpty(request[field]));
+}
+
 /** The §3.1 host identity of one coordinator call: provenance, scope, native id. */
 function coordinatorIdentityOf(sessionId: string, workflowId: string): ExecutionIdentity {
   return { source: "host", sessionId, workflowId, role: "coordinator" };
@@ -303,8 +384,51 @@ async function routeOf(
   try {
     return { ok: true, value: await authority.route({ harnessDir: harnessRoot }) };
   } catch (error) {
-    return { ok: false, outcome: refuse(codeOf(error), messageOf(error), { harnessRoot }) };
+    return { ok: false, outcome: engineRefusal(error, { harnessRoot }) };
   }
+}
+
+/**
+ * The shape of an operation that has ONE caller form on every route: the exact
+ * allowed key set and the keys every route requires. Every unusable field is
+ * reported in one aggregated refusal, by name, before any authority is probed.
+ */
+function classifyCoordinatorCall(
+  raw: unknown,
+  operation: "bind" | "show-recovery",
+  allowedKeys: readonly string[],
+  requiredKeys: readonly string[],
+): { ok: true; request: Record<string, unknown> } | { ok: false; outcome: CoordinatorIdentityOutcome } {
+  if (!isPlainObject(raw)) {
+    return { ok: false, outcome: refuse("invalid-input", `the coordinator ${operation} input must be an object`) };
+  }
+  if (raw.operation !== operation) {
+    return {
+      ok: false,
+      outcome: refuse("unknown-operation", `this is the coordinator ${operation} path; got ${JSON.stringify(raw.operation)}`, {
+        operation: raw.operation,
+      }),
+    };
+  }
+  const keys = Object.keys(raw);
+  const forbidden = keys.filter((key) => !allowedKeys.includes(key));
+  const missing = requiredKeys.filter((key) => !keys.includes(key));
+  if (forbidden.length > 0 || missing.length > 0) {
+    const verdicts = [
+      ...(forbidden.length > 0 ? [`refused ${forbidden.join(", ")}`] : []),
+      ...(missing.length > 0 ? [`requires ${missing.join(", ")}`] : []),
+    ];
+    return {
+      ok: false,
+      outcome: refuse(
+        forbidden.length > 0 ? "forbidden-field" : "invalid-input",
+        `the coordinator ${operation} form accepts only ${allowedKeys.join(", ")} — ${verdicts.join("; ")}; ` +
+          "a mixed form never selects an authority, and a session id, root, caller role, authority flag or credential path is never accepted from the caller",
+        { forbidden, missing },
+      ),
+    };
+  }
+  return { ok: true, request: raw };
 }
 
 type CoordinatorForm =
@@ -312,16 +436,19 @@ type CoordinatorForm =
   | { ok: false; outcome: CoordinatorIdentityOutcome };
 
 /**
- * Which of the two authority-selected forms one call declares, from its own key
- * set alone. The active form is the one carrying a marker field the JSON form
- * does not have; the chosen form's key set must then match EXACTLY, so a mixed
- * or partial call is refused by name instead of silently selecting an authority.
+ * Which of the two authority-selected recovery forms one call declares, from its
+ * own key set alone. The active form is the one carrying a marker field the JSON
+ * form does not have; the chosen form's key set must then match EXACTLY beyond
+ * the keys the ACTIVE route derives, so a mixed or partial call is refused by
+ * name instead of silently selecting an authority.
  */
 function classifyCoordinatorForm(
   raw: unknown,
-  operation: "bind" | "show-recovery" | "recover",
-  jsonKeys: readonly string[],
-  activeKeys: readonly string[],
+  operation: "recover",
+  forms: {
+    json: { keys: readonly string[]; required: readonly string[] };
+    active: { keys: readonly string[]; required: readonly string[] };
+  },
   markers: readonly string[],
 ): CoordinatorForm {
   if (!isPlainObject(raw)) {
@@ -337,20 +464,20 @@ function classifyCoordinatorForm(
   }
   const keys = Object.keys(raw);
   const form = markers.some((marker) => keys.includes(marker)) ? "active" : "json";
-  const allowed = form === "active" ? activeKeys : jsonKeys;
-  const forbidden = keys.filter((key) => !allowed.includes(key));
+  const selected = form === "active" ? forms.active : forms.json;
+  const forbidden = keys.filter((key) => !selected.keys.includes(key));
   if (forbidden.length > 0) {
     return {
       ok: false,
       outcome: refuse(
         "forbidden-field",
-        `the coordinator ${operation} ${form} form accepts only ${allowed.join(", ")} \u2014 refused ${forbidden.join(", ")}; ` +
+        `the coordinator ${operation} ${form} form accepts only ${selected.keys.join(", ")} \u2014 refused ${forbidden.join(", ")}; ` +
           "a mixed form never selects an authority, and a session id, root, caller role, authority flag or credential path is never accepted from the caller",
         { forbidden, form },
       ),
     };
   }
-  const missing = allowed.filter((key) => !keys.includes(key));
+  const missing = selected.required.filter((key) => !keys.includes(key));
   if (missing.length > 0) {
     return {
       ok: false,
@@ -365,14 +492,122 @@ function classifyCoordinatorForm(
 }
 
 /**
+ * The engine-safe defaults of an ACTIVE call's two CAS controls, derived so an
+ * ordinary call carries only the operation and the workflow:
+ *
+ * - `expected` is the workflow's CURRENT execution token, read from the very
+ *   authority the call addresses — never a caller-invented or cached value, and
+ *   re-checked by the engine inside its own write transaction;
+ * - `operationId` is a fresh host-minted id when the caller names none, so a
+ *   repeated call is a second attempt the engine's own holder guard answers
+ *   truthfully instead of a replay nobody asked for. A caller-supplied id is
+ *   forwarded verbatim and makes an identical retry the replay.
+ */
+async function activeControlsOf(
+  authority: CoordinatorAuthorityDeps,
+  harnessRoot: string,
+  workflowId: string,
+  request: Record<string, unknown>,
+): Promise<{ ok: true; expected: string; operationId: string } | { ok: false; outcome: CoordinatorIdentityOutcome }> {
+  const expected = isNonEmpty(request.expected) ? request.expected : undefined;
+  if (expected !== undefined) {
+    const supplied = request.operationId;
+    return { ok: true, expected, operationId: isNonEmpty(supplied) ? supplied : `coordinator-bind-${randomUUID()}` };
+  }
+  let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
+  try {
+    read = await authority.read({ harnessDir: harnessRoot, workflowId });
+  } catch (error) {
+    return { ok: false, outcome: engineRefusal(error, { workflowId, harnessRoot }) };
+  }
+  // The engine requires the exact workflow token; a read that returned without
+  // one cannot be turned into a CAS value here.
+  if (!isNonEmpty(read.token)) {
+    return {
+      ok: false,
+      outcome: refuse(
+        "execution.token-unavailable",
+        `the execution authority read of workflow ${workflowId} returned no workflow token, so no CAS value can be derived; supply \`expected\` explicitly`,
+        { workflowId, harnessRoot },
+      ),
+    };
+  }
+  const supplied = request.operationId;
+  return { ok: true, expected: read.token, operationId: isNonEmpty(supplied) ? supplied : `coordinator-bind-${randomUUID()}` };
+}
+
+/**
+ * The ACTIVE arm of a bind: the DB session API records the binding under the
+ * host-derived identity, with the CAS controls derived when the caller omits
+ * them. A supplied-but-unusable control refuses once, naming every offender.
+ */
+async function bindActiveCoordinator(
+  request: Record<string, unknown>,
+  facts: CoordinatorIdentityFacts,
+  workflowId: string,
+  harnessRoot: string,
+  authority: CoordinatorAuthorityDeps,
+): Promise<CoordinatorIdentityOutcome> {
+  const unusable = unusableFieldsOf(request, ["expected", "operationId"]);
+  if (unusable.length > 0) {
+    return refuse(
+      "invalid-input",
+      `the coordinator bind CAS fields ${unusable.join(", ")} must be non-empty strings when supplied — omit them and the host reads the current token and mints the operation id`,
+      { workflowId, harnessRoot, fields: unusable },
+    );
+  }
+  const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
+  try {
+    validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
+  } catch (error) {
+    return refusalOf(error, { workflowId });
+  }
+  const controls = await activeControlsOf(authority, harnessRoot, workflowId, request);
+  if (!controls.ok) return controls.outcome;
+  try {
+    const bound = await authority.bind({
+      harnessDir: harnessRoot,
+      identity,
+      workflowId,
+      expected: controls.expected as ExecutionToken,
+      operationId: controls.operationId,
+    });
+    // The DB session reference is an identity, not a credential: the text
+    // names the already-public workflow/session ids and the store epoch, and
+    // never a token or a path.
+    return {
+      ok: true,
+      isError: false,
+      code: bound.replayed ? "replayed" : "bound",
+      text: bound.replayed
+        ? `workflow ${workflowId} already recorded this bind as operation ${bound.operationId}: session ${bound.data.sessionId} is still its coordinator in store epoch ${bound.epoch}; nothing was written.`
+        : `workflow ${workflowId} is bound to coordinator session ${bound.data.sessionId} in store epoch ${bound.epoch} (operation ${bound.operationId}). This binding is one-shot; recovery is the only transition that replaces a recorded holder.`,
+      details: {
+        workflowId,
+        sessionId: bound.data.sessionId,
+        role: "coordinator",
+        harnessRoot,
+        storeId: bound.storeId,
+        epoch: bound.epoch,
+        operationId: bound.operationId,
+        replayed: bound.replayed,
+      },
+    };
+  } catch (error) {
+    return engineRefusal(error, { workflowId, harnessRoot });
+  }
+}
+
+/**
  * Derive the adapter input from host facts and bind one coordinator identity.
  *
- * Refusal order is deliberate: the caller-supplied shape and its form first (an
- * extra field is never partially honored, and a mixed form never picks a
- * fallback authority), then the host-derived facts, then the route of the
- * addressed root, then the shared `validateExecutionIdentity`, then the engine
- * verb — which re-checks creation identity, root membership, registration
- * commit and duplicate holders.
+ * The caller shape is ONE ordinary form — the operation and the explicitly named
+ * workflow, with optional ACTIVE CAS values — and the addressed root's route
+ * decides which authority answers. Refusal order is deliberate: the caller's
+ * key set first (an extra field is never partially honored), then the
+ * host-derived facts, then the route, then the ACTIVE identity validation, then
+ * the engine verb — which re-checks creation identity, root membership,
+ * registration commit and duplicate holders.
  */
 export async function bindCoordinatorIdentity(
   raw: unknown,
@@ -380,13 +615,7 @@ export async function bindCoordinatorIdentity(
   bind: CoordinatorBindFn = (input) => bindPlanSession(input),
   authority: CoordinatorAuthorityDeps = DEFAULT_AUTHORITY_DEPS,
 ): Promise<CoordinatorIdentityOutcome> {
-  const shape = classifyCoordinatorForm(
-    raw,
-    "bind",
-    COORDINATOR_BIND_INPUT_KEYS,
-    COORDINATOR_ACTIVE_BIND_INPUT_KEYS,
-    ACTIVE_FORM_MARKERS,
-  );
+  const shape = classifyCoordinatorCall(raw, "bind", COORDINATOR_BIND_INPUT_KEYS, ["operation", "workflowId"]);
   if (!shape.ok) return shape.outcome;
   if (!isNonEmpty(shape.request.workflowId)) {
     return refuse("invalid-input", "workflowId is required");
@@ -409,78 +638,25 @@ export async function bindCoordinatorIdentity(
   }
   const harnessRoot = facts.harnessRoot;
 
-  // §5/§6: the root decides which authority answers. The probe runs for both
-  // forms, before any engine verb, so an active form on a pre-activation root
-  // and a Prepare form on an ACTIVE root both refuse without a fallback.
+  // §5/§6: the root decides which authority answers, before any engine verb.
   const route = await routeOf(authority, harnessRoot);
   if (!route.ok) return route.outcome;
-
-  if (shape.form === "active") {
-    if (route.value !== "execution") {
-      return refuse(
-        "execution.not-active",
-        `the control root ${harnessRoot} carries no ACTIVE execution authority (its read route is "${route.value}"), so no DB session can be bound there. The active form never falls back to the Prepare bootstrap: activate the execution authority, or use the file route deliberately.`,
-        { workflowId, harnessRoot },
-      );
-    }
-    // A tuple loop widens every field back to `unknown`, so each guard is spelled
-    // per field: the refusal text and its order are unchanged, and the value the
-    // engine verb receives is a narrowed `string` rather than a cast.
-    const activeExpected = shape.request.expected;
-    const activeOperationId = shape.request.operationId;
-    if (!isNonEmpty(activeExpected)) {
-      return refuse("invalid-input", "expected is required for the active coordinator bind");
-    }
-    if (!isNonEmpty(activeOperationId)) {
-      return refuse("invalid-input", "operationId is required for the active coordinator bind");
-    }
-    const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
-    try {
-      validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
-    } catch (error) {
-      return refuse(codeOf(error), messageOf(error), { workflowId });
-    }
-    try {
-      const bound = await authority.bind({
-        harnessDir: harnessRoot,
-        identity,
-        workflowId,
-        expected: activeExpected as ExecutionToken,
-        operationId: activeOperationId,
-      });
-      // The DB session reference is an identity, not a credential: the text
-      // names the already-public workflow/session ids and the store epoch, and
-      // never a token or a path.
-      return {
-        ok: true,
-        isError: false,
-        code: bound.replayed ? "replayed" : "bound",
-        text: bound.replayed
-          ? `workflow ${workflowId} already recorded this bind as operation ${bound.operationId}: session ${bound.data.sessionId} is still its coordinator in store epoch ${bound.epoch}; nothing was written.`
-          : `workflow ${workflowId} is bound to coordinator session ${bound.data.sessionId} in store epoch ${bound.epoch} (operation ${bound.operationId}). This binding is one-shot; recovery is the only transition that replaces a recorded holder.`,
-        details: {
-          workflowId,
-          sessionId: bound.data.sessionId,
-          role: "coordinator",
-          harnessRoot,
-          storeId: bound.storeId,
-          epoch: bound.epoch,
-          operationId: bound.operationId,
-          replayed: bound.replayed,
-        },
-      };
-    } catch (error) {
-      return refuse(codeOf(error), messageOf(error), { workflowId, harnessRoot });
-    }
+  if (route.value === "execution") {
+    return bindActiveCoordinator(shape.request, facts, workflowId, harnessRoot, authority);
   }
 
-  if (route.value === "execution") {
+  // A pre-activation root answers through the Prepare bootstrap, whose bind has
+  // no CAS value and no operation id: a call carrying the ACTIVE controls
+  // asserts an authority this root does not carry and is refused, never
+  // partially honored.
+  const carried = (["expected", "operationId"] as const).filter((field) => shape.request[field] !== undefined);
+  if (carried.length > 0) {
     return refuse(
-      "execution.consumer-not-ready",
-      `an ACTIVE execution authority governs ${harnessRoot}, so the managed Prepare bootstrap (a session envelope plus the ` +
-        `workflow snapshot) is retired and was not written. Bind through the DB form instead: ` +
-        `{operation:"bind", workflowId, expected, operationId} with the workflow execution token. Nothing was written.`,
-      { workflowId, harnessRoot },
+      "execution.not-active",
+      `the control root ${harnessRoot} carries no ACTIVE execution authority (its read route is "${route.value}"), so the ` +
+        `CAS values ${carried.join(", ")} address no store there. The file route's managed bootstrap takes only the ` +
+        `operation and the workflow: retry without them, or activate the execution authority deliberately.`,
+      { workflowId, harnessRoot, fields: carried },
     );
   }
 
@@ -491,7 +667,7 @@ export async function bindCoordinatorIdentity(
   try {
     validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId });
+    return refusalOf(error, { workflowId });
   }
 
   try {
@@ -520,7 +696,7 @@ export async function bindCoordinatorIdentity(
       },
     };
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId, harnessRoot });
+    return engineRefusal(error, { workflowId, harnessRoot });
   }
 }
 
@@ -687,12 +863,11 @@ export async function showCoordinatorRecovery(
   deps: CoordinatorRecoveryDeps = DEFAULT_RECOVERY_DEPS,
   authority: CoordinatorAuthorityDeps = DEFAULT_AUTHORITY_DEPS,
 ): Promise<CoordinatorIdentityOutcome> {
-  const shape = classifyCoordinatorForm(
+  const shape = classifyCoordinatorCall(
     raw,
     "show-recovery",
     COORDINATOR_SHOW_RECOVERY_INPUT_KEYS,
     COORDINATOR_SHOW_RECOVERY_INPUT_KEYS,
-    [],
   );
   if (!shape.ok) return shape.outcome;
   const context = coordinatorCallContext(raw, facts, COORDINATOR_SHOW_RECOVERY_INPUT_KEYS, "show-recovery");
@@ -705,7 +880,7 @@ export async function showCoordinatorRecovery(
     try {
       read = await authority.read({ harnessDir: context.harnessRoot, workflowId: context.workflowId });
     } catch (error) {
-      return refuse(codeOf(error), messageOf(error), { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
+      return engineRefusal(error, { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
     }
     const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
     if (workflow === undefined) {
@@ -757,12 +932,9 @@ export async function showCoordinatorRecovery(
       },
     };
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
+    return engineRefusal(error, { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
   }
 }
-
-/** The fields only the active `recover` declares (the JSON form has none of them). */
-const ACTIVE_RECOVER_MARKERS = ["priorSessionId", "attestation", "expected"] as const;
 
 /**
  * `{operation:"recover"}` — replace the recorded coordinator binding with THIS
@@ -788,8 +960,13 @@ export async function recoverCoordinatorIdentity(
   const shape = classifyCoordinatorForm(
     raw,
     "recover",
-    COORDINATOR_RECOVER_INPUT_KEYS,
-    COORDINATOR_ACTIVE_RECOVER_INPUT_KEYS,
+    {
+      json: { keys: COORDINATOR_RECOVER_INPUT_KEYS, required: COORDINATOR_RECOVER_INPUT_KEYS },
+      active: {
+        keys: COORDINATOR_ACTIVE_RECOVER_INPUT_KEYS,
+        required: ["operation", "workflowId", "priorSessionId", "reason", "attestation"],
+      },
+    },
     ACTIVE_RECOVER_MARKERS,
   );
   if (!shape.ok) return shape.outcome;
@@ -798,19 +975,25 @@ export async function recoverCoordinatorIdentity(
   const context = coordinatorCallContext(raw, facts, COORDINATOR_RECOVER_INPUT_KEYS, "recover");
   if (!context.ok) return context.outcome;
   const request = raw as Record<string, unknown>;
-  for (const [field, value] of [
-    ["operationId", request.operationId],
-    ["reason", request.reason],
-    ["authorizationRef", request.authorizationRef],
-  ] as const) {
-    if (!isNonEmpty(value)) return refuse("invalid-input", `${field} is required`);
-  }
+  // Every unusable field of one call is named in a single refusal, so the
+  // caller repairs the whole shape in one round trip. An empty stop assertion
+  // stays its own unauthorized verdict: a missing proof, not a malformed field.
+  const unusable = (["operationId", "reason", "authorizationRef"] as const).filter(
+    (field) => !isNonEmpty(request[field]),
+  );
   const stopped = request.stoppedSessionIds;
-  if (!Array.isArray(stopped) || stopped.length === 0) {
+  const stopAssertion = !Array.isArray(stopped) || stopped.length === 0;
+  if (unusable.length > 0 || stopAssertion) {
+    const verdicts = [
+      ...(unusable.length > 0 ? [`requires a non-empty ${unusable.join(", ")}`] : []),
+      ...(stopAssertion
+        ? ["stoppedSessionIds must name the recorded prior holder this recovery replaces \u2014 the host never treats an empty stop assertion as an authorization"]
+        : []),
+    ];
     return refuse(
-      "unauthorized",
-      "stoppedSessionIds must name the recorded prior holder this recovery replaces \u2014 the host never treats an empty stop assertion as an authorization",
-      { workflowId: context.workflowId },
+      stopAssertion ? "unauthorized" : "invalid-input",
+      `the coordinator recover file form ${verdicts.join("; ")}`,
+      { workflowId: context.workflowId, fields: [...unusable] },
     );
   }
   // Every entry is forwarded to the engine AND echoed by it, so each must be a
@@ -851,7 +1034,7 @@ export async function recoverCoordinatorIdentity(
   try {
     validateExecutionIdentity(identity, { workflowId: context.workflowId, role: "coordinator" });
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId: context.workflowId });
+    return refusalOf(error, { workflowId: context.workflowId });
   }
   try {
     const result = await deps.recover({
@@ -889,7 +1072,7 @@ export async function recoverCoordinatorIdentity(
       },
     };
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
+    return engineRefusal(error, { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
   }
 }
 
@@ -899,8 +1082,9 @@ export async function recoverCoordinatorIdentity(
  * current epoch/root revalidation, the creator/prior-holder rule, the atomic
  * revocation and the immutable receipt — and the operator's attestation is
  * forwarded untouched to `validateActivationAttestation`. This adapter adds only
- * the caller-shape refusals and the host-derived identity, and never echoes the
- * attestation body, a token or a path back to the model.
+ * the caller-shape refusals and the host-derived identity, derives the two CAS
+ * controls exactly like the bind, and never echoes the attestation body, a token
+ * or a path back to the model.
  */
 async function recoverActiveCoordinator(
   request: Record<string, unknown>,
@@ -924,17 +1108,32 @@ async function recoverActiveCoordinator(
   }
   const harnessRoot = facts.harnessRoot;
 
-  // `null` is the explicit "this workflow records no coordinator at all" claim
-  // (`--unowned`), and the adapter never treats a missing field as it; a
-  // non-null holder is validated under the same public-session-id rule the JSON
-  // stop assertion uses, without echoing the rejected value.
+  // Every unusable field of one call is named in a single refusal: the holder,
+  // the operator's reason, and the two CAS controls (whose omission is derived,
+  // not defaulted away). `null` is the explicit "this workflow records no
+  // coordinator at all" claim (`--unowned`) and is never treated as a missing
+  // field; a non-null holder is validated under the same public-session-id rule
+  // the JSON stop assertion uses, without echoing the rejected value. The
+  // attestation is the authorization document, so its absence keeps the
+  // unauthorized verdict instead of folding into an input-shape refusal.
   const prior = request.priorSessionId;
-  if (prior !== null && !isNonEmpty(prior)) {
-    return refuse(
-      "invalid-input",
-      "priorSessionId must name the recorded holder this recovery replaces, or be null only when the workflow records no coordinator at all \u2014 an absent or empty holder is never guessed",
-      { workflowId },
-    );
+  const unusable = unusableFieldsOf(request, ["reason", "expected", "operationId"]);
+  const holderInvalid = prior !== null && !isNonEmpty(prior);
+  const attestation = request.attestation;
+  if (holderInvalid || unusable.length > 0 || !isPlainObject(attestation)) {
+    const verdicts = [
+      ...(holderInvalid
+        ? ["priorSessionId must name the recorded holder this recovery replaces, or be null only when the workflow records no coordinator at all \u2014 an absent or empty holder is never guessed"]
+        : []),
+      ...(unusable.length > 0 ? [`requires a non-empty ${unusable.join(", ")}`] : []),
+      ...(!isPlainObject(attestation)
+        ? ["attestation must be the operator's own ActivationAttestation document \u2014 this adapter never manufactures or defaults one"]
+        : []),
+    ];
+    return refuse(!isPlainObject(attestation) ? "unauthorized" : "invalid-input", verdicts.join("; "), {
+      workflowId,
+      fields: [...(holderInvalid ? ["priorSessionId"] : []), ...unusable],
+    });
   }
   if (prior !== null) {
     try {
@@ -947,28 +1146,6 @@ async function recoverActiveCoordinator(
         { workflowId },
       );
     }
-  }
-  // Same per-field spelling as the active bind: a tuple loop widens the request's
-  // `unknown` fields back to `unknown`, while these guards hand the engine real
-  // strings with the identical refusal text and order.
-  const activeExpected = request.expected;
-  const activeOperationId = request.operationId;
-  const activeReason = request.reason;
-  if (!isNonEmpty(activeExpected)) {
-    return refuse("invalid-input", "expected is required for the active coordinator recovery");
-  }
-  if (!isNonEmpty(activeOperationId)) {
-    return refuse("invalid-input", "operationId is required for the active coordinator recovery");
-  }
-  if (!isNonEmpty(activeReason)) {
-    return refuse("invalid-input", "reason is required for the active coordinator recovery");
-  }
-  if (!isPlainObject(request.attestation)) {
-    return refuse(
-      "unauthorized",
-      "attestation must be the operator's own ActivationAttestation document \u2014 this adapter never manufactures or defaults one",
-      { workflowId },
-    );
   }
 
   const route = await routeOf(authority, harnessRoot);
@@ -985,17 +1162,19 @@ async function recoverActiveCoordinator(
   try {
     validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId });
+    return refusalOf(error, { workflowId });
   }
+  const controls = await activeControlsOf(authority, harnessRoot, workflowId, request);
+  if (!controls.ok) return controls.outcome;
   try {
     const result = await authority.recover({
       harnessDir: harnessRoot,
       identity,
-      expected: activeExpected as ExecutionToken,
-      operationId: activeOperationId,
+      expected: controls.expected as ExecutionToken,
+      operationId: controls.operationId,
       priorSessionId: prior,
-      reason: activeReason,
-      attestation: request.attestation,
+      reason: request.reason as string,
+      attestation,
     });
     return {
       ok: true,
@@ -1016,7 +1195,7 @@ async function recoverActiveCoordinator(
       },
     };
   } catch (error) {
-    return refuse(codeOf(error), messageOf(error), { workflowId, harnessRoot });
+    return engineRefusal(error, { workflowId, harnessRoot });
   }
 }
 

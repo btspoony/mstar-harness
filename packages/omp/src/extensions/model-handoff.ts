@@ -1656,11 +1656,29 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: COORDINATOR_TOOL_NAME,
     label: "Coordinator identity",
     description:
-      'Morning Star coordinator identity entry. `{operation:"bind"}` binds this host session as the coordinator of the explicitly named workflow. `{operation:"show-recovery"}` reads the recorded coordinator, the observed snapshot and compass digests and the Prepare verdict of one workflow without writing. `{operation:"recover"}` replaces a recorded coordinator binding the prior owner can no longer authenticate, under the audited Prepare-only guards and with an explicit stop assertion. Every operation uses the native session id and the canonical control harness root derived from the host \u2014 never from the call. No operation accepts a session id, root, caller role, authority flag, credential path or force flag; the prior holder and its envelope come from the engine\'s stored binding. This is the only supported managed bootstrap and recovery route; a `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
+      'Morning Star coordinator identity entry. The control harness root and the native session id are derived from the host \u2014 never from the call. `{operation:"bind", workflowId}` binds THIS host session as the coordinator of the explicitly named workflow and works on both routes: under an ACTIVE execution authority the adapter reads the workflow\'s current token and mints the operation id itself, so the ordinary call needs nothing else (supply `expected` and `operationId` only to pin your own CAS value and idempotency key \u2014 a repeated bind is then the replayed receipt), while a pre-activation root answers the same call with the managed Prepare bootstrap and refuses those two CAS fields instead of ignoring them. `{operation:"show-recovery", workflowId}` reads the recorded coordinator and the observed state without writing. `{operation:"recover"}` replaces a recorded holder the prior owner can no longer authenticate: an ACTIVE root takes `priorSessionId` (the recorded holder, or null ONLY when the workflow records no coordinator at all), `reason` and the operator\'s own `attestation` document (its token and operation id are derived like the bind\'s); a pre-activation root takes the audited `operationId`, `reason`, `authorizationRef` and `stoppedSessionIds`. No operation accepts a session id, root, caller role, authority flag, credential path or force flag. A `store.schema-unsupported` refusal names the loaded entry that answered: refresh the installed package and start a NEW host process/session to load the refreshed registration \u2014 a new session never inherits an existing coordinator binding, so an existing holder is replaced only through this recovery; the public MCP route serves the same operations with an independently acquired identity. A `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
     parameters: z
       .union([
-        z.object({ operation: z.literal("bind"), workflowId: z.string() }).strict(),
+        z
+          .object({
+            operation: z.literal("bind"),
+            workflowId: z.string(),
+            expected: z.string().optional(),
+            operationId: z.string().optional(),
+          })
+          .strict(),
         z.object({ operation: z.literal("show-recovery"), workflowId: z.string() }).strict(),
+        z
+          .object({
+            operation: z.literal("recover"),
+            workflowId: z.string(),
+            priorSessionId: z.union([z.string(), z.null()]),
+            reason: z.string(),
+            attestation: z.unknown(),
+            expected: z.string().optional(),
+            operationId: z.string().optional(),
+          })
+          .strict(),
         z
           .object({
             operation: z.literal("recover"),
