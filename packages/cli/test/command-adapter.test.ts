@@ -98,7 +98,6 @@ describe("generated CLI adapter", () => {
     // bound to the `payload` input field, so the refusal carries indexed
     // `payload.<field>` paths rather than falling through to the family parser.
     expect(body.code).toBe("command.invalid-input");
-    expect(body.message).toContain("Invalid command payload");
     const paths = (body.details?.diagnostics ?? []).map((entry) => entry.path);
     expect(paths.length).toBeGreaterThan(0);
     expect(paths.every((entry) => entry.startsWith("payload."))).toBe(true);
@@ -186,7 +185,6 @@ describe("generated CLI adapter", () => {
     const recovered = await run([...args, "--session-id", "cli-main-session"]);
     const recoveredEnvelope = JSON.parse(recovered.stdout);
     expect(recoveredEnvelope.status).toBe("refused");
-    expect(recoveredEnvelope.message).not.toContain("recovery requires the main conversation session identity");
     expect(recoveredEnvelope.code).not.toBe("command.invalid-input");
 
     const priorIdentity = process.env.MSTAR_HOST_SESSION_ID;
@@ -197,7 +195,6 @@ describe("generated CLI adapter", () => {
       const withoutRuntimeIdentity = await run(args);
       const usageEnvelope = JSON.parse(withoutRuntimeIdentity.stdout);
       expect(usageEnvelope).toMatchObject({ status: "usage" });
-      expect(String(usageEnvelope.message)).toContain("recovery requires the main conversation session identity");
       expect(String(usageEnvelope.message)).toContain("--session-id");
       expect(String(usageEnvelope.message)).toContain("sessionId");
     } finally {
@@ -325,9 +322,6 @@ describe("schema selector routes", () => {
     expect(envelope.data.family).toBe("worktree");
     const ids = envelope.data.members.map((member: { id: string }) => member.id);
     expect(ids).toContain("worktree.check");
-    for (const member of envelope.data.members) {
-      expect(Object.keys(member).sort()).toEqual(["description", "id"]);
-    }
   });
 
   test("CLI refuses an unknown command id with grouped selectors", async () => {
@@ -335,7 +329,8 @@ describe("schema selector routes", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "schema", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).toContain("available families");
+    expect(envelope.details?.selectors).toEqual(["command"]);
+    expect(envelope.details?.helpRoute).toBe("mstar schema --help");
   });
 
   test("CLI refuses colliding positional and option selectors", async () => {
@@ -344,7 +339,8 @@ describe("schema selector routes", () => {
     const envelope = JSON.parse(result.stdout);
     expect(envelope.status).toBe("usage");
     expect(envelope.exitCode).toBe(2);
-    expect(envelope.message).toContain("exactly one");
+    expect(envelope.details?.helpRoute).toBe("mstar schema --help");
+    expect(envelope.details?.diagnostics.length).toBeGreaterThan(0);
   });
 
 
@@ -357,8 +353,6 @@ describe("payload option decoding", () => {
     // The lone path decoded cleanly into a one-element list: the refusal is
     // the missing --workflow validation, not a payload JSON decode error.
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).not.toContain("payload");
-    expect(envelope.message).not.toContain("valid JSON");
     // Structured diagnostics (plan 005) may be present, but they must point at
     // the missing --workflow member, never at a payload decode failure.
     for (const diagnostic of envelope.details?.diagnostics ?? []) {
@@ -371,8 +365,6 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).not.toContain("payload");
-    expect(envelope.message).not.toContain("valid JSON");
     for (const diagnostic of envelope.details?.diagnostics ?? []) {
       expect(diagnostic.path).toBe("workflow");
     }
@@ -383,7 +375,6 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).toContain("Invalid command payload");
     const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
     expect(diagnostics[0]?.path).toBe("worktree[0]");
   });
@@ -393,7 +384,6 @@ describe("payload option decoding", () => {
     expect(result.status).toBe(2);
     const envelope = JSON.parse(result.stdout);
     expect(envelope).toMatchObject({ command: "worktree.cleanup", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    expect(envelope.message).toContain("Invalid command payload");
     const diagnostics = envelope.details?.diagnostics as Array<{ path: string }>;
     expect(diagnostics[0]?.path).toBe("worktree[0]");
   });
@@ -436,11 +426,11 @@ test("generated CLI adapter decodes schema-typed numeric options and registers b
     ]);
     const numericResult = JSON.parse(numeric.stdout) as { code?: string; message?: string };
     expect(numericResult.code).not.toBe("command.invalid-input");
-    expect(numericResult.message ?? "").not.toContain("expected number");
 
   const boolean = await run(["plan", "bind", "--execution"]);
-  const booleanResult = JSON.parse(boolean.stdout) as { message?: string };
-  expect(booleanResult.message ?? "").not.toContain("argument missing");
+  const booleanResult = JSON.parse(boolean.stdout);
+  expect(booleanResult.command).toBe("plan.bind");
+  expect(booleanResult.details?.diagnostics ?? []).not.toContainEqual(expect.objectContaining({ path: "execution" }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

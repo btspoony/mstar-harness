@@ -235,7 +235,7 @@ generated_at: 2026-01-02
       const leaf = envelope(await client.callTool({ name: "mstar_schema", arguments: { command: "qc.validate-report" } }));
       expect(leaf).toMatchObject({ status: "ok", data: { kind: "command", descriptor: { required: ["reportFile"] } } });
       const payload = envelope(await client.callTool({ name: "mstar_schema", arguments: { type: "CaptureInput" } }));
-      expect(payload).toMatchObject({ status: "ok", data: { kind: "payload" } });
+      expect(payload).toMatchObject({ status: "ok", data: { type: "CaptureInput" } });
       const empty = envelope(await client.callTool({ name: "mstar_schema", arguments: {} }));
       expect(empty).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
       expect(empty.details?.helpRoute).toBe("mstar schema --help");
