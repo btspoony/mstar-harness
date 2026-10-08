@@ -838,7 +838,7 @@ jobs:
         run: bun run cli:build
 
       - name: Test scripts
-        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/prepare-release.test.ts
+        run: bun test scripts/ascii-literal-utils.test.ts scripts/build-zcode-hooks.test.ts scripts/ci-dep-guard.test.ts scripts/ci-packed-manifest-guard.test.ts scripts/drift-lint.test.ts scripts/escape-dist-literals.test.ts scripts/lint-ascii-literals.test.ts scripts/lint-refusal-quality.test.ts scripts/lint-help-reachability.test.ts scripts/prepare-release.test.ts
 
       # ZCode write-gate source tests: spawn the TS entry with synthetic
       # PreToolUse stdin fixtures (engine dist is built above).
@@ -850,6 +850,16 @@ jobs:
       # Scans packages/{engine,cli}/src + hooks/src only (no build needed).
       - name: Lint ASCII literals (src code)
         run: bun run lint:ascii-literals
+      # These source-only lints import the command registry directly under Bun;
+      # they need no generated package build. Keep each command enforcing.
+      - name: Lint hash gates
+        run: bun run lint:hash-gates
+
+      - name: Lint refusal quality
+        run: bun run lint:refusal-quality
+
+      - name: Lint help reachability
+        run: bun run lint:help-reachability
 
   pack-consumers:
     runs-on: ubuntu-latest
