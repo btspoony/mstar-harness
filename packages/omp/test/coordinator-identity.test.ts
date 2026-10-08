@@ -12,7 +12,6 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  COORDINATOR_BIND_INPUT_KEYS,
   COORDINATOR_RECOVER_INPUT_KEYS,
   COORDINATOR_SHOW_RECOVERY_INPUT_KEYS,
   COORDINATOR_TOOL_NAME,
@@ -66,7 +65,6 @@ function fakeBind(): { calls: Array<Record<string, unknown>>; bind: (input: Reco
 
 describe("prerequisite identity — coordinator identity adapter input", () => {
   test("accepts only its documented keys; every identity-shaped field is refused by name", async () => {
-    expect([...COORDINATOR_BIND_INPUT_KEYS]).toEqual(["operation", "workflowId", "expected", "operationId"]);
     expect(COORDINATOR_TOOL_NAME).toBe("mstar_coordinator");
     for (const forged of [
       { operation: "bind", workflowId: "wf-a", sessionId: "attacker" },
@@ -583,69 +581,72 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
   });
 
-  test("a minimal ACTIVE bind reads the current token and mints a host operation id", async () => {
+  test("a minimal ACTIVE bind derives a fresh operation id and the current token from the addressed authority", async () => {
     // The ordinary call carries only the operation and the workflow: the adapter
     // derives both CAS controls from the addressed authority and the host, so no
     // caller ever has to discover/read/copy a token first. The Prepare bootstrap
     // must not run for it.
     const engine = fakeAuthority();
+    const bootstrap = () => {
+      throw new Error("the Prepare bootstrap must not run for the ACTIVE bind");
+    };
+    const first = await bindCoordinatorIdentity({ operation: "bind", workflowId: "wf-a" }, FACTS, bootstrap, engine.deps);
+    const second = await bindCoordinatorIdentity({ operation: "bind", workflowId: "wf-a" }, FACTS, bootstrap, engine.deps);
+    expect({ ok: first.ok, code: first.code }).toEqual({ ok: true, code: "bound" });
+    expect(engine.calls.read).toEqual([
+      { harnessDir: FACTS.harnessRoot, workflowId: "wf-a" },
+      { harnessDir: FACTS.harnessRoot, workflowId: "wf-a" },
+    ]);
+    expect(engine.calls.bind).toHaveLength(2);
+    for (const call of engine.calls.bind) {
+      expect(call).toMatchObject({
+        workflowId: "wf-a",
+        expected: WORKFLOW_TOKEN,
+        identity: { source: "host", sessionId: FACTS.sessionId, role: "coordinator" },
+      });
+    }
+    // A fresh idempotency key per call: the two attempts are not one replay, so
+    // the engine — not a caller-supplied constant — decides what a repeat means.
+    const [firstCall, secondCall] = engine.calls.bind;
+    expect(typeof firstCall?.operationId).toBe("string");
+    expect(firstCall?.operationId).not.toBe(secondCall?.operationId);
+    // The receipt reports the ids the authority was actually called with.
+    expect(first.details.operationId).toBe(firstCall?.operationId);
+    expect(second.details.operationId).toBe(secondCall?.operationId);
+    // The result IS the model-visible tool result: no token, path or credential.
+    expect(JSON.stringify(first)).not.toContain(WORKFLOW_TOKEN);
+    expect(JSON.stringify(first)).not.toContain("sessions/");
+  });
+
+  test("a combined forbidden and invalid call is refused whole before the authority", async () => {
+    // The advertised single repair: one refusal names EVERY unusable field, so a
+    // caller that follows it reaches a working call without discovering a second
+    // defect. The fixture combines both classes — a forbidden identity field and
+    // an unusable optional CAS value — and nothing reaches the authority.
+    const engine = fakeAuthority();
     const result = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a" },
+      { operation: "bind", workflowId: "wf-a", expected: 7, sessionId: "forged" },
       FACTS,
-      async () => {
-        throw new Error("the Prepare bootstrap must not run for the ACTIVE bind");
-      },
+      undefined as never,
       engine.deps,
     );
-    expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "bound" });
-    expect(engine.calls.read).toEqual([{ harnessDir: FACTS.harnessRoot, workflowId: "wf-a" }]);
-    expect(engine.calls.bind).toHaveLength(1);
-    expect(engine.calls.bind[0]).toMatchObject({
-      workflowId: "wf-a",
-      expected: WORKFLOW_TOKEN,
-      identity: { source: "host", sessionId: FACTS.sessionId, role: "coordinator" },
-    });
-    expect(String(engine.calls.bind[0]?.operationId)).toMatch(/^coordinator-bind-/);
-    // The result IS the model-visible tool result: no token, path or credential.
-    expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
-    expect(JSON.stringify(result)).not.toContain("sessions/");
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "forbidden-field" });
+    expect(result.details.forbidden).toEqual(["sessionId"]);
+    expect(result.details.missing).toEqual([]);
+    expect(result.details.fields).toEqual(["expected"]);
+    expect(engine.calls.read).toHaveLength(0);
+    expect(engine.calls.bind).toHaveLength(0);
   });
 
-  test("a supplied CAS value is honored verbatim and a supplied-but-empty one refuses once", async () => {
-    const supplied = fakeAuthority();
-    const honored = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a", expected: WORKFLOW_TOKEN, operationId: OPERATION_ID },
-      FACTS,
-      undefined as never,
-      supplied.deps,
+  test("an incompatible-build engine refusal keeps its code and message and adds only its loaded-entry provenance", async () => {
+    // A REAL engine refusal of the incompatible-build class (the code and message
+    // the engine's own store boundary raises today): its code and message travel
+    // unchanged, the loaded entry is the module that ACTUALLY answered, and the
+    // supported recovery is ADDITIVE — the engine's text stays first and intact.
+    const refusal = Object.assign(
+      new Error("The store was written by schema version 999, which this build does not know. Known versions: 1..7."),
+      { code: "store.schema-unsupported" },
     );
-    expect({ ok: honored.ok, code: honored.code }).toEqual({ ok: true, code: "bound" });
-    expect(supplied.calls.read).toHaveLength(0);
-    expect(supplied.calls.bind[0]).toMatchObject({ expected: WORKFLOW_TOKEN, operationId: OPERATION_ID });
-
-    const empty = fakeAuthority();
-    const refused = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a", expected: "", operationId: "  " },
-      FACTS,
-      undefined as never,
-      empty.deps,
-    );
-    expect({ ok: refused.ok, code: refused.code }).toEqual({ ok: false, code: "invalid-input" });
-    expect(refused.text).toContain("expected");
-    expect(refused.text).toContain("operationId");
-    expect(empty.calls.read).toHaveLength(0);
-    expect(empty.calls.bind).toHaveLength(0);
-  });
-
-  test("an engine refusal keeps its code, message and COMPLETE details, and names the loaded entry", async () => {
-    // The store/schema facts an engine carries on a refusal travel with it
-    // verbatim — an incompatible loaded build is diagnosed from what is running,
-    // never from installed-plugin inventory — and the incompatible-build class
-    // adds the supported host recovery without rewriting an engine fact.
-    const refusal = Object.assign(new Error("loaded engine schema is unsupported"), {
-      code: "store.schema-unsupported",
-      details: { highestAppliedSchema: 9, supportedMaxSchema: 7, firstUnknownMigration: 8 },
-    });
     const engine = fakeAuthority({
       route: async () => {
         throw refusal;
@@ -653,21 +654,20 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     });
     const result = await bindCoordinatorIdentity({ operation: "bind", workflowId: "wf-a" }, FACTS, undefined as never, engine.deps);
     expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "store.schema-unsupported" });
-    expect(result.text).toContain("loaded engine schema is unsupported");
-    expect(result.text).toContain("NEW host process/session");
-    expect(result.details).toMatchObject({
-      highestAppliedSchema: 9,
-      supportedMaxSchema: 7,
-      firstUnknownMigration: 8,
-      loadedEntry: LOADED_ENTRY,
-    });
+    expect(result.text.startsWith(refusal.message)).toBe(true);
+    expect(result.text.length).toBeGreaterThan(refusal.message.length);
+    expect(result.details.loadedEntry).toBe(LOADED_ENTRY);
     expect(engine.calls.bind).toHaveLength(0);
   });
 
-  test("a non-schema engine refusal keeps its text verbatim and still names the loaded entry", async () => {
+  test("an engine refusal's own structured details survive the projection, and a non-schema one keeps its text verbatim", async () => {
+    // The details are the REAL shape a coordination refusal carries today: they
+    // are the caller's evidence and are never summarized away. A later engine
+    // change (B3) may add schema bounds to the same record; this seat asserts the
+    // projection, not a field set it cannot yet observe.
     const refusal = Object.assign(
-      new Error("the trusted caller does not match the supplied coordinator reference"),
-      { code: "execution.scope-mismatch" },
+      new Error("workflow wf-a holds the ACTIVE coordinator session other-session at epoch 3"),
+      { code: "coordination.invalid-transition", details: { workflow_id: "wf-a", holder: "other-session", named: "prior-session" } },
     );
     const engine = fakeAuthority({
       bind: async () => {
@@ -680,8 +680,16 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       undefined as never,
       engine.deps,
     );
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "coordination.invalid-transition" });
+    expect(result.details).toMatchObject({
+      workflow_id: "wf-a",
+      holder: "other-session",
+      named: "prior-session",
+      loadedEntry: LOADED_ENTRY,
+    });
+    // Not the incompatible-build class: the engine's message is exactly its own,
+    // with no appended routing guidance.
     expect(result.text).toBe(refusal.message);
-    expect(result.details.loadedEntry).toBe(LOADED_ENTRY);
   });
 
   test("an identical active bind retry reports the replay instead of a second commit", async () => {
@@ -695,6 +703,10 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       engine.deps,
     );
     expect(result.code).toBe("replayed");
+    // A supplied CAS value is honored verbatim and no authority READ is needed to
+    // derive it: the engine is the one that decides the retry is the same request.
+    expect(engine.calls.read).toHaveLength(0);
+    expect(engine.calls.bind[0]).toMatchObject({ expected: WORKFLOW_TOKEN, operationId: OPERATION_ID });
     expect(result.text).toContain(OPERATION_ID);
   });
 
@@ -744,7 +756,12 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     }
   });
 
-  test("the active recover forwards the operator's own inputs and never echoes the attestation body", async () => {
+  test("the active recover forwards the operator's own facts and derives only its CAS controls", async () => {
+    // The operator's three non-derivable facts cross the boundary exactly as
+    // stated — the holder, the reason and the attestation DOCUMENT (never a
+    // manufactured or defaulted one); only the token and the operation id are
+    // derived, which is what makes a recovery completable without a
+    // discover/read/copy token ladder.
     const engine = fakeAuthority();
     const attestation = {
       version: 1,
@@ -753,31 +770,50 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       consumers: [],
       stoppedSessions: [],
     };
-    const result = await recoverCoordinatorIdentity(
-      {
-        operation: "recover",
-        workflowId: "wf-a",
+    const request = {
+      operation: "recover" as const,
+      workflowId: "wf-a",
+      priorSessionId: "prior-session",
+      reason: "stopped owner",
+      attestation,
+    };
+    const first = await recoverCoordinatorIdentity(request, FACTS, undefined as never, engine.deps);
+    const second = await recoverCoordinatorIdentity(request, FACTS, undefined as never, engine.deps);
+    expect({ ok: first.ok, code: first.code }).toEqual({ ok: true, code: "recovered" });
+    expect(engine.calls.read).toEqual([
+      { harnessDir: FACTS.harnessRoot, workflowId: "wf-a" },
+      { harnessDir: FACTS.harnessRoot, workflowId: "wf-a" },
+    ]);
+    expect(engine.calls.recover).toHaveLength(2);
+    for (const call of engine.calls.recover) {
+      expect(call).toMatchObject({
+        identity: { source: "host", sessionId: FACTS.sessionId, workflowId: "wf-a", role: "coordinator" },
+        expected: WORKFLOW_TOKEN,
         priorSessionId: "prior-session",
         reason: "stopped owner",
-        attestation,
-        expected: WORKFLOW_TOKEN,
-        operationId: OPERATION_ID,
-      },
-      FACTS,
-      undefined as never,
-      engine.deps,
-    );
-    expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "recovered" });
-    expect(result.details).toMatchObject({ priorSessionId: "prior-session", sessionId: "native-session-a", epoch: 3 });
-    expect(JSON.stringify(result)).not.toContain("auth-7");
-    expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
+      });
+    }
+    // The document itself is forwarded, not a copy or a summary of it.
+    expect(engine.calls.recover[0]?.attestation).toBe(attestation);
+    const [firstCall, secondCall] = engine.calls.recover;
+    expect(firstCall?.operationId).not.toBe(secondCall?.operationId);
+    expect(first.details.operationId).toBe(firstCall?.operationId);
+    expect(second.details.operationId).toBe(secondCall?.operationId);
+    // The result IS the model-visible tool result: no token, no credential.
+    expect(JSON.stringify(first)).not.toContain(WORKFLOW_TOKEN);
+    expect(JSON.stringify(first)).not.toContain("auth-7");
   });
 
-  test("a minimal ACTIVE recovery derives its CAS controls and never invents the operator's facts", async () => {
-    // The operator names the holder, the reason and the attestation document;
-    // the token and the operation id are derived exactly like the bind's, so a
-    // recovery is completable without a discover/read/copy token ladder.
-    const engine = fakeAuthority();
+  test("the active recover reports an engine refusal with its own code, message and details", async () => {
+    const refusal = Object.assign(
+      new Error("workflow wf-a records no coordinator session prior-session to recover from"),
+      { code: "coordination.session-not-found", details: { workflow_id: "wf-a" } },
+    );
+    const engine = fakeAuthority({
+      recover: async () => {
+        throw refusal;
+      },
+    });
     const result = await recoverCoordinatorIdentity(
       {
         operation: "recover",
@@ -790,30 +826,35 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       undefined as never,
       engine.deps,
     );
-    expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "recovered" });
-    expect(engine.calls.read).toEqual([{ harnessDir: FACTS.harnessRoot, workflowId: "wf-a" }]);
-    expect(engine.calls.recover).toHaveLength(1);
-    expect(engine.calls.recover[0]).toMatchObject({
-      identity: { source: "host", sessionId: FACTS.sessionId, workflowId: "wf-a", role: "coordinator" },
-      expected: WORKFLOW_TOKEN,
-      priorSessionId: "prior-session",
-      reason: "stopped owner",
-    });
-    expect(String(engine.calls.recover[0]?.operationId)).toMatch(/^coordinator-bind-/);
-    expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "coordination.session-not-found" });
+    expect(result.text).toBe(refusal.message);
+    expect(result.details).toMatchObject({ workflow_id: "wf-a", loadedEntry: LOADED_ENTRY });
   });
 
   test("the active recover reports every unusable field of one call in a single refusal", async () => {
+    // One call, four defects across all three classes: a malformed holder, an
+    // empty reason, an unusable optional CAS value and a non-object attestation.
+    // The caller repairs the WHOLE shape from this one verdict — the exact
+    // regression this finding names — and nothing reaches the authority.
     const engine = fakeAuthority();
     const result = await recoverCoordinatorIdentity(
-      { operation: "recover", workflowId: "wf-a", priorSessionId: "", reason: "", attestation: { version: 1 } },
+      {
+        operation: "recover",
+        workflowId: "wf-a",
+        priorSessionId: "",
+        reason: "",
+        attestation: "attestation.json",
+        expected: 7,
+      },
       FACTS,
       undefined as never,
       engine.deps,
     );
-    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "invalid-input" });
-    expect(result.text).toContain("priorSessionId");
-    expect(result.text).toContain("reason");
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "unauthorized" });
+    expect(result.details).toMatchObject({ form: "active", forbidden: [], missing: [] });
+    expect(result.details.fields).toEqual(["priorSessionId", "reason", "expected"]);
+    expect(result.text).toContain("attestation");
+    expect(engine.calls.read).toHaveLength(0);
     expect(engine.calls.recover).toHaveLength(0);
   });
 
@@ -844,6 +885,33 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     expect(engine.calls.recover).toHaveLength(0);
   });
 
+  test("the file form reports a forbidden key, a missing field and an unusable stop entry in one refusal", async () => {
+    // The JSON (pre-activation) form aggregates the same way: an extra key, an
+    // absent required operation field, a malformed stop entry (reported by its
+    // POSITION, never its value) and a missing stop PROOF all arrive together.
+    const engine = fakeRecovery();
+    const result = await recoverCoordinatorIdentity(
+      {
+        operation: "recover",
+        workflowId: "wf-a",
+        authorizationRef: "PM-authorization-1",
+        stoppedSessionIds: ["../creds/secret.json"],
+        force: true,
+      },
+      FACTS,
+      engine.deps,
+    );
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "forbidden-field" });
+    expect(result.details).toMatchObject({
+      form: "json",
+      forbidden: ["force"],
+      missing: ["operationId", "reason"],
+      fields: ["stoppedSessionIds[0]"],
+    });
+    expect(JSON.stringify(result)).not.toContain("secret.json");
+    expect(engine.recovered).toHaveLength(0);
+  });
+
   test("an explicitly unowned recovery forwards a null holder", async () => {
     const engine = fakeAuthority();
     const result = await recoverCoordinatorIdentity(
@@ -861,6 +929,8 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       engine.deps,
     );
     expect(result.ok).toBe(true);
+    // The explicit "this workflow records no coordinator at all" claim crosses
+    // the boundary as `null` — never a defaulted or guessed holder.
     expect(engine.calls.recover[0]?.priorSessionId).toBeNull();
   });
 

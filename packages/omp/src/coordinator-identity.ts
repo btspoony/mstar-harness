@@ -3,11 +3,13 @@
  * (prerequisite contract §3.2).
  *
  * This adapter is deliberately thin and deliberately negative. A `bind` call
- * carries **only** the operation and the explicitly named workflow: the native
- * session id comes from `ctx.sessionManager`, the canonical control-harness
- * root is derived from the host cwd, and the caller cannot supply a session id,
- * root, role, authority flag or credential path — an input that tries is
- * refused before anything is read or written.
+ * carries the operation and the explicitly named workflow — plus, on an ACTIVE
+ * route only, the optional `expected`/`operationId` CAS values the engine
+ * re-checks. The native session id comes from `ctx.sessionManager`, the
+ * canonical control-harness root is derived from the host cwd, and the caller
+ * cannot supply a session id, root, role, authority flag or credential path —
+ * an input that tries is refused before anything is read or written, and every
+ * unusable field of one call is named in ONE refusal.
  *
  * `extensions/model-handoff.ts` registers the tool; the same adapter also
  * classifies the shell transport, so a managed coordinator bind attempted
@@ -360,17 +362,6 @@ function engineRefusal(error: unknown, facts: Record<string, unknown> = {}): Coo
   return { ...outcome, text: `${outcome.text} ${INCOMPATIBLE_LOADED_ENGINE_RECOVERY}` };
 }
 
-/**
- * The supplied fields of one request whose value is not the non-empty string
- * their contract requires. An absent field is never unusable — omission is what
- * the ACTIVE route derives — so a caller who supplies a value always has it
- * checked. Reported together so the caller repairs the whole shape in one round
- * trip instead of one field per call.
- */
-function unusableFieldsOf(request: Record<string, unknown>, fields: readonly string[]): string[] {
-  return fields.filter((field) => request[field] !== undefined && !isNonEmpty(request[field]));
-}
-
 /** The §3.1 host identity of one coordinator call: provenance, scope, native id. */
 function coordinatorIdentityOf(sessionId: string, workflowId: string): ExecutionIdentity {
   return { source: "host", sessionId, workflowId, role: "coordinator" };
@@ -389,15 +380,81 @@ async function routeOf(
 }
 
 /**
- * The shape of an operation that has ONE caller form on every route: the exact
- * allowed key set and the keys every route requires. Every unusable field is
- * reported in one aggregated refusal, by name, before any authority is probed.
+ * The shape contract of one coordinator call: the keys the addressed form
+ * accepts, the keys it requires and the supplied values its contract cannot
+ * use. One call is answered with ONE verdict listing every unusable field of
+ * every class — an extra key, a missing key and a malformed value are reported
+ * together — because a caller that repairs one field per round trip pays a new
+ * call per defect. Only field NAMES are reported: a rejected session id,
+ * credential path or attestation body is never echoed, and producing this
+ * verdict never probes an authority.
+ */
+type CoordinatorShapeContract = Readonly<{
+  /** Diagnostics label of the addressed form, or `null` for a single-form call. */
+  form: string | null;
+  /** Keys the form accepts; every other supplied key is `forbidden`. */
+  keys: readonly string[];
+  /** Keys the call must carry; an absent one is `missing`. */
+  required: readonly string[];
+  /** Required keys whose supplied value must be a non-empty string. */
+  nonEmpty: readonly string[];
+  /** Optional keys whose SUPPLIED value (never an omitted one) must be a non-empty string. */
+  optionalNonEmpty: readonly string[];
+  /** Supplied keys a richer contract of this form already judged unusable, by name. */
+  invalid: readonly string[];
+  /** The operator's own authorization/proof document is absent or unusable. */
+  unproven: boolean;
+  /** Why that document is required, for the `unauthorized` verdict. */
+  unprovenVerdict: string;
+}>;
+
+/** One aggregated refusal for every unusable field of one call, or `undefined` when the shape is usable. */
+function shapeRefusalOf(
+  raw: Record<string, unknown>,
+  operation: string,
+  contract: CoordinatorShapeContract,
+): CoordinatorIdentityOutcome | undefined {
+  const supplied = Object.keys(raw);
+  const forbidden = supplied.filter((key) => !contract.keys.includes(key));
+  const missing = contract.required.filter((key) => !supplied.includes(key));
+  const invalid = [
+    ...contract.invalid,
+    ...contract.nonEmpty.filter((key) => supplied.includes(key) && !isNonEmpty(raw[key])),
+    ...contract.optionalNonEmpty.filter((key) => raw[key] !== undefined && !isNonEmpty(raw[key])),
+  ].filter((key, index, all) => all.indexOf(key) === index);
+  if (forbidden.length === 0 && missing.length === 0 && invalid.length === 0 && !contract.unproven) return undefined;
+  const label = contract.form === null ? operation : `${operation} ${contract.form}`;
+  const verdicts = [
+    ...(forbidden.length > 0 ? [`refused ${forbidden.join(", ")}`] : []),
+    ...(missing.length > 0 ? [`requires ${missing.join(", ")}`] : []),
+    ...(invalid.length > 0 ? [`cannot use ${invalid.join(", ")}`] : []),
+    ...(contract.unproven ? [contract.unprovenVerdict] : []),
+  ];
+  return refuse(
+    forbidden.length > 0 ? "forbidden-field" : contract.unproven ? "unauthorized" : "invalid-input",
+    `the coordinator ${label} accepts only ${contract.keys.join(", ")} \u2014 ${verdicts.join("; ")}; a session id, root, ` +
+      "caller role, authority flag or credential path is never accepted from the caller",
+    {
+      ...(contract.form === null ? {} : { form: contract.form }),
+      forbidden,
+      missing,
+      fields: invalid,
+    },
+  );
+}
+
+/**
+ * The shape of an operation with ONE caller form on every route (`bind`,
+ * `show-recovery`): the exact key set, the keys it requires and the optional
+ * CAS values it honors when supplied. Every unusable field is reported in one
+ * aggregated refusal, by name, before any authority is probed.
  */
 function classifyCoordinatorCall(
   raw: unknown,
   operation: "bind" | "show-recovery",
-  allowedKeys: readonly string[],
-  requiredKeys: readonly string[],
+  keys: readonly string[],
+  required: readonly string[],
+  optionalNonEmpty: readonly string[] = [],
 ): { ok: true; request: Record<string, unknown> } | { ok: false; outcome: CoordinatorIdentityOutcome } {
   if (!isPlainObject(raw)) {
     return { ok: false, outcome: refuse("invalid-input", `the coordinator ${operation} input must be an object`) };
@@ -410,85 +467,134 @@ function classifyCoordinatorCall(
       }),
     };
   }
-  const keys = Object.keys(raw);
-  const forbidden = keys.filter((key) => !allowedKeys.includes(key));
-  const missing = requiredKeys.filter((key) => !keys.includes(key));
-  if (forbidden.length > 0 || missing.length > 0) {
-    const verdicts = [
-      ...(forbidden.length > 0 ? [`refused ${forbidden.join(", ")}`] : []),
-      ...(missing.length > 0 ? [`requires ${missing.join(", ")}`] : []),
-    ];
-    return {
-      ok: false,
-      outcome: refuse(
-        forbidden.length > 0 ? "forbidden-field" : "invalid-input",
-        `the coordinator ${operation} form accepts only ${allowedKeys.join(", ")} — ${verdicts.join("; ")}; ` +
-          "a mixed form never selects an authority, and a session id, root, caller role, authority flag or credential path is never accepted from the caller",
-        { forbidden, missing },
-      ),
-    };
-  }
+  const refusal = shapeRefusalOf(raw, operation, {
+    form: null,
+    keys,
+    required,
+    nonEmpty: required.filter((key) => key !== "operation"),
+    optionalNonEmpty,
+    invalid: [],
+    unproven: false,
+    unprovenVerdict: "",
+  });
+  if (refusal !== undefined) return { ok: false, outcome: refusal };
   return { ok: true, request: raw };
 }
 
-type CoordinatorForm =
-  | { ok: true; form: "json" | "active"; request: Record<string, unknown> }
-  | { ok: false; outcome: CoordinatorIdentityOutcome };
+/**
+ * The supplied public-session-id values that violate the one shared rule (a
+ * single safe path component of bounded length), labelled by FIELD NAME or by
+ * position inside a list — never by value. Every such value is forwarded to the
+ * engine AND echoed by its audit, so the rule is applied here first; the
+ * refusal is itself a public diagnostic and never repeats the rejected value.
+ */
+function unsafeSessionIdSubjects(
+  candidates: readonly Readonly<{ subject: string; value: unknown }>[],
+): string[] {
+  return candidates.flatMap(({ subject, value }) => {
+    try {
+      assertSafeSessionId(value, subject);
+      return [];
+    } catch {
+      return [subject];
+    }
+  });
+}
 
 /**
  * Which of the two authority-selected recovery forms one call declares, from its
- * own key set alone. The active form is the one carrying a marker field the JSON
- * form does not have; the chosen form's key set must then match EXACTLY beyond
- * the keys the ACTIVE route derives, so a mixed or partial call is refused by
- * name instead of silently selecting an authority.
+ * own key set alone, and every unusable field of that form. The active form is
+ * the one carrying a marker field the JSON form does not have; the form's key
+ * set must then match EXACTLY beyond the keys the ACTIVE route derives, so a
+ * mixed or partial call is refused by name instead of silently selecting an
+ * authority. Both forms report their whole verdict in one refusal: an empty or
+ * absent stop assertion and an unusable attestation each keep the explicit
+ * `unauthorized` verdict — a missing proof is not a malformed field.
  */
-function classifyCoordinatorForm(
+function classifyCoordinatorRecover(
   raw: unknown,
-  operation: "recover",
-  forms: {
-    json: { keys: readonly string[]; required: readonly string[] };
-    active: { keys: readonly string[]; required: readonly string[] };
-  },
-  markers: readonly string[],
-): CoordinatorForm {
+): { ok: true; form: "json" | "active"; request: Record<string, unknown> } | { ok: false; outcome: CoordinatorIdentityOutcome } {
   if (!isPlainObject(raw)) {
-    return { ok: false, outcome: refuse("invalid-input", `the coordinator ${operation} input must be an object`) };
+    return { ok: false, outcome: refuse("invalid-input", "the coordinator recover input must be an object") };
   }
-  if (raw.operation !== operation) {
+  if (raw.operation !== "recover") {
     return {
       ok: false,
-      outcome: refuse("unknown-operation", `this is the coordinator ${operation} path; got ${JSON.stringify(raw.operation)}`, {
+      outcome: refuse("unknown-operation", `this is the coordinator recover path; got ${JSON.stringify(raw.operation)}`, {
         operation: raw.operation,
       }),
     };
   }
   const keys = Object.keys(raw);
-  const form = markers.some((marker) => keys.includes(marker)) ? "active" : "json";
-  const selected = form === "active" ? forms.active : forms.json;
-  const forbidden = keys.filter((key) => !selected.keys.includes(key));
-  if (forbidden.length > 0) {
-    return {
-      ok: false,
-      outcome: refuse(
-        "forbidden-field",
-        `the coordinator ${operation} ${form} form accepts only ${selected.keys.join(", ")} \u2014 refused ${forbidden.join(", ")}; ` +
-          "a mixed form never selects an authority, and a session id, root, caller role, authority flag or credential path is never accepted from the caller",
-        { forbidden, form },
-      ),
-    };
-  }
-  const missing = selected.required.filter((key) => !keys.includes(key));
-  if (missing.length > 0) {
-    return {
-      ok: false,
-      outcome: refuse(
-        "invalid-input",
-        `the coordinator ${operation} ${form} form requires ${missing.join(", ")}; a partial form never falls back to the other authority`,
-        { missing, form },
-      ),
-    };
-  }
+  const form = ACTIVE_RECOVER_MARKERS.some((marker) => keys.includes(marker)) ? "active" : "json";
+  const stopped = raw.stoppedSessionIds;
+  const contract: CoordinatorShapeContract =
+    form === "active"
+      ? {
+          form,
+          keys: COORDINATOR_ACTIVE_RECOVER_INPUT_KEYS,
+          required: ["operation", "workflowId", "priorSessionId", "reason"],
+          nonEmpty: ["workflowId", "reason"],
+          optionalNonEmpty: ["expected", "operationId"],
+          // `null` is the explicit "this workflow records no coordinator at all"
+          // claim (`--unowned`) and is never treated as a missing field or an
+          // unusable id; every other supplied holder — including an own
+          // `undefined` key — honors the same public-session-id rule as the stop
+          // list, without echoing the rejected value.
+          invalid:
+            raw.priorSessionId === null
+              ? []
+              : unsafeSessionIdSubjects([{ subject: "priorSessionId", value: raw.priorSessionId }]),
+          unproven: !isPlainObject(raw.attestation),
+          unprovenVerdict:
+            "attestation must be the operator's own ActivationAttestation document, forwarded to the engine's own validator \u2014 this adapter never manufactures or defaults one",
+        }
+      : {
+          form,
+          keys: COORDINATOR_RECOVER_INPUT_KEYS,
+          required: ["operation", "workflowId", "operationId", "reason", "authorizationRef"],
+          nonEmpty: ["workflowId", "operationId", "reason", "authorizationRef"],
+          optionalNonEmpty: [],
+          invalid: Array.isArray(stopped)
+            ? unsafeSessionIdSubjects(stopped.map((value, index) => ({ subject: `stoppedSessionIds[${index}]`, value })))
+            : [],
+          unproven: !Array.isArray(stopped) || stopped.length === 0,
+          unprovenVerdict:
+            "stoppedSessionIds must name the recorded prior holder this recovery replaces \u2014 the host never treats an empty stop assertion as an authorization",
+        };
+  const refusal = shapeRefusalOf(raw, "recover", contract);
+  if (refusal !== undefined) return { ok: false, outcome: refusal };
   return { ok: true, form, request: raw };
+}
+
+/**
+ * The host-derived facts every coordinator operation needs before any authority
+ * IO: a native session id, a non-leaf seat and a resolvable control root. The
+ * caller's own shape is already settled by the classifiers above, so this gate
+ * reports host facts only, in one shared order.
+ */
+function coordinatorHostFacts(
+  facts: CoordinatorIdentityFacts,
+): { ok: true; harnessRoot: string } | { ok: false; outcome: CoordinatorIdentityOutcome } {
+  if (!isNonEmpty(facts.sessionId)) {
+    return {
+      ok: false,
+      outcome: refuse(
+        "identity-missing",
+        "this host session has no native session id, so no coordinator identity can be acquired \u2014 the engine never generates one",
+      ),
+    };
+  }
+  if (facts.leaf) {
+    return { ok: false, outcome: refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat") };
+  }
+  if (!isNonEmpty(facts.harnessRoot)) {
+    return {
+      ok: false,
+      outcome: refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, { cwd: facts.cwd }),
+    };
+  }
+  return { ok: true, harnessRoot: facts.harnessRoot };
 }
 
 /**
@@ -509,37 +615,41 @@ async function activeControlsOf(
   workflowId: string,
   request: Record<string, unknown>,
 ): Promise<{ ok: true; expected: string; operationId: string } | { ok: false; outcome: CoordinatorIdentityOutcome }> {
-  const expected = isNonEmpty(request.expected) ? request.expected : undefined;
-  if (expected !== undefined) {
-    const supplied = request.operationId;
-    return { ok: true, expected, operationId: isNonEmpty(supplied) ? supplied : `coordinator-bind-${randomUUID()}` };
-  }
-  let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
-  try {
-    read = await authority.read({ harnessDir: harnessRoot, workflowId });
-  } catch (error) {
-    return { ok: false, outcome: engineRefusal(error, { workflowId, harnessRoot }) };
-  }
-  // The engine requires the exact workflow token; a read that returned without
-  // one cannot be turned into a CAS value here.
-  if (!isNonEmpty(read.token)) {
-    return {
-      ok: false,
-      outcome: refuse(
-        "execution.token-unavailable",
-        `the execution authority read of workflow ${workflowId} returned no workflow token, so no CAS value can be derived; supply \`expected\` explicitly`,
-        { workflowId, harnessRoot },
-      ),
-    };
+  // A supplied token is forwarded verbatim — the shared shape gate already
+  // refused an empty one — and is re-checked by the engine inside its own write
+  // transaction, which is what makes a stale value a real refusal instead of a
+  // value this adapter could have masked.
+  let expected = request.expected as string | undefined;
+  if (expected === undefined) {
+    let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
+    try {
+      read = await authority.read({ harnessDir: harnessRoot, workflowId });
+    } catch (error) {
+      return { ok: false, outcome: engineRefusal(error, { workflowId, harnessRoot }) };
+    }
+    // The engine requires the exact workflow token; a read that returned without
+    // one cannot be turned into a CAS value here.
+    if (!isNonEmpty(read.token)) {
+      return {
+        ok: false,
+        outcome: refuse(
+          "execution.token-unavailable",
+          `the execution authority read of workflow ${workflowId} returned no workflow token, so no CAS value can be derived; supply \`expected\` explicitly`,
+          { workflowId, harnessRoot },
+        ),
+      };
+    }
+    expected = read.token;
   }
   const supplied = request.operationId;
-  return { ok: true, expected: read.token, operationId: isNonEmpty(supplied) ? supplied : `coordinator-bind-${randomUUID()}` };
+  return { ok: true, expected, operationId: isNonEmpty(supplied) ? supplied : `coordinator-bind-${randomUUID()}` };
 }
 
 /**
  * The ACTIVE arm of a bind: the DB session API records the binding under the
  * host-derived identity, with the CAS controls derived when the caller omits
- * them. A supplied-but-unusable control refuses once, naming every offender.
+ * them. A supplied-but-unusable control is already answered by the shared shape
+ * gate, before any authority is probed.
  */
 async function bindActiveCoordinator(
   request: Record<string, unknown>,
@@ -548,14 +658,6 @@ async function bindActiveCoordinator(
   harnessRoot: string,
   authority: CoordinatorAuthorityDeps,
 ): Promise<CoordinatorIdentityOutcome> {
-  const unusable = unusableFieldsOf(request, ["expected", "operationId"]);
-  if (unusable.length > 0) {
-    return refuse(
-      "invalid-input",
-      `the coordinator bind CAS fields ${unusable.join(", ")} must be non-empty strings when supplied — omit them and the host reads the current token and mints the operation id`,
-      { workflowId, harnessRoot, fields: unusable },
-    );
-  }
   const identity = coordinatorIdentityOf(facts.sessionId, workflowId);
   try {
     validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
@@ -615,28 +717,16 @@ export async function bindCoordinatorIdentity(
   bind: CoordinatorBindFn = (input) => bindPlanSession(input),
   authority: CoordinatorAuthorityDeps = DEFAULT_AUTHORITY_DEPS,
 ): Promise<CoordinatorIdentityOutcome> {
-  const shape = classifyCoordinatorCall(raw, "bind", COORDINATOR_BIND_INPUT_KEYS, ["operation", "workflowId"]);
+  const shape = classifyCoordinatorCall(raw, "bind", COORDINATOR_BIND_INPUT_KEYS, ["operation", "workflowId"], [
+    "expected",
+    "operationId",
+  ]);
   if (!shape.ok) return shape.outcome;
-  if (!isNonEmpty(shape.request.workflowId)) {
-    return refuse("invalid-input", "workflowId is required");
-  }
-  const workflowId = shape.request.workflowId;
+  const workflowId = shape.request.workflowId as string;
 
-  if (!isNonEmpty(facts.sessionId)) {
-    return refuse(
-      "identity-missing",
-      "this host session has no native session id, so no coordinator identity can be acquired \u2014 the engine never generates one",
-    );
-  }
-  if (facts.leaf) {
-    return refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat");
-  }
-  if (!isNonEmpty(facts.harnessRoot)) {
-    return refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, {
-      cwd: facts.cwd,
-    });
-  }
-  const harnessRoot = facts.harnessRoot;
+  const host = coordinatorHostFacts(facts);
+  if (!host.ok) return host.outcome;
+  const harnessRoot = host.harnessRoot;
 
   // §5/§6: the root decides which authority answers, before any engine verb.
   const route = await routeOf(authority, harnessRoot);
@@ -797,53 +887,6 @@ const DEFAULT_RECOVERY_DEPS: CoordinatorRecoveryDeps = {
   target: readStoredCoordinatorTarget,
 };
 
-/** The host-derived facts and the refusal order every coordinator operation shares. */
-function coordinatorCallContext(
-  raw: unknown,
-  facts: CoordinatorIdentityFacts,
-  allowedKeys: readonly string[],
-  operation: "show-recovery" | "recover",
-): { ok: true; workflowId: string; harnessRoot: string } | { ok: false; outcome: CoordinatorIdentityOutcome } {
-  if (!isPlainObject(raw)) {
-    return { ok: false, outcome: refuse("invalid-input", `the coordinator ${operation} input must be an object`) };
-  }
-  const forbidden = Object.keys(raw).filter((key) => !allowedKeys.includes(key));
-  if (forbidden.length > 0) {
-    const extra =
-      operation === "recover"
-        ? "a session id, root, caller role, authority flag, credential path or force flag is never accepted from the caller"
-        : "a session id, root, caller role, authority flag or credential path is never accepted from the caller";
-    return {
-      ok: false,
-      outcome: refuse("forbidden-field", `the coordinator ${operation} input accepts only ${allowedKeys.join(", ")} \u2014 refused ${forbidden.join(", ")}; ${extra}`, {
-        forbidden,
-      }),
-    };
-  }
-  if (!isNonEmpty(raw.workflowId)) {
-    return { ok: false, outcome: refuse("invalid-input", "workflowId is required") };
-  }
-  if (!isNonEmpty(facts.sessionId)) {
-    return {
-      ok: false,
-      outcome: refuse(
-        "identity-missing",
-        "this host session has no native session id, so no coordinator identity can be acquired \u2014 the engine never generates one",
-      ),
-    };
-  }
-  if (facts.leaf) {
-    return { ok: false, outcome: refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat") };
-  }
-  if (!isNonEmpty(facts.harnessRoot)) {
-    return {
-      ok: false,
-      outcome: refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, { cwd: facts.cwd }),
-    };
-  }
-  return { ok: true, workflowId: raw.workflowId, harnessRoot: facts.harnessRoot };
-}
-
 /**
  * `{operation:"show-recovery"}` — the read-only recovery view of one workflow
  * (prerequisite contract §3.3): the recorded owner, the observed snapshot and
@@ -870,24 +913,26 @@ export async function showCoordinatorRecovery(
     COORDINATOR_SHOW_RECOVERY_INPUT_KEYS,
   );
   if (!shape.ok) return shape.outcome;
-  const context = coordinatorCallContext(raw, facts, COORDINATOR_SHOW_RECOVERY_INPUT_KEYS, "show-recovery");
-  if (!context.ok) return context.outcome;
+  const host = coordinatorHostFacts(facts);
+  if (!host.ok) return host.outcome;
+  const workflowId = shape.request.workflowId as string;
+  const harnessRoot = host.harnessRoot;
 
-  const route = await routeOf(authority, context.harnessRoot);
+  const route = await routeOf(authority, harnessRoot);
   if (!route.ok) return route.outcome;
   if (route.value === "execution") {
     let read: ExecutionRead<ExecutionState | ExecutionPlanView>;
     try {
-      read = await authority.read({ harnessDir: context.harnessRoot, workflowId: context.workflowId });
+      read = await authority.read({ harnessDir: harnessRoot, workflowId });
     } catch (error) {
-      return engineRefusal(error, { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
+      return engineRefusal(error, { workflowId, harnessRoot });
     }
     const workflow = "workflows" in read.data ? read.data.workflows[0] : undefined;
     if (workflow === undefined) {
       return refuse(
         "coordination.workflow-not-found",
-        `the execution authority read of workflow ${context.workflowId} returned no lifecycle; nothing about it can be reviewed.`,
-        { workflowId: context.workflowId, harnessRoot: context.harnessRoot },
+        `the execution authority read of workflow ${workflowId} returned no lifecycle; nothing about it can be reviewed.`,
+        { workflowId, harnessRoot },
       );
     }
     const coordinator = workflow.coordinator;
@@ -896,12 +941,12 @@ export async function showCoordinatorRecovery(
       isError: false,
       code: "recovery-state",
       text:
-        `workflow ${context.workflowId} is ${workflow.state.status} at phase ${JSON.stringify(workflow.state.phase ?? null)} under store epoch ` +
+        `workflow ${workflowId} is ${workflow.state.status} at phase ${JSON.stringify(workflow.state.phase ?? null)} under store epoch ` +
         `${read.epoch}; the DB session authority records ${coordinator === null ? "no coordinator (recovery with priorSessionId null is the explicit unowned path)" : `coordinator session ${coordinator.sessionId}`}. ` +
         "This view holds no token, envelope bytes or credential path.",
       details: {
-        workflowId: context.workflowId,
-        harnessRoot: context.harnessRoot,
+        workflowId,
+        harnessRoot,
         storeId: read.storeId,
         epoch: read.epoch,
         status: workflow.state.status,
@@ -914,7 +959,7 @@ export async function showCoordinatorRecovery(
   }
 
   try {
-    const view = await deps.show({ cwd: facts.cwd, harnessDir: context.harnessRoot, workflowId: context.workflowId });
+    const view = await deps.show({ cwd: facts.cwd, harnessDir: harnessRoot, workflowId });
     const blockers = view.blockers.map((entry) => `${entry.code}: ${entry.message}`).join("; ");
     return {
       ok: true,
@@ -928,11 +973,11 @@ export async function showCoordinatorRecovery(
         compassVersion: view.compassVersion,
         allowed: view.allowed,
         blockers: view.blockers.map((entry) => `${entry.code}: ${entry.message}`),
-        harnessRoot: context.harnessRoot,
+        harnessRoot,
       },
     };
   } catch (error) {
-    return engineRefusal(error, { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
+    return engineRefusal(error, { workflowId, harnessRoot });
   }
 }
 
@@ -950,6 +995,14 @@ export async function showCoordinatorRecovery(
  *   its envelope path come from the engine's stored binding (never a caller
  *   path) and the caller must name that holder in the stop assertion. Every
  *   semantic guard stays the engine's, inside the snapshot write lock.
+ * The caller shape is settled FIRST, in one aggregated refusal: the addressed
+ * form's key set (an extra key is never partially honored), the keys it
+ * requires, the values their contract cannot use (including the POSITION of a
+ * stop-assertion entry that is not a public session id) and the separate
+ * `unauthorized` verdict of a missing operator proof. Only then do the
+ * host-derived facts, the route, the identity validation and the engine verb
+ * run — and the engine re-checks every semantic guard inside its own
+ * transaction.
  */
 export async function recoverCoordinatorIdentity(
   raw: unknown,
@@ -957,89 +1010,43 @@ export async function recoverCoordinatorIdentity(
   deps: CoordinatorRecoveryDeps = DEFAULT_RECOVERY_DEPS,
   authority: CoordinatorAuthorityDeps = DEFAULT_AUTHORITY_DEPS,
 ): Promise<CoordinatorIdentityOutcome> {
-  const shape = classifyCoordinatorForm(
-    raw,
-    "recover",
-    {
-      json: { keys: COORDINATOR_RECOVER_INPUT_KEYS, required: COORDINATOR_RECOVER_INPUT_KEYS },
-      active: {
-        keys: COORDINATOR_ACTIVE_RECOVER_INPUT_KEYS,
-        required: ["operation", "workflowId", "priorSessionId", "reason", "attestation"],
-      },
-    },
-    ACTIVE_RECOVER_MARKERS,
-  );
+  const shape = classifyCoordinatorRecover(raw);
   if (!shape.ok) return shape.outcome;
-  if (shape.form === "active") return recoverActiveCoordinator(shape.request, facts, authority);
+  const host = coordinatorHostFacts(facts);
+  if (!host.ok) return host.outcome;
+  const harnessRoot = host.harnessRoot;
+  if (shape.form === "active") return recoverActiveCoordinator(shape.request, facts, harnessRoot, authority);
 
-  const context = coordinatorCallContext(raw, facts, COORDINATOR_RECOVER_INPUT_KEYS, "recover");
-  if (!context.ok) return context.outcome;
-  const request = raw as Record<string, unknown>;
-  // Every unusable field of one call is named in a single refusal, so the
-  // caller repairs the whole shape in one round trip. An empty stop assertion
-  // stays its own unauthorized verdict: a missing proof, not a malformed field.
-  const unusable = (["operationId", "reason", "authorizationRef"] as const).filter(
-    (field) => !isNonEmpty(request[field]),
-  );
-  const stopped = request.stoppedSessionIds;
-  const stopAssertion = !Array.isArray(stopped) || stopped.length === 0;
-  if (unusable.length > 0 || stopAssertion) {
-    const verdicts = [
-      ...(unusable.length > 0 ? [`requires a non-empty ${unusable.join(", ")}`] : []),
-      ...(stopAssertion
-        ? ["stoppedSessionIds must name the recorded prior holder this recovery replaces \u2014 the host never treats an empty stop assertion as an authorization"]
-        : []),
-    ];
-    return refuse(
-      stopAssertion ? "unauthorized" : "invalid-input",
-      `the coordinator recover file form ${verdicts.join("; ")}`,
-      { workflowId: context.workflowId, fields: [...unusable] },
-    );
-  }
-  // Every entry is forwarded to the engine AND echoed by it, so each must be a
-  // safe PUBLIC session id (single path component, bounded length) under the
-  // one shared rule — an arbitrary string is refused here, before the engine
-  // call, instead of being hashed into the audit or returned in a diagnostic.
-  // The refusal is a public diagnostic itself, so it reports the rule and the
-  // entry's POSITION and never repeats the rejected value.
-  for (const [index, entry] of stopped.entries()) {
-    try {
-      assertSafeSessionId(entry, "stoppedSessionIds entry");
-    } catch {
-      return refuse(
-        "invalid-input",
-        "every stoppedSessionIds entry must be a public session id \u2014 a single safe path component " +
-          "([A-Za-z0-9._-]+) of at most 128 characters; this adapter does not echo the rejected value",
-        { workflowId: context.workflowId, index },
-      );
-    }
-  }
-  const stoppedSessionIds = stopped as readonly string[];
+  const request = shape.request;
+  const workflowId = request.workflowId as string;
+  // Every entry is forwarded to the engine AND echoed by its audit, so the one
+  // shared public-session-id rule was applied by the classifier above: an
+  // arbitrary string never reaches the request digest or the audit record.
+  const stoppedSessionIds = request.stoppedSessionIds as readonly string[];
 
-  const resolved = deps.target({ harnessRoot: context.harnessRoot, workflowId: context.workflowId });
-  if (!resolved.ok) return refuse(resolved.code, resolved.message, { workflowId: context.workflowId });
+  const resolved = deps.target({ harnessRoot, workflowId });
+  if (!resolved.ok) return refuse(resolved.code, resolved.message, { workflowId });
   const { priorSessionPath, priorSessionId } = resolved.target;
   // The stop assertion is forwarded EXACTLY as the caller stated it: whether it
   // names the recorded holder is the engine's guard, checked against the
   // binding it reads inside the snapshot lock (which is also what makes an
-  // exact retry of an accepted recovery recognizable). The host still refuses
-  // an empty assertion above, because that is a missing proof, not a mismatch.
+  // exact retry of an accepted recovery recognizable).
 
   const identity: ExecutionIdentity = {
     source: "host",
     sessionId: facts.sessionId,
-    workflowId: context.workflowId,
+    workflowId,
     role: "coordinator",
   };
   try {
-    validateExecutionIdentity(identity, { workflowId: context.workflowId, role: "coordinator" });
+    validateExecutionIdentity(identity, { workflowId, role: "coordinator" });
   } catch (error) {
-    return refusalOf(error, { workflowId: context.workflowId });
+    return refusalOf(error, { workflowId });
   }
   try {
     const result = await deps.recover({
       cwd: facts.cwd,
-      harnessDir: context.harnessRoot,
+      harnessDir: harnessRoot,
       identity,
       priorSessionPath,
       priorSessionId,
@@ -1068,11 +1075,11 @@ export async function recoverCoordinatorIdentity(
         replay: receipt.replay,
         snapshotVersion: receipt.snapshotVersion,
         compassVersion: receipt.compassVersion,
-        harnessRoot: context.harnessRoot,
+        harnessRoot,
       },
     };
   } catch (error) {
-    return engineRefusal(error, { workflowId: context.workflowId, harnessRoot: context.harnessRoot });
+    return engineRefusal(error, { workflowId, harnessRoot });
   }
 }
 
@@ -1082,71 +1089,24 @@ export async function recoverCoordinatorIdentity(
  * current epoch/root revalidation, the creator/prior-holder rule, the atomic
  * revocation and the immutable receipt — and the operator's attestation is
  * forwarded untouched to `validateActivationAttestation`. This adapter adds only
- * the caller-shape refusals and the host-derived identity, derives the two CAS
- * controls exactly like the bind, and never echoes the attestation body, a token
- * or a path back to the model.
+ * the caller-shape refusals (already aggregated by the shared classifier, which
+ * validates the holder under the same public-session-id rule the JSON stop
+ * assertion uses and keeps the missing attestation an `unauthorized` verdict)
+ * and the host-derived identity. It derives the two CAS controls exactly like
+ * the bind and never echoes the attestation body, a token or a path back to the
+ * model.
  */
 async function recoverActiveCoordinator(
   request: Record<string, unknown>,
   facts: CoordinatorIdentityFacts,
+  harnessRoot: string,
   authority: CoordinatorAuthorityDeps,
 ): Promise<CoordinatorIdentityOutcome> {
-  if (!isNonEmpty(request.workflowId)) return refuse("invalid-input", "workflowId is required");
-  const workflowId = request.workflowId;
-
-  if (!isNonEmpty(facts.sessionId)) {
-    return refuse(
-      "identity-missing",
-      "this host session has no native session id, so no coordinator identity can be acquired \u2014 the engine never generates one",
-    );
-  }
-  if (facts.leaf) {
-    return refuse("leaf-session", "this is a leaf/subagent (task) session, not a coordinator seat");
-  }
-  if (!isNonEmpty(facts.harnessRoot)) {
-    return refuse("harness-not-found", `no canonical control harness root is resolvable from ${facts.cwd}`, { cwd: facts.cwd });
-  }
-  const harnessRoot = facts.harnessRoot;
-
-  // Every unusable field of one call is named in a single refusal: the holder,
-  // the operator's reason, and the two CAS controls (whose omission is derived,
-  // not defaulted away). `null` is the explicit "this workflow records no
-  // coordinator at all" claim (`--unowned`) and is never treated as a missing
-  // field; a non-null holder is validated under the same public-session-id rule
-  // the JSON stop assertion uses, without echoing the rejected value. The
-  // attestation is the authorization document, so its absence keeps the
-  // unauthorized verdict instead of folding into an input-shape refusal.
-  const prior = request.priorSessionId;
-  const unusable = unusableFieldsOf(request, ["reason", "expected", "operationId"]);
-  const holderInvalid = prior !== null && !isNonEmpty(prior);
-  const attestation = request.attestation;
-  if (holderInvalid || unusable.length > 0 || !isPlainObject(attestation)) {
-    const verdicts = [
-      ...(holderInvalid
-        ? ["priorSessionId must name the recorded holder this recovery replaces, or be null only when the workflow records no coordinator at all \u2014 an absent or empty holder is never guessed"]
-        : []),
-      ...(unusable.length > 0 ? [`requires a non-empty ${unusable.join(", ")}`] : []),
-      ...(!isPlainObject(attestation)
-        ? ["attestation must be the operator's own ActivationAttestation document \u2014 this adapter never manufactures or defaults one"]
-        : []),
-    ];
-    return refuse(!isPlainObject(attestation) ? "unauthorized" : "invalid-input", verdicts.join("; "), {
-      workflowId,
-      fields: [...(holderInvalid ? ["priorSessionId"] : []), ...unusable],
-    });
-  }
-  if (prior !== null) {
-    try {
-      assertSafeSessionId(prior, "priorSessionId");
-    } catch {
-      return refuse(
-        "invalid-input",
-        "priorSessionId must be a public session id \u2014 a single safe path component ([A-Za-z0-9._-]+) of at most 128 " +
-          "characters; this adapter does not echo the rejected value",
-        { workflowId },
-      );
-    }
-  }
+  const workflowId = request.workflowId as string;
+  const prior = request.priorSessionId as string | null;
+  // The authorization document is forwarded UNTOUCHED: the classifier already
+  // refused an absent or non-object attestation as `unauthorized`, and the
+  // engine's own `validateActivationAttestation` projects the declared shape.
 
   const route = await routeOf(authority, harnessRoot);
   if (!route.ok) return route.outcome;
@@ -1174,7 +1134,7 @@ async function recoverActiveCoordinator(
       operationId: controls.operationId,
       priorSessionId: prior,
       reason: request.reason as string,
-      attestation,
+      attestation: request.attestation,
     });
     return {
       ok: true,

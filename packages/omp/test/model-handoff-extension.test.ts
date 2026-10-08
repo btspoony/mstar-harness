@@ -2856,9 +2856,15 @@ describe("prerequisite identity — registered coordinator recovery tool handler
  * A REAL active execution authority whose workflow is created by
  * `creatorSessionId` and holds NO coordinator row — the state an ordinary
  * minimal bind addresses. No root register and no workflow snapshot exist on
- * this route.
+ * this route. The returned token is the lifecycle's CURRENT token at this
+ * moment: once a later operation advances the header revision it is exactly the
+ * stale CAS value a supplied-controls retry carries.
  */
-async function seedBindableActiveWorkflow(repo: ControlRepo, creatorSessionId: string, workflowId: string): Promise<void> {
+async function seedBindableActiveWorkflow(
+  repo: ControlRepo,
+  creatorSessionId: string,
+  workflowId: string,
+): Promise<string> {
   const harness = repo.harness;
   mkdirSync(join(harness, "plans"), { recursive: true });
   setArtifactStore(createFsStore(harness));
@@ -2884,6 +2890,7 @@ async function seedBindableActiveWorkflow(repo: ControlRepo, creatorSessionId: s
     expected: initialized.token,
     operationId: `create-${workflowId}`,
   });
+  return (await readExecutionAuthority({ harnessDir: harness }, { workflowId })).token;
 }
 
 /**
@@ -2939,8 +2946,10 @@ describe("native coordinator tool on the ACTIVE route", () => {
       role: "coordinator",
       replayed: false,
     });
-    expect(String((bound.details.mstarCoordinator as Record<string, unknown>).operationId)).toMatch(/^coordinator-bind-/);
+    // §3.3: the coordinator envelope path is coordinator-owned transport, so this
+    // model-visible tool result carries neither the path nor the derived token.
     expect(JSON.stringify(bound.details)).not.toContain("sessions/");
+    expect(String(bound.content[0]?.text)).not.toContain("sessions/");
     expect(await activeCoordinatorOf(repo, workflowId)).toBe(hostId);
 
     // A second bind is the ENGINE's own ownership refusal — with the recorded
@@ -2953,6 +2962,65 @@ describe("native coordinator tool on the ACTIVE route", () => {
     expect(Array.isArray(refusal.available_work)).toBe(true);
     expect(typeof refusal.loadedEntry).toBe("string");
     expect(await activeCoordinatorOf(repo, workflowId)).toBe(hostId);
+  }, 120_000);
+
+  test("a stale supplied CAS and a wrong-holder stop proof are refused through the registered handler without moving the owner", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-stale-iteration";
+    const createdToken = await seedBindableActiveWorkflow(repo, hostId, workflowId);
+
+    // A supplied-but-stale CAS is not permission to pick a route or an identity:
+    // the engine re-checks the token inside its own write transaction and refuses.
+    // The successful bind in between is what makes `createdToken` stale.
+    expect((await harness.runCoordinatorTool({ operation: "bind", workflowId })).isError).toBe(false);
+    const afterBind = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    const ownerBefore = await activeCoordinatorOf(repo, workflowId);
+    expect(ownerBefore).toBe(hostId);
+
+    const stale = await harness.runCoordinatorTool({
+      operation: "bind",
+      workflowId,
+      expected: createdToken,
+      operationId: "native-stale-op-1",
+    });
+    expect(stale.isError).toBe(true);
+    expect(coordinatorCodeOf(stale)).toBe("execution.stale-token");
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerBefore);
+    expect((await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).epoch).toBe(afterBind.epoch);
+
+    // A recovery whose stop evidence names a DIFFERENT session than the recorded
+    // holder is refused: the host forwards the assertion verbatim and the engine's
+    // own guard rejects it against the binding it reads inside the transaction.
+    const wrongHolder = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId,
+      priorSessionId: "some-other-session",
+      reason: "the recorded host session was stopped",
+      attestation: activationAttestation("some-other-session"),
+    });
+    expect(wrongHolder.isError).toBe(true);
+    // The engine refuses a named holder the workflow does not record; the exact
+    // stable code is the engine's own coordination vocabulary.
+    expect(coordinatorCodeOf(wrongHolder)).toBe("coordination.session-not-found");
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerBefore);
+
+    // An unusable stop proof is refused BEFORE any authority IO, and the owner and
+    // header revision are untouched by every refusal above.
+    const unproven = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId,
+      priorSessionId: hostId,
+      reason: "",
+      attestation: activationAttestation(hostId),
+    });
+    expect(unproven.isError).toBe(true);
+    expect(coordinatorCodeOf(unproven)).toBe("invalid-input");
+    const afterAllRefusals = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    expect(afterAllRefusals.token).toBe(afterBind.token);
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerBefore);
   }, 120_000);
 
   test("show-recovery reads the ACTIVE authority through the registered handler", async () => {
@@ -3007,11 +3075,16 @@ describe("native coordinator tool on the ACTIVE route", () => {
       sessionId: hostId,
       replayed: false,
     });
-    expect(String((recovered.details.mstarCoordinator as Record<string, unknown>).operationId)).toMatch(/^coordinator-bind-/);
+    // The DB authority actually moved: the recorded holder was replaced by THIS
+    // host session, and the replacement is audited as a distinct operation.
     expect(await activeCoordinatorOf(repo, state.workflowId)).toBe(hostId);
+    const audited = recovered.details.mstarCoordinator as Record<string, unknown>;
+    expect(typeof audited.operationId).toBe("string");
+    expect(String(audited.operationId).length).toBeGreaterThan(0);
+    expect(JSON.stringify(recovered.details)).not.toContain("sessions/");
   }, 120_000);
 
-  test("a newer store schema surfaces the loaded build's own refusal with its provenance", async () => {
+  test("a newer store schema surfaces the loaded build's own refusal and its running-module provenance", async () => {
     const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
     const harness = await createHarness({
       cwd: repo.main,
@@ -3022,17 +3095,21 @@ describe("native coordinator tool on the ACTIVE route", () => {
     store.db.exec("insert into schema_version values(999, 'future', 'future', 'now')");
     store.close();
 
-    // The route probe refuses with the engine's OWN code and message — never a
-    // masked Prepare refusal or generic text — and the details carry the loaded
-    // entry that answered plus the supported host recovery.
+    // The route probe refuses with the engine's OWN code — never a masked Prepare
+    // refusal or a fabricated success — and the provenance is the module the host
+    // ACTUALLY loaded, reported by that module itself.
     const refused = await harness.runCoordinatorTool({ operation: "bind", workflowId: "native-schema-iteration" });
     expect(refused.isError).toBe(true);
     expect(coordinatorCodeOf(refused)).toBe("store.schema-unsupported");
-    expect(String(refused.content[0]?.text)).toContain("which this build does not know");
-    expect(String(refused.content[0]?.text)).toContain("NEW host process/session");
     const details = refused.details.mstarCoordinator as Record<string, unknown>;
+    // The consumer reads whatever structured facts the LOADED build supplies —
+    // it never pins an engine message substring. B3 adds the concrete
+    // highest-applied / supported-max / first-unknown fields to `StoreError.details`;
+    // this seat asserts the code and the provenance now, and the integration wave
+    // extends the same details read to those named facts once the engine emits them.
     expect(typeof details.loadedEntry).toBe("string");
-    expect(String(details.loadedEntry).length).toBeGreaterThan(0);
+    expect(String(details.loadedEntry)).toMatch(/\.(ts|js)$/);
+    expect(JSON.stringify(details)).not.toContain("sessions/");
   }, 120_000);
 });
 
