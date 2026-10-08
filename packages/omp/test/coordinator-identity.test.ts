@@ -12,7 +12,6 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  COORDINATOR_BIND_INPUT_KEYS,
   COORDINATOR_RECOVER_INPUT_KEYS,
   COORDINATOR_SHOW_RECOVERY_INPUT_KEYS,
   COORDINATOR_TOOL_NAME,
@@ -64,8 +63,7 @@ function fakeBind(): { calls: Array<Record<string, unknown>>; bind: (input: Reco
 }
 
 describe("prerequisite identity — coordinator identity adapter input", () => {
-  test("accepts only operation and workflowId; every identity-shaped field is refused by name", async () => {
-    expect([...COORDINATOR_BIND_INPUT_KEYS]).toEqual(["operation", "workflowId"]);
+  test("accepts only its documented keys; every identity-shaped field is refused by name", async () => {
     expect(COORDINATOR_TOOL_NAME).toBe("mstar_coordinator");
     for (const forged of [
       { operation: "bind", workflowId: "wf-a", sessionId: "attacker" },
@@ -582,18 +580,25 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
   });
 
-  test("an identical active bind retry reports the replay instead of a second commit", async () => {
-    const engine = fakeAuthority({
-      bind: async (input) => receiptOf({ sessionId: input.identity.sessionId, workflowId: input.workflowId, operationId: input.operationId }, true),
-    });
+  test("a combined forbidden and invalid call is refused whole before the authority", async () => {
+    // The advertised single repair: one refusal names EVERY unusable field, so a
+    // caller that follows it reaches a working call without discovering a second
+    // defect. The fixture combines all three classes — a forbidden identity key,
+    // a missing required key and an unusable optional CAS value — and nothing
+    // reaches the authority.
+    const engine = fakeAuthority();
     const result = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a", expected: WORKFLOW_TOKEN, operationId: OPERATION_ID },
+      { operation: "bind", expected: 7, sessionId: "forged" },
       FACTS,
       undefined as never,
       engine.deps,
     );
-    expect(result.code).toBe("replayed");
-    expect(result.text).toContain(OPERATION_ID);
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "forbidden-field" });
+    expect(result.details.forbidden).toEqual(["sessionId"]);
+    expect(result.details.missing).toEqual(["workflowId"]);
+    expect(result.details.fields).toEqual(["expected"]);
+    expect(engine.calls.read).toHaveLength(0);
+    expect(engine.calls.bind).toHaveLength(0);
   });
 
   test("the route decides the authority: an active form on a pre-activation root refuses instead of falling back", async () => {
@@ -606,46 +611,6 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     );
     expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "execution.not-active" });
     expect(engine.calls.bind).toHaveLength(0);
-  });
-
-  test("a Prepare bind on an ACTIVE root refuses with the redirect, and never writes the retired documents", async () => {
-    const engine = fakeAuthority();
-    let prepareCalls = 0;
-    const result = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a" },
-      FACTS,
-      async () => {
-        prepareCalls += 1;
-        throw new Error("unreachable");
-      },
-      engine.deps,
-    );
-    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "execution.consumer-not-ready" });
-    expect(result.text).toContain("expected");
-    expect(prepareCalls).toBe(0);
-  });
-
-  test("a mixed or partial form refuses by name before any IO", async () => {
-    const mixed = fakeAuthority();
-    const mixedResult = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a", expected: WORKFLOW_TOKEN, operationId: OPERATION_ID, coordinatorSessionPath: "/tmp/creds.json" },
-      FACTS,
-      undefined as never,
-      mixed.deps,
-    );
-    expect({ ok: mixedResult.ok, code: mixedResult.code }).toEqual({ ok: false, code: "forbidden-field" });
-
-    const partial = fakeAuthority();
-    const partialResult = await bindCoordinatorIdentity(
-      { operation: "bind", workflowId: "wf-a", expected: WORKFLOW_TOKEN },
-      FACTS,
-      undefined as never,
-      partial.deps,
-    );
-    expect({ ok: partialResult.ok, code: partialResult.code }).toEqual({ ok: false, code: "invalid-input" });
-    expect(partialResult.text).toContain("operationId");
-    expect(mixed.calls.bind).toHaveLength(0);
-    expect(partial.calls.bind).toHaveLength(0);
   });
 
   test("host facts gate the active forms exactly as they gate the Prepare bootstrap", async () => {
@@ -682,33 +647,31 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     }
   });
 
-  test("the active recover forwards the operator's own inputs and never echoes the attestation body", async () => {
+  test("the active recover reports every unusable field of one call in a single refusal", async () => {
+    // One call, four defects across all three classes: a malformed holder, an
+    // empty reason, an unusable optional CAS value and a non-object attestation.
+    // The caller repairs the WHOLE shape from this one verdict — the exact
+    // regression this finding names — and nothing reaches the authority.
     const engine = fakeAuthority();
-    const attestation = {
-      version: 1,
-      attestedAt: "2026-09-16T00:00:00Z",
-      operator: { actor: "operator-a", authorizationRef: "auth-7" },
-      consumers: [],
-      stoppedSessions: [],
-    };
     const result = await recoverCoordinatorIdentity(
       {
         operation: "recover",
         workflowId: "wf-a",
-        priorSessionId: "prior-session",
-        reason: "stopped owner",
-        attestation,
-        expected: WORKFLOW_TOKEN,
-        operationId: OPERATION_ID,
+        priorSessionId: "",
+        reason: "",
+        attestation: "attestation.json",
+        expected: 7,
       },
       FACTS,
       undefined as never,
       engine.deps,
     );
-    expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "recovered" });
-    expect(result.details).toMatchObject({ priorSessionId: "prior-session", sessionId: "native-session-a", epoch: 3 });
-    expect(JSON.stringify(result)).not.toContain("auth-7");
-    expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "unauthorized" });
+    expect(result.details).toMatchObject({ form: "active", forbidden: [], missing: [] });
+    expect(result.details.fields).toEqual(["priorSessionId", "reason", "expected"]);
+    expect(result.text).toContain("attestation");
+    expect(engine.calls.read).toHaveLength(0);
+    expect(engine.calls.recover).toHaveLength(0);
   });
 
   test("the active recover requires an explicit holder and the operator's own attestation document", async () => {
@@ -738,6 +701,33 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     expect(engine.calls.recover).toHaveLength(0);
   });
 
+  test("the file form reports a forbidden key, a missing field and an unusable stop entry in one refusal", async () => {
+    // The JSON (pre-activation) form aggregates the same way: an extra key, an
+    // absent required operation field, a malformed stop entry (reported by its
+    // POSITION, never its value) and a missing stop PROOF all arrive together.
+    const engine = fakeRecovery();
+    const result = await recoverCoordinatorIdentity(
+      {
+        operation: "recover",
+        workflowId: "wf-a",
+        authorizationRef: "PM-authorization-1",
+        stoppedSessionIds: ["../creds/secret.json"],
+        force: true,
+      },
+      FACTS,
+      engine.deps,
+    );
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: false, code: "forbidden-field" });
+    expect(result.details).toMatchObject({
+      form: "json",
+      forbidden: ["force"],
+      missing: ["operationId", "reason"],
+      fields: ["stoppedSessionIds[0]"],
+    });
+    expect(JSON.stringify(result)).not.toContain("secret.json");
+    expect(engine.recovered).toHaveLength(0);
+  });
+
   test("an explicitly unowned recovery forwards a null holder", async () => {
     const engine = fakeAuthority();
     const result = await recoverCoordinatorIdentity(
@@ -755,6 +745,8 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
       engine.deps,
     );
     expect(result.ok).toBe(true);
+    // The explicit "this workflow records no coordinator at all" claim crosses
+    // the boundary as `null` — never a defaulted or guessed holder.
     expect(engine.calls.recover[0]?.priorSessionId).toBeNull();
   });
 

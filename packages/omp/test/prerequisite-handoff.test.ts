@@ -46,6 +46,14 @@ import {
   RegisteredToolAdapter,
   loadExtensionFromFactory,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+// The host validates a registered tool's arguments with `validateToolArguments`
+// BEFORE `RegisteredToolAdapter.execute` (pi-agent-core `agent-loop.ts`), not with
+// the raw schema's own `.parse`. That validator only applies this host's argument
+// normalization (optional-null stripping, unknown-key handling, coercion), so a
+// fixture that calls `.parse` alone can miss a real registered-boundary refusal.
+// `pi-coding-agent` re-exports pi-ai's validator through its legacy-pi-ai shim,
+// which is resolvable from this package without adding a dependency.
+import { validateToolArguments as validateHostToolArguments } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-ai-shim";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -347,7 +355,6 @@ async function coordinatorHarness(
 ): Promise<{
   sessionId: string;
   runTool: (params: Record<string, unknown>) => Promise<ToolResult>;
-  validate: (params: Record<string, unknown>) => { success: boolean };
   runRawTool: (params: Record<string, unknown>) => Promise<ToolResult>;
   runHandoffTool: (params: Record<string, unknown>) => Promise<ToolResult>;
   validateHandoff: (params: Record<string, unknown>) => { success: boolean };
@@ -426,8 +433,23 @@ async function coordinatorHarness(
 
   return {
     sessionId: sessionManager.getSessionId(),
-    runTool: async (params) => runRawTool(registered.definition.parameters.parse(params) as Record<string, unknown>),
-    validate: (params) => ({ success: registered.definition.parameters.safeParse(params).success }),
+    // The host's own registered-tool call order: normalize+validate the arguments
+    // against the registered schema (`validateToolArguments`), then hand the
+    // normalized object to `RegisteredToolAdapter.execute`. A schema-normalization
+    // refusal (which is NOT the handler's aggregated refusal) therefore surfaces
+    // here exactly as it would in a live host process.
+    runTool: async (params) =>
+      (await adapter.execute(
+        "fixture-call",
+        validateHostToolArguments(registered.definition as never, {
+          type: "toolCall",
+          id: "fixture-call",
+          name: registered.definition.name,
+          arguments: params,
+        }) as Record<string, unknown>,
+        undefined,
+        undefined,
+      )) as ToolResult,
     runRawTool,
     runHandoffTool: async (params) =>
       (await handoffAdapter.execute(
@@ -493,14 +515,17 @@ describe("prerequisite handoff — readiness integration", () => {
     expect(details).toMatchObject({ priorSessionId: PRIOR_SESSION, allowed: true });
     expect(JSON.stringify(details)).not.toContain("/sessions/");
 
-    // A caller-chosen identity, root or prior path is refused by the registered
-    // schema AND by the handler's own boundary.
+    // A caller-chosen identity, root or prior path never reaches a mutation: the
+    // registered schema admits the raw key set and the handler's OWN boundary
+    // refuses the forbidden field by name through the real registered path.
     for (const forged of [
       { operation: "recover", workflowId: WORKFLOW_ID, sessionId: hostId },
       { operation: "recover", workflowId: WORKFLOW_ID, harnessRoot: "/elsewhere/.mstar" },
       { operation: "recover", workflowId: WORKFLOW_ID, priorSessionPath: "/tmp/creds.json" },
     ]) {
-      expect({ forged, valid: host.validate(forged).success }).toEqual({ forged, valid: false });
+      const refused = await host.runTool(forged);
+      expect({ forged, code: refused.details.mstarCoordinator?.code }).toEqual({ forged, code: "forbidden-field" });
+      expect(JSON.stringify(refused)).not.toContain("/tmp/creds.json");
     }
 
     const recovered = await host.runTool({
