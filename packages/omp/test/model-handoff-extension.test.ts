@@ -2441,10 +2441,10 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     }
 
     // The registered schema is a RAW ADMISSION of the documented keys: it must
-    // NOT reject a mixed call inside the host's own parameter parsing, because
+    // NOT reject a mixed call inside the host's own parameter validation, because
     // that replaces the handler's ONE aggregated refusal with a schema-library
     // message naming a single class. The real registered path
-    // (`parameters.parse` → `RegisteredToolAdapter.execute` → the handler)
+    // (`validateToolArguments` → `RegisteredToolAdapter.execute` → the handler)
     // therefore answers every one of these with the combined refusal, and the
     // schema itself is not the gate.
     const lawful = await createHarness({
@@ -2480,12 +2480,11 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
     });
 
     // A wrong-TYPED supplied holder is an unusable NAMED VALUE, not a schema
-    // error: the recover arm declares `priorSessionId` untyped and REQUIRED
-    // (required so this host's own optional-null normalization cannot delete the
-    // explicit `null` unowned claim), so every one of these reaches the handler's
-    // classifier and is named `invalid` — never refused by the schema library.
-    // The explicit `null` unowned claim itself is exercised by the recovery
-    // suites below through the same registered path.
+    // error: the recover arm declares `priorSessionId` as the REQUIRED JSON-value
+    // union (required so this host's own optional-null normalization cannot delete
+    // the explicit `null` unowned claim, and named so the wire still advertises the
+    // field), so every one of these reaches the handler's classifier and is named
+    // `invalid` — never refused by the schema library.
     for (const unusable of [7, true, [], { prior: "p" }]) {
       const typed = await lawful.runCoordinatorTool({
         operation: "recover",
@@ -2497,6 +2496,8 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
       expect({ unusable, code: coordinatorCodeOf(typed) }).toEqual({ unusable, code: "invalid-input" });
       expect(typed.details.mstarCoordinator).toMatchObject({ fields: ["priorSessionId"] });
     }
+    // The explicit `null` unowned claim — and its distinction from an absent
+    // holder — is exercised against the real engine in the ACTIVE-route suite.
 
     // Every refusal above wrote nothing.
     expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(before));
@@ -2798,8 +2799,9 @@ describe("prerequisite identity — registered coordinator recovery tool handler
 
     // The registered schema is a RAW ADMISSION, so a forged identity key — or a
     // removed byte-version gate input — is refused by the handler's OWN combined
-    // boundary, in one refusal naming every unusable field rather than by the
-    // schema library naming one class. This traverses the real registered path.
+    // boundary, in one refusal naming every unusable field rather than by the host
+    // parameter validator naming one class. This traverses the real registered path
+    // (`validateToolArguments` → `RegisteredToolAdapter.execute` → the handler).
     for (const forged of [
       { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), sessionId: hostId },
       { ...recoveryToolParams(workflowId, RECOVERY_PRIOR_SESSION), priorSessionPath: "/tmp/creds.json" },
@@ -3191,6 +3193,88 @@ describe("native coordinator tool on the ACTIVE route", () => {
     expect(await activeCoordinatorOf(repo, workflowId)).toBe(ownerAfterFirst);
     expect((await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).token).toBe(headerAfterFirst.token);
     expect(executionOperationCount(repo)).toBe(operationsAfterFirst);
+  }, 120_000);
+
+  test("a supplied holder null and an absent holder reach the real engine distinctly", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-unowned-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+
+    // The workflow records NO coordinator yet (the seed created but never bound
+    // it), so the explicit `null` holder is the documented unowned claim — and the
+    // host forwards it UNTOUCHED through `validateToolArguments` → the adapter →
+    // the handler. The real engine accepts it and binds THIS host as the
+    // coordinator, proving a legal unowned recovery, not a schema-level rejection.
+    const operationsBefore = executionOperationCount(repo);
+    const unowned = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId,
+      priorSessionId: null,
+      reason: "no coordinator was ever bound to this workflow",
+      attestation: activationAttestation(hostId, []),
+    });
+    expect(unowned.isError).toBe(false);
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(hostId);
+    expect(executionOperationCount(repo)).toBe(operationsBefore + 1);
+
+    // An ABSENT holder is a different request: the classifier reports the missing
+    // semantic selector and nothing is written, so a null and an omission never
+    // collapse into the same path.
+    const secondRepo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const secondHarness = await createHarness({
+      cwd: secondRepo.main,
+      sessionDir: scratchDir("unused-"),
+      sessionManager: newSession(secondRepo.main),
+    });
+    const secondHost = secondHarness.sessionManager.getSessionId();
+    const absentWorkflow = "native-absent-iteration";
+    await seedBindableActiveWorkflow(secondRepo, secondHost, absentWorkflow);
+    const secondOperations = executionOperationCount(secondRepo);
+    const absent = await secondHarness.runCoordinatorTool({
+      operation: "recover",
+      workflowId: absentWorkflow,
+      reason: "no coordinator was ever bound to this workflow",
+      attestation: activationAttestation(secondHost, []),
+    });
+    expect(absent.isError).toBe(true);
+    expect(coordinatorCodeOf(absent)).toBe("invalid-input");
+    expect((absent.details.mstarCoordinator as Record<string, unknown>).missing).toContain("priorSessionId");
+    expect(await activeCoordinatorOf(secondRepo, absentWorkflow)).toBeNull();
+    expect(executionOperationCount(secondRepo)).toBe(secondOperations);
+  }, 120_000);
+
+  test("one malformed-holder call names the forbidden, missing and invalid fields together", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-combined-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+    const operationsBefore = executionOperationCount(repo);
+
+    // One call carrying all three classes: a forbidden identity key, an absent
+    // required key and an unusable NAMED value — a malformed (wrong-typed) holder
+    // that the JSON-value union now lets through to the classifier. The registered
+    // gate (validateToolArguments → adapter → handler) reports every one of them in
+    // a SINGLE refusal, so one repair is enough, and the request never mutates.
+    const combined = await harness.runCoordinatorTool({
+      operation: "recover",
+      workflowId,
+      priorSessionId: 7,
+      sessionId: "attacker",
+    });
+    expect(coordinatorCodeOf(combined)).toBe("forbidden-field");
+    expect(combined.details.mstarCoordinator).toMatchObject({
+      form: "active",
+      forbidden: ["sessionId"],
+      missing: ["reason"],
+      fields: ["priorSessionId"],
+    });
+    expect(await activeCoordinatorOf(repo, workflowId)).toBeNull();
+    expect(executionOperationCount(repo)).toBe(operationsBefore);
   }, 120_000);
 
   test("show-recovery reads the ACTIVE authority through the registered handler", async () => {

@@ -1696,36 +1696,41 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: COORDINATOR_TOOL_NAME,
     label: "Coordinator identity",
     description:
-      'Morning Star coordinator identity entry. The control harness root and the native session id are derived from the host \u2014 never from the call. `{operation:"bind", workflowId}` binds THIS host session as the coordinator of the explicitly named workflow and works on both routes: under an ACTIVE execution authority the adapter reads the workflow\'s current token and mints the operation id itself, so the ordinary call needs nothing else (supply `expected` and `operationId` only to pin your own CAS value and idempotency key \u2014 a repeated bind is then the replayed receipt), while a pre-activation root answers the same call with the managed Prepare bootstrap and refuses those two CAS fields instead of ignoring them. `{operation:"show-recovery", workflowId}` reads the recorded coordinator and the observed state without writing. `{operation:"recover"}` replaces a recorded holder the prior owner can no longer authenticate: an ACTIVE root takes `priorSessionId` (the recorded holder, or null ONLY when the workflow records no coordinator at all), `reason` and the operator\'s own `attestation` document (its token and operation id are derived like the bind\'s); a pre-activation root takes the audited `operationId`, `reason`, `authorizationRef` and `stoppedSessionIds`. No operation accepts a session id, root, caller role, authority flag, credential path or force flag, and a call carrying any unusable field is answered with ONE refusal that names every such field at once \u2014 forbidden keys, absent required keys and unusable values together \u2014 so a single repair is enough and a rejected value is never echoed back. A `store.schema-unsupported` refusal names the loaded entry that answered: refresh the installed package and start a NEW host PROCESS to load the refreshed registration \u2014 a new chat or session inside the SAME process reuses the already-loaded registration, and an inventory listing or a Restart screen is not proof that a matching entry was loaded. A new host identity never inherits an existing coordinator binding, so an existing holder is replaced only through this recovery; the public MCP route serves the same operations with an independently acquired identity. A `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
+      'Morning Star coordinator identity entry. The control harness root and the native session id are derived from the host \u2014 never from the call. `{operation:"bind", workflowId}` binds THIS host session as the coordinator of the explicitly named workflow and works on both routes: under an ACTIVE execution authority the adapter reads the workflow\'s current token and mints the operation id itself, so the ordinary call needs nothing else (supply `expected` and `operationId` only to pin your own CAS value and idempotency key \u2014 a repeated bind is then the replayed receipt), while a pre-activation root answers the same call with the managed Prepare bootstrap and refuses those two CAS fields instead of ignoring them. `{operation:"show-recovery", workflowId}` reads the recorded coordinator and the observed state without writing. `{operation:"recover"}` replaces a recorded holder the prior owner can no longer authenticate: an ACTIVE root takes `priorSessionId` (the recorded holder, or null ONLY when the workflow records no coordinator at all), `reason` and the operator\'s own `attestation` document (its token and operation id are derived like the bind\'s); a pre-activation root takes the audited `operationId`, `reason`, `authorizationRef` and `stoppedSessionIds`. No operation accepts a session id, root, caller role, authority flag, credential path or force flag, and a call carrying any unusable field is answered with ONE refusal that names every such field at once \u2014 forbidden keys, absent required keys and unusable values together \u2014 so a single repair is enough and a rejected value is never echoed back. A `store.schema-unsupported` refusal names the loaded entry that answered: refresh the installed package and start a NEW host PROCESS to load the refreshed registration \u2014 a new chat or session inside the SAME process reuses the already-loaded registration, and an inventory listing or a Restart screen is not proof that a matching entry was loaded. A new host identity never inherits an existing coordinator binding, so an existing holder is replaced only through this recovery; the public MCP route serves the same operations with an independently acquired identity. A `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool. The host treats a `null` supplied for the OPTIONAL `expected` or `operationId` as an omission, not a value: on the ACTIVE route the adapter then derives the workflow token and mints the operation id itself (the safe behaviour), while the pre-activation FILE form still refuses the resulting absence as a missing mandatory field. `priorSessionId` is the deliberate exception \u2014 its explicit `null` on the ACTIVE route is the "this workflow records no coordinator at all" claim and is preserved, never treated as an omission.',
     // RAW ADMISSION: this registered schema ADVERTISES the documented keys; it
     // is not the semantic gate. A typed/`.strict()` union here rejected a mixed
     // call (a forbidden identity key, an absent required key, an unusable value)
     // inside the host's own parameter parsing, so the caller got a schema-library
     // message naming one class at a time instead of the ONE aggregated refusal
-    // the handler owns. Every arm is therefore `.passthrough()`, and every value
+    // the handler owns. Every arm is therefore `.passthrough()`, and every field
     // except `priorSessionId` is left untyped, so the canonical
     // `CoordinatorShapeContract` classifier in `../coordinator-identity.ts` stays
     // the single place the valid-field rules live (forbidden → missing → invalid,
     // plus the separate `unauthorized` proof verdict) and every invalid value
     // reaches it BY NAME instead of dying in the schema library.
     //
-    // Split into two arms for ONE measured reason: this host's own
-    // `validateToolArguments` runs `normalizeOptionalNullsForSchema` first and
-    // DELETES a supplied `null` from any field an arm declares OPTIONAL, while a
-    // REQUIRED field is never stripped. `priorSessionId:null` is the documented
-    // explicit "this workflow records no coordinator at all" claim, so the
-    // recover arm declares `priorSessionId` REQUIRED. It is NOT left `z.unknown()`
-    // either: an untyped declaration vanishes from the wire advertisement, so the
-    // field would stop being discoverable to the model. It is declared as the
-    // explicit JSON-value union above — required AND named — which is the one
-    // shape that keeps `null`, admits every wrong type (number, boolean, array,
-    // object) so the classifier can name it, and still advertises the field. The
-    // general arm covers bind / show-recovery / a holderless recover and
-    // deliberately does NOT declare `priorSessionId`: any declaration there (even
-    // `unknown().optional()`) would re-introduce the optional-null strip, and a
-    // narrower one would re-reject an invalid value. `operation` stays the one
-    // enumerated discriminator, so a call carrying no operation is the only shape
-    // this schema itself refuses.
+    // This host's own validation (see the description) runs a normalization pass
+    // before the handler that DELETES a supplied `null` from any field declared
+    // OPTIONAL here. For the shared OPTIONAL keys that is the accepted SDK
+    // convention — a model uses `null` to mean "omitted" — and the classifier
+    // treats the resulting omission as "not supplied".
+    //
+    // `priorSessionId` is the one EXCEPTION: a supplied `null` is the documented
+    // explicit "this workflow records no coordinator at all" claim, not an
+    // omission, so it must survive. The recover arm therefore declares it
+    // REQUIRED (a required field is never stripped), and declares it as the
+    // explicit JSON-value union above — NOT `z.unknown()` — because an untyped
+    // field vanishes from the wire advertisement: the union keeps the field
+    // NAMED and discoverable while still admitting every wrong type (number,
+    // boolean, array, object) so the classifier can name it. The general arm
+    // covers bind / show-recovery / a holderless recover and deliberately does NOT
+    // declare `priorSessionId`: any declaration there (even `unknown().optional()`)
+    // would re-introduce the optional-null strip, and a narrower one would
+    // re-reject an invalid value.
+    //
+    // The schema still enforces `operation` as the discriminator, so a call with
+    // no operation — or one outside `bind | show-recovery | recover` — is refused
+    // by the schema itself rather than by the handler's classifier.
     parameters: z
       .union([
         z
