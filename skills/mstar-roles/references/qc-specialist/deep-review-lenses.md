@@ -7,6 +7,10 @@ Extension of `references/qc-specialist-shared.md`. Read at QC session start when
 > 不派发子 agent，不产生额外对话轮次，不违反反递归约束。
 > 透镜问题用 **diff / read / grep** 回答；**禁止**为回答透镜去跑 test/build/lint（与 `reviewer-workflow.md` 一致）。
 
+## Required path-triggered lens
+
+**Overdesign Judge Lens** is REQUIRED for qc-specialist seat 1 at plan QC tri-review and the inline single-seat equivalent whenever the reviewed diff touches `packages/engine/src` or `packages/commands/src`, independently of the ≥2-signal deep-review threshold below. Read **mstar-roles** → [`references/qc-specialist/overdesign-judge.md`](overdesign-judge.md). Seats 2/3 load it on demand when a refusal-quality/help-reachability `--json` candidate intersects their focus. The reviewing Assignment must state the module's operating-model premise; without it the lens returns `cannot-judge: no operating-model premise supplied`, not a new approval gate. This role-owned lens is never preset-gated and does not expand the assigned review or targeted re-review scope.
+
 ## Deep review 触发规则（自动判定，无需人工指定）
 
 QC reviewer 在开工时根据以下信号自判是否启用 deep review。满足 **≥2 条**时仅选择与 Assignment 变更问题相关的透镜；触发不会扩大 review 范围。
@@ -68,6 +72,7 @@ QC reviewer 在开工时根据以下信号自判是否启用 deep review。满�
 - **Bounds Lens** — ① 完整产出（含 wrapper/metadata/封套行）的 owner 明确，边界检查覆盖完整产出而非仅载荷？② tiny/exact limit 被探测（空/最小/恰好等于上限）？③ 超大单块（单条记录超上限）被拒绝/截断而非绕过按行/按条门禁？④ 多字节文本（UTF-8 多字节字符）按字节上限而非字符数处理？
 - **Enforcement-Path Lens** — ① 每个 deny/veto 路径追到实际执行拒绝的操作（而非仅声明策略）？② 直调/wrapper/facade/schema-less 路径/listener 顺序等旁路调用方是否都经同一校验点？③ 观察/记录侧（listener/consumer/回调）不会绕过主校验路径写入状态或缓存？（与 **Security Lens** 互指：访问控制点自身正确性归 Security；拒绝/校验路径的执行与旁路追迹归本透镜）
 - **Real-Entry-Path Lens** — ① 测试/覆盖走 shipped entry（CLI/bin/loader/plugin boot）而非 hand-mounted 等价物（手工装配的组件实例）？② 真实入口的启动/挂载顺序（注册时序）被覆盖？
+- **Overdesign Judge Lens** — **mstar-roles** → [`references/qc-specialist/overdesign-judge.md`](overdesign-judge.md): ① gate necessary under the declared operating model? ② gate agrees with its documented importable-state contract? ③ self-written output correctly classified? ④ protocol solves an actual in-model problem? Mechanical violations and catch-all masking are blocking Critical; semantic findings are advisory Suggestions for PM issue capture, not approval gates.
 
 ---
 
