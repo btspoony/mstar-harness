@@ -1,19 +1,41 @@
+import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildReport } from "./report.ts";
 import { prepareManifest, canonicalJson, sha256Hex, type EvalManifest } from "./manifest.ts";
 import { executeManifest, selectCases } from "./runner.ts";
-import { createMcpClientLaunch } from "./mcp-client-launch.ts";
-const ADVISORY_AGENTS = "# Bounded-resolution scenario fixture (evaluation input, not a real workspace)\n- Engine: advisory mode.\n";
 
-const root = "/Users/bibi/workspace/ai/mstar-harness.worktrees/bounded-resolution-guess-path";
-const out = resolve(root, ".tmp/skill-eval/r3-guess-path");
+import { createMcpClientLaunch } from "./mcp-client-launch.ts";
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const root = resolve(process.env.MSTAR_SKILL_EVAL_REPO_ROOT ?? resolve(scriptDir, "../.."));
+const runId = "r5-guess-path";
+const out = resolve(root, `.tmp/skill-eval/${runId}`);
 const configPath = resolve(out, "config.json");
 const fullManifestPath = resolve(out, "prepared/manifest.json");
 const runManifestPath = resolve(out, "manifest.json");
-const durable = "/Users/bibi/workspace/ai/mstar-harness/.mstar/sdd/20261008-bounded-resolution-guess-path/eval/r3-guess-path";
+const durable = resolve(process.env.MSTAR_SKILL_EVAL_DURABLE_DIR ?? resolve(root, `.mstar/sdd/20261008-bounded-resolution-guess-path/eval/${runId}`));
 const cliPath = resolve(root, "packages/cli/dist/mstar-harness.js");
-
+const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const cliPackage = JSON.parse(readFileSync(resolve(root, "packages/cli/package.json"), "utf8")) as { name: string; version: string };
+const help = execFileSync("node", [cliPath, "--help"]);
+const config = {
+  plan: "20261008-bounded-resolution-guess-path",
+  sourceRefs: { baseline: head, candidate: head },
+  cli: { path: cliPath, version: `${cliPackage.name} ${cliPackage.version} (local build; Node.js entrypoint)`, helpHash: sha256Hex(help) },
+  requestedModel: null,
+  requestedModelReason: "No LLM invoked: fixed scripted MCP client drives the built CLI; no model was requested.",
+  observedModel: null,
+  observedModelReason: "No LLM invoked: scripted client, not a model; model compliance is unverified.",
+  ambient: { status: "local-built-cli", evidence: "Task 2 run: scripted MCP JSON-RPC client launches the locally built CLI stdio server; no model or external provider is invoked." },
+  sandbox: "read-only",
+  timeoutMs: 600000,
+  repeats: 1,
+  interleaveSeed: 20261008,
+};
+mkdirSync(out, { recursive: true });
+writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 mkdirSync(resolve(out, "prepared"), { recursive: true });
 const prepared = await prepareManifest({
   configPath,
@@ -39,11 +61,6 @@ manifest.configHash = prepared.manifest.configHash;
 const fixtureContents: Record<string, Record<string, string>> = {
   "bounded-res-mcp-guess-path": {
     "AGENTS.md": "# Bounded-resolution MCP fixture (synthetic evaluation input).\n",
-    "mcp.json": "{\"command\":\"node\",\"args\":[\"${MSTAR_CLI_PATH}\",\"mcp\"]}\n",
-  },
-  "bounded-res-negative-four-lookups": {
-    "AGENTS.md": ADVISORY_AGENTS,
-    "store/fixture.json": "{\"issueId\":\"I-000001\",\"revision\":1}\n",
     "mcp.json": "{\"command\":\"node\",\"args\":[\"${MSTAR_CLI_PATH}\",\"mcp\"]}\n",
   },
 };
