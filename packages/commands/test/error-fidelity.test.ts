@@ -116,10 +116,10 @@ describe("session.recover input discovery", () => {
 
   test("a malformed attestation keeps its parser grammar but never echoes the submitted document", async () => {
     // The supported runtimes echo the offending operand differently: Node wraps
-    // it in a double-quoted `..., "<source>" is not valid JSON` excerpt, while
-    // Bun's identifier form is `Unexpected identifier "<source>"` with no
-    // suffix at all. Both are the runtime echoing an OPERAND, so both must be
-    // elided; the parser's own grammar must survive.
+    // it in a double-quoted `..., "<source>" is not valid JSON` tail, while Bun's
+    // identifier form is `Unexpected identifier "<source>"` with no suffix. Both
+    // are the runtime echoing an OPERAND, so both must go; the parser's own
+    // single-quoted grammar must survive.
     for (const [label, document] of [
       ["identifier operand (Bun shape)", '{"operator":{"actor":LEAKSENTINEL7QX9}}'],
       ["bare-word value (Node excerpt shape)", '{"actor":LEAKSENTINEL7QX9}'],
@@ -138,12 +138,17 @@ describe("session.recover input discovery", () => {
       // Stable, specific classification — not a generic usage envelope.
       expect(result, label).toMatchObject({ status: "refused", code: "session.recover.attestation-malformed", exitCode: 1 });
       if (result.status === "ok") throw new Error(label);
-      // Concrete parser facts survive: the cause is a real parser statement, and
-      // a location is reported only because this runtime supplied one.
+      // Concrete parser facts survive: a real cause statement, never a generic
+      // wrapper and never an empty tail.
       expect(result.message, label).toMatch(/^--attestation is not valid JSON: \S/);
-      expect(result.message, label).not.toContain("--attestation is not valid JSON: \n");
+      // Every double-quoted operand the SAME runtime derives for this input is
+      // gone from the published message; the sentinel is gone from the whole
+      // serialized envelope, not just the cause.
+      const rawMessage = (() => { try { JSON.parse(document); return ""; } catch (error) { return error instanceof Error ? error.message : String(error); } })();
+      for (const operand of rawMessage.match(/"[^"]*"/g) ?? []) {
+        expect(result.message, `${label}: runtime operand ${JSON.stringify(operand)} must not reach the message`).not.toContain(operand);
+      }
       expect(JSON.stringify(result), `${label}: the submitted sentinel must not reach the envelope`).not.toContain("LEAKSENTINEL7QX9");
-      expect(result.message, label).not.toContain("actor");
       // Nothing was written and the engine was never reached.
       expect(existsSync(path.join(harness, "workflows")), label).toBe(false);
     }

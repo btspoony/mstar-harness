@@ -77,33 +77,32 @@ function parserLocation(message: string): string | undefined {
  * grammatical cause and, only when it reports one, its position — never the
  * offending source bytes.
  *
- * The supported runtimes append the offending document differently: Node wraps
- * it as a double-quoted `..., "<source>" is not valid JSON` excerpt, while Bun's
- * identifier form is a double-quoted `Unexpected identifier "<source>"` with no
- * suffix at all. Every double-quoted operand is therefore the runtime's echo of
- * an operand, not parser grammar, and is elided to `"…"`. Single-quoted operands
- * are grammar the parser authored (`'}'`, `','`, `property name`) and are kept —
- * unless their inner text is also present in the submitted document, in which
- * case they are an echo of the caller's content and are elided too. The result
- * is scrubbed once more by the repository's secret redactor so nothing
- * credential-shaped can survive.
+ * The discriminator is QUOTE STYLE, matching the equivalent policy on the
+ * workflow-adoption parser boundary: a DOUBLE-quoted operand is the runtime
+ * echoing the caller's own bytes — Node's `..., "<excerpt>" is not valid JSON`
+ * tail and Bun's `Unexpected identifier "<token>"` — so the span is removed
+ * outright (no placeholder bytes the parser never emitted); a SINGLE-quoted
+ * operand is grammar the parser authored (`'}'`, `','`, `"'"`) and is always
+ * kept. Removing the double-quoted span IS the redaction, and one final pass of
+ * the repository's secret redactor guards the remainder, so no caller value can
+ * reach the refusal while the parser's category survives.
  */
-function attestationParserCause(error: unknown, submitted: string): string {
+function attestationParserCause(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const location = parserLocation(message);
   const cause = message
     .replace(/^JSON Parse error:\s*/i, "")
     .replace(/^JSON parse error:\s*/i, "")
     .replace(/^SyntaxError:\s*/i, "")
-    .replace(/"[^"]*"/g, '"…"')
-    .replace(/'([^']*)'/g, (match, inner: string) =>
-      inner.length >= 2 && /[A-Za-z0-9]/.test(inner) && submitted.includes(inner) ? "'…'" : match)
-    .replace(/,?\s*"…"\s+is not valid JSON\s*$/i, "")
-    .replace(/,?\s*\.\.\.\s+is not valid JSON\s*$/i, "")
+    // Node's document excerpt tail: greedy, because the excerpt itself contains
+    // quotes and a truncated trailing ellipsis.
+    .replace(/,?\s*"[\s\S]*"\s*\.{0,3}\s*is not valid JSON\s*$/i, "")
+    .replace(/,?\s*\.{0,3}\s*is not valid JSON\s*$/i, "")
+    // Any remaining double-quoted operand (Bun's identifier form) is an echo too.
+    .replace(/\s*"[^"]*"/g, "")
     .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
     .replace(/\s*\(line \d+ column \d+\)/gi, "")
-    .replace(/,?\s*is not valid JSON\s*$/i, "")
     .replace(/\s+/g, " ")
     .replace(/[\s,:;]+$/, "")
     .trim();
@@ -198,7 +197,7 @@ function readAttestationDocument(pathValue: string): ActivationAttestation {
   try {
     return JSON.parse(text) as ActivationAttestation;
   } catch (error) {
-    throw new RecoveryInputError("session.recover.attestation-malformed", "refused", `--attestation is not valid JSON: ${attestationParserCause(error, text)}`);
+    throw new RecoveryInputError("session.recover.attestation-malformed", "refused", `--attestation is not valid JSON: ${attestationParserCause(error)}`);
   }
 }
 
