@@ -82,15 +82,27 @@ test("shared admission distinguishes zero, false, and true selectors at real mil
  const exclusive=await update({target:"2026-10-08",clearTarget:true});
  expect(exclusive.details?.diagnostics).toContainEqual(expect.objectContaining({code:"exclusive"}));
 
- const assignment=(clear:boolean)=>executeCommand("milestone.assign",{
-  project:"proj-admission",issue:"I-999999",clear,reason:"test",expectIssue:0,expectStore:storeRevision,
-  operation:`assign-${clear}`,session:"session.json",actor:"test",harness,
- },invocation(cwd));
- const falseSelector=await assignment(false);
- expect(falseSelector.details?.diagnostics).toContainEqual(expect.objectContaining({
-  code:"alternative-required",expected:expect.stringContaining("exactly one of"),
- }));
- const trueSelector=await assignment(true);
- expect(trueSelector.details?.diagnostics).not.toContainEqual(expect.objectContaining({code:"alternative-required"}));
+/** The grouped admission diagnostics of a usage envelope, or a failed read. */
+const usageDiagnostics=(envelope:{status:string;details?:Record<string,unknown>})=>{
+ const diagnostics=(envelope.details as {diagnostics?:unknown}|undefined)?.diagnostics;
+ if(!Array.isArray(diagnostics))throw new Error(`usage envelope carries no grouped details.diagnostics: ${JSON.stringify(envelope)}`);
+ return diagnostics as Array<Record<string,unknown>>;
+};
+const assignment=(clear:boolean)=>executeCommand("milestone.assign",{
+ project:"proj-admission",issue:"I-999999",clear,reason:"test",expectIssue:0,expectStore:storeRevision,
+ operation:`assign-${clear}`,session:"session.json",actor:"test",harness,
+},invocation(cwd));
+// `clear=false` selects neither alternative: the selector admission refuses
+// `exactly one of id | clear=true` before any engine work.
+const falseSelector=await assignment(false);
+expect(falseSelector).toMatchObject({status:"usage",code:"command.invalid-input",exitCode:2});
+expect(usageDiagnostics(falseSelector)).toContainEqual(expect.objectContaining({
+ code:"alternative-required",expected:expect.stringContaining("exactly one of"),
+}));
+// `clear=true` alone satisfies the selector, so admission passes and the
+// instruction reaches the engine's own scope boundary instead of a usage
+// refusal; that real refusal is the observable proof the selector was accepted.
+const trueSelector=await assignment(true);
+expect(trueSelector).toMatchObject({status:"refused",code:"issue.scope-refused",exitCode:1});
 });
 

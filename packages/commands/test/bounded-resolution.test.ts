@@ -503,7 +503,13 @@ describe("issue family witnesses", () => {
       id: receipt.issueId, payload: { reason: "unversioned", severity: "critical" },
       operationId: "op-missing-expect", actor: "project-manager",
     }, context);
-    expect(missing).toMatchObject({ status: "refused", code: "issue.revision-conflict", exitCode: 1 });
+    // A missing numeric CAS is the shared admission's own usage refusal
+    // (`--expect` is admission-required), not a store-level revision conflict:
+    // the call never reaches the store, so no write can land.
+    expect(missing).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(missing.details?.diagnostics).toContainEqual(expect.objectContaining({
+      path: "expect", code: "invalid_type", received: "undefined",
+    }));
     const afterMissing = await countedCall(missingExpect, "execute", "issue.show", { id: receipt.issueId }, context);
     expect(afterMissing.status).toBe("ok");
     if (afterMissing.status === "ok") expect(afterMissing.data).toMatchObject({ revision: receipt.revision + 1, severity: "low" });
