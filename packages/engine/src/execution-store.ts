@@ -1898,14 +1898,16 @@ export function executionRootTokenOf(tx: ExecutionTransaction): ExecutionToken {
  * dead process), so an unattested holder is never silently revoked, an
  * explicitly supplied malformed proof refuses before any store access, and a
  * changed proof under a committed operation id is an operation conflict rather
- * than a silent replay. The committed receipt records the settled targets and
- * the approving operator/attestation provenance.
+ * than a silent replay. An omitted expectedRevision is resolved from the
+ * addressed row inside this transaction; an explicit expectedRevision remains
+ * a strict CAS. The committed receipt records the settled targets and the
+ * approving operator/attestation provenance.
  */
 export async function adoptTerminalWorkflow(
   context: ExecutionContext,
   input: {
     workflowId: string;
-    expectedRevision: number;
+    expectedRevision?: number;
     reason: string;
     operationId: string;
     /** The operator's stopped-owner/operator proof; required exactly when the addressed header holds a current-epoch ACTIVE coordinator session. */
@@ -1916,9 +1918,9 @@ export async function adoptTerminalWorkflow(
   if (caller.role !== "coordinator" || caller.workflowId !== input.workflowId || !isNonEmptyString(caller.sessionId)) {
     throw new ExecutionError("execution.scope-mismatch", "terminal adoption requires an acquired coordinator identity addressing the selected workflow");
   }
-  if (!isNonEmptyString(input.workflowId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1 ||
+  if (!isNonEmptyString(input.workflowId) || (input.expectedRevision !== undefined && (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)) ||
       !isNonEmptyString(input.reason) || !isNonEmptyString(input.operationId)) {
-    throw new ExecutionError("execution.adoption-invalid", "workflowId, positive expectedRevision, non-empty reason, and operationId are required");
+    throw new ExecutionError("execution.adoption-invalid", "workflowId, an optional positive expectedRevision, non-empty reason, and operationId are required");
   }
   // An explicitly supplied proof document is validated by the SAME validator
   // the activation barrier and coordinator recovery use, BEFORE any store
@@ -1944,7 +1946,7 @@ export async function adoptTerminalWorkflow(
     address: { workflowId: input.workflowId },
     caller,
     intent: {
-      expectedRevision: input.expectedRevision,
+      expectedRevision: input.expectedRevision ?? "current",
       reason: input.reason,
       // The proof document is part of the request's semantic selection: a retry
       // carrying a DIFFERENT attestation is a different intent — an operation
@@ -1976,7 +1978,7 @@ export async function adoptTerminalWorkflow(
       throw new ExecutionError("execution.adoption-refused", `workflow ${input.workflowId} has no terminal header to adopt; register the workflow through the supported workflow registration route`);
     }
     const revision = storedRevision(row.revision, `execution_workflows(${input.workflowId}).revision`);
-    if (revision !== input.expectedRevision) {
+    if (input.expectedRevision !== undefined && revision !== input.expectedRevision) {
       throw new ExecutionError("execution.header-revision-conflict", `workflow ${input.workflowId} header revision is ${revision}, not expected revision ${input.expectedRevision}; re-read status validate and retry with its listed revision`);
     }
     const registered = tx.db.prepare("select 1 as present from execution_registry where workflow_id = ?").get(input.workflowId);
@@ -2055,8 +2057,9 @@ export async function adoptTerminalWorkflow(
       adoption_actor_session_id: caller.sessionId,
       adoption_operation_id: input.operationId,
     };
+    const expectedRevision = input.expectedRevision ?? revision;
     tx.db.prepare("update execution_workflows set revision = revision + 1, state_json = ?, updated_at = ? where workflow_id = ? and revision = ?")
-      .run(JSON.stringify(nextState), now, input.workflowId, input.expectedRevision);
+      .run(JSON.stringify(nextState), now, input.workflowId, expectedRevision);
     tx.db.prepare("update execution_meta set revision = revision + 1, root_updated_at = ? where id = 1").run(now);
     tx.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
     // Safe provenance on the committed receipt: which addressed rows were
@@ -2088,11 +2091,12 @@ export async function adoptTerminalWorkflow(
       ...(settlement === undefined ? {} : { operationRecovery: settlement }),
     };
     writeOperationReceipt(tx, { operationId: input.operationId, requestHash, workflowId: input.workflowId, planId: null, receipt, now });
+    const { operationRecovery, ...publicReceipt } = receipt;
     return {
-      ...receipt,
+      ...publicReceipt,
       operationId: input.operationId,
       replayed: false,
-      ...(settlement === undefined ? {} : { recovery: settlement }),
+      ...(operationRecovery === undefined ? {} : { recovery: operationRecovery }),
     };
   });
 }

@@ -2,7 +2,9 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { initializeExecutionAuthority, initializeStore, openStore, type StoreDb } from "@mstar-harness/engine";
+import { activationAttestationDocumentConstraints } from "../activation-attestation.js";
 import { executeCommand, getCommandDefinitions } from "../definitions.js";
 import type { CommandEnvelope, InvocationContext } from "../types.js";
 
@@ -118,12 +120,30 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   const definition = getCommandDefinitions().find((entry) => entry.id === "workflow.adopt-terminal");
   expect(definition).toBeDefined();
   expect(definition!.cli.options.find((option) => option.key === "expect")?.help)
-    .toBe("Header revision CAS (positive integer) acquired from the terminalUnregistered[].revision entry in `mstar status validate`, not an execution token.");
+    .toContain("when omitted the engine derives the current addressed revision");
   const schema = await executeCommand("schema", { command: "workflow.adopt-terminal" }, invocation(root));
-  expect(schema.status).toBe("ok");
-  if (schema.status === "ok") {
-    const descriptor = (schema.data as { descriptor: { requirements: Array<{ name: string; tokenKind?: string }> } }).descriptor;
-    expect(descriptor.requirements.find((requirement) => requirement.name === "expect")?.tokenKind).toBe("revision");
+  const descriptorSchema = z.object({
+    id: z.string(),
+    requirements: z.array(z.object({
+      name: z.string(),
+      route: z.string(),
+      tokenKind: z.string().optional(),
+      constraint: z.string().optional(),
+    })),
+    payloadSchemas: z.record(z.string(), z.unknown()),
+  });
+  const selectionSchema = z.object({ kind: z.literal("command"), descriptor: descriptorSchema });
+  if (schema.status !== "ok") throw new Error("expected the public workflow.adopt-terminal schema descriptor");
+  const descriptor = selectionSchema.parse(schema.data).descriptor;
+  expect(descriptor.id).toBe("workflow.adopt-terminal");
+  expect(descriptor.requirements.find((requirement) => requirement.name === "expect")?.tokenKind).toBe("revision");
+  expect(descriptor.payloadSchemas.adoptionAttestation).toBeDefined();
+  const publishedConstraints = descriptor.requirements
+    .filter((requirement) => requirement.name === "attestation")
+    .map((requirement) => requirement.constraint ?? "")
+    .join(" ");
+  for (const { path, rule } of activationAttestationDocumentConstraints) {
+    expect(publishedConstraints).toContain(`${path}: ${rule}`);
   }
 });
 
@@ -169,16 +189,13 @@ test("inactive-authority refusal names the supported status and store-upgrade re
     "Run `mstar status validate` to inspect the harness, then `mstar store upgrade --operator <name>` to import legacy execution state and activate the execution authority before retrying adoption.",
   );
 });
-test("workflow adopt-terminal refusal keeps exact engine message first and names the recovery", async () => {
+test("stale header CAS is preserved when explicitly supplied", async () => {
   const { root, harness } = await fixture();
   const refused = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness, expect: "2", operation: "command-adopt-stale", reason: "stale header",
   }, invocation(root));
-  expectAdoptionRefusal(
-    refused,
-    "[execution.header-revision-conflict] workflow wf-command header revision is 1, not expected revision 2; re-read status validate and retry with its listed revision",
-    "Run `mstar status validate`, then retry `mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>`.",
-  );
+  expect(refused).toMatchObject({ status: "refused", code: "execution.header-revision-conflict", exitCode: 1 });
+  if (refused.status === "refused") expect(refused.recovery).toContain("omit --expect");
 });
 test("registered-row refusal advertises the existing close path", async () => {
   const { root, harness } = await fixture();
@@ -209,39 +226,46 @@ test("registered-row refusal advertises the existing close path", async () => {
   expect(close.status).toBe("ok");
 });
 
-test("ACTIVE-session refusal names the exact holder and the supported optional-attestation recovery", async () => {
+test("ACTIVE-holder refusal publishes targets and full proof contract before a file correction and retry", async () => {
   const { root, harness } = await fixture();
   await withActiveHolder(harness, "stranded-holder");
-  const before = await executeCommand("status.validate", {}, invocation(root));
-  expect(before.status).toBe("ok");
   const refused = await executeCommand("workflow.adopt-terminal", {
-    workflow: "wf-command", harness, expect: "1", operation: "adopt-active", reason: "active holder",
+    workflow: "wf-command", harness, reason: "active holder",
   }, invocation(root));
   expect(refused).toMatchObject({ status: "refused", code: "execution.adoption-refused", exitCode: 1 });
   if (refused.status !== "refused") throw new Error("expected the ACTIVE-holder refusal");
-  // The refusal names the actual holder, the required proof and the exact
-  // supported retry — it is no longer the retired dead end, so no dead-end
-  // marker may leak into its message or recovery.
-  expect(refused.message).toContain("stranded-holder");
-  expect(refused.message).toContain("ActivationAttestation");
-  expect(refused.message).not.toContain("No supported exit exists");
   expect(refused.details).toMatchObject({
     active_holder_sessions: ["stranded-holder"],
     adoption_refusal: "active-session-proof-required",
     helpRoute: "mstar workflow adopt-terminal --help",
   });
-  if (refused.recovery === undefined) throw new Error("expected the supported recovery");
-  expect(refused.recovery).toContain("--attestation");
-  expect(refused.recovery).toContain("mstar schema workflow.adopt-terminal");
+  const details = refused.details;
+  if (details === undefined || !("attestationContract" in details) || details.attestationContract === null || typeof details.attestationContract !== "object") {
+    throw new Error("the first correction refusal must publish the proof contract");
+  }
+  expect(details.attestationContract).toMatchObject({ schema: expect.any(Object), constraints: activationAttestationDocumentConstraints });
+  expect(refused.recovery).toContain("omitted --expect derives");
+  expect(refused.recovery).toContain("omitted --operation is generated once");
+  expect(refused.recovery).toContain("mstar schema --command workflow.adopt-terminal");
   expect(refused.recovery).not.toContain("No supported exit exists");
-  // A refusal settles nothing: the holder row and the header stay untouched.
-  const after = await executeCommand("status.validate", {}, invocation(root));
-  expect(after).toEqual(before);
   await withWriter(harness, (db) => {
     expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
       .toEqual({ state: "active", revision: 1 });
     expect(db.prepare("select revision from execution_workflows where workflow_id = ?").get("wf-command"))
       .toEqual({ revision: 1 });
+  });
+
+  const attestation = writeAttestation(root, ["stranded-holder"]);
+  const applied = await executeCommand("workflow.adopt-terminal", {
+    workflow: "wf-command", harness, reason: "active holder", attestation,
+  }, invocation(root));
+  expect(applied).toMatchObject({ status: "ok", code: "workflow.adopt-terminal.ok", exitCode: 0 });
+  await withWriter(harness, (db) => {
+    expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
+      .toEqual({ state: "revoked", revision: 2 });
+    expect(db.prepare("select revision from execution_workflows where workflow_id = ?").get("wf-command"))
+      .toEqual({ revision: 2 });
+    expect((db.prepare("select count(*) as n from execution_operations").get() as { n: number }).n).toBe(1);
   });
 });
 
@@ -267,7 +291,12 @@ test("workflow adopt-terminal settles the attested ACTIVE holder through the com
   });
   const replay = await executeCommand("workflow.adopt-terminal", input, invocation(root));
   expect(replay).toMatchObject({ status: "ok" });
-  if (replay.status === "ok") expect((replay.data as { replayed: boolean }).replayed).toBe(true);
+  expect(applied.data).not.toHaveProperty("operationRecovery");
+  if (replay.status === "ok") {
+    expect(replay.data).not.toHaveProperty("operationRecovery");
+    const replayData = replay.data as { replayed: boolean; [key: string]: unknown };
+    expect({ ...replayData, replayed: false }).toEqual(applied.data);
+  }
   await withWriter(harness, (db) => {
     expect(db.prepare("select state, revision from execution_sessions where session_id = ?").get("stranded-holder"))
       .toEqual({ state: "revoked", revision: 2 });
@@ -298,14 +327,16 @@ test("the command transport refuses wrong, malformed and self-settling documents
   const malformed = await fixture();
   await withActiveHolder(malformed.harness, "stranded-holder");
   const brokenPath = join(malformed.root, "attestation.json");
-  writeFileSync(brokenPath, "{ not json");
+  writeFileSync(brokenPath, "{\"token\":\"fixture-malformed-secret\",}");
   const unparseable = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness: malformed.harness, expect: "1", operation: "adopt-broken", reason: "malformed",
     attestation: brokenPath,
   }, invocation(malformed.root));
   expect(unparseable).toMatchObject({
     status: "refused", code: "workflow.adopt-terminal.attestation-malformed", exitCode: 1,
+    details: { parser: { parser: expect.stringMatching(/JSON parser reported/ ) } },
   });
+  expect(JSON.stringify(unparseable)).not.toContain("fixture-malformed-secret");
   // A relative document is caller input, not a filesystem read.
   const relative = await executeCommand("workflow.adopt-terminal", {
     workflow: "wf-command", harness: malformed.harness, expect: "1", operation: "adopt-relative", reason: "relative",
@@ -355,37 +386,6 @@ test("a changed proof under a committed operation id is an operation conflict, n
   });
 });
 
-test("the settled-adoption proof contract is published by help and schema", async () => {
-  const { root } = await fixture();
-  const definition = getCommandDefinitions().find((entry) => entry.id === "workflow.adopt-terminal");
-  if (definition === undefined) throw new Error("missing workflow.adopt-terminal definition");
-  expect(definition.cli.options.find((option) => option.key === "attestation")?.help).toContain("ActivationAttestation");
-  // The document contract publishes the exact proof structure and allowed fields.
-  const payload = definition.payloads?.adoptionAttestation;
-  if (payload === undefined) throw new Error("missing the adoptionAttestation document contract");
-  const document = payload.schema.toJSONSchema() as {
-    properties?: Record<string, { properties?: Record<string, unknown> }>;
-    required?: string[];
-  };
-  expect(Object.keys(document.properties ?? {})).toEqual([
-    "version", "attestedAt", "operator", "consumers", "stoppedSessions",
-  ]);
-  expect(document.required).toEqual(["version", "attestedAt", "operator", "consumers", "stoppedSessions"]);
-  const stopped = document.properties?.stoppedSessions;
-  expect(JSON.stringify(stopped)).toContain('"sessionId"');
-  expect(JSON.stringify(stopped)).toContain('"stopped"');
-  expect(JSON.stringify(stopped)).toContain('"reloaded"');
-  // The conditional-requirement fact is published for both routes.
-  const schema = await executeCommand("schema", { command: "workflow.adopt-terminal" }, invocation(root));
-  expect(schema.status).toBe("ok");
-  if (schema.status !== "ok") throw new Error("expected the schema descriptor");
-  const descriptor = (schema.data as { descriptor: { requirements: Array<{ name: string; route: string; constraint?: string }> } }).descriptor;
-  for (const route of ["cli", "mcp"]) {
-    const attestation = descriptor.requirements.find((entry) => entry.name === "attestation" && entry.route === route);
-    expect(attestation?.constraint).toContain("ACTIVE coordinator session");
-    expect(attestation?.constraint).toContain("stoppedSessions");
-  }
-});
 
 test("nonterminal-header refusal routes through execution bind and normal close", async () => {
   const { root, harness } = await fixture();

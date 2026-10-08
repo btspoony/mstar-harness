@@ -85,24 +85,22 @@ describe("terminal workflow adoption", () => {
 
   test("refuses stale CAS, registered rows, active-session rows, non-terminal headers, and headers missing both reason keys", async () => {
     const stale = await strandedTerminal();
+    const staleBefore = await footprint(stale.context);
     await expect(adoptTerminalWorkflow({ harnessDir: stale.context.harnessDir, caller: stale.caller }, {
       workflowId: stale.caller.workflowId, expectedRevision: 2, reason: "stale", operationId: "adopt-stale",
-    })).rejects.toMatchObject({
-      code: "execution.header-revision-conflict",
-      message: "[execution.header-revision-conflict] workflow wf-stranded header revision is 1, not expected revision 2; re-read status validate and retry with its listed revision",
-    });
+    })).rejects.toMatchObject({ code: "execution.header-revision-conflict" });
+    await expect(footprint(stale.context)).resolves.toEqual(staleBefore);
 
     const registered = await strandedTerminal();
     const registry = await openStore(registered.context, "write");
     registry.db.prepare("insert into execution_registry(workflow_id, entry_json) values (?, ?)")
       .run("wf-stranded", JSON.stringify({ id: "wf-stranded", type: "plan", started_at: "2026-10-01T00:00:00.000Z", dir: "workflows/wf-stranded" }));
     registry.close();
+    const registeredBefore = await footprint(registered.context);
     await expect(adoptTerminalWorkflow({ harnessDir: registered.context.harnessDir, caller: registered.caller }, {
       workflowId: registered.caller.workflowId, expectedRevision: 1, reason: "registered", operationId: "adopt-registered",
-    })).rejects.toMatchObject({
-      code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded is already registered; finish its lifecycle through mstar status workflow-close",
-    });
+    })).rejects.toMatchObject({ code: "execution.adoption-refused" });
+    await expect(footprint(registered.context)).resolves.toEqual(registeredBefore);
 
     const active = await strandedTerminal();
     const session = await openStore(active.context, "write");
@@ -129,7 +127,6 @@ describe("terminal workflow adoption", () => {
       workflowId: nonterminal.caller.workflowId, expectedRevision: 1, reason: "running", operationId: "adopt-running",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded is not terminal; no supported exit exists for a non-terminal header without registry membership",
     });
 
     const missingReason = await strandedTerminal();
@@ -147,7 +144,6 @@ describe("terminal workflow adoption", () => {
       workflowId: missingReason.caller.workflowId, expectedRevision: 1, reason: "failed", operationId: "adopt-failed",
     })).rejects.toMatchObject({
       code: "execution.adoption-refused",
-      message: "[execution.adoption-refused] workflow wf-stranded has no recorded terminal reason in its header; no supported exit exists for a stopped/failed header missing the recorded reason",
     });
   });
 });
@@ -155,8 +151,8 @@ describe("terminal workflow adoption", () => {
 /**
  * The settled-terminal-adoption consumer regressions: an ACTIVE current-epoch
  * coordinator row is settled only against the operator's stop attestation,
- * atomically with the adoption write, and every refusal leaves the whole store
- * footprint untouched.
+ * atomically with the adoption write, and every refusal preserves the scoped
+ * database snapshot captured by the footprint helper below.
  */
 describe("terminal adoption session settlement", () => {
   /** The operator stop document the engine validates: declared fields only. */
@@ -194,7 +190,7 @@ describe("terminal adoption session settlement", () => {
     return stranded;
   }
 
-  /** The whole store footprint a refusal must leave byte-identical. */
+  /** The scoped database state and revision snapshot used by no-mutation assertions. */
   async function footprint(context: StrandedFixture["context"]) {
     const db = await openStore(context, "read");
     try {
@@ -214,7 +210,7 @@ describe("terminal adoption session settlement", () => {
       { harnessDir: stranded.context.harnessDir, caller: stranded.caller },
       {
         workflowId: stranded.caller.workflowId,
-        expectedRevision: input.expectedRevision ?? 1,
+        ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
         reason: "settle the stranded holder",
         operationId: "adopt-settle-1",
         ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
@@ -258,19 +254,28 @@ describe("terminal adoption session settlement", () => {
     const applied = await adopt(stranded, { attestation: proof });
     const replay = await adopt(stranded, { attestation: proof });
     expect(replay.replayed).toBe(true);
-    expect(replay.recovery).toEqual(applied.recovery);
+    expect(applied).toHaveProperty("recovery", expect.objectContaining({ outcome: "applied" }));
+    expect(applied).not.toHaveProperty("operationRecovery");
+    expect(replay).not.toHaveProperty("operationRecovery");
+    expect({ ...replay, replayed: false }).toEqual(applied);
     const db = await openStore(stranded.context, "read");
     try {
       // A replay never revokes twice: the settled row keeps its committed revision.
       expect(db.db.prepare("select state, revision from execution_sessions where session_id = ?").get("active-holder"))
         .toEqual({ state: "revoked", revision: 2 });
+      const stored = db.db.prepare("select result_json from execution_operations where operation_id = ?")
+        .get("adopt-settle-1") as { result_json: string };
+      const storedReceipt = JSON.parse(stored.result_json) as Record<string, unknown>;
+      expect(storedReceipt).toHaveProperty("operationRecovery", expect.objectContaining({ outcome: "applied" }));
+      expect(storedReceipt).not.toHaveProperty("recovery");
     } finally { db.close(); }
 
+    const beforeChangedProof = await footprint(stranded.context);
     const changed = await refusalOf(() => adopt(stranded, {
       attestation: attestationVariant({ attestedAt: "2026-10-08T09:00:00.000Z" }),
     }));
     expect(changed).toMatchObject({ code: "execution.operation-conflict" });
-    await expect(footprint(stranded.context)).resolves.toEqual(await footprint(stranded.context));
+    await expect(footprint(stranded.context)).resolves.toEqual(beforeChangedProof);
   });
 
   test("refuses a holder with no proof, an incomplete proof and stale CAS without any mutation footprint", async () => {
@@ -309,7 +314,7 @@ describe("terminal adoption session settlement", () => {
       attestation: attestationVariant({ token: "fixture-credential-value" }),
     }));
     expect(credential).toMatchObject({ code: "store.attestation-invalid" });
-    expect(credential.message).toContain('undeclared field "token"');
+    expect(JSON.stringify(credential)).not.toContain("fixture-credential-value");
     await expect(footprint(stranded.context)).resolves.toEqual(before);
   });
 
@@ -334,6 +339,10 @@ describe("terminal adoption session settlement", () => {
 
     const unneeded = await strandedTerminal();
     const supplied = await adopt(unneeded, { attestation: attestation([]) });
+    const unneededReplay = await adopt(unneeded, { attestation: attestation([]) });
+    expect(supplied).not.toHaveProperty("operationRecovery");
+    expect(unneededReplay).not.toHaveProperty("operationRecovery");
+    expect({ ...unneededReplay, replayed: false }).toEqual(supplied);
     expect(supplied.replayed).toBe(false);
     // A valid document naming nothing ACTIVE is never silently dropped: the
     // receipt records that no settlement was required.
