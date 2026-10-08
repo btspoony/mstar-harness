@@ -15,7 +15,7 @@
   "observedModel": null,
   "observedModelReason": "unverified until a real authorized smoke",
   "configHash": "7b311c3c297c927256e16168b62a2f21b1994c36f11077f7dc7f3704f2298893",
-  "casesHash": "c2a26b3da9a5d036d63dd3483081ce413df06e75d3c6aa55217fab8dde046822",
+  "casesHash": "93e6fc2f15c8370d2be04a1569b131a543276604bcbca3b44f333082724afd86",
   "ambient": {
     "status": "engine-absent",
     "evidence": "scenario fixtures declare no engine policy"
@@ -968,12 +968,6 @@
           "note": "the bounded path must observe a successful catalog response"
         },
         {
-          "id": "a-catalog",
-          "kind": "final_contains",
-          "value": "tools/list catalog returned",
-          "note": "the bounded path must observe a successful catalog response"
-        },
-        {
           "id": "a-corrected-call",
           "kind": "final_contains",
           "value": "corrected call succeeded",
@@ -992,7 +986,7 @@
         "context": "cold",
         "evidence": "failed call mstar_schem → -32602 naming mstar_schema and tools/list → tools/list → mstar_schema(type=CaptureInput)"
       },
-      "integrityHash": "521b7007c51654a0a9dd5fa1d8312a76a9f0da03cd58ad1712909217df70d517"
+      "integrityHash": "3752f6a38960992e004d03b087843e314b0374e8af857645c3263562780d86ef"
     }
   ],
   "sandbox": "read-only",

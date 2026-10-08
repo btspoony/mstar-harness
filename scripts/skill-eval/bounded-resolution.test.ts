@@ -30,8 +30,12 @@ import { canonicalJson, sha256Hex, type EvalManifest } from "./manifest.ts";
 import { buildReport } from "./report.ts";
 import { executeManifest, manifestIntegrityErrors, selectCases, type RunnerIo, type SpawnFn, type SpawnRequest } from "./runner.ts";
 import {
+  MCP_GUESS_PATH_ACTIONS,
+  classifyMcpResponse,
   createMcpRpcDispatcher,
   mapMcpExchangeEvent,
+  mapMcpInterruptedEvent,
+  mapMcpInvocationStartedEvent,
   summarizeMcpExchanges,
   type McpExchangeOutcome,
   type McpJsonRpcResponse,
@@ -456,10 +460,25 @@ const EXPECTED_OUTCOME: Record<string, string> = {
 
 const mcpCall = (id: string | null, name: string, failed = false): string => {
   const method = name === "tools/list" ? "tools/list" : "tools/call";
+  const requestId = Number(id?.slice(id.lastIndexOf("-") + 1) ?? 1);
   const response: McpJsonRpcResponse = failed
-    ? { error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." } }
-    : { result: {} };
-  return JSON.stringify(mapMcpExchangeEvent(method, name, id, response));
+    ? {
+        jsonrpc: "2.0",
+        id: requestId,
+        error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." },
+      }
+    : method === "tools/list"
+      ? { jsonrpc: "2.0", id: requestId, result: { tools: [{ name: "mstar_schema" }] } }
+      : { jsonrpc: "2.0", id: requestId, result: { content: [{ type: "text", text: "CaptureInput schema" }] } };
+  const outcome = classifyMcpResponse({
+    identity: id,
+    method,
+    name,
+    requestId,
+    response,
+    expectedToolName: method === "tools/list" ? "mstar_schema" : undefined,
+  });
+  return JSON.stringify(mapMcpExchangeEvent(outcome));
 };
 
 function finalFor(caseId: string): string {
@@ -1281,8 +1300,8 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     const closed = createMcpRpcDispatcher(() => {});
     const onClose = closed.request("tools/list", {});
     closed.stop(new Error("MCP server closed"));
-    await expect(onClose).rejects.toThrow("MCP server closed");
-    await expect(closed.request("tools/list", {})).rejects.toThrow("MCP server closed");
+    await expect(onClose.response).rejects.toThrow("MCP server closed");
+    expect(() => closed.request("tools/list", {})).toThrow("MCP server closed");
 
     vi.useFakeTimers();
     try {
@@ -1290,8 +1309,8 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
       const onTimeout = timedOut.request("tools/call", { name: "mstar_schema" });
       setTimeout(() => timedOut.stop(new Error("MCP server request deadline exceeded")), 1);
       vi.advanceTimersByTime(1);
-      await expect(onTimeout).rejects.toThrow("MCP server request deadline exceeded");
-      await expect(timedOut.request("tools/list", {})).rejects.toThrow("MCP server request deadline exceeded");
+      await expect(onTimeout.response).rejects.toThrow("MCP server request deadline exceeded");
+      expect(() => timedOut.request("tools/list", {})).toThrow("MCP server request deadline exceeded");
     } finally {
       vi.useRealTimers();
     }
@@ -1300,53 +1319,115 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
   test("mcp-guess-path case is selected and its mapped call evidence is graded honestly", async () => {
     const selected = selectCases(manifest, "dev").find((item) => item.id === "bounded-res-mcp-guess-path");
     expect(selected).toBeDefined();
-    expect(selected?.assertions.find((assertion) => assertion.kind === "calls_within")?.value).toBe(3);
+    expect(MCP_GUESS_PATH_ACTIONS).toEqual([
+      { method: "tools/call", name: "mstar_schem" },
+      { method: "tools/list" },
+      { method: "tools/call", name: "mstar_schema", arguments: { type: "CaptureInput" } },
+    ]);
     expect(manifestText).toContain("failed call mstar_schem");
 
     const caseManifest = cloneManifest();
     caseManifest.cases = caseManifest.cases.filter((item) => item.id === "bounded-res-mcp-guess-path" || item.split === "heldout");
-    const makeTrace = (ids: boolean[], count = 3, invalidOutcomeIndex?: number) => {
+    type InvalidResponse = "missing-outcome" | "null-list" | "primitive-list" | "missing-envelope" | "missing-catalog" | "null-call" | "empty-content" | "wrong-call-content";
+    type Interruption = "close" | "timeout";
+    const makeTrace = (ids: boolean[], count = 3, invalidResponse?: InvalidResponse, interruption?: Interruption) => {
       const records: string[] = [JSON.stringify({ type: "thread.started", thread_id: "thr_mcp_guess" })];
       const outcomes: McpExchangeOutcome[] = [];
       const tools = ["mstar_schem", "tools/list", "mstar_schema", "tools/list"];
-      for (let index = 0; index < count; index++) {
+      const completedCount = interruption === undefined ? count : 3;
+      for (let index = 0; index < completedCount; index += 1) {
         const name = tools[index]!;
         const method = name === "tools/list" ? "tools/list" : "tools/call";
-        const id = ids[index] === false ? null : `mcp-${index + 1}`;
-        const response: McpJsonRpcResponse = index === 0
-          ? { error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." } }
-          : index === invalidOutcomeIndex
-            ? { id: index + 1 }
-            : { result: {} };
-        const event = mapMcpExchangeEvent(method, name, id, response);
-        records.push(JSON.stringify(event));
-        const item = event.item as Record<string, unknown>;
-        outcomes.push({
+        const identity = ids[index] === false ? null : `mcp-${index + 1}`;
+        let response: McpJsonRpcResponse;
+        if (index === 0) {
+          response = {
+            jsonrpc: "2.0",
+            id: index + 1,
+            error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." },
+          };
+        } else if (index === 1 && invalidResponse === "missing-outcome") {
+          response = { jsonrpc: "2.0", id: index + 1 };
+        } else if (index === 1 && invalidResponse === "null-list") {
+          response = { jsonrpc: "2.0", id: index + 1, result: null };
+        } else if (index === 1 && invalidResponse === "primitive-list") {
+          response = { jsonrpc: "2.0", id: index + 1, result: "catalog" };
+        } else if (index === 1 && invalidResponse === "missing-envelope") {
+          response = { result: { tools: [{ name: "mstar_schema" }] } };
+        } else if (index === 1 && invalidResponse === "missing-catalog") {
+          response = { jsonrpc: "2.0", id: index + 1, result: {} };
+        } else if (index === 2 && invalidResponse === "null-call") {
+          response = { jsonrpc: "2.0", id: index + 1, result: null };
+        } else if (index === 2 && invalidResponse === "empty-content") {
+          response = { jsonrpc: "2.0", id: index + 1, result: { content: [] } };
+        } else if (index === 2 && invalidResponse === "wrong-call-content") {
+          response = { jsonrpc: "2.0", id: index + 1, result: { content: [{ type: "text", text: "Other schema" }] } };
+        } else {
+          response = method === "tools/list"
+            ? { jsonrpc: "2.0", id: index + 1, result: { tools: [{ name: "mstar_schema" }] } }
+            : { jsonrpc: "2.0", id: index + 1, result: { content: [{ type: "text", text: "CaptureInput schema" }] } };
+        }
+        const outcome = classifyMcpResponse({
+          identity,
           method,
           name,
-          succeeded: item.status === "completed",
-          ...(response.error?.code === undefined ? {} : { errorCode: response.error.code }),
-          ...(response.error?.message === undefined
-            ? (Object.hasOwn(response, "result") ? {} : { errorMessage: "MCP response omitted both result and error" })
-            : { errorMessage: response.error.message }),
+          requestId: index + 1,
+          response,
+          expectedToolName: method === "tools/list" ? "mstar_schema" : undefined,
         });
+        records.push(JSON.stringify(mapMcpInvocationStartedEvent(method, name, identity)));
+        records.push(JSON.stringify(mapMcpExchangeEvent(outcome)));
+        outcomes.push(outcome);
       }
-      records.push(JSON.stringify({ type: "turn.completed", usage: {} }));
+      if (interruption !== undefined) {
+        const method = "tools/call";
+        const name = "mstar_schema";
+        const identity = `mcp-${completedCount + 1}`;
+        const interrupted: McpExchangeOutcome = {
+          identity,
+          method,
+          name,
+          status: "interrupted",
+          errorMessage: `MCP server ${interruption === "close" ? "closed" : "timed out"}`,
+        };
+        records.push(JSON.stringify(mapMcpInvocationStartedEvent(method, name, identity)));
+        records.push(JSON.stringify(mapMcpInterruptedEvent(interrupted, interrupted.errorMessage!)));
+        outcomes.push(interrupted);
+      } else {
+        records.push(JSON.stringify({ type: "turn.completed", usage: {} }));
+      }
       return {
         events: `${records.join("\n")}\n`,
         final: summarizeMcpExchanges(outcomes),
+        completed: interruption === undefined,
       };
     };
-    const evaluate = async (options: { ids: boolean[]; count?: number; invalidOutcomeIndex?: number; final?: string }) => {
+    const evaluate = async (options: {
+      ids: boolean[];
+      count?: number;
+      invalidResponse?: InvalidResponse;
+      interruption?: Interruption;
+      final?: string;
+    }) => {
       const io = memoryIo();
       seedRun(io, caseManifest);
+      let trace: ReturnType<typeof makeTrace> | undefined;
+      let finalPath: string | null = null;
       const spawn: SpawnFn = async (request) => {
-        const trace = makeTrace(options.ids, options.count, options.invalidOutcomeIndex);
+        trace = makeTrace(options.ids, options.count, options.invalidResponse, options.interruption);
         io.writeText(request.stdoutFile, trace.events);
-        io.writeText(request.stderrFile, "");
+        io.writeText(request.stderrFile, options.interruption ?? "");
         const output = request.argv[request.argv.indexOf("--output-last-message") + 1]!;
-        io.writeText(output, options.final ?? trace.final);
-        return { code: 0, signal: null, timedOut: false, spawnError: null };
+        finalPath = output;
+        if (trace.completed) io.writeText(output, options.final ?? trace.final);
+        return options.interruption === undefined
+          ? { code: 0, signal: null, timedOut: false, spawnError: null }
+          : {
+              code: null,
+              signal: "SIGTERM",
+              timedOut: options.interruption === "timeout",
+              spawnError: `MCP server ${options.interruption}`,
+            };
       };
       const result = await executeManifest({
         manifestPath: RUN_MANIFEST_PATH,
@@ -1359,12 +1440,18 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
       });
       expect(result.errors).toEqual([]);
       const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, repoRoot: REPO_ROOT, io });
-      const unit = Object.values(result.state.units)[0]!;
+      const unit = Object.values(result.state.units).find((item) => item.caseId === "bounded-res-mcp-guess-path")!;
+      const turn = Object.values(unit.turns)[0];
+      if (!turn) throw new Error(JSON.stringify({ failureReason: unit.failureReason, files: [...io.files.keys()] }));
       return {
         grade: unit.grade,
-        calls: unit.grading!.assertions.find((item) => item.kind === "calls_within")!.grade,
-        failedInvocations: Object.values(unit.turns)[0]!.metrics.invocations.failed,
+        calls: unit.grading?.assertions.find((item) => item.kind === "calls_within")?.grade ?? null,
+        failedInvocations: turn.metrics.invocations.failed,
+        countedInvocations: turn.metrics.invocations.counted,
+        unknownOutcomes: turn.metrics.invocations.unknownOutcome,
         report: report.report,
+        finalWritten: finalPath !== null && io.exists(finalPath),
+        events: trace!.events,
       };
     };
 
@@ -1372,6 +1459,7 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(compliantShape.grade).toBe("pass");
     expect(compliantShape.report.units[0]!.grade).toBe("pass");
     expect(compliantShape.failedInvocations).toBe(1);
+    expect(compliantShape.finalWritten).toBe(true);
 
     const noSuggestion = await evaluate({
       ids: [true, true, true],
@@ -1389,11 +1477,21 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(identityMissing.grade).toBe("unverified");
     expect(identityMissing.report.units[0]!.unverifiedAssertions).toContain("a-calls(calls_within)");
 
-    const invalidOutcome = await evaluate({ ids: [true, true, true], invalidOutcomeIndex: 1 });
-    expect(invalidOutcome.calls).toBe("pass");
-    expect(invalidOutcome.failedInvocations).toBe(2);
-    expect(invalidOutcome.grade).toBe("fail");
-    expect(invalidOutcome.report.units[0]!.failedAssertions).toContain("a-catalog(final_contains)");
-    expect(invalidOutcome.report.units[0]!.failedAssertions).toContain("a-corrected-call(final_contains)");
+    for (const invalidResponse of ["missing-outcome", "null-list", "primitive-list", "missing-envelope", "missing-catalog", "null-call", "empty-content", "wrong-call-content"] as const) {
+      const invalid = await evaluate({ ids: [true, true, true], invalidResponse });
+      expect(invalid.calls).toBe("pass");
+      expect(invalid.failedInvocations).toBe(2);
+      expect(invalid.grade).toBe("fail");
+    }
+
+    for (const interruption of ["close", "timeout"] as const) {
+      const interrupted = await evaluate({ ids: [true, true, true, true], count: 4, interruption });
+      expect(interrupted.countedInvocations).toBe(4);
+      expect(interrupted.unknownOutcomes).toBe(1);
+      expect(interrupted.calls).toBe("unverified");
+      expect(interrupted.grade).not.toBe("pass");
+      expect(interrupted.finalWritten).toBe(false);
+      expect(interrupted.events).not.toContain("turn.completed");
+    }
   });
 });
