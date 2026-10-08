@@ -267,8 +267,9 @@ async function runAdmitted(bindings: AdmittedBindings, context: InvocationContex
  * bindings it was created from, so its behaviour is admission's, not the
  * caller's: nothing outside this module can produce an object the library
  * treats as an admitted request. The handler value itself is never copied onto
- * the returned object, so no caller can replace a schema-validated value after
- * admission and have execution observe it.
+ * the returned object, so no caller can hand execution a different object after
+ * admission. This is object-level privacy, not a deep snapshot: nested values a
+ * field schema preserves by reference stay caller-owned (see `AdmittedCommand`).
  */
 function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
   return Object.freeze({
@@ -288,7 +289,7 @@ function admittedCommand(bindings: AdmittedBindings): AdmittedCommand {
  * its context selectors and maps the judgment document to stdin). It runs once,
  * at admission, on the schema-validated value, and only its result is handed to
  * the definition as the private handler value — so the executed value is always
- * derived from the one parse this admission performed, never replaced
+ * derived from the one parse this admission performed, never swapped out
  * afterwards. It cannot change the definition, the contract or the resolved
  * identity.
  */

@@ -195,23 +195,19 @@ describe("admitted execution capability", () => {
     const original = { name: "Ada", payload: { numbers: [2, 3] } };
     const admitted = admit(fixture, original);
     if (!admitted.success) throw new Error("expected admission to succeed");
-    // A consumer written against the removed public capability used to reach
-    // for `admitted.input` / `admitted.data` and mutate the handler value
-    // through them. Reproduce that attempt through the admitted object's own
-    // runtime shape: on this implementation neither member exists, so nothing
-    // the caller can write reaches what the handler observes.
-    if ("input" in admitted) {
-      const legacyInput: unknown = admitted.input;
-      if (typeof legacyInput === "object" && legacyInput !== null && "name" in legacyInput) legacyInput.name = "";
-    }
-    if ("data" in admitted) {
-      const legacyData: unknown = admitted.data;
-      if (typeof legacyData === "object" && legacyData !== null) {
-        if ("name" in legacyData) legacyData.name = "";
-        if ("payload" in legacyData) {
-          const payload: unknown = legacyData.payload;
-          if (typeof payload === "object" && payload !== null && "numbers" in payload && Array.isArray(payload.numbers)) payload.numbers.push(-5);
-        }
+    // The formerly published handler value is gone from the capability's type
+    // and from its runtime shape. Reproduce the removed consumer's access by
+    // reading the admitted object's own properties as an untyped view — the
+    // same `input`/`data` read that used to return the live handler value.
+    const capability: Record<string, unknown> = { ...admitted };
+    const legacyInput = capability.input;
+    if (legacyInput !== null && typeof legacyInput === "object" && "name" in legacyInput) legacyInput.name = "";
+    const legacyData = capability.data;
+    if (legacyData !== null && typeof legacyData === "object") {
+      if ("name" in legacyData) legacyData.name = "";
+      if ("payload" in legacyData) {
+        const payload = legacyData.payload;
+        if (payload !== null && typeof payload === "object" && "numbers" in payload && Array.isArray(payload.numbers)) payload.numbers.push(-5);
       }
     }
 
@@ -266,16 +262,15 @@ describe("admitted execution capability", () => {
     // pre-projection object as `admitted.input`). A consumer written against
     // that shape mutates it in place; execution must keep the value admission
     // itself produced, so the observable total stays the validated 5.
-    if ("data" in admitted) {
-      const legacyProjected: unknown = admitted.data;
-      if (typeof legacyProjected === "object" && legacyProjected !== null) {
-        if ("name" in legacyProjected) legacyProjected.name = "";
-        if ("payload" in legacyProjected) {
-          const payload: unknown = legacyProjected.payload;
-          if (typeof payload === "object" && payload !== null && "numbers" in payload && Array.isArray(payload.numbers)) {
-            payload.numbers.length = 0;
-            payload.numbers.push(-5);
-          }
+    const capability: Record<string, unknown> = { ...admitted };
+    const legacyProjected = capability.data;
+    if (legacyProjected !== null && typeof legacyProjected === "object") {
+      if ("name" in legacyProjected) legacyProjected.name = "";
+      if ("payload" in legacyProjected) {
+        const payload = legacyProjected.payload;
+        if (payload !== null && typeof payload === "object" && "numbers" in payload && Array.isArray(payload.numbers)) {
+          payload.numbers.length = 0;
+          payload.numbers.push(-5);
         }
       }
     }
