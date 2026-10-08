@@ -122,8 +122,15 @@ function mutation(input: IssueInput): MutationContext {
     error.paths = ["actor"];
     throw error;
   }
+  const operationId = input.operationId ?? randomUUID();
+  if (operationId.trim() === "") {
+    const error = new Error("operationId must be non-empty when supplied") as Error & { code: string; paths: string[] };
+    error.code = "issue.invalid-payload";
+    error.paths = ["operationId"];
+    throw error;
+  }
   return {
-    operationId: input.operationId ?? randomUUID(),
+    operationId,
     actor: input.actor,
     ...(input.expect !== undefined ? { expectedRevision: input.expect } : {}),
   };
@@ -158,20 +165,25 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       return ok(id, page);
     }
     if (id === "issue.show") return ok(id, await getIssue(context, requiredId(input)));
-    if (id === "issue.add") return ok(id, await captureIssue(context, validatePayload(input, "CaptureInput", "add") as CaptureInput, mutation(input)));
-    if (id === "issue.occurrence") return ok(id, await appendOccurrence(context, requiredId(input), validatePayload(input, "OccurrenceInput", "occurrence") as OccurrenceInput, mutation(input)));
-    if (id === "issue.triage") return ok(id, await triageIssue(context, requiredId(input), validatePayload(input, "IssueTriage", "triage") as IssueTriage, mutation(input)));
+    const runMutation = async (action: (write: MutationContext) => Promise<unknown>): Promise<CommandEnvelope<unknown>> => {
+      const write = mutation(input);
+      const receipt = await action(write);
+      return ok(id, { ...(receipt as Record<string, unknown>), operationId: write.operationId });
+    };
+    if (id === "issue.add") return await runMutation((write) => captureIssue(context, validatePayload(input, "CaptureInput", "add") as CaptureInput, write));
+    if (id === "issue.occurrence") return await runMutation((write) => appendOccurrence(context, requiredId(input), validatePayload(input, "OccurrenceInput", "occurrence") as OccurrenceInput, write));
+    if (id === "issue.triage") return await runMutation((write) => triageIssue(context, requiredId(input), validatePayload(input, "IssueTriage", "triage") as IssueTriage, write));
     if (id === "issue.reopen") {
-      return ok(id, await reopenIssue(
+      return await runMutation((write) => reopenIssue(
         context,
         requiredId(input),
         validatePayload(input, "IssueReopen", "reopen") as IssueReopen,
-        mutation(input),
+        write,
       ));
     }
     const disposition = terminalDisposition[id.slice("issue.".length)];
-    if (disposition !== undefined) return ok(id, await closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, mutation(input)));
-    if (id === "issue.link") return ok(id, await linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, mutation(input)));
+    if (disposition !== undefined) return await runMutation((write) => closeIssue(context, requiredId(input), disposition, validatePayload(input, "ClosureEvidence", id.slice("issue.".length)) as ClosureEvidence, write));
+    if (id === "issue.link") return await runMutation((write) => linkIssue(context, requiredId(input), validatePayload(input, "IssueLink", "link") as IssueLink, write));
     throw new Error(`unsupported issue command ${id}`);
   } catch (error) {
     return refused(id, error, input);
@@ -257,15 +269,21 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     harness: "--harness <path>", file: "--file <path>", operationId: "--operation-id <id>", actor: "--actor <role>",
     expect: "--expect <n>", payload: "--payload <json>",
   };
+  const requiresIssueId = verb === "show" || (payloadType[verb] !== undefined && verb !== "add");
   const mutationOperationHelp = payloadType[verb] === undefined
     ? undefined
     : "Replay id; if omitted, this command generates one fresh id for this invocation. Explicit values are preserved and blank values are not defaulted.";
+  const commandInput = inputSchema.extend({
+    ...(requiresIssueId ? { id: z.string().min(1) } : {}),
+    ...(expectedRevisionVerbs[verb] === true ? { expect: z.number().int().nonnegative() } : {}),
+  });
   const options = Object.keys(inputSchema.shape).map((key) => ({
     key,
     flags: optionFlags[key]!,
-    required: (payloadType[verb] !== undefined && key === "actor") ||
+    required: (payloadType[verb] !== undefined && (key === "actor" || (key === "id" && requiresIssueId))) ||
       (verb === "show" && key === "id") ||
       (expectedRevisionVerbs[verb] === true && key === "expect"),
+    ...(requiresIssueId && key === "id" ? { help: "Current issue id from `mstar issue show --id <id>`." } : {}),
     ...(expectedRevisionVerbs[verb] === true && key === "expect"
       ? { help: "Current issue revision from `mstar issue show --id <id>`; the write checks this revision as a CAS precondition." }
       : {}),
@@ -274,11 +292,12 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const isMutation = payloadType[verb] !== undefined;
   const requirements = isMutation
     ? (["cli", "mcp"] as const).flatMap((route) => [
+        ...(requiresIssueId ? [{ name: "id", ownership: "caller" as const, route, required: true, constraint: "issue id from `mstar issue show --id <id>`" }] : []),
         { name: "actor", ownership: "caller" as const, route, required: true, constraint: "accepted actor vocabulary is project-manager" },
         { name: "operationId", ownership: "caller" as const, route, required: false, constraint: mutationOperationHelp! },
         { name: "payload", ownership: "caller" as const, route, required: true, condition: { field: "file", present: false }, constraint: `payload shape: mstar schema ${payloadType[verb]}` },
         { name: "file", ownership: "caller" as const, route, required: true, condition: { field: "payload", present: false }, constraint: "absolute JSON file alternative to payload" },
-        ...(verb === "reopen" || expectedRevisionVerbs[verb] === true
+        ...(expectedRevisionVerbs[verb] === true
           ? [{ name: "expect", ownership: "caller" as const, route, required: true, tokenKind: "revision" as const, constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write" }]
           : []),
       ])
@@ -291,11 +310,11 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   return {
     id,
     cli: { path: ["issue", verb], aliases: [], arguments: [], options },
-    input: inputSchema,
+    input: commandInput,
+    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. ${requiresIssueId ? "Requires the issue id from `mstar issue show --id <id>`." : ""} ${expectedRevisionVerbs[verb] === true ? "Requires `--expect` with the current revision from `mstar issue show --id <id>`." : ""} Actor vocabulary: project-manager.`,
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
-    description: `${verb} issue operation; ${payloadType[verb] === undefined ? "no JSON payload" : `payload schema: mstar schema ${payloadType[verb]}`}. Actor vocabulary: project-manager.`,
     ...(payloadType[verb] !== undefined
       ? { payloads: { payload: { schema: payloadSchema(payloadType[verb], verb), help: `Domain schema: mstar schema ${payloadType[verb]}` } } }
       : {}),

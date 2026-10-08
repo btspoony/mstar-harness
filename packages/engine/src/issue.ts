@@ -333,6 +333,7 @@ export type IssueErrorCode =
   | "issue.scope-refused"
   | "issue.revision-conflict"
   | "issue.invalid-disposition"
+  | "issue.invalid-operation-id"
   | "milestone.schema-outdated"
   | "issue.schema-outdated"
   | "milestone.project-mismatch"
@@ -544,6 +545,9 @@ function receiptStoreRevision(db: StoreDb, composed?: ComposedTransactionRevisio
 }
 
 function lookupOperation(db: StoreDb, operationId: string): { request_hash: string; result_json: string } | undefined {
+  if (typeof operationId !== "string" || operationId.trim() === "") {
+    throw new IssueError("issue.invalid-operation-id", "operationId must be a non-empty string");
+  }
   return db.prepare("select request_hash, result_json from store_operations where operation_id = ?").get(operationId) as
     | { request_hash: string; result_json: string }
     | undefined;
