@@ -301,7 +301,8 @@ test("ACTIVE-holder refusal publishes targets and full proof contract before a f
   // declared in writeAttestation, not facts invented here. The emitted validator
   // must reject a document missing a required field before the retry succeeds.
   const document = attestationDocument(targets);
-  const { version: _omitted, ...missingRequired } = document;
+  const missingRequired: Record<string, unknown> = { ...document };
+  delete missingRequired.version;
   // A document missing an emitted required field must fail the emitted
   // validator, so the correction consumer cannot silently accept a broken
   // published contract.
