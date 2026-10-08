@@ -90,11 +90,7 @@ export function recoveryIsReachable(recovery: string, grammar: CliGrammar): bool
   }
   return candidates.length > 0 && candidates.every(commandIsReachable);
 }
-/** Bounded structured-channel scan: typed CoordinationError codes, recoveryRefusal messages,
- * and refusalEnvelope objects are agent-facing. Internal `violation(...)` results, arbitrary
- * helper calls, and raw Error invariants are excluded. Recovery presence is enforced only on
- * refusalEnvelope, which exposes that field; explicit recovery actions are grammar-checked.
- */
+/** Bounded structured-channel scan of named-cause and recovery-presence rules. */
 export function scanSource(source: string, file: string, grammar: CliGrammar): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations = new Map<string, ts.Expression>();
@@ -151,20 +147,10 @@ export function scanSource(source: string, file: string, grammar: CliGrammar): R
         const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
         findings.push({ file, line: line + 1, column: character + 1, classification: "missing-cause-code", reason: "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
       }
-      const message = codeValue(node.arguments?.[1]);
-      if (message && RECOVERY.test(message) && !recoveryIsReachable(message, grammar)) {
-        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        findings.push({ file, line: line + 1, column: character + 1, classification: "unreachable-recovery", reason: "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
-      }
       return visitChildren(node);
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(sf).split(".").at(-1);
-      const message = codeValue(node.arguments[1]);
-      if (callee === "recoveryRefusal" && message && RECOVERY.test(message) && !recoveryIsReachable(message, grammar)) {
-        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        findings.push({ file, line: line + 1, column: character + 1, classification: "unreachable-recovery", reason: "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
-      }
       if (callee === "refusalEnvelope") {
         const input = node.arguments[0];
         if (!input || !ts.isObjectLiteralExpression(input)) return visitChildren(node);
@@ -176,8 +162,6 @@ export function scanSource(source: string, file: string, grammar: CliGrammar): R
         if (!fields.has("code")) add("missing-cause-code", "Rule #341 class 2 (named cause): provide the refusal envelope's named `code` field.");
         const recoveryNode = fields.get("recovery");
         if (status !== "usage" && !recoveryNode) add("missing-recovery", "Rule #341 class 3 (recovery): provide the refusal envelope's supported `recovery` field.");
-        const recovery = codeValue(recoveryNode);
-        if (recovery && !recoveryIsReachable(recovery, grammar)) add("unreachable-recovery", "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.");
         return visitChildren(node);
       }
     }

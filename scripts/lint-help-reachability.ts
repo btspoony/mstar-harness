@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript";
-import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, scanSource, type RefusalFinding } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, recoveryIsReachable, type RefusalFinding } from "./lint-refusal-quality";
 import type { CliGrammar } from "./lint-refusal-quality";
 
 export type HelpReachabilityFinding = RefusalFinding;
@@ -25,9 +25,47 @@ function makeFinding(source: ts.SourceFile, file: string, node: ts.Node, reason:
 }
 
 export function scanRecoveryText(sourceText: string, file: string, grammar: CliGrammar): HelpReachabilityFinding[] {
-  return scanSource(sourceText, file, grammar)
-    .filter((row) => row.classification === "unreachable-recovery")
-    .map((row) => ({ ...row, classification: "capability-unreachable", reason: "Rule #341 class 4 / #365: recovery names a verb or flag absent from the CLI registry/schema grammar. Fix hint: use only supported CLI capabilities." }));
+  const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const declarations = new Map<string, ts.Expression>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) declarations.set(node.name.text, node.initializer);
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  const value = (node: ts.Expression | undefined): string | undefined => {
+    if (!node) return undefined;
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
+    if (ts.isIdentifier(node)) return value(declarations.get(node.text));
+    return undefined;
+  };
+  const findings: HelpReachabilityFinding[] = [];
+  const inspect = (node: ts.Node, text: string): void => {
+    if (/\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|invoke)\b|\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, grammar)) {
+      findings.push(makeFinding(source, file, node, "recovery text references a verb or flag missing from the help grammar", node.getText(source)));
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isNewExpression(node) && node.expression.getText(source).split(".").at(-1) === "CoordinationError") {
+      const text = value(node.arguments?.[1]);
+      if (text) inspect(node, text);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(source).split(".").at(-1);
+      if (callee === "recoveryRefusal") {
+        const text = value(node.arguments[1]);
+        if (text) inspect(node, text);
+      } else if (callee === "refusalEnvelope" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+        const recovery = node.arguments[0].properties.find((item) => ts.isPropertyAssignment(item) && propertyName(item.name) === "recovery");
+        if (recovery && ts.isPropertyAssignment(recovery)) {
+          const text = value(recovery.initializer);
+          if (text) inspect(node, text);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return findings;
 }
 
 export function scanDeclaredCapabilities(sourceText: string, file: string, grammar: CliGrammar): HelpReachabilityFinding[] {

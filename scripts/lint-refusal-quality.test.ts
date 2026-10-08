@@ -1,7 +1,7 @@
 import { applyAllowlist, countViolations, exitCodeFor, normalizeSnippet, parseAllowlist, scanSource, signatureFor } from "./lint-refusal-quality";
 
 describe("refusal quality scanner", () => {
-  test("finds missing cause codes and unreachable refusal-envelope recovery", () => {
+  test("finds missing cause codes without enforcing recovery reachability", () => {
     const source = `
       refusalEnvelope({ command: "x", status: "refused", exitCode: 1, message: "Cannot continue",
         recovery: "Run mstar execution restore-preview --path <path>" });
@@ -11,9 +11,7 @@ describe("refusal quality scanner", () => {
     const findings = scanSource(source, "packages/engine/src/fixture.ts", {
       verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
     });
-    expect(findings.map((finding) => finding.classification)).toEqual([
-      "missing-cause-code", "unreachable-recovery",
-    ]);
+    expect(findings.map((finding) => finding.classification)).toEqual(["missing-cause-code"]);
   });
 
   test("accepts a refusal envelope with a supported recovery", () => {
@@ -38,55 +36,6 @@ describe("refusal quality scanner", () => {
     })).toEqual([]);
   });
 
-  test("matches the longest nested command before its parent verb", () => {
-    const source = `recoveryRefusal("unauthorized", "supply workflow recover-coordinator --attestation <file>");`;
-    const findings = scanSource(source, "packages/engine/src/fixture.ts", {
-      verbs: new Set(["workflow", "workflow recover-coordinator"]),
-      flagsByVerb: new Map([
-        ["workflow", new Set<string>()],
-        ["workflow recover-coordinator", new Set(["--attestation"])],
-      ]),
-    });
-    expect(findings).toEqual([]);
-  });
-
-  test("checks a literal CLI reference without an action keyword", () => {
-    const source = `refusalEnvelope({ command: "x", status: "refused", code: "x.bad", exitCode: 1, message: "x", recovery: "mstar nonexistent --bad" });`;
-    expect(scanSource(source, "packages/commands/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    }).map((finding) => finding.classification)).toEqual(["unreachable-recovery"]);
-  });
-
-  test("rejects unsupported subcommands after a valid parent verb", () => {
-    const source = `refusalEnvelope({ command: "x", status: "refused", code: "x.bad", exitCode: 1, message: "x", recovery: "Run mstar workflow nonexistent" });`;
-    expect(scanSource(source, "packages/commands/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    }).map((finding) => finding.classification)).toEqual(["unreachable-recovery"]);
-  });
-
-  test("rejects an unsupported command even when another recovery command is valid", () => {
-    const source = `refusalEnvelope({ command: "x", status: "refused", code: "x.bad", exitCode: 1, message: "x", recovery: "Run mstar workflow --resume; or run mstar nonexistent --bad" });`;
-    expect(scanSource(source, "packages/commands/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    }).map((finding) => finding.classification)).toEqual(["unreachable-recovery"]);
-  });
-
-
-  test("rejects bare action-command alternatives after an explicit command", () => {
-    const source = `refusalEnvelope({ command: "x", status: "refused", code: "x.bad", exitCode: 1, message: "x", recovery: "Run mstar workflow --resume; or run nonexistent --bad" });`;
-    expect(scanSource(source, "packages/commands/src/fixture.ts", {
-      verbs: new Set(["workflow"]), flagsByVerb: new Map([["workflow", new Set(["--resume"])]]),
-    }).map((finding) => finding.classification)).toEqual(["unreachable-recovery"]);
-  });
-
-  test("accepts a supported positional argument after a command verb", () => {
-    const source = `refusalEnvelope({ command: "schema", status: "refused", code: "schema.invalid", exitCode: 1, message: "x", recovery: "Run mstar schema ExampleType" });`;
-    expect(scanSource(source, "packages/commands/src/fixture.ts", {
-      verbs: new Set(["schema"]),
-      flagsByVerb: new Map([["schema", new Set<string>()]]),
-      positionalsByVerb: new Map([["schema", [{ key: "type", variadic: false }]]]),
-    }).map((finding) => finding.classification)).toEqual([]);
-  });
   test("one allowlist signature suppresses repeated identical occurrences", () => {
     const snippet = `refusalEnvelope({ code: "x.bad" })`;
     const findings = [1, 8].map((line) => ({
@@ -108,7 +57,7 @@ describe("refusal quality scanner", () => {
     const findings = [
       { file: "scripts/a.ts", line: 1, column: 1, classification: "missing-recovery" as const, reason: "x", snippet: "same()" },
       { file: "scripts/a.ts", line: 2, column: 1, classification: "missing-recovery" as const, reason: "x", snippet: "same()" },
-      { file: "scripts/a.ts", line: 3, column: 1, classification: "unreachable-recovery" as const, reason: "y", snippet: "other()" },
+      { file: "scripts/a.ts", line: 3, column: 1, classification: "missing-cause-code" as const, reason: "y", snippet: "other()" },
     ];
     const allowlist = [{
       signature: signatureFor("missing-recovery", "scripts/a.ts", "same()"),
