@@ -6188,7 +6188,7 @@ export async function amendPrepareWorkflow(
       if (written === undefined) {
         throw new CoordinationError(
           "coordination.store",
-          `snapshot ${scope.snapshotPath} is unreadable after this call committed it`,
+          `snapshot ${scope.snapshotPath} is unreadable after this call committed it. Inspect the workflow with mstar status validate.`,
           { path: scope.snapshotPath },
         );
       }
@@ -6206,7 +6206,7 @@ export async function amendPrepareWorkflow(
       if (current === undefined) {
         throw new CoordinationError(
           "coordination.store",
-          `snapshot ${scope.snapshotPath} is unreadable after this call inspected it`,
+          `snapshot ${scope.snapshotPath} is unreadable after this call inspected it. Inspect the workflow with mstar status validate.`,
           { path: scope.snapshotPath },
         );
       }
@@ -6427,7 +6427,7 @@ function createRecoveryEnvelope(session: CoordinationSession): { path: string; c
     ) {
       throw recoveryRefusal(
         "invalid-request",
-        `a coordinator envelope for session ${session.session_id} already exists with a different session identity`,
+        `a coordinator envelope for session ${session.session_id} already exists with a different session identity at ${path}; inspect the workflow with mstar status validate and restore access to the recorded harness path before retrying mstar workflow recover-coordinator`,
         { workflow_id: session.workflow_id, session_id: session.session_id },
       );
     }
@@ -6477,7 +6477,7 @@ function reclaimRecoveryEnvelope(path: string, expected: CoordinationSession): v
 export async function showPrepareCoordinatorRecovery(
   input: Readonly<{ cwd: string; harnessDir: string; workflowId: string }>,
 ): Promise<PrepareCoordinatorRecoveryView> {
-  if (!isPlainObject(input)) throw invalidInput("coordinator recovery view input must be an object");
+  if (!isPlainObject(input)) throw invalidInput("coordinator recovery view input must be an object. Inspect the workflow with mstar status validate.");
   requireCwd(input.cwd);
   const harnessRoot = requireProcessRoot(input.cwd, input.harnessDir);
   assertExecutionFileReadAllowed({ harnessDir: harnessRoot });
@@ -6490,7 +6490,7 @@ export async function showPrepareCoordinatorRecovery(
   if (coordinator === undefined) {
     throw new CoordinationError(
       "coordination.identity-missing",
-      `workflow ${workflowId} has no recorded coordinator; recover-coordinator replaces a binding, so create it with plan bind instead`,
+      `workflow ${workflowId} has no recorded coordinator; recover-coordinator replaces a binding, so inspect with mstar status validate; do not create a new binding for recovery`,
       { workflow_id: workflowId },
     );
   }
