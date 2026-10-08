@@ -227,15 +227,17 @@ function cleanupClaims(snapshot: WorkflowSnapshot, field: "branch" | "path", val
   };
   if (field === "branch" && snapshot.branch?.integration === value) claims.push({ workflowId: snapshot.id });
   if (field === "path" && [snapshot.integration_worktree_path, (snapshot as WorkflowSnapshot & { control_worktree_path?: string }).control_worktree_path].some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value))) claims.push({ workflowId: snapshot.id });
-  for (const row of snapshot.plans as unknown as Record<string, unknown>[]) {
+  if (snapshot.status !== "stopped" && snapshot.status !== "failed") {
+    for (const row of snapshot.plans as unknown as Record<string, unknown>[]) {
     const meta = row.metadata as Record<string, unknown> | undefined;
     const matches = field === "branch"
       ? meta?.working_branch === value || (Array.isArray(meta?.track_branches) && meta.track_branches.includes(value))
       : (typeof meta?.worktree_path === "string" && pathKey(meta.worktree_path) === pathKey(value)) ||
         (Array.isArray(meta?.cleanup_protective_worktree_paths) && meta.cleanup_protective_worktree_paths.some((candidate) => typeof candidate === "string" && pathKey(candidate) === pathKey(value)));
-    if (matches) {
-      const planId = typeof row.id === "string" ? row.id : typeof row.plan_id === "string" ? row.plan_id : undefined;
-      claims.push({ workflowId: snapshot.id, ...(planId ? { planId } : {}) });
+      if (matches) {
+        const planId = typeof row.id === "string" ? row.id : typeof row.plan_id === "string" ? row.plan_id : undefined;
+        claims.push({ workflowId: snapshot.id, ...(planId ? { planId } : {}) });
+      }
     }
   }
   return claims;
