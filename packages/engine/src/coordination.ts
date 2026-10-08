@@ -384,7 +384,9 @@ function invalidInput(message: string, details: Record<string, unknown> = {}): C
 export function assertViolationFree(violations: readonly { code: string; message: string }[], what: string): void {
   if (violations.length > 0) {
     throw new CoordinationError("coordination.invalid-input", "Stored workflow is invalid. Inspect it with mstar status validate.", {
+      subject: what,
       violations: violations.map((entry) => entry.code),
+      violation_messages: violations.map((entry) => entry.message),
     });
   }
 }
@@ -422,7 +424,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
     throw new CoordinationError(
       "coordination.local-store-required",
       "No artifact store is resolvable from the current working directory. Run mstar status validate from the control harness root.",
-      { harness_root: harnessRoot },
+      { harness_root: harnessRoot, cwd: resolve(process.cwd()), cause: errorMessage(error) },
     );
   }
   const root = "root" in store ? store.root : undefined;
@@ -809,7 +811,7 @@ function safePlanId(planId: string, where: string): string {
     assertSafePathComponent(planId, where);
   } catch (error) {
     throw invalidInput("The supplied path component is unsafe. Correct the caller input and inspect the target workflow with mstar status validate.", {
-      plan_id: planId,
+      plan_id: planId, where, cause: errorMessage(error),
     });
   }
   return planId;
@@ -867,7 +869,7 @@ function readSnapshotWithPhase(dir: string): { snapshot: WorkflowSnapshot; phase
     throw new CoordinationError(
       "coordination.store",
       "Workflow snapshot is unreadable or invalid. Inspect the harness with mstar status validate.",
-      { path: snapshotPath },
+      { path: snapshotPath, cause: errorMessage(error) },
     );
   }
 }
@@ -947,7 +949,7 @@ export function readSessionEnvelope(sessionPath: string): CoordinationSession {
     parsed = JSON.parse(readFileSync(abs, "utf8"));
   } catch (error) {
     throw new CoordinationError("coordination.store", "Session envelope is not valid JSON. Inspect the harness authority with mstar status validate.", {
-      path: abs,
+      path: abs, cause: errorMessage(error),
     });
   }
   if (!isPlainObject(parsed)) {
@@ -1031,7 +1033,7 @@ function createSessionEnvelope(session: CoordinationSession): string {
       );
     }
     throw new CoordinationError("coordination.store", "Cannot create the session envelope. Inspect the harness state with mstar status validate and verify the recorded path is writable from the control harness root.", {
-      path,
+      path, cause: errorMessage(error),
     });
   }
   return path;
@@ -3177,14 +3179,14 @@ async function assertFindingsClosed(
     throw new CoordinationError(
       "coordination.store",
       "The issue store is unavailable, so findings authority cannot be read. Restore access to the canonical issue store and retry mstar plan complete; inspect the registered row with mstar plan show --plan <plan-id>.",
-      { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup },
+      { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup, cause: message },
     );
   }
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.invalid-transition",
       "Findings are open under the configured cleanup policy. Close or waive each finding with mstar issue close or mstar issue waive, then retry mstar plan complete.",
-      { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup },
+      { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup, violations: gate.violations.map((entry) => entry.code), violation_messages: gate.violations.map((entry) => entry.message) },
     );
   }
 }
@@ -3522,7 +3524,7 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
         throw missingDecision({
           planId: String(row.id), what: "close", component: "plan-completion",
           field: "coordination.completion", source: "stored plan row",
-          message: "Close requires every owned row to be Done. Complete each row with approved evidence using mstar plan complete, then retry mstar workflow close.",
+          message: "Close requires every owned row to be Done. Complete each row with approved evidence using mstar plan complete, then retry mstar status workflow-close.",
         });
       }
     }
@@ -3530,7 +3532,7 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
       const policy = snapshot.completion_policy;
       const recorded = snapshot.delivery?.completion;
       if (!isNonEmptyString(policy) || recorded?.policy !== policy || !isNonEmptyString(recorded.evidence)) {
-        throw new CoordinationError("coordination.invalid-transition", "report-only close requires explicitly recorded fulfilment matching completion_policy; use mstar workflow evidence, then mstar workflow close");
+        throw new CoordinationError("coordination.invalid-transition", "report-only close requires explicitly recorded fulfilment matching completion_policy; use mstar workflow evidence, then mstar status workflow-close");
       }
     }
     snapshot = await closeWorkflow(input.workflowId, workflowDir, {
@@ -3547,7 +3549,7 @@ export async function closeFileWorkflow(input: FileWorkflowCloseInput): Promise<
   } else if (!isV2RootRegister(statusPath)) {
     throw new CoordinationError(
       "coordination.root-register-unwritable",
-      "Workflow is terminal, but its root register is not writable as v2. Terminal state stands; run mstar migrate, then retry mstar workflow close to finish unregistering without rewriting ended_at",
+      "Workflow is terminal, but its root register is not writable as v2. Terminal state stands; run mstar migrate, then retry mstar status workflow-close to finish unregistering without rewriting ended_at",
       { workflow_id: input.workflowId, applied: ["terminal-snapshot"], rootRegister: "not-v2-register" },
     );
   }
@@ -3675,7 +3677,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   if (input.payload.id !== input.ref.key) {
     throw invalidInput(
       "Snapshot payload id does not match the reference key. Correct the supplied payload before retrying; inspect the current workflow with mstar status validate.",
-      {},
+      { actual: input.payload.id, expected: input.ref.key },
     );
   }
   const gate = validateWorkflowSnapshot(input.payload);
@@ -4216,7 +4218,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
     throw prepareAmendmentRefusal(
       "compass-mismatch",
       "Reviewed compass is unreadable. Correct it at the reported path and inspect the workflow with mstar status validate.",
-      { workflow_id: snapshot.id, path },
+      { workflow_id: snapshot.id, path, cause: errorMessage(error) },
     );
   }
   let frontmatter: Record<string, unknown>;
@@ -4226,7 +4228,7 @@ function readPrepareCompass(harnessRoot: string, snapshot: WorkflowSnapshot): Pr
     throw prepareAmendmentRefusal(
       "compass-mismatch",
       "Reviewed compass has no parsable frontmatter. Correct it at the reported path and inspect the workflow with mstar status validate.",
-      { workflow_id: snapshot.id, path },
+      { workflow_id: snapshot.id, path, cause: errorMessage(error) },
     );
   }
   // The declaration is read exactly as written. A missing lifecycle identity
@@ -4822,13 +4824,13 @@ function readIntegrationWorktreePath(
     throw prepareAmendmentRefusal("invalid-worktree", message, details);
   };
   if (!isNonEmptyString(value) || !isAbsolute(value)) {
-    return refuse(`integrationWorktreePath must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}. Correct the recorded source checkout with mstar workflow amend-prepare.`, {
+    return refuse("integrationWorktreePath must be an absolute path — got <value>. Correct the recorded source checkout with mstar workflow amend-prepare.", {
       actual: value ?? null,
     });
   }
   const path = canonicalTarget(value);
   if (!existsSync(path) || !statSync(path).isDirectory()) {
-    return refuse(`integration checkout ${path} does not exist. Correct the recorded source checkout with mstar workflow amend-prepare.`, { path, expected: value });
+    return refuse("integration checkout <value> does not exist. Correct the recorded source checkout with mstar workflow amend-prepare.", { path, expected: value });
   }
   const mainRoot = canonicalTarget(context.main.root);
   const control = canonicalizeNearestExisting(context.harnessRoot);
@@ -4842,19 +4844,19 @@ function readIntegrationWorktreePath(
   const controlRepo = readMainWorktree(control);
   if (controlRepo === null) {
     return refuse(
-      `the control harness root ${control} has no readable Git main worktree \u2014 the integration checkout cannot be proven to be a checkout of this repository. Correct the recorded source checkout with mstar workflow amend-prepare.`,
+      "the control harness root <value> has no readable Git main worktree — the integration checkout cannot be proven to be a checkout of this repository. Correct the recorded source checkout with mstar workflow amend-prepare.",
       { path, harness_root: control },
     );
   }
   const controlMainRoot = canonicalTarget(controlRepo.root);
   if (controlMainRoot !== mainRoot) {
     return refuse(
-      `this call runs from the main worktree of ${mainRoot}, not the repository owning the control harness root ${control} (${controlMainRoot}) \u2014 the recorded checkout must belong to that repository. Correct the recorded source checkout with mstar workflow amend-prepare.`,
+      "this call runs from the main worktree of <value>, not the repository owning the control harness root <value> (<value>) — the recorded checkout must belong to that repository. Correct the recorded source checkout with mstar workflow amend-prepare.",
       { path, expected: controlMainRoot, actual: mainRoot },
     );
   }
   if (path === mainRoot || path === control) {
-    return refuse(`integration checkout ${path} is the main/control checkout \u2014 a dedicated integration worktree is required. Correct the recorded source checkout with mstar workflow amend-prepare.`, {
+    return refuse("integration checkout <value> is the main/control checkout — a dedicated integration worktree is required. Correct the recorded source checkout with mstar workflow amend-prepare.", {
       path,
       expected: `a checkout distinct from ${mainRoot}`,
     });
@@ -4862,7 +4864,7 @@ function readIntegrationWorktreePath(
   const repo = readMainWorktree(path);
   if (repo === null || canonicalTarget(repo.root) !== controlMainRoot) {
     return refuse(
-      `integration checkout ${path} is not a checkout of the repository owning the control harness root ${control} (${controlMainRoot}). Correct the recorded source checkout with mstar workflow amend-prepare.`,
+      "integration checkout <value> is not a checkout of the repository owning the control harness root <value> (<value>). Correct the recorded source checkout with mstar workflow amend-prepare.",
       {
         path,
         expected: controlMainRoot,
@@ -4871,7 +4873,7 @@ function readIntegrationWorktreePath(
     );
   }
   if (!isDistinctCheckout(context.main.root, path)) {
-    return refuse(`integration checkout ${path} is not a distinct checkout (same Git checkout as ${mainRoot}). Correct the recorded source checkout with mstar workflow amend-prepare.`, {
+    return refuse("integration checkout <value> is not a distinct checkout (same Git checkout as <value>). Correct the recorded source checkout with mstar workflow amend-prepare.", {
       path,
       expected: `a checkout distinct from ${mainRoot}`,
     });
@@ -4879,14 +4881,14 @@ function readIntegrationWorktreePath(
   const integrationBranch = context.snapshot.branch?.integration;
   if (!isNonEmptyString(integrationBranch)) {
     return refuse(
-      `workflow ${context.snapshot.id} records no branch.integration \u2014 the integration checkout cannot be verified. Correct the recorded source checkout with mstar workflow amend-prepare.`,
+      "workflow <value> records no branch.integration — the integration checkout cannot be verified. Correct the recorded source checkout with mstar workflow amend-prepare.",
       { workflow_id: context.snapshot.id, path },
     );
   }
   const branch = gitRead(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== integrationBranch) {
     return refuse(
-      `integration checkout ${path} is on ${branch === undefined ? "an unreadable checkout" : branch || "a detached HEAD"}, not the recorded ${integrationBranch}. Correct the recorded source checkout with mstar workflow amend-prepare.`,
+      "integration checkout <value> is on <value>, not the recorded <value>. Correct the recorded source checkout with mstar workflow amend-prepare.",
       { path, expected: integrationBranch, actual: branch ?? null },
     );
   }
