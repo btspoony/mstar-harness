@@ -1,5 +1,6 @@
 import { encodeExecutionSessionRef, serializeExecutionValue, type ExecutionIdentity } from "@mstar-harness/engine";
-import { mintedIdentityScopeProblem, resolveCliSessionIdentity } from "./command-adapter";
+import { executeCommand, getCommandDefinitions, getCommandSchemas, type InvocationContext } from "@mstar-harness/commands";
+import { mintedIdentityScopeProblem, renderCommandContract, resolveCliSessionIdentity } from "./command-adapter";
 
 const originalSessionId = process.env.MSTAR_HOST_SESSION_ID;
 const originalMinted = process.env.MSTAR_EXECUTION_IDENTITY;
@@ -111,4 +112,63 @@ test("CLI scope gate constrains a minted identity to the scope it declares", () 
   expect(mintedIdentityScopeProblem(identity, { resume: "/tmp/x.json", workflow: "wf-elsewhere" }, "plan.bind")).toBeUndefined();
   // A malformed reference stays the family's own typed refusal.
   expect(mintedIdentityScopeProblem(identity, { sessionRef: "not-a-wire", operation: "op" }, "plan.progress")).toBeUndefined();
+});
+test("registry help, schema and runtime admission share required inputs and declared defaults", async () => {
+  const definitions = getCommandDefinitions();
+  const schemas = getCommandSchemas(definitions);
+  let dashboardPort: number | undefined;
+  const context: InvocationContext = {
+    cwd: process.cwd(),
+    controlRoot: process.cwd(),
+    versions: { engine: null, cli: null, plugin: null, host: null, platform: null },
+    signal: new AbortController().signal,
+    effects: {
+      async readInput() { return ""; },
+      async spawn() { return { exitCode: 0, signal: null, stdout: "", stderr: "" }; },
+      async startDashboard(request) {
+        dashboardPort = request.port;
+        return { url: "http://127.0.0.1:0", async close() {} };
+      },
+      async openBrowser() { throw new Error("unused"); },
+    },
+  };
+  for (const definition of definitions) {
+    const schema = schemas.find((entry) => entry.id === definition.id);
+    if (schema === undefined) throw new Error(`missing schema descriptor for ${definition.id}`);
+    const published = await executeCommand("schema", { command: definition.id }, context);
+    expect(published).toMatchObject({
+      status: "ok",
+      data: { descriptor: { required: schema.required, defaults: schema.defaults, input: { required: schema.required } } },
+    });
+    const help = renderCommandContract(definition, "cli");
+    for (const requirement of schema.requirements) {
+      if (requirement.constraint !== undefined && requirement.route === "cli") {
+        expect(help).toContain(requirement.constraint);
+      }
+    }
+    if (schema.required.length > 0) {
+      expect(help).toContain(`Required inputs: ${schema.required.join(", ")}`);
+      const result = await executeCommand(definition.id, {}, context);
+      expect(result.status).toBe("usage");
+      const expectedRequired = [...new Set([
+        ...schema.required,
+        ...schema.requirements
+          .filter((entry) => entry.required && entry.condition !== undefined && entry.condition.present === false)
+          .map((entry) => entry.name),
+      ])];
+      expect(result.details?.required).toEqual(expectedRequired);
+      expect(result.details?.conditionalRequirements).toEqual(schema.requirements.filter((entry) => entry.condition !== undefined));
+      const diagnostics = result.details?.diagnostics;
+      expect(Array.isArray(diagnostics)).toBe(true);
+      for (const field of expectedRequired) {
+        expect((diagnostics as Array<{ path?: string }>).some((item) => item.path === field)).toBe(true);
+      }
+    }
+    for (const [key, value] of Object.entries(schema.defaults)) {
+      expect(help).toContain(`${key}=${JSON.stringify(value)}`);
+    }
+  }
+  const dashboard = await executeCommand("dashboard", {}, context);
+  expect(dashboard.status).toBe("ok");
+  expect(dashboardPort).toBe(0);
 });

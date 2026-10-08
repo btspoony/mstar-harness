@@ -6,6 +6,8 @@ export type RefusalDiagnostic = Readonly<{
   message: string;
   helpRoute?: string;
   index?: number;
+  expected?: string;
+  received?: string;
 }>;
 
 type RefusalInputFields = Readonly<{

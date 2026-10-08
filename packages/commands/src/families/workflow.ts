@@ -135,12 +135,52 @@ function makeDefinition(
   return {
     id,
     ...(id === "workflow.register" ? {
-      requirements: [{
-        name: "planTitle",
-        ownership: "caller" as const,
-        route: "cli" as const,
-        constraint: "the selected plan document is the registration authority; the supplied title must match its H1",
-      }],
+      requirements: [
+        { name: "workflow", ownership: "caller" as const, route: "cli" as const, required: true },
+        { name: "planId", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
+        { name: "planTitle", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
+        { name: "planFile", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
+        { name: "deliveryKind", ownership: "caller" as const, route: "cli" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
+        { name: "expect", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "operation" }, constraint: "supply together with operation to select active registration" },
+        { name: "operation", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "expect" }, constraint: "supply together with expect to select active registration" },
+        { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
+        { name: "planId", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
+        { name: "planTitle", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
+        { name: "planFile", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
+        { name: "deliveryKind", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
+        { name: "expect", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "operation" }, constraint: "supply together with operation to select active registration" },
+        { name: "operation", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "expect" }, constraint: "supply together with expect to select active registration" },
+      ],
+    } : {}),
+    ...(id === "workflow.evidence" ? {
+      requirements: [
+        { name: "workflow", ownership: "caller" as const, route: "cli" as const, required: true },
+        { name: "file", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "supply exactly one of file or declareKind" },
+        { name: "declareKind", ownership: "caller" as const, route: "cli" as const, required: true, condition: { field: "file", present: false }, constraint: "supply exactly one of file or declareKind" },
+        { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
+        { name: "file", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "declareKind", present: false }, constraint: "supply exactly one of file or declareKind" },
+        { name: "declareKind", ownership: "caller" as const, route: "mcp" as const, required: true, condition: { field: "file", present: false }, constraint: "supply exactly one of file or declareKind" },
+      ],
+    } : {}),
+    ...(id === "workflow.recover-coordinator" ? {
+      requirements: [
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route: "cli" as const,
+          required: true,
+          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
+          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
+        },
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route: "mcp" as const,
+          required: true,
+          condition: { field: "interruptedIntegrationMergeClaim", equals: true },
+          constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
+        },
+      ],
     } : {}),
     cli: {
       path: id.split("."),
