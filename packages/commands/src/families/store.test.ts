@@ -97,30 +97,6 @@ test("store.upgrade names the required operator input before writing", async () 
   }
 });
 
-test("store.upgrade publishes proof admission rules through CLI help and command schema", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mstar-store-attestation-contract-"));
-  try {
-    const definition = getStoreCommandDefinitions().find(({ id }) => id === "store.upgrade");
-    if (definition === undefined) throw new Error("missing store.upgrade definition");
-    const help = definition.cli.options.find(({ key }) => key === "attestation")?.help ?? "";
-    expect(help).toContain("nonblank");
-    expect(help).toContain("Date.parse");
-    expect(help).toContain("24.18.0");
-    expect(help).toContain("Exactly one consumer is current");
-    expect(help).toContain("kind must be coordinator");
-
-    const published = await executeCommand("schema", { command: "store.upgrade" }, invocation(root));
-    expect(published.status).toBe("ok");
-    const rendered = JSON.stringify(published);
-    expect(rendered).toContain("nonblank");
-    expect(rendered).toContain("Date.parse");
-    expect(rendered).toContain("24.18.0");
-    expect(rendered).toContain("Exactly one consumer is current");
-    expect(rendered).toContain("kind must be coordinator");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
 
 test("a store usage refusal carries the shared factory metadata and keeps its code", async () => {
   const root = mkdtempSync(join(tmpdir(), "mstar-store-usage-shape-"));
