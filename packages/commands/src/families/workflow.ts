@@ -180,7 +180,7 @@ function parseWorkflowExecutionPolicy(text: string): WorkflowExecutionPolicy {
     parseWorkflowJson<unknown>(text, "execution policy file", "workflow.execution-policy.file-malformed"),
   );
   if (!parsed.success) {
-    throw new StoreError("coordination.invalid-input", "an execution-policy operation needs a policy object");
+    throw new WorkflowInputError("an execution-policy operation needs a policy object");
   }
   return parsed.data;
 }

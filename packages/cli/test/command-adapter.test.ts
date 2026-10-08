@@ -105,6 +105,9 @@ describe("generated CLI adapter", () => {
       workflowId: workflow, expected: workflowToken, operationId: "bind-cli-note-coordinator",
     });
     const sessionRef = encodeExecutionSessionRef(bound.data as ExecutionSessionRef);
+    // Settle the writer-close sidecars before the registered CLI opens its
+    // reader, matching the existing fixture seal used by other CLI routes.
+    (await openStore({ harnessDir }, "read")).close();
     const priorHost = process.env.MSTAR_HOST_SESSION_ID;
     const priorMinted = process.env.MSTAR_EXECUTION_IDENTITY;
     const ledgerPath = path.join(harnessDir, "workflows", workflow, "notes.jsonl");
