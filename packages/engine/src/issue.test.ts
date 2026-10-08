@@ -145,6 +145,18 @@ describe("capture identity", () => {
     expect(detail.disposition).toBe("open");
   });
 
+  test("blank operation ids are rejected before issue capture writes", async () => {
+    const context = ctx("capture-blank-operation-");
+    await initializeStore(context).then((handle) => handle.close());
+    await expect(captureIssue(context, baseInput(), mut(""))).rejects.toMatchObject({
+      name: "IssueError",
+      code: "issue.invalid-operation-id",
+    });
+    expect((await listIssues(context, {})).total).toBe(0);
+    const next = await captureIssue(context, baseInput(), mut("capture-after-blank"));
+    expect(next.issueId).toBe("I-000001");
+  });
+
   test("two concurrent processes capturing the same identity create exactly one issue", async () => {
     const context = ctx("capture-concurrent-");
     await initializeStore(context).then((h) => h.close());

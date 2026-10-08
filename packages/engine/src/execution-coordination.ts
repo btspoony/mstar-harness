@@ -1097,25 +1097,44 @@ export async function residualAddExecutionPlan(
     // single advance has already run, so every composed issue helper joins it
     // instead of advancing the same counter once more.
     const composed: ComposedTransactionRevision = { committedStoreRevision: storeRevisionOn(tx.db) };
-    for (const input of derivedEntries) {
+    for (const [entryIndex, input] of derivedEntries.entries()) {
       const occurrenceKey = input.occurrenceKey;
-      const capture = captureIssueOn(
-        tx.db,
-        input,
-        { operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey), actor },
-        composed,
-      );
-      // Always link, never only on `created`: the plan link is the gate a later
-      // residual-close is checked against, and both verbs are idempotent, so a
-      // retry converges instead of leaving an unlinked issue the plan can never
-      // close.
-      linkIssueScopedOn(
-        tx.db,
-        capture.issueId,
-        { kind: "plan", target: planId },
-        { operationId: residualLinkOperationId(sessionId, planId, occurrenceKey), actor, expectedRevision: capture.revision },
-        composed,
-      );
+      let childOperation: "capture" | "plan-link" = "capture";
+      try {
+        const capture = captureIssueOn(
+          tx.db,
+          input,
+          { operationId: residualCaptureOperationId(sessionId, planId, occurrenceKey), actor },
+          composed,
+        );
+        // Always link, never only on `created`: the plan link is the gate a later
+        // residual-close is checked against, and both verbs are idempotent, so a
+        // retry converges instead of leaving an unlinked issue the plan can never
+        // close.
+        childOperation = "plan-link";
+        linkIssueScopedOn(
+          tx.db,
+          capture.issueId,
+          { kind: "plan", target: planId },
+          { operationId: residualLinkOperationId(sessionId, planId, occurrenceKey), actor, expectedRevision: capture.revision },
+          composed,
+        );
+      } catch (error) {
+        if (!(error instanceof IssueError) || error.code !== "store.operation-conflict") throw error;
+        const contextual = new IssueError(
+          error.code,
+          `residual-add entry ${entryIndex} ${childOperation} child operation conflicts: ${error.message}`,
+        );
+        contextual.details = {
+          entryIndex,
+          entryPath: `entries[${entryIndex}].occurrenceKey`,
+          childOperation,
+          childOperationIdOrigin: "session + plan + entry occurrenceKey",
+          causeCode: error.code,
+          correction: "Give each observation within this session and plan a distinct occurrenceKey; the child operation id derives from session + plan + occurrenceKey, so changing only the outer operationId repeats the conflict.",
+        };
+        throw contextual;
+      }
     }
     advancePlanRowRevision(tx, witness);
     const committed = readExecutionPlanWitness(tx, resolved.read);

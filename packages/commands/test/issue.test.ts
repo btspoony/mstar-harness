@@ -157,7 +157,7 @@ describe("issue command family", () => {
     const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
     if (shown.status === "ok") expect(shown.data).toMatchObject({ owner: "reviewer" });
   });
-  test("omitted replay ids are fresh per mutation while explicit blank remains invalid", async () => {
+  test("omitted replay ids are fresh per mutation while explicit blank remains invalid without a write", async () => {
     const context = await testContext();
     const command = definition("issue.add");
     const first = await command.execute({
@@ -170,22 +170,87 @@ describe("issue command family", () => {
     }, context);
     expect(first.status).toBe("ok");
     expect(second.status).toBe("ok");
+    if (first.status !== "ok" || second.status !== "ok") return;
+    const firstReceipt = first.data as { issueId: string; revision: number; operationId: string };
+    const secondReceipt = second.data as { issueId: string; revision: number; operationId: string };
+    expect(firstReceipt.operationId).not.toBe(secondReceipt.operationId);
+    expect(firstReceipt.operationId).toMatch(/^[0-9a-f-]{36}$/);
     const blank = await command.execute({
       payload: capture({ sourceIdentity: "review/blank", rootCauseKey: "blank-root", occurrenceKey: "blank-occ" }),
       operationId: "",
       actor: "project-manager",
     }, context);
-    expect(blank.status).toBe("refused");
-    if (first.status !== "ok") return;
-    const receipt = first.data as { issueId: string; revision: number };
-    const triaged = await definition("issue.triage").execute({
-      id: receipt.issueId, payload: { reason: "reclassify", severity: "low" },
-      actor: "project-manager", expect: receipt.revision,
+    expect(blank).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["operationId"] } });
+    const afterBlank = await definition("issue.list").execute({}, context);
+    expect(afterBlank.status).toBe("ok");
+    if (afterBlank.status === "ok") expect((afterBlank.data as { items: unknown[] }).items).toHaveLength(2);
+    const next = await command.execute({
+      payload: capture({ sourceIdentity: "review/auto-3", rootCauseKey: "auto-root-3", occurrenceKey: "auto-occ-3" }),
+      actor: "project-manager",
     }, context);
-    expect(triaged.status).toBe("ok");
-    const shown = await definition("issue.show").execute({ id: receipt.issueId }, context);
+    expect(next.status).toBe("ok");
+    if (next.status === "ok") expect((next.data as { issueId: string }).issueId).toBe("I-000003");
+
+    const shown = await definition("issue.show").execute({ id: firstReceipt.issueId }, context);
     expect(shown.status).toBe("ok");
-    if (shown.status === "ok") expect(shown.data).toMatchObject({ id: receipt.issueId, revision: receipt.revision + 1, severity: "low" });
+    if (shown.status !== "ok") return;
+    const current = shown.data as { id: string; revision: number };
+    const triaged = await definition("issue.triage").execute({
+      id: current.id, payload: { reason: "reclassify", severity: "low" },
+      operationId: "triage-from-show", actor: "project-manager", expect: current.revision,
+    }, context);
+    expect(triaged).toMatchObject({ status: "ok", data: { operationId: "triage-from-show", issueId: current.id } });
+    const final = await definition("issue.show").execute({ id: current.id }, context);
+    expect(final).toMatchObject({ status: "ok", data: { id: current.id, revision: current.revision + 1, severity: "low" } });
+  });
+
+  test("explicit replay ids replay once and reject conflicting reuse without mutation", async () => {
+    const context = await testContext();
+    const command = definition("issue.add");
+    const input = capture();
+    const first = await command.execute({ payload: input, operationId: "capture-replay", actor: "project-manager" }, context);
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok") return;
+    const replay = await command.execute({ payload: input, operationId: "capture-replay", actor: "project-manager" }, context);
+    expect(replay).toEqual(first);
+    expect(replay).toMatchObject({ data: { operationId: "capture-replay" } });
+    const conflict = await command.execute({
+      payload: capture({ title: "Different issue", occurrenceKey: "different-occurrence" }),
+      operationId: "capture-replay", actor: "project-manager",
+    }, context);
+    expect(conflict).toMatchObject({ status: "refused", code: "store.operation-conflict" });
+    const page = await definition("issue.list").execute({}, context);
+    expect(page.status).toBe("ok");
+    if (page.status === "ok") expect((page.data as { items: unknown[] }).items).toHaveLength(1);
+  });
+
+  test("addressed issue mutations publish issue id and revision CAS minima", () => {
+    const addressed = ["occurrence", "triage", "close", "reopen", "waive", "duplicate", "supersede", "link"];
+    for (const verb of addressed) {
+      const command = definition(`issue.${verb}`);
+      for (const route of ["cli", "mcp"] as const) {
+        expect(command.requirements).toContainEqual(expect.objectContaining({ name: "id", route, required: true }));
+      }
+      expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: true }));
+      const missingId = command.input.safeParse({ actor: "project-manager" });
+      expect(missingId.success).toBe(false);
+      if (!missingId.success) expect(missingId.error.issues.some((issue) => issue.path.includes("id"))).toBe(true);
+    }
+    for (const verb of ["add", "export"]) {
+      const command = definition(`issue.${verb}`);
+      expect(command.requirements).not.toContainEqual(expect.objectContaining({ name: "id", required: true }));
+      expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: false }));
+    }
+    for (const verb of ["triage", "close", "reopen", "waive", "duplicate", "supersede", "link"]) {
+      expect(definition(`issue.${verb}`).requirements).toContainEqual(
+        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show") }),
+      );
+      const missingCas = definition(`issue.${verb}`).input.safeParse({
+        id: "I-000001", actor: "project-manager", payload: {},
+      });
+      expect(missingCas.success).toBe(false);
+      if (!missingCas.success) expect(missingCas.error.issues.some((issue) => issue.path.includes("expect"))).toBe(true);
+    }
   });
 });
 
