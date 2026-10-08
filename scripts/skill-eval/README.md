@@ -279,3 +279,14 @@ as-is — no assertion was edited after these results:
   `usageBasis: "unknown"`).
 - Re-version provenance and per-finding dispositions: control
   `{SDD_DIR}/eval/r2-corpus-reversion.md` and the QC-1 report.
+
+## MCP guess-path real run (2026-10-08)
+
+- Prepared the frozen 30-case corpus, then derived a disposable one-case selection (`bounded-res-mcp-guess-path`) for `selectCases` → `executeManifest` → `buildReport`; the immutable source ref and local CLI identity remain pinned in the run manifest.
+- Source HEAD: `cc9c454d705b88da6716c143f6e3c67461808e8a`.
+- Built CLI: `@mstar-harness/cli 3.11.2` at `packages/cli/dist/mstar-harness.js`; `helpHash` `e01ebf398724fb2c1bbbe32727320b5fbc2d017f753812ea24953225df2ec707`.
+- Guess path: **3 counted calls** (near-miss failed call, `tools/list`, corrected `mstar_schema` call); case grade **pass**, run/report exit **0**.
+- Retained four-lookup negative control was separately executed against the same built CLI: **4 counted calls**, case grade fail as expected; the report also records its scripted final's independent grouped-facts and outcome assertion failures, so it is not represented as a model response.
+- **model compliance stays unverified (scripted client, no LLM)**.
+- Durable manifest, raw MCP transcripts, runner event/prompt/argv/metrics files, report JSON and Markdown: `{SDD_DIR}/eval/r3-guess-path/` (including `negative-control-run-report.json`).
+- Reproducible run command: `bun scripts/skill-eval/run-bounded-resolution-real.ts`.
