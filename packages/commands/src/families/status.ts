@@ -26,6 +26,7 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 import { SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
+import { engineErrorFacts } from "./family-refusal.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
 const harnessInput = z.object({ harness: z.string().min(1).optional() });
@@ -34,8 +35,8 @@ function ok<T>(command: string, data: T): CommandEnvelope<T> {
   return { version: 1, command, status: "ok", code: "status.ok", exitCode: 0, data };
 }
 
-function refused(command: string, code: string, message: string, details?: Record<string, unknown>): CommandEnvelope<never> {
-  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }) });
+function refused(command: string, code: string, message: string, details?: Record<string, unknown>, recovery?: string): CommandEnvelope<never> {
+  return refusalEnvelope({ command, status: "refused", code, exitCode: 1, message, ...(details === undefined ? {} : { details }), ...(recovery === undefined ? {} : { recovery }) });
 }
 
 function invalid(command: string, error: z.ZodError): CommandEnvelope<never> {
@@ -171,7 +172,12 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
             ? ok("status.validate", data)
             : refused("status.validate", gate.violations[0]?.code ?? "status.invalid", "Status validation failed", { ...data });
         } catch (error) {
-          return refused("status.validate", engineCode(error, "status.validation-failed"), messageOf(error));
+          // The engine's own refusal facts travel verbatim at this mapper too:
+          // a typed store/authority error keeps its code, its `details` record
+          // (e.g. the distinct schema-unsupported version facts) and any
+          // recovery it authors, instead of collapsing to code plus prose.
+          const { code, details, recovery } = engineErrorFacts(error);
+          return refused("status.validate", code ?? "status.validation-failed", messageOf(error), details, recovery);
         }
       },
     }),

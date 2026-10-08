@@ -1,8 +1,9 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, test } from "bun:test";
-import { encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
+import { MIGRATIONS, encodeExecutionSessionRef, initializeExecutionAuthority, initializeStore } from "@mstar-harness/engine";
 import { getCommandDefinitions } from "../src/index.js";
 import type { InvocationContext } from "../src/types.js";
 
@@ -162,6 +163,51 @@ describe("status command family", () => {
       expect(result.message.split("\n")[0]).not.toContain("Help:");
       expect(result.message).toContain("Help: mstar status workflow-close --help");
       expect(result.details).toMatchObject({ helpRoute: "mstar status workflow-close --help" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * F7: the store-vs-build-vs-first-unknown facts are the engine's own machine
+   * facts, and this command surface must forward them rather than reduce a
+   * typed store refusal to its code and prose. The fixture is a real store
+   * written past this build's supported maximum in an isolated OS-temp root
+   * outside every Git worktree, observed with an explicit harness.
+   */
+  test("an unreadable store keeps the engine's code, machine details and recovery facts", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "status-schema-facts-"));
+    try {
+      const harnessDir = path.join(dir, ".mstar");
+      const store = await initializeStore({ harnessDir });
+      const supportedMax = Math.max(...MIGRATIONS.map((migration) => migration.version));
+      const insert = store.db.prepare("insert into schema_version(version, name, checksum, applied_at) values(?, ?, ?, ?)");
+      insert.run(supportedMax + 1, "from-a-newer-build", "f".repeat(64), "2026-09-18T00:00:00.000Z");
+      insert.run(supportedMax + 2, "from-an-even-newer-build", "e".repeat(64), "2026-09-18T00:00:00.000Z");
+      store.close();
+
+      const target = path.join(harnessDir, "status.json");
+      const result = await statusDefinition("status.validate").execute({ path: target }, context(dir));
+      expect(result).toMatchObject({ status: "refused", code: "store.schema-unsupported", exitCode: 1 });
+      if (result.status === "ok") throw new Error("expected the store refusal");
+      if (result.status !== "refused") throw new Error("expected the store refusal");
+      // The three distinct facts travel as machine facts, so an agent reads the
+      // values instead of re-parsing the message.
+      expect(result.details).toMatchObject({
+        storeSchemaVersion: supportedMax + 2,
+        supportedSchemaMax: supportedMax,
+        firstUnsupportedMigration: supportedMax + 1,
+      });
+      expect(result.message).toContain(`highest applied schema version is ${supportedMax + 2}`);
+      expect(result.message).toContain(`first unsupported migration is ${supportedMax + 1}`);
+
+      // The guard refused before any mutation: every row still stands.
+      const after = new DatabaseSync(path.join(harnessDir, "store.db"), { readOnly: true });
+      const rows = after.prepare("select version from schema_version order by version").all();
+      after.close();
+      expect(rows.map((row) => Object.values(row)[0])).toEqual(
+        Array.from({ length: supportedMax + 2 }, (_, index) => index + 1),
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

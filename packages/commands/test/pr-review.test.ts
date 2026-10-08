@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getCommandDefinitions } from "../src/index.js";
-import type { CommandDefinition, InvocationContext } from "../src/types.js";
+import { getCommandDefinitions, executeCommand } from "../src/index.js";
+import type { CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -24,6 +24,25 @@ function command(id: string): CommandDefinition {
   const found = getCommandDefinitions().find((definition) => definition.id === id);
   if (found === undefined) throw new Error(`Missing command ${id}`);
   return found;
+}
+
+/** The rendered seat prompt of an ok envelope, narrowed rather than asserted. */
+function promptOf(envelope: CommandEnvelope, label: string): string {
+  expect(envelope.status, label).toBe("ok");
+  if (envelope.status !== "ok") throw new Error(label);
+  const data: unknown = envelope.data;
+  if (data === null || typeof data !== "object" || !("prompt" in data) || typeof data.prompt !== "string") {
+    throw new Error(`${label}: seat-prompt must return its rendered prompt`);
+  }
+  return data.prompt;
+}
+
+/** The usage diagnostics of a refusal, narrowed rather than asserted. */
+function diagnosticsOf(envelope: CommandEnvelope, label: string): readonly unknown[] {
+  if (envelope.status === "ok") throw new Error(label);
+  const diagnostics = envelope.details?.diagnostics;
+  if (!Array.isArray(diagnostics)) throw new Error(`${label}: the refusal must carry structured diagnostics`);
+  return diagnostics;
 }
 
 describe("pr-review command family", () => {
@@ -101,6 +120,85 @@ describe("pr-review command family", () => {
     );
     expect(result.status).toBe("ok");
     expect(JSON.stringify(result)).toContain(cwd);
+  });
+
+  /**
+   * The folded-seat combinations are asserted against the prompt the engine
+   * actually renders and the refusals admission actually authors, not against
+   * a copy of the requirement table: these cases drive the canonical
+   * `executeCommand` route, which is where the conditional facts are enforced.
+   */
+  test("folded-seat admission accepts stage-2 domain seats and refuses the impossible combinations", async () => {
+    const { cwd, context } = fixture();
+    const diffFile = path.join(cwd, "review.pack.diff");
+    writeFileSync(diffFile, "diff --git a/a.ts b/a.ts\n");
+
+    // Accepted: stage 2 with a pinned diff snapshot; omitted --security keeps
+    // its false default, and false is the same non-security seat.
+    for (const security of [undefined, false]) {
+      const folded = await executeCommand("pr-review.seat-prompt", {
+        stage: "2", domain: "audit", seat: "code-reviewer", diffFile, collectFolded: true,
+        ...(security === undefined ? {} : { security }),
+      }, context);
+      // The fold is a real instruction anchored to the budget block, not an
+      // echo of the requirement object.
+      const prompt = promptOf(folded, "folded stage-2 seat");
+      expect(prompt).toContain("Collect wave folded");
+      expect(prompt).toContain("## Budget");
+      expect(prompt).toContain(diffFile);
+    }
+
+    // Refused: a folded Stage-1 seat is the contradiction the engine guards.
+    const stageOne = await executeCommand("pr-review.seat-prompt", {
+      stage: "1", domain: "audit", seat: "code-reviewer", diffFile, collectFolded: true,
+    }, context);
+    expect(stageOne).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(stageOne, "folded stage-1 seat")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "stage", code: "not_allowed", expected: '"2"', received: '"1"' }),
+    ]));
+
+    // Refused: folding without a pinned pack contradicts the fold instruction.
+    const withoutPack = await executeCommand("pr-review.seat-prompt", {
+      stage: "2", domain: "audit", seat: "code-reviewer", collectFolded: true,
+    }, context);
+    expect(withoutPack).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(withoutPack, "folded seat without a pack")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "diffFile", code: "required" }),
+    ]));
+
+    // Refused: the independent security seat survives every fold.
+    const securitySeat = await executeCommand("pr-review.seat-prompt", {
+      stage: "2", domain: "audit", seat: "code-reviewer", diffFile, security: true, collectFolded: true,
+    }, context);
+    expect(securitySeat).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
+    expect(diagnosticsOf(securitySeat, "folded security seat")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "security", code: "not_allowed", expected: "false", received: "true" }),
+    ]));
+  });
+
+  test("an unfolded seat keeps its ordinary stage behavior and never gains the fold instruction", async () => {
+    const { cwd, context } = fixture();
+    const diffFile = path.join(cwd, "review.pack.diff");
+    writeFileSync(diffFile, "diff --git a/a.ts b/a.ts\n");
+
+    for (const collectFolded of [undefined, false]) {
+      const ordinary = await executeCommand("pr-review.seat-prompt", {
+        stage: "1", domain: "audit", seat: "code-reviewer", diffFile,
+        ...(collectFolded === undefined ? {} : { collectFolded }),
+      }, context);
+      // Stage 1 without a fold is the ordinary collect seat: the budget block
+      // binds but the fold bullet is absent, and the security seat is allowed.
+      const prompt = promptOf(ordinary, "ordinary stage-1 seat");
+      expect(prompt).toContain("## Budget");
+      expect(prompt).not.toContain("Collect wave folded");
+      expect(prompt).toContain("Stage 1");
+    }
+
+    // A security seat outside a fold is an ordinary, accepted combination.
+    const securityStageTwo = await executeCommand("pr-review.seat-prompt", {
+      stage: "2", domain: "audit", seat: "code-reviewer", diffFile, security: true,
+    }, context);
+    promptOf(securityStageTwo, "unfolded stage-2 security seat");
   });
 
   test("unknown outcome after posting does not claim success or retry", async () => {

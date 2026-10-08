@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { constants } from "node:os";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import {
   createFsStore,
@@ -12,7 +13,7 @@ import {
   type ActivationAttestation,
   type ExecutionIdentity,
 } from "@mstar-harness/engine";
-import { refusalEnvelope } from "../envelope.js";
+import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
@@ -37,9 +38,124 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
   });
 }
 
+/**
+ * One refusal this family authors itself, before the engine is reached. It
+ * exists so the two input boundaries `session.recover` owns stay specific:
+ * the aggregated missing/exclusive facts carry one diagnostic per path, and a
+ * caller-supplied attestation path is validated as the caller input it is
+ * rather than being silently resolved against the process cwd.
+ */
+class RecoveryInputError extends Error {
+  constructor(readonly code: string, readonly status: "usage" | "refused", message: string) {
+    super(message);
+    this.name = "RecoveryInputError";
+  }
+}
+
+function requiredFact(path: string): RefusalDiagnostic {
+  return {
+    path,
+    code: "required",
+    message: path === "sessionId" ? "active recovery requires the main conversation session identity" : `${path} is required`,
+  };
+}
+
+/** The recovered cardinality facts, in the shared admission vocabulary. */
+const RECOVER_ALTERNATIVE_EXPECTED = "exactly one of priorSession | unowned=true";
+
+/** The recovered caller inputs of `session.recover`, all non-optional. */
+type RecoverInputs = Readonly<{
+  workflow: string;
+  priorSessionId: string | null;
+  reason: string;
+  attestationPath: string;
+  expect: string;
+  operation: string;
+  sessionId: string;
+  harness: string | undefined;
+}>;
+
+const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
+
+/**
+ * The ONE resolution of `session.recover`'s caller inputs. Every known absent
+ * or contradictory field becomes its own diagnostic, so the caller sees all
+ * of them in one refusal instead of discovering them one call at a time; the
+ * combined guard below then performs the actual narrowing, so the engine call
+ * reads real strings and never an assertion over a maybe-absent field.
+ *
+ * The `priorSession`/`unowned` source is ONE cardinality fact, reported with
+ * the same code, path and expected text shared admission publishes for the
+ * contract's `alternatives` entry — never as two independent required fields,
+ * which would misstate the contract as "both are mandatory".
+ */
+function resolveRecoverInputs(
+  data: z.infer<typeof recoverInput>,
+  sessionId: string | undefined,
+): { ok: true; inputs: RecoverInputs } | { ok: false; diagnostics: RefusalDiagnostic[] } {
+  const { workflow, priorSession, unowned, reason, attestation, expect, operation, harness } = data;
+  const sourceCount = Number(priorSession !== undefined) + Number(unowned === true);
+  const missing = [
+    ...(reason === undefined ? ["reason"] : []),
+    ...(attestation === undefined ? ["attestation"] : []),
+    ...(expect === undefined ? ["expect"] : []),
+    ...(operation === undefined ? ["operation"] : []),
+    ...(sessionId === undefined || sessionId.trim() === "" ? ["sessionId"] : []),
+  ];
+  const diagnostics: RefusalDiagnostic[] = [
+    ...missing.map(requiredFact),
+    ...(sourceCount === 1 ? [] : [{
+      path: "priorSession|unowned=true",
+      code: "alternative-required",
+      message: `${RECOVER_ALTERNATIVE_EXPECTED}; received ${sourceCount === 0 ? "none" : "priorSession | unowned=true"}`,
+      expected: RECOVER_ALTERNATIVE_EXPECTED,
+      received: sourceCount === 0 ? "none" : "priorSession | unowned=true",
+    }]),
+  ];
+  if (
+    diagnostics.length > 0 ||
+    reason === undefined || attestation === undefined || expect === undefined || operation === undefined ||
+    sessionId === undefined
+  ) {
+    return { ok: false, diagnostics };
+  }
+  return {
+    ok: true,
+    inputs: { workflow, priorSessionId: priorSession === undefined ? null : priorSession, reason, attestationPath: attestation, expect, operation, sessionId, harness },
+  };
+}
+
+/**
+ * The operator stop attestation read at this route's FILE consumer boundary.
+ * Each failure keeps its own specific fact instead of collapsing into one
+ * generic cause: a relative value is a usage refusal (caller input, never a
+ * read against the process cwd); an unreadable document keeps its real POSIX
+ * code and message; a malformed one names the parser failure. The engine still
+ * owns the document's SHAPE, so a readable but invalid attestation remains the
+ * engine's own typed refusal.
+ */
+function readAttestationDocument(pathValue: string): ActivationAttestation {
+  if (!isAbsolute(pathValue)) {
+    throw new RecoveryInputError("command.invalid-input", "usage", `--attestation must be an absolute path - got ${JSON.stringify(pathValue)}`);
+  }
+  let text: string;
+  try {
+    text = readFileSync(pathValue, "utf8");
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "session.recover.attestation-unreadable";
+    throw new RecoveryInputError(code, "refused", error instanceof Error ? error.message : String(error));
+  }
+  try {
+    return JSON.parse(text) as ActivationAttestation;
+  } catch (error) {
+    throw new RecoveryInputError("session.recover.attestation-malformed", "refused", `--attestation is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
   const runInput = z.object({ workflow: z.string().min(1), role: z.enum(SESSION_ROLES), argv: z.array(z.string()).optional(), harness: z.string().min(1).optional() });
-  const recoverInput = z.object({ workflow: z.string().min(1), priorSession: z.string().min(1).optional(), unowned: z.boolean().optional(), reason: z.string().min(1).optional(), attestation: z.string().min(1).optional(), expect: z.string().min(1).optional(), operation: z.string().min(1).optional(), harness: z.string().min(1).optional() });
   return [
     command({
       id: "session.run",
@@ -117,50 +233,36 @@ export function getSessionCommandDefinitions(): readonly CommandDefinition[] {
       async execute(raw, context: InvocationContext) {
         const parsed = recoverInput.safeParse(raw);
         if (!parsed.success) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "Invalid input.", diagnostics: decodeInputDiagnostics(parsed.error, raw) });
-        const { workflow, priorSession, unowned, reason, attestation, expect, operation, harness } = parsed.data;
-        const sourceCount = Number(priorSession !== undefined) + Number(unowned === true);
-        const missing = [
-          ...(sourceCount === 0 ? ["priorSession", "unowned"] : []),
-          ...(reason === undefined ? ["reason"] : []),
-          ...(attestation === undefined ? ["attestation"] : []),
-          ...(expect === undefined ? ["expect"] : []),
-          ...(operation === undefined ? ["operation"] : []),
-          ...(context.sessionId === undefined || context.sessionId.trim() === "" ? ["sessionId"] : []),
-        ];
-        const exclusive = sourceCount > 1 ? ["priorSession", "unowned"] : [];
-        if (missing.length > 0 || exclusive.length > 0) {
-          const diagnostics = [
-            ...missing.map((field) => ({
-              path: field,
-              code: "required",
-              message: field === "sessionId"
-                ? "active recovery requires the main conversation session identity"
-                : `${field} is required`,
-            })),
-            ...exclusive.map((field) => ({
-              path: field,
-              code: "exclusive",
-              message: `exactly one of priorSession or unowned may be supplied`,
-            })),
-          ];
+        const resolved = resolveRecoverInputs(parsed.data, context.sessionId);
+        if (!resolved.ok) {
           return refusalEnvelope({
             command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2,
             message: "session recover inputs are incomplete or mutually exclusive",
-            diagnostics,
+            diagnostics: resolved.diagnostics,
           });
         }
         try {
+          const { workflow, priorSessionId, reason, attestationPath, expect, operation, sessionId, harness } = resolved.inputs;
           const root = resolveProcessHarnessDir(context.cwd, harness);
           if (root === null) return refusalEnvelope({ command: "session.recover", status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
-          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator" };
-          const parsedAttestation = JSON.parse(readFileSync(attestation, "utf8")) as ActivationAttestation;
+          const identity: ExecutionIdentity = { source: context.host === undefined ? "local" : "host", sessionId, workflowId: workflow, role: "coordinator" };
+          const parsedAttestation = readAttestationDocument(attestationPath);
           const contextForCaller = executionContextFor({ harnessDir: root }, identity);
           const receipt = await recoverExecutionCoordinator(contextForCaller, {
-            expected: expect as never, operationId: operation, priorSessionId: unowned ? null : priorSession!, reason,
+            expected: expect as never, operationId: operation, priorSessionId, reason,
             attestation: parsedAttestation,
           });
           return ok("session.recover", receipt);
         } catch (error) {
+          if (error instanceof RecoveryInputError) {
+            return refusalEnvelope({
+              command: "session.recover",
+              status: error.status,
+              code: error.code,
+              exitCode: error.status === "usage" ? 2 : 1,
+              message: error.message,
+            });
+          }
           return engineRefusal("session.recover", error);
         }
       },
