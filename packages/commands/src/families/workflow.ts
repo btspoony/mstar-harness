@@ -10,7 +10,8 @@ import {
   resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore,
   showPrepareWorkflow,
   type ActivationAttestation,
-  type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
+  type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence,
+  type WorkflowExecutionOperation, type WorkflowExecutionPolicy,
 } from "@mstar-harness/engine";
 import { redactSecrets } from "@mstar-harness/engine/src/audit";
 import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
@@ -167,6 +168,21 @@ function parseWorkflowJson<T>(text: string, label: string, code: string): T {
       { code, details: { parser: diagnostic } },
     );
   }
+}
+const workflowExecutionPolicySchema = z.object({
+  plan_parallelism: z.unknown().optional(),
+  worktree_mode: z.unknown().optional(),
+  push_policy: z.unknown().optional(),
+}).passthrough();
+
+function parseWorkflowExecutionPolicy(text: string): WorkflowExecutionPolicy {
+  const parsed = workflowExecutionPolicySchema.safeParse(
+    parseWorkflowJson<unknown>(text, "execution policy file", "workflow.execution-policy.file-malformed"),
+  );
+  if (!parsed.success) {
+    throw new StoreError("coordination.invalid-input", "an execution-policy operation needs a policy object");
+  }
+  return parsed.data;
 }
 function jsonParseDiagnostic(error: unknown): { cause: string; location?: string } {
   const message = error instanceof Error ? error.message : "";
@@ -702,8 +718,8 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           : transition.name === "lifecycle"
             ? input.status === undefined || input.reason === undefined || !(WORKFLOW_LIFECYCLE_STATUSES as readonly string[]).includes(input.status) ? (() => { throw new Error("lifecycle requires a supported status and reason") })() : { kind: "lifecycle", status: input.status as never, reason: input.reason }
             : transition.name === "execution-policy"
-              ? { kind: "execution-policy", policy: parseWorkflowJson<unknown>(
-                readFileSync(absolute(input.file, "file"), "utf8"), "execution policy file", `${id}.file-malformed`,
+              ? { kind: "execution-policy", policy: parseWorkflowExecutionPolicy(
+                readFileSync(absolute(input.file, "file"), "utf8"),
               ) }
               : { kind: "integration-worktree", path: absolute(input.path, "path") };
         const identity: ExecutionIdentity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" };

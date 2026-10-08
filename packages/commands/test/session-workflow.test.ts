@@ -60,14 +60,14 @@ describe("session and workflow command families", () => {
     const evidence = await executeCommand("workflow.evidence", {
       workflow: "wf-malformed", file: malformedFile, harness,
     }, context);
-    expect(evidence).toMatchObject({ status: "refused", code: "workflow.evidence.file-malformed", recovery: expect.stringContaining("mstar workflow evidence") });
+    expect(evidence).toMatchObject({ status: "refused", code: "workflow.evidence.file-malformed", details: { recovery: expect.stringContaining("mstar workflow evidence") } });
     expect(JSON.stringify(evidence)).not.toContain(secret);
     expect(JSON.stringify(evidence)).not.toContain("workflow adopt-terminal --attestation");
 
     const policy = await executeCommand("workflow.execution-policy", {
       workflow: "wf-malformed", file: malformedFile, harness,
     }, context);
-    expect(policy).toMatchObject({ status: "refused", code: "workflow.execution-policy.file-malformed", recovery: expect.stringContaining("mstar workflow execution-policy") });
+    expect(policy).toMatchObject({ status: "refused", code: "workflow.execution-policy.file-malformed", details: { recovery: expect.stringContaining("mstar workflow execution-policy") } });
     expect(JSON.stringify(policy)).not.toContain(secret);
     expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
 
@@ -94,7 +94,7 @@ describe("session and workflow command families", () => {
     }, context);
     expect(evidence).toMatchObject({
       status: "refused", code: "ENOENT",
-      recovery: expect.stringContaining("mstar workflow evidence --workflow <id> --file <absolute-json>"),
+      details: { recovery: expect.stringContaining("mstar workflow evidence --workflow <id> --file <absolute-json>") },
     });
     expect(JSON.stringify(evidence)).not.toContain("workflow adopt-terminal --attestation");
 
@@ -103,7 +103,7 @@ describe("session and workflow command families", () => {
     }, context);
     expect(policy).toMatchObject({
       status: "refused", code: "ENOENT",
-      recovery: expect.stringContaining("mstar workflow execution-policy --workflow <id> --file <absolute-json>"),
+      details: { recovery: expect.stringContaining("mstar workflow execution-policy --workflow <id> --file <absolute-json>") },
     });
     expect(JSON.stringify(policy)).not.toContain("workflow adopt-terminal --attestation");
   });
