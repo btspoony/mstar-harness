@@ -1,13 +1,12 @@
 /**
- * Bounded-resolution scenario ledger and deterministic call-depth witnesses.
+ * Bounded-resolution selected behavioral witnesses and deterministic call-depth tests.
  *
- * This suite is an evaluation consumer of the published command registry: it
- * inventories every canonical CLI/MCP definition and every supported
- * slash-command document with a semantic scenario disposition, then proves a
- * selected subset of routes with real handlers over isolated local fixtures.
- * It is not a production authority and does not claim model compliance; the
- * aggregate <=3-call compliance gate stays unverified until an unchanged
- * scenario set supplies post-change evidence from real interactions.
+ * This suite exercises selected public registry descriptors and handler paths
+ * against isolated local fixtures. It does not inventory the full command
+ * registry or slash-command documents. It is not a production authority and
+ * does not claim model compliance; aggregate <=3-call compliance remains
+ * unverified until an unchanged scenario set supplies post-change evidence
+ * from real interactions.
  *
  * Accounting rule (one instruction = one budget): every causally attributable
  * model-visible call counts — reads, help, schema queries, failed attempts.
