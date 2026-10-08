@@ -423,7 +423,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   } catch (error) {
     throw new CoordinationError(
       "coordination.local-store-required",
-      "No artifact store is resolvable from the current working directory. Run mstar status validate from the control harness root.",
+      "No artifact store is resolvable from the current working directory. Run mstar status validate. Then inspect the control harness root.",
       { harness_root: harnessRoot, cwd: resolve(process.cwd()), cause: errorMessage(error) },
     );
   }
@@ -431,7 +431,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   if (typeof root !== "string") {
     throw new CoordinationError(
       "coordination.local-store-required",
-      "The active ArtifactStore has no local root; this operation requires the canonical FsStore. Run mstar status validate from the control harness root.",
+      "The active ArtifactStore has no local root; this operation requires the canonical FsStore. Run mstar status validate. Then inspect the control harness root.",
       { harness_root: harnessRoot },
     );
   }
@@ -440,7 +440,7 @@ function localStore(harnessRoot: string): ArtifactStore & { root: string } {
   if (actual !== expected) {
     throw new CoordinationError(
       "coordination.path-mismatch",
-      "The active ArtifactStore root does not match the resolved control harness root. Run mstar status validate from the resolved control harness root.",
+      "The active ArtifactStore root does not match the resolved control harness root. Run mstar status validate. Then inspect the resolved control harness root.",
       { expected, actual },
     );
   }
@@ -489,7 +489,7 @@ export function resolveProcessHarnessDir(cwd: string = process.cwd(), harnessDir
     if (linked) {
       throw new CoordinationError(
         "coordination.not-in-git",
-        "The linked checkout's main worktree cannot be read. Run mstar status validate from the main worktree at the control harness root.",
+        "The linked checkout's main worktree cannot be read. Run mstar status validate. Then inspect the main worktree at the control harness root.",
         { cwd: start, marker: join(dir, ".git") },
       );
     }
@@ -901,7 +901,7 @@ export async function resolvePlanScope(input: PlanScopeInput, cwd: string = proc
   if (!isPlainObject(input)) throw invalidInput("Scope input must name a workflow and plan. Supply the expected API fields and inspect the target with mstar status validate.");
   assertExactKeys(input, ["workflowId", "planId", "harnessDir"], "scope input");
   if (!isNonEmptyString(input.workflowId) || !isNonEmptyString(input.planId)) {
-    throw invalidInput("workflowId and planId are required; supply them from mstar plan show --plan <plan-id>");
+    throw invalidInput("workflowId and planId are required. The addressed row is shown by mstar plan show --plan <plan-id>.");
   }
   const workflowId = safePlanId(input.workflowId, "workflowId");
   const planId = safePlanId(input.planId, "planId");
@@ -1028,7 +1028,7 @@ function createSessionEnvelope(session: CoordinationSession): string {
     if (code === "EEXIST") {
       throw new CoordinationError(
         "coordination.identity-mismatch",
-        "Session envelope already exists; resume the recorded envelope with mstar plan bind --resume <session-file>",
+        "Session envelope already exists. The recorded envelope is addressed by mstar plan bind --resume <session-file>.",
         { path },
       );
     }
@@ -1736,7 +1736,7 @@ async function bindCoordinatorSession(
       if (existing !== undefined) {
         throw new CoordinationError(
           "coordination.identity-mismatch",
-          "Workflow already has a coordinator. Use mstar plan bind --resume <session-file>, or mstar workflow recover-coordinator only when the recorded coordinator is stopped.",
+          "Workflow already has a coordinator. Inspect the active binding with mstar status validate. A stopped coordinator can be recovered with mstar workflow recover-coordinator.",
           { holder: existing.session_id, session_file: existing.session_file },
         );
       }
@@ -1765,7 +1765,7 @@ function requireProcessRoot(cwd: string, harnessDir?: string): string {
   if (root === null) {
     throw new CoordinationError(
       "coordination.harness-not-found",
-      "No control harness root is resolvable from this working directory. Run mstar status validate from the control harness root, or pass that root explicitly to the caller.",
+      "No control harness root is resolvable from this working directory. Run mstar status validate. The caller must address the resolved control harness root.",
       { cwd: resolve(cwd) },
     );
   }
@@ -2546,7 +2546,7 @@ async function mutateResidualAdd(
   request: ResidualAddCoordinationRequest,
 ): Promise<CoordinationResult> {
   if (!Array.isArray(request.entries) || request.entries.length === 0) {
-    throw invalidInput("residual-add requires at least one entry; provide caller-supplied issue entries for the findings, then inspect the plan with mstar plan show --plan <plan-id>");
+    throw invalidInput("residual-add requires at least one entry. Caller-supplied issue entries are required; inspect the addressed row with mstar plan show --plan <plan-id>.");
   }
   const entries = request.entries;
   const context = planStoreContext(scope);
@@ -2945,7 +2945,7 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
         : String(error);
   return new CoordinationError(
     "coordination.git-unavailable",
-    "Cannot read Git state. Restore access to the Git checkout and retry; mstar status validate can inspect workflow registration but cannot repair Git availability.",
+    "Git state cannot be read. Inspect workflow registration with mstar status validate. Git availability requires a readable checkout.",
     { path: cwd, command: `git ${args.join(" ")}`, cause },
   );
 }
@@ -3043,12 +3043,12 @@ export function captureGitProofWitness(
   const common = gitRead(repository, ["rev-parse", "--git-common-dir"]);
   const head = gitRead(repository, ["rev-parse", "HEAD"]);
   if (gitDir === undefined || common === undefined || head === undefined) {
-    throw new CoordinationError(refusal, "Cannot read the Git checkout. Restore the recorded checkout or retry against its current state; inspect registered scope with mstar plan show --plan <plan-id>.", { repository });
+    throw new CoordinationError(refusal, "Cannot read the Git checkout. Inspect registered scope with mstar plan show --plan <plan-id>.", { repository });
   }
   const commonDir = canonicalTarget(resolve(repository, common));
   const current = currentGitHead(gitDir, commonDir);
   if (current.head !== head) {
-    throw new CoordinationError(refusal, "Git HEAD changed between reads. Restore the recorded checkout or retry against its current state; inspect registered scope with mstar plan show --plan <plan-id>.", { repository, expected: head, actual: current.head });
+    throw new CoordinationError(refusal, "Git HEAD changed between reads. Inspect registered scope with mstar plan show --plan <plan-id>.", { repository, expected: head, actual: current.head });
   }
   return {
     repository, refusal, gitDir, commonDir,
@@ -3070,7 +3070,7 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
         canonicalTarget(routing[1]!) !== witness.commonDir) {
       throw new CoordinationError(
         witness.refusal,
-        "Git checkout routing changed. Restore the recorded checkout or retry against its current repository; inspect source registration with mstar plan show --plan <plan-id>.",
+        "Git checkout routing changed. Inspect source registration with mstar plan show --plan <plan-id>.",
         { repository: witness.repository },
       );
     }
@@ -3087,11 +3087,11 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
     ) return;
   } catch (error) {
     if (error instanceof CoordinationError) throw error;
-    throw new CoordinationError(witness.refusal, "Cannot re-read Git identity. Restore the recorded checkout and retry; inspect source registration with mstar plan show --plan <plan-id>.", { repository: witness.repository });
+    throw new CoordinationError(witness.refusal, "Cannot re-read Git identity. Inspect source registration with mstar plan show --plan <plan-id>.", { repository: witness.repository });
   }
   throw new CoordinationError(
     witness.refusal,
-    "Git checkout identity, branch, HEAD, cleanliness, or operation state changed. Restore a clean recorded checkout or retry against current state; inspect source registration with mstar plan show --plan <plan-id>.",
+    "Git checkout identity, branch, HEAD, cleanliness, or operation state changed. Inspect source registration with mstar plan show --plan <plan-id>.",
     { repository: witness.repository, expected: witness.head, actual: current.head },
   );
 }
@@ -3110,7 +3110,7 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string, w
   if (checkout === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      "The recorded plan worktree is not a readable Git worktree. Restore that checkout before retrying mstar plan complete; inspect its registered scope with mstar plan show --plan <plan-id>.",
+      "The recorded plan worktree is not a readable Git worktree. Its registered scope is available with mstar plan show --plan <plan-id>.",
       { plan_id: planId, worktree_path: worktreePath },
     );
   }
@@ -3178,14 +3178,14 @@ async function assertFindingsClosed(
     const message = error instanceof Error ? error.message : String(error);
     throw new CoordinationError(
       "coordination.store",
-      "The issue store is unavailable, so findings authority cannot be read. Restore access to the canonical issue store and retry mstar plan complete; inspect the registered row with mstar plan show --plan <plan-id>.",
+      "The issue store is unavailable, so findings authority cannot be read. Inspect the registered row with mstar plan show --plan <plan-id>.",
       { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup, cause: message },
     );
   }
   if (!gate.ok) {
     throw new CoordinationError(
       "coordination.invalid-transition",
-      "Findings are open under the configured cleanup policy. Close or waive each finding with mstar issue close or mstar issue waive, then retry mstar plan complete.",
+      "Findings are open under the configured cleanup policy. Close or waive each finding through a supported issue lifecycle operation; inspect registered findings with mstar issue list and retry mstar plan complete.",
       { plan_id: scope.planId, findings_cleanup: prepared.findings_cleanup, violations: gate.violations.map((entry) => entry.code), violation_messages: gate.violations.map((entry) => entry.message) },
     );
   }
@@ -3645,7 +3645,7 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   const session = readSessionEnvelope(input.sessionPath);
   if (session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate; for an existing binding use mstar plan bind --resume <session-file> only after checking the recorded workflow.", {
+    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Existing bindings are resumed with mstar plan bind --resume <session-file> after checking the recorded workflow.", {
       role: session.role,
     });
   }
