@@ -487,6 +487,26 @@ function definition(verb: (typeof verbs)[number]): CommandDefinition<Input, unkn
   const payloads: Record<string, PayloadDescriptor> | undefined = verb === "worktree.check"
     ? { tracks: { schema: tracksSchema, help: "JSON array of {worktreePath, workingBranch}; the CLI passes the JSON string, MCP passes the object array" } }
     : undefined;
-  return { id, cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) }, input: schemas[verb], output: commandEnvelopeSchema, effects: item.effects, description: item.description, ...(payloads === undefined ? {} : { payloads }), execute: (input, context) => execute(id, input, context) };
+  const assignmentHeaderRequirement = {
+    name: "assignmentFile",
+    ownership: "caller" as const,
+    constraint: "the file must use a `## Assignment` header; assignment metadata is read only before the next `##` section, thematic `---`, or top-level `#` heading, so put Execute as, Delegation, and other assignment fields in that header",
+  };
+  return {
+    id,
+    cli: { path: item.path, aliases: [], arguments: item.args, options: item.options.map((option) => ({ ...option, required: false })) },
+    input: schemas[verb],
+    output: commandEnvelopeSchema,
+    effects: item.effects,
+    description: item.description,
+    ...(verb === "dispatch.validate" ? {
+      requirements: [
+        { ...assignmentHeaderRequirement, route: "cli" as const },
+        { ...assignmentHeaderRequirement, route: "mcp" as const },
+      ],
+    } : {}),
+    ...(payloads === undefined ? {} : { payloads }),
+    execute: (input, context) => execute(id, input, context),
+  };
 }
 export function getValidationCommandDefinitions(): readonly CommandDefinition[] { return verbs.map(definition); }

@@ -40,6 +40,8 @@ export type CommandRequirement = Readonly<{
   help?: string;
   tokenKind?: CommandTokenKind;
   constraint?: string;
+  required?: boolean;
+  condition?: Readonly<{ field: string; present?: boolean; equals?: string | boolean | number }>;
 }>;
 
 export type CommandEffect = "read" | "validate" | "write" | "stdin" | "process" | "service" | "browser";

@@ -24,7 +24,7 @@ import { getProcessCommandDefinitions } from "./families/process.js";
 import { getDashboardCommandDefinitions } from "./families/dashboard.js";
 import { getLocalCommandDefinitions } from "./families/local.js";
 import { getReportCommandDefinitions } from "./families/report.js";
-import { getSchemaCommandDefinitions } from "./families/schema.js";
+import { getCommandSchemas, getSchemaCommandDefinitions } from "./families/schema.js";
 
 
 const failureEnvelopeSchema = z.object({
@@ -166,6 +166,7 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getReportCommandDefinitions(),
 ];
 validateCommandDefinitions(canonicalDefinitions);
+const commandSchemasById = new Map(getCommandSchemas(canonicalDefinitions).map((descriptor) => [descriptor.id, descriptor] as const));
 
 export function getCommandDefinitions(): readonly CommandDefinition[] {
   return canonicalDefinitions;
@@ -229,16 +230,20 @@ function issueMessageSanitizer(input: unknown): (message: string) => string {
   };
 }
 
-function inputDiagnostic(issue: z.ZodError["issues"][number], sanitize: (message: string) => string): RefusalDiagnostic {
-  const path = issue.path.reduce((path: string, part: string | number | symbol) =>
-    typeof part === "number" ? `${path}[${String(part)}]` : path === "" ? String(part) : `${path}.${String(part)}`,
-  "");
+function inputDiagnostic(
+  issue: z.ZodError["issues"][number],
+  sanitize: (message: string) => string,
+  input: unknown,
+): RefusalDiagnostic {
+  const path = inputPath(issue);
   const index = issue.path.find((part) => typeof part === "number");
-  const message = sanitize(issue.message);
+  const facts = rejectionFacts(issue, input);
   return {
     path,
     code: issue.code,
-    message,
+    message: sanitize(issue.message),
+    expected: facts.expected,
+    received: facts.received,
     ...(typeof index === "number" ? { index } : {}),
   };
 }
@@ -280,44 +285,79 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
   if (definition === undefined) {
     return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
   }
-  const rawInput = input !== null && typeof input === "object" ? input as Record<string, unknown> : {};
+  const isInputObject = input !== null && typeof input === "object" && !Array.isArray(input);
+  const rawInput = isInputObject ? input as Record<string, unknown> : {};
+  const contract = commandSchemasById.get(definition.id)!;
+  let effectiveInput: unknown = input;
+  if (isInputObject) {
+    let effectiveObject = rawInput;
+    for (const [key, value] of Object.entries(contract.defaults)) {
+      if (effectiveObject[key] === undefined) {
+        if (effectiveObject === rawInput) effectiveObject = { ...rawInput };
+        effectiveObject[key] = value;
+      }
+    }
+    effectiveInput = effectiveObject;
+  }
+  const effectiveRecord = isInputObject ? effectiveInput as Record<string, unknown> : {};
+  const parsed = definition.input.safeParse(effectiveInput);
+  const issues = parsed.success ? [] : parsed.error.issues;
+  const sanitize = issueMessageSanitizer(effectiveInput);
+  const diagnostics = issues.map((issue) => inputDiagnostic(issue, sanitize, effectiveInput));
   const selector = definition.cli.options.find((option) => option.context === "sessionId");
-  const selectorValue = selector === undefined ? undefined : rawInput[selector.key];
-  if (selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "")) {
-    return refusalEnvelope({
-      command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message: `${selector?.flags.split(/[ <]/)[0] ?? selector?.key} must be a non-empty string`,
-      rejected: {
-        path: selector?.flags.split(/[ <]/)[0] ?? selector?.key ?? "session",
+  const selectorValue = selector === undefined ? undefined : effectiveRecord[selector.key];
+  const selectorInvalid = selectorValue !== undefined && (typeof selectorValue !== "string" || selectorValue.trim() === "");
+  const selectorDiagnostic = selectorInvalid && selector !== undefined && !diagnostics.some((entry) => entry.path === selector.key)
+    ? [{
+        path: selector.key,
+        code: "invalid_session_id",
+        message: `${selector.flags.split(/[ <]/)[0]} must be a non-empty string`,
         expected: "non-empty string",
         received: typeof selectorValue === "string" ? JSON.stringify(selectorValue) : typeof selectorValue,
-      },
-    });
-  }
-  const parsed = definition.input.safeParse(input);
-  if (!parsed.success) {
-    const sanitize = issueMessageSanitizer(input);
-    const diagnostics = parsed.error.issues.map((issue) => inputDiagnostic(issue, sanitize));
-    const hasMoreIssues = parsed.error.issues.length > 20;
-    const joinedMessage = hasMoreIssues
-      ? `${parsed.error.issues.slice(0, 20).map((entry) => entry.message).join("; ")}\n…and ${parsed.error.issues.length - 20} more issues — full diagnostics in details.diagnostics.`
-      : parsed.error.issues.map((entry) => entry.message).join("; ");
-    const issue = parsed.error.issues[0];
-    const facts = rejectionFacts(issue, input);
-    const optionKey = issue.path.map(String).join(".");
+      }]
+    : [];
+  const conditionalRequired = contract.requirements.filter((entry) => {
+    if (!entry.required || entry.condition === undefined) return false;
+    const trigger = effectiveRecord[entry.condition.field];
+    return entry.condition.equals !== undefined
+      ? trigger === entry.condition.equals
+      : entry.condition.present === false ? trigger === undefined : trigger !== undefined;
+  });
+  const required = [...new Set([...contract.required, ...conditionalRequired.map((entry) => entry.name)])];
+  const missing = required.filter((key) => effectiveRecord[key] === undefined && !diagnostics.some((entry) => entry.path === key));
+  const requiredDiagnostics = missing.map((key) => ({
+    path: key,
+    code: "required",
+    message: `${key} is required`,
+    expected: "present",
+    received: "undefined",
+  }));
+  const allDiagnostics = [...diagnostics, ...requiredDiagnostics, ...selectorDiagnostic];
+  if (!parsed.success || missing.length > 0 || selectorInvalid) {
+    const issue = issues[0];
+    const facts = issue === undefined ? undefined : rejectionFacts(issue, effectiveInput);
+    const optionKey = issue?.path.map(String).join(".");
     const option = definition.cli.options.find((entry) => entry.key === optionKey);
-    const rejected = !hasMoreIssues && facts.path !== "" ? {
+    const rejected = facts !== undefined && facts.path !== "" ? {
       path: option?.flags.split(/[ <]/)[0] ?? facts.path,
       expected: facts.expected,
       received: facts.received,
-    } : undefined;
-    const message = hasMoreIssues
-      ? `Rejected ${option?.flags.split(/[ <]/)[0] ?? facts.path}: expected ${facts.expected}; received ${facts.received}\n${sanitize(joinedMessage)}`
-      : sanitize(joinedMessage);
+    } : selectorDiagnostic[0] !== undefined ? {
+      path: selector?.flags.split(/[ <]/)[0] ?? selectorDiagnostic[0].path,
+      expected: selectorDiagnostic[0].expected,
+      received: selectorDiagnostic[0].received,
+    } : missing.length === 1 ? { path: missing[0]!, expected: "present", received: "undefined" } : undefined;
+    const message = allDiagnostics.map((entry) => entry.message).join("; ");
     return refusalEnvelope({
       command: id, status: "usage", code: "command.invalid-input", exitCode: 2,
-      message,
-      diagnostics,
+      message: sanitize(message),
+      diagnostics: allDiagnostics,
+      details: {
+        required,
+        defaults: contract.defaults,
+        requirements: contract.requirements,
+        conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
+      },
       ...(rejected === undefined ? {} : { rejected }),
     });
   }
@@ -326,6 +366,18 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     const envelope = await definition.execute(parsed.data, request);
     if (!definition.output.safeParse(envelope).success) {
       return { version: 1, command: id, status: "error", code: "command.output-invalid", exitCode: 1, message: "handler returned an invalid envelope" };
+    }
+    if (envelope.status === "usage" || envelope.status === "refused") {
+      return {
+        ...envelope,
+        details: {
+          ...envelope.details,
+          required,
+          defaults: contract.defaults,
+          requirements: contract.requirements,
+          conditionalRequirements: contract.requirements.filter((entry) => entry.condition !== undefined),
+        },
+      };
     }
     return envelope;
   } catch (error) {

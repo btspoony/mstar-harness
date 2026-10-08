@@ -218,13 +218,21 @@ export function renderCommandContract(definition: CommandDefinition, route: "cli
     const optionTokens = descriptor.cli.options.map((option) => ` ${option.flags}`).join("");
     lines.push(`CLI: mstar ${descriptor.cli.path.join(" ")}${argumentTokens}${optionTokens}`);
   }
+  const requiredLine = descriptor.required.length === 0 ? undefined : `Required inputs: ${descriptor.required.join(", ")}`;
+  if (requiredLine !== undefined) lines.push(requiredLine);
+  const defaultEntries = Object.entries(descriptor.defaults);
+  if (defaultEntries.length > 0) {
+    lines.push(`Safe defaults: ${defaultEntries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(", ")}`);
+  }
   for (const [ownership, label] of [["caller", "Caller-supplied"], ["derivable", "Derived"]] as const) {
     const entries = descriptor.requirements.filter((entry) => entry.ownership === ownership && entry.route === route);
     if (entries.length === 0) continue;
     const parts = entries.map((entry) => {
-      const description = [entry.help, entry.constraint === undefined ? undefined : `constraint: ${entry.constraint}`]
-        .filter((value): value is string => value !== undefined)
-        .join("; ");
+      const description = [
+        entry.help,
+        entry.constraint === undefined ? undefined : `constraint: ${entry.constraint}`,
+        entry.condition === undefined ? undefined : `when ${entry.condition.field}${entry.condition.equals !== undefined ? `=${JSON.stringify(entry.condition.equals)}` : entry.condition.present === false ? " is absent" : " is present"}`,
+      ].filter((value): value is string => value !== undefined).join("; ");
       return description === "" ? entry.name : `${entry.name} (${description})`;
     });
     lines.push(`${label}: ${parts.join(", ")}`);
@@ -597,9 +605,7 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
   }
   if (command.registeredArguments.length === 0) {
     for (const argument of definition.cli.arguments) {
-      const token = argument.variadic
-        ? argument.required ? `<${argument.key}...>` : `[${argument.key}...]`
-        : argument.required ? `<${argument.key}>` : `[${argument.key}]`;
+      const token = argument.variadic ? `[${argument.key}...]` : `[${argument.key}]`;
       command.argument(token, argument.key);
     }
   }
@@ -618,10 +624,7 @@ function configureLeaf(command: Command, definition: CommandDefinition): void {
       const appendValue = option.variadic
         ? (value: string, previous: string[] = []) => [...previous, value]
         : undefined;
-      if (option.required) {
-        if (appendValue) command.requiredOption(flags, description, appendValue);
-        else command.requiredOption(flags, description);
-      } else if (appendValue) {
+      if (appendValue) {
         command.option(flags, description, appendValue);
       } else {
         command.option(flags, description);
