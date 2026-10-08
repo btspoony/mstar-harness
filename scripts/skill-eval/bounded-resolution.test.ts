@@ -22,13 +22,26 @@
  * the bound. Universal/model compliance stays unverified until an authorized
  * real-agent run records traces.
  */
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { describe, expect, test, vi } from "bun:test";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { getCommandDefinitions } from "../../packages/commands/src/index.ts";
 import { canonicalJson, sha256Hex, type EvalManifest } from "./manifest.ts";
 import { buildReport } from "./report.ts";
 import { executeManifest, manifestIntegrityErrors, selectCases, type RunnerIo, type SpawnFn, type SpawnRequest } from "./runner.ts";
+import {
+  MCP_GUESS_PATH_ACTIONS,
+  classifyMcpResponse,
+  createMcpClientLaunch,
+  createMcpRpcDispatcher,
+  mapMcpExchangeEvent,
+  mapMcpInterruptedEvent,
+  mapMcpInvocationStartedEvent,
+  summarizeMcpExchanges,
+  type McpExchangeOutcome,
+  type McpJsonRpcResponse,
+} from "./mcp-client-launch.ts";
 
 const MANIFEST_PATH = resolve(import.meta.dir, "bounded-resolution.manifest.json");
 const FROZEN_CASES_PATH = resolve(import.meta.dir, "cases.json");
@@ -50,6 +63,12 @@ const SUPPLIED_STALE_TOKEN = `sha256:${"0".repeat(64)}`;
 const VERSIONED_DOCUMENT = JSON.stringify({ version: RECORDED_TOKEN, payload: { issueId: "I-000001", revision: 1 } });
 
 function fixtureFilesFor(caseId: string): { path: string; content: string }[] {
+  if (caseId === "bounded-res-mcp-guess-path") {
+    return [
+      { path: "AGENTS.md", content: "# Bounded-resolution MCP fixture (synthetic evaluation input).\n" },
+      { path: "mcp.json", content: "{\"command\":\"node\",\"args\":[\"${MSTAR_CLI_PATH}\",\"mcp\"]}\n" },
+    ];
+  }
   const store: Record<string, string> = {
     "bounded-res-schema-read": '{"issueId":"I-000001","revision":1}',
     "bounded-res-write-stale-constraint": VERSIONED_DOCUMENT,
@@ -438,12 +457,34 @@ const EXPECTED_OUTCOME: Record<string, string> = {
   "bounded-res-replay-partial": "outcome: upgrade still unfinished; the read-only replay withheld the write, receipt phase activated (sources pending) remains the recorded state\nnext: apply the sources phase, then retire",
   "bounded-res-slash-iteration-cold": "outcome: requested missing bootstrap facts",
   "bounded-res-slash-review-cold": "outcome: requested missing review facts",
+  "bounded-res-mcp-guess-path": "error -32602: Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog.\ncorrected call succeeded",
+};
+
+const mcpCall = (id: string | null, name: string, failed = false): string => {
+  const method = name === "tools/list" ? "tools/list" : "tools/call";
+  const requestId = Number(id?.slice(id.lastIndexOf("-") + 1) ?? 1);
+  const response: McpJsonRpcResponse = failed
+    ? {
+        jsonrpc: "2.0",
+        id: requestId,
+        error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." },
+      }
+    : method === "tools/list"
+      ? { jsonrpc: "2.0", id: requestId, result: { tools: [{ name: "mstar_schema" }] } }
+      : { jsonrpc: "2.0", id: requestId, result: { content: [{ type: "text", text: "CaptureInput schema" }] } };
+  const outcome = classifyMcpResponse({
+    identity: id,
+    method,
+    name,
+    requestId,
+    response,
+    expectedToolName: method === "tools/list" ? "mstar_schema" : undefined,
+  });
+  return JSON.stringify(mapMcpExchangeEvent(outcome));
 };
 
 function finalFor(caseId: string): string {
   const lines: string[] = [];
-  // The adversarial twin deliberately emits a success-looking marker with the
-  // WRONG action: the oracle must catch it (budget stays valid).
   if (caseId === "bounded-res-adversarial-wrong-action") lines.push("SUCCESS-MARKER");
   const grouped = GROUPED_FINALS[caseId];
   if (grouped !== undefined) lines.push(grouped);
@@ -454,6 +495,15 @@ function finalFor(caseId: string): string {
 function scriptFor(caseId: string, fixtureText?: string): { events: string; final: string } {
   const final = finalFor(caseId);
   switch (caseId) {
+    case "bounded-res-mcp-guess-path":
+      return {
+        events: turn([
+          mcpCall("mcp-1", "mstar_schem", true),
+          mcpCall("mcp-2", "tools/list"),
+          mcpCall("mcp-3", "mstar_schema"),
+        ]),
+        final,
+      };
     case "bounded-res-lease-boundary": {
       const text = fixtureText ?? fixtureFilesFor(caseId).find((f) => f.path === "store/fixture.json")!.content;
       const { integration_merge_lease: lease } = JSON.parse(text) as {
@@ -474,10 +524,10 @@ function scriptFor(caseId: string, fixtureText?: string): { events: string; fina
         final,
       };
     case "bounded-res-schema-read":
+      return {
       // The trace observes the REAL fixture reads the outcome claims: the
       // published contract (its required field list) and the stored issue
       // document (its values) — not placeholder reads.
-      return {
         events: turn([
           invocation("item_1", ["cat", "contract/capture-input.json"]),
           invocation("item_2", ["cat", "store/fixture.json"]),
@@ -495,6 +545,7 @@ function scriptFor(caseId: string, fixtureText?: string): { events: string; fina
       return { events: turn([invocation("item_1")]), final };
   }
 }
+
 
 function syntheticSpawn(
   io: RunnerIo,
@@ -1246,5 +1297,249 @@ describe("bounded-resolution scenario set: consumed by the existing evaluator", 
     expect(markdown).toContain("Bounded-resolution accounting");
     // Declared contexts travel with the scenarios; the cold-start arms are cold.
     expect(report.report.boundedResolution.unitsDeclaredCold).toBeGreaterThanOrEqual(1);
+  });
+  test("mcp-guess-path dispatcher settles pending requests on close and timeout", async () => {
+    const closed = createMcpRpcDispatcher(() => {});
+    const onClose = closed.request("tools/list", {});
+    closed.stop(new Error("MCP server closed"));
+    await expect(onClose.response).rejects.toThrow("MCP server closed");
+    expect(() => closed.request("tools/list", {})).toThrow("MCP server closed");
+
+    vi.useFakeTimers();
+    try {
+      const timedOut = createMcpRpcDispatcher(() => {});
+      const onTimeout = timedOut.request("tools/call", { name: "mstar_schema" });
+      setTimeout(() => timedOut.stop(new Error("MCP server request deadline exceeded")), 1);
+      vi.advanceTimersByTime(1);
+      await expect(onTimeout.response).rejects.toThrow("MCP server request deadline exceeded");
+      expect(() => timedOut.request("tools/list", {})).toThrow("MCP server request deadline exceeded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  test("mcp-guess-path real adapter maps initialize and tool-call exchanges", async () => {
+    const root = join(tmpdir(), `mcp-adapter-${process.pid}-${Date.now()}`);
+    mkdirSync(root, { recursive: true });
+    try {
+      const serverPath = join(root, "server.mjs");
+      writeFileSync(serverPath, [
+        'import readline from "node:readline";',
+        'const input = readline.createInterface({ input: process.stdin });',
+        'input.on("line", (line) => {',
+        '  const request = JSON.parse(line);',
+        '  if (request.id === undefined) return;',
+        '  const result = request.method === "initialize"',
+        '    ? { serverInfo: { name: "fixture", version: "1" }, capabilities: { tools: {} } }',
+        '    : { content: [{ type: "text", text: "CaptureInput schema" }] };',
+        '  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");',
+        '});',
+      ].join("\n"));
+      writeFileSync(join(root, "mcp.json"), JSON.stringify({ command: "node", args: ["${MSTAR_CLI_PATH}"] }));
+      const output = join(root, "events.jsonl");
+      const final = join(root, "final.md");
+      const launch = createMcpClientLaunch({
+        cliPath: serverPath,
+        nodePath: "node",
+        actions: [{ method: "tools/call", name: "mstar_schema", arguments: { type: "CaptureInput" } }],
+      });
+      const result = await launch({
+        file: "node",
+        argv: ["mstar", "--output-last-message", final],
+        cwd: root,
+        stdinFile: join(root, "prompt.txt"),
+        stdoutFile: output,
+        stderrFile: join(root, "stderr.txt"),
+        timeoutMs: 5_000,
+      });
+      expect(result).toEqual({ code: 0, signal: null, timedOut: false, spawnError: null });
+      const events = readFileSync(output, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      const calls = events.filter((event) => event.type === "item.completed").map((event) => event.item.mcp_tool_call);
+      expect(calls).toEqual([
+        { id: "mcp-2", method: "tools/call", name: "mstar_schema", status: "completed", exit_code: 0 },
+      ]);
+      expect(events.at(-1)?.type).toBe("turn.completed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+
+  test("mcp-guess-path case is selected and its mapped call evidence is graded honestly", async () => {
+    const selected = selectCases(manifest, "dev").find((item) => item.id === "bounded-res-mcp-guess-path");
+    expect(selected).toBeDefined();
+    expect(MCP_GUESS_PATH_ACTIONS).toEqual([
+      { method: "tools/call", name: "mstar_schem" },
+      { method: "tools/list" },
+      { method: "tools/call", name: "mstar_schema", arguments: { type: "CaptureInput" } },
+    ]);
+    expect(manifestText).toContain("failed call mstar_schem");
+
+    const caseManifest = cloneManifest();
+    caseManifest.cases = caseManifest.cases.filter((item) => item.id === "bounded-res-mcp-guess-path" || item.split === "heldout");
+    type InvalidResponse = "missing-outcome" | "null-list" | "primitive-list" | "missing-envelope" | "missing-catalog" | "null-call" | "empty-content" | "wrong-call-content";
+    type Interruption = "close" | "timeout";
+    const makeTrace = (ids: boolean[], count = 3, invalidResponse?: InvalidResponse, interruption?: Interruption) => {
+      const records: string[] = [JSON.stringify({ type: "thread.started", thread_id: "thr_mcp_guess" })];
+      const outcomes: McpExchangeOutcome[] = [];
+      const tools = ["mstar_schem", "tools/list", "mstar_schema", "tools/list"];
+      const completedCount = interruption === undefined ? count : 3;
+      for (let index = 0; index < completedCount; index += 1) {
+        const name = tools[index]!;
+        const method = name === "tools/list" ? "tools/list" : "tools/call";
+        const identity = ids[index] === false ? null : `mcp-${index + 1}`;
+        let response: McpJsonRpcResponse;
+        if (index === 0) {
+          response = {
+            jsonrpc: "2.0",
+            id: index + 1,
+            error: { code: -32602, message: "Tool mstar_schem not found. Did you mean mstar_schema? Call tools/list for the full catalog." },
+          };
+        } else if (index === 1 && invalidResponse === "missing-outcome") {
+          response = { jsonrpc: "2.0", id: index + 1 };
+        } else if (index === 1 && invalidResponse === "null-list") {
+          response = { jsonrpc: "2.0", id: index + 1, result: null };
+        } else if (index === 1 && invalidResponse === "primitive-list") {
+          response = { jsonrpc: "2.0", id: index + 1, result: "catalog" };
+        } else if (index === 1 && invalidResponse === "missing-envelope") {
+          response = { result: { tools: [{ name: "mstar_schema" }] } };
+        } else if (index === 1 && invalidResponse === "missing-catalog") {
+          response = { jsonrpc: "2.0", id: index + 1, result: {} };
+        } else if (index === 2 && invalidResponse === "null-call") {
+          response = { jsonrpc: "2.0", id: index + 1, result: null };
+        } else if (index === 2 && invalidResponse === "empty-content") {
+          response = { jsonrpc: "2.0", id: index + 1, result: { content: [] } };
+        } else if (index === 2 && invalidResponse === "wrong-call-content") {
+          response = { jsonrpc: "2.0", id: index + 1, result: { content: [{ type: "text", text: "Other schema" }] } };
+        } else {
+          response = method === "tools/list"
+            ? { jsonrpc: "2.0", id: index + 1, result: { tools: [{ name: "mstar_schema" }] } }
+            : { jsonrpc: "2.0", id: index + 1, result: { content: [{ type: "text", text: "CaptureInput schema" }] } };
+        }
+        const outcome = classifyMcpResponse({
+          identity,
+          method,
+          name,
+          requestId: index + 1,
+          response,
+          expectedToolName: method === "tools/list" ? "mstar_schema" : undefined,
+        });
+        records.push(JSON.stringify(mapMcpInvocationStartedEvent(method, name, identity)));
+        records.push(JSON.stringify(mapMcpExchangeEvent(outcome)));
+        outcomes.push(outcome);
+      }
+      if (interruption !== undefined) {
+        const method = "tools/call";
+        const name = "mstar_schema";
+        const identity = `mcp-${completedCount + 1}`;
+        const interrupted: McpExchangeOutcome = {
+          identity,
+          method,
+          name,
+          status: "interrupted",
+          errorMessage: `MCP server ${interruption === "close" ? "closed" : "timed out"}`,
+        };
+        records.push(JSON.stringify(mapMcpInvocationStartedEvent(method, name, identity)));
+        records.push(JSON.stringify(mapMcpInterruptedEvent(interrupted, interrupted.errorMessage!)));
+        outcomes.push(interrupted);
+      } else {
+        records.push(JSON.stringify({ type: "turn.completed", usage: {} }));
+      }
+      return {
+        events: `${records.join("\n")}\n`,
+        final: summarizeMcpExchanges(outcomes),
+        completed: interruption === undefined,
+      };
+    };
+    const evaluate = async (options: {
+      ids: boolean[];
+      count?: number;
+      invalidResponse?: InvalidResponse;
+      interruption?: Interruption;
+      final?: string;
+    }) => {
+      const io = memoryIo();
+      seedRun(io, caseManifest);
+      let trace: ReturnType<typeof makeTrace> | undefined;
+      let finalPath: string | null = null;
+      const spawn: SpawnFn = async (request) => {
+        trace = makeTrace(options.ids, options.count, options.invalidResponse, options.interruption);
+        io.writeText(request.stdoutFile, trace.events);
+        io.writeText(request.stderrFile, options.interruption ?? "");
+        const output = request.argv[request.argv.indexOf("--output-last-message") + 1]!;
+        finalPath = output;
+        if (trace.completed) io.writeText(output, options.final ?? trace.final);
+        return options.interruption === undefined
+          ? { code: 0, signal: null, timedOut: false, spawnError: null }
+          : {
+              code: null,
+              signal: "SIGTERM",
+              timedOut: options.interruption === "timeout",
+              spawnError: `MCP server ${options.interruption}`,
+            };
+      };
+      const result = await executeManifest({
+        manifestPath: RUN_MANIFEST_PATH,
+        split: "dev",
+        variants: ["baseline"],
+        repeats: 1,
+        repoRoot: REPO_ROOT,
+        io,
+        launchFn: spawn,
+      });
+      expect(result.errors).toEqual([]);
+      const report = buildReport({ manifestPath: RUN_MANIFEST_PATH, repoRoot: REPO_ROOT, io });
+      const unit = Object.values(result.state.units).find((item) => item.caseId === "bounded-res-mcp-guess-path")!;
+      const turn = Object.values(unit.turns)[0];
+      if (!turn) throw new Error(JSON.stringify({ failureReason: unit.failureReason, files: [...io.files.keys()] }));
+      return {
+        grade: unit.grade,
+        calls: unit.grading?.assertions.find((item) => item.kind === "calls_within")?.grade ?? null,
+        failedInvocations: turn.metrics.invocations.failed,
+        countedInvocations: turn.metrics.invocations.counted,
+        unknownOutcomes: turn.metrics.invocations.unknownOutcome,
+        report: report.report,
+        finalWritten: finalPath !== null && io.exists(finalPath),
+        events: trace!.events,
+      };
+    };
+
+    const compliantShape = await evaluate({ ids: [true, true, true] });
+    expect(compliantShape.grade).toBe("pass");
+    expect(compliantShape.report.units[0]!.grade).toBe("pass");
+    expect(compliantShape.failedInvocations).toBe(1);
+    expect(compliantShape.finalWritten).toBe(true);
+
+    const noSuggestion = await evaluate({
+      ids: [true, true, true],
+      final: "error -32602: Tool mstar_schem not found. Call tools/list for the full catalog.\ntools/list catalog returned\ncorrected call succeeded",
+    });
+    expect(noSuggestion.grade).toBe("fail");
+    expect(noSuggestion.report.units[0]!.failedAssertions).toContain("a-correction(final_contains)");
+
+    const overBudget = await evaluate({ ids: [true, true, true, true], count: 4 });
+    expect(overBudget.calls).toBe("fail");
+    expect(overBudget.grade).toBe("fail");
+
+    const identityMissing = await evaluate({ ids: [false, true, true] });
+    expect(identityMissing.calls).toBe("unverified");
+    expect(identityMissing.grade).toBe("unverified");
+    expect(identityMissing.report.units[0]!.unverifiedAssertions).toContain("a-calls(calls_within)");
+
+    for (const invalidResponse of ["missing-outcome", "null-list", "primitive-list", "missing-envelope", "missing-catalog", "null-call", "empty-content", "wrong-call-content"] as const) {
+      const invalid = await evaluate({ ids: [true, true, true], invalidResponse });
+      expect(invalid.calls).toBe("pass");
+      expect(invalid.failedInvocations).toBe(2);
+      expect(invalid.grade).toBe("fail");
+    }
+
+    for (const interruption of ["close", "timeout"] as const) {
+      const interrupted = await evaluate({ ids: [true, true, true, true], count: 4, interruption });
+      expect(interrupted.countedInvocations).toBe(4);
+      expect(interrupted.unknownOutcomes).toBe(1);
+      expect(interrupted.calls).toBe("unverified");
+      expect(interrupted.grade).not.toBe("pass");
+      expect(interrupted.finalWritten).toBe(false);
+      expect(interrupted.events).not.toContain("turn.completed");
+    }
   });
 });

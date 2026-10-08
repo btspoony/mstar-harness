@@ -279,3 +279,29 @@ as-is — no assertion was edited after these results:
   `usageBasis: "unknown"`).
 - Re-version provenance and per-finding dispositions: control
   `{SDD_DIR}/eval/r2-corpus-reversion.md` and the QC-1 report.
+
+## MCP guess-path real-run history
+
+### R3 archived run (2026-10-08; superseded after adapter semantics changed)
+
+- Prepared the frozen 30-case corpus, then derived a disposable one-case selection (`bounded-res-mcp-guess-path`) for `selectCases` → `executeManifest` → `buildReport`; the source ref and local CLI identity are pinned in the manifest.
+- Source HEAD: `cc9c454d705b88da6716c143f6e3c67461808e8a`.
+- Revision provenance: this run executed at the reviewed Task 1 base. Commits touching only documentation or the run driver's exit propagation do not alter the correction surface or grading path. Wave A changed adapter outcome semantics, so this R3 result is retained as history and is not the current acceptance evidence.
+- Built CLI: `@mstar-harness/cli 3.11.2` at `packages/cli/dist/mstar-harness.js`; `helpHash` `e01ebf398724fb2c1bbbe32727320b5fbc2d017f753812ea24953225df2ec707`.
+- Guess path: **3 counted calls**, case grade **pass**, run/report exit **0**.
+- The separate four-lookup control recorded **4 calls** and a failing grade; its report also records the scripted final's grouped-facts and outcome assertion failures, so it is not represented as a model response.
+- Durable R3 evidence: `{SDD_DIR}/eval/r3-guess-path/`.
+
+### R4 intermediate run (2026-10-08; before initialize fix)
+
+- Built at HEAD `47e18593a493aa31275eea84499c4293be279b75`. The adapter failed at initialize with `undefined is not an object (evaluating 'init.jsonrpc')`, exit **2**, one `infrastructure_error`, **0 counted calls**; the ≤3-call result was inconclusive.
+- R4 artifacts remain under `{SDD_DIR}/eval/r4-guess-path/`. The adapter initialize-response contract was fixed in commit `3c0f0eea`; R4 is historical, not current acceptance evidence.
+
+### R5 current real run (2026-10-08; after initialize fix)
+
+- Full source HEAD: `3c0f0eea8c9f6298d701e472da81f2a8ffd8de73`. Built CLI: `@mstar-harness/cli 3.11.2`, helpHash `e01ebf398724fb2c1bbbe32727320b5fbc2d017f753812ea24953225df2ec707`.
+- Prepared the frozen 30-case corpus and selected only `bounded-res-mcp-guess-path` through `selectCases` → `executeManifest` → `buildReport`.
+- Result: **3 counted calls** (failed near-miss, `tools/list`, corrected call), **pass**, run/report exit **0**; pass=1, fail=0, unverified=0, infrastructure_error=0.
+- Artifacts: `{SDD_DIR}/eval/r5-guess-path/`. The portable driver derives repo root from `import.meta.url`; `MSTAR_SKILL_EVAL_REPO_ROOT` and `MSTAR_SKILL_EVAL_DURABLE_DIR` may override local destinations.
+- Portable invocation from a clone: `bun run --cwd packages/cli build && bun scripts/skill-eval/run-bounded-resolution-real.ts`.
+- **model compliance stays unverified (scripted client, no LLM)**.
