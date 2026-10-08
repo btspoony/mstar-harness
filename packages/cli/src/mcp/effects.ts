@@ -26,10 +26,16 @@ type ProcessResult = {
   stderrTruncated: boolean;
   spawnError: string | null;
 };
-type InputState = { value: unknown; consumed: boolean; cwd: string; signal: AbortSignal };
+type InputState = { stdin: string | undefined; consumed: boolean; cwd: string; signal: AbortSignal };
 type VerifyRequest = { sddDir: string; planId: string; taskId: string; runId: string; targetPath?: string };
 export type McpEffects = Omit<CommandEffects, "captureSddEvidence" | "verifySddEvidence"> & {
-  withInput<T>(input: unknown, request: { cwd: string; signal: AbortSignal }, operation: () => Promise<T>): Promise<T>;
+  /**
+   * Scope one request's transport-supplied stdin content for the duration of
+   * `operation`. The value is the primitive string admission extracted for a
+   * command that declares the `stdin` effect; no parsed handler value passes
+   * through here.
+   */
+  withInput<T>(stdin: string | undefined, request: { cwd: string; signal: AbortSignal }, operation: () => Promise<T>): Promise<T>;
   captureSddEvidence(requestPath: string, argv: readonly string[]): Promise<{ runDir: string; record: SddEvidenceRecord; exitCode: number }>;
   verifySddEvidence(request: VerifyRequest): Promise<EvidenceAssessment>;
 };
@@ -50,22 +56,21 @@ const MAX_CAPTURE_LOG_BYTES = FIXED_LIMITS.maxLogBytesPerStream;
 export function createMcpEffects(services: Array<{ close(): Promise<void> }>): McpEffects {
   const inputs = new AsyncLocalStorage<InputState>();
   return {
-    withInput<T>(input: unknown, request: { cwd: string; signal: AbortSignal }, operation: () => Promise<T>) {
-      return inputs.run({ value: input, consumed: false, ...request }, operation);
+    withInput<T>(stdin: string | undefined, request: { cwd: string; signal: AbortSignal }, operation: () => Promise<T>) {
+      return inputs.run({ stdin, consumed: false, ...request }, operation);
     },
     async readInput() {
       const state = inputs.getStore();
       if (state === undefined) throw new Error("MCP stdin effect is outside a request");
       if (state.consumed) throw new Error("MCP input payload can only be consumed once");
       state.consumed = true;
-      const record = state.value !== null && typeof state.value === "object" ? state.value as Record<string, unknown> : {};
-      if (typeof record.input !== "string") {
+      if (state.stdin === undefined) {
         throw Object.assign(new Error("MCP stdin effect requires an explicit input string"), { code: "command.invalid-input" });
       }
-      if (Buffer.byteLength(record.input) > MAX_STREAM_BYTES) {
+      if (Buffer.byteLength(state.stdin) > MAX_STREAM_BYTES) {
         throw Object.assign(new Error(`MCP stdin payload exceeds ${MAX_STREAM_BYTES} bytes`), { code: "command.invalid-input" });
       }
-      return record.input;
+      return state.stdin;
     },
     async spawn(request: ProcessRequest) {
       const result = await spawnBounded({ ...request, stdinMode: "ignore" });

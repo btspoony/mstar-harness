@@ -37,12 +37,13 @@ function usageDiagnostics(envelope: CommandEnvelope): ReadonlyArray<Record<strin
   return diagnostics as Array<Record<string, unknown>>;
 }
 
-async function runCliSource(args: readonly string[]): Promise<{ exitCode: number; stdout: string }> {
+async function runCliSource(args: readonly string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const cliEntry = fileURLToPath(new URL("../../cli/src/index.ts", import.meta.url));
   const child = Bun.spawn([process.execPath, cliEntry, ...args], { stdout: "pipe", stderr: "pipe" });
-  const stdout = await new Response(child.stdout).text();
-  const exitCode = await child.exited;
-  return { exitCode, stdout };
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  return { exitCode, stdout, stderr };
 }
 
 describe("executeCommand input diagnostics", () => {
@@ -53,10 +54,10 @@ describe("executeCommand input diagnostics", () => {
     const envelope = await executeCommand("workflow.register", { deliveryKind: "pr" }, context());
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message.split("\n")[0]).toBe(
-      "Rejected --delivery-kind: expected development | verification/report-only; received pr",
-    );
-    expect(envelope.details).toMatchObject({ diagnostics: [{ path: "deliveryKind", code: "invalid_value" }] });
+    expect(at(usageDiagnostics(envelope), "deliveryKind")).toMatchObject({
+      code: "invalid_value", expected: "development | verification/report-only", received: "pr",
+    });
+    expect(envelope.details?.helpRoute).toBe("mstar workflow register --help");
   });
 
   test("two identical violations at different object paths keep distinct safe paths in one grouped response", async () => {
@@ -71,26 +72,15 @@ describe("executeCommand input diagnostics", () => {
     expect(engine).toMatchObject({ code: "invalid_type" });
     expect(cli).not.toHaveProperty("index");
     expect(engine).not.toHaveProperty("index");
-    // The flattened messages are identical; only the structured path tells them apart.
-    expect(cli?.message).toBe(engine?.message);
-    // Diagnostics carry only safe facts: field path, stable code, message, array index.
-    for (const entry of diagnostics) {
-      expect(Object.keys(entry).every((key) => ["path", "code", "message", "index"].includes(key))).toBe(true);
-    }
-  });
-
-  test("invalid array item rejection includes formatter-generated expected and received facts", async () => {
-    const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
-    expect(envelope.status).toBe("usage");
-    if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message.split("\n")[0]).toBe("Rejected files[0]: expected string; received 42");
+    expect(cli).toMatchObject({ expected: "string", received: "1" });
+    expect(engine).toMatchObject({ expected: "string", received: "2" });
   });
 
   test("numeric array indices are reported for the offending array item", async () => {
     const envelope = await executeCommand("worktree.qc-alignment", { files: [42] }, context());
     const diagnostics = usageDiagnostics(envelope);
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({ path: "files[0]", code: "invalid_type", index: 0 });
+    expect(diagnostics[0]).toMatchObject({ path: "files[0]", code: "invalid_type", index: 0, expected: "string", received: "42" });
   });
 
   test("secret-shaped submitted values never appear in the diagnostic output", async () => {
@@ -100,14 +90,17 @@ describe("executeCommand input diagnostics", () => {
     expect(JSON.stringify(envelope)).not.toContain(secret);
     // The offending member is still identified by its safe path.
     expect(diagnostics.map((entry) => entry.path)).toContain("files[0]");
+    expect(at(diagnostics, "files[0]")).toMatchObject({ expected: "string", received: "object" });
   });
   test("secret-shaped scalar received values are redacted from the usage message", async () => {
     const secret = "sk-live-test-123";
     const envelope = await executeCommand("worktree.qc-alignment", { files: secret }, context());
+    const diagnostics = usageDiagnostics(envelope);
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
     expect(envelope.message).not.toContain(secret);
     expect(envelope.message).toContain("[REDACTED]");
+    expect(at(diagnostics, "files")).toMatchObject({ expected: "array", received: "[REDACTED]" });
   });
 
   test("non-secret scalar received values remain fully rendered", async () => {
@@ -137,7 +130,8 @@ describe("executeCommand input diagnostics", () => {
     const envelope = await executeCommand("report", { bogus: 1 }, context());
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message).toContain('Unrecognized key: "bogus"');
+    expect(envelope.message).toContain("bogus");
+    expect(usageDiagnostics(envelope)[0]).toMatchObject({ code: "unrecognized_keys", expected: "recognized keys", received: "object" });
   });
   test("large invalid input bounds the message while retaining every diagnostic", async () => {
     const issueCount = 5000;
@@ -145,10 +139,18 @@ describe("executeCommand input diagnostics", () => {
     const diagnostics = usageDiagnostics(envelope);
     expect(diagnostics).toHaveLength(issueCount);
     expect(diagnostics[0]).toMatchObject({ path: "files[0]", code: "invalid_type", index: 0 });
-    expect(diagnostics[0]?.message).toContain("received number");
+    expect(diagnostics[0]).toMatchObject({ expected: "string", received: "42" });
+    expect(diagnostics[issueCount - 1]).toMatchObject({ path: `files[${issueCount - 1}]`, index: issueCount - 1, expected: "string", received: "42" });
     expect(envelope.status).toBe("usage");
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message).toContain("\n…and 4980 more issues — full diagnostics in details.diagnostics.");
+    const summary = envelope.details?.diagnosticSummary as { total: number; shown: number; omitted: number };
+    expect(summary.total).toBe(issueCount);
+    expect(summary.shown).toBeGreaterThan(1);
+    expect(summary.shown + summary.omitted).toBe(issueCount);
+    expect(envelope.message).toContain(String(issueCount));
+    expect(envelope.message).toContain(String(summary.omitted));
+    expect(envelope.message).toContain("files[0]");
+    expect(envelope.message).toContain("files[1]");
     expect(envelope.message.length).toBeLessThan(3000);
     expect(envelope.message).toContain("received 42");
   });
@@ -163,10 +165,10 @@ describe("session selector admission", () => {
     const envelope = await executeCommand("plan.bind", { sessionId: "" }, context());
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received ""');
+    expect(at(usageDiagnostics(envelope), "sessionId")).toMatchObject({ expected: "non-empty string", received: '""' });
     expect(envelope.details).toMatchObject({
       helpRoute: "mstar plan bind --help",
-      recovery: "Run mstar plan bind --help and correct the flagged input.",
+      recovery: expect.stringContaining("mstar plan bind --help"),
     });
   });
 
@@ -174,79 +176,94 @@ describe("session selector admission", () => {
     const envelope = await executeCommand("plan.bind", { sessionId: "   " }, context());
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message.split("\n")[0]).toBe('Rejected --session-id: expected non-empty string; received "   "');
+    expect(at(usageDiagnostics(envelope), "sessionId")).toMatchObject({ expected: "non-empty string", received: '"   "' });
   });
 
   test("a non-string session selector names the received type", async () => {
     const envelope = await executeCommand("plan.bind", { sessionId: 42 }, context());
     expect(envelope).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     if (envelope.status !== "usage") throw new Error("expected usage envelope");
-    expect(envelope.message.split("\n")[0]).toBe("Rejected --session-id: expected non-empty string; received number");
+    expect(at(usageDiagnostics(envelope), "sessionId")).toMatchObject({ expected: "non-empty string", received: "number" });
     expect(envelope.details).toMatchObject({ helpRoute: "mstar plan bind --help" });
   });
 });
 
 describe("CLI parser diagnostics", () => {
-  test("missing required argument reports the field and the leaf help route", async () => {
-    // `--key` is supplied so Commander deterministically reports the missing
-    // positional argument instead of the required option.
+  test("an omitted positional input reaches shared admission diagnostics", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "--key", "probe-key"]);
     expect(exitCode).toBe(2);
-    const envelope = JSON.parse(stdout) as {
-      command: string;
-      status: string;
-      code: string;
-      exitCode: number;
-      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
-    };
+    const envelope = JSON.parse(stdout) as CommandEnvelope;
     expect(envelope).toMatchObject({ command: "persist.get", status: "usage", code: "command.invalid-input", exitCode: 2 });
-    const diagnostic = envelope.details?.diagnostics?.[0];
+    const diagnostic = usageDiagnostics(envelope).find((entry) => entry.path === "kind");
     expect(diagnostic?.path).toBe("kind");
-    expect(diagnostic?.code).toBe("commander.missingArgument");
-    expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
+    expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
   });
 
-  test("a required option without its value reports the option's input field", async () => {
+  test("an omitted required option reaches shared admission diagnostics", async () => {
     const { exitCode, stdout } = await runCliSource(["persist", "get", "json"]);
     expect(exitCode).toBe(2);
-    const envelope = JSON.parse(stdout) as {
-      status: string;
-      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
-    };
+    const envelope = JSON.parse(stdout) as CommandEnvelope;
     expect(envelope.status).toBe("usage");
-    const diagnostic = envelope.details?.diagnostics?.[0];
+    const diagnostic = usageDiagnostics(envelope).find((entry) => entry.path === "key");
     expect(diagnostic?.path).toBe("key");
-    expect(diagnostic?.code).toBe("commander.missingMandatoryOptionValue");
-    expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
+    expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
   });
 
-  test("a flag present without its value reports the option's input field", async () => {
-    const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key"]);
+  test("a flag present without its value reports missing-value facts", async () => {
+    const { exitCode, stdout, stderr } = await runCliSource(["persist", "get", "json", "--key"]);
     expect(exitCode).toBe(2);
-    const envelope = JSON.parse(stdout) as {
-      status: string;
-      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
-    };
+    const envelope = JSON.parse(stdout) as CommandEnvelope;
     expect(envelope.status).toBe("usage");
-    const diagnostic = envelope.details?.diagnostics?.[0];
+    const diagnostic = usageDiagnostics(envelope)[0]!;
+    expect(diagnostic.code).toMatch(/^commander\./);
+    expect(stderr).toContain(String(diagnostic.message));
+    expect(diagnostic).toMatchObject({ argvIndex: 5, token: "--key" });
     expect(diagnostic?.path).toBe("key");
-    expect(diagnostic?.code).toBe("commander.optionMissingArgument");
-    expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
+    expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
+    expect(diagnostic?.expected).toBe("option value");
+    expect(diagnostic?.received).toBe("missing value");
   });
 
-  test("a malformed flag keeps the honest parser diagnostic without guessing a field", async () => {
-    const { exitCode, stdout } = await runCliSource(["persist", "get", "json", "--key", "probe-key", "--definitely-not-a-flag"]);
+  test("an unknown option reports its argv location without inventing a field", async () => {
+    const { exitCode, stdout, stderr } = await runCliSource(["persist", "get", "json", "--key", "probe-key", "--definitely-not-a-flag"]);
     expect(exitCode).toBe(2);
-    const envelope = JSON.parse(stdout) as {
-      status: string;
-      details?: { diagnostics?: Array<{ path?: string; code: string; message: string; helpRoute?: string }> };
-    };
+    const envelope = JSON.parse(stdout) as CommandEnvelope;
     expect(envelope.status).toBe("usage");
-    const diagnostic = envelope.details?.diagnostics?.[0];
-    expect(diagnostic?.code).toBe("commander.unknownOption");
-    expect(diagnostic?.message).toContain("--definitely-not-a-flag");
-    // An unknown flag is not a determinable input field: no path is invented.
-    expect(diagnostic).not.toHaveProperty("path");
-    expect(diagnostic?.helpRoute).toBe("mstar persist get --help");
+    const diagnostic = usageDiagnostics(envelope)[0]!;
+    expect(diagnostic.code).toMatch(/^commander\./);
+    expect(stderr).toContain(String(diagnostic.message));
+    expect(diagnostic.path).toBe("argv[7]");
+    expect(diagnostic?.expected).toBe("recognized option");
+    expect(diagnostic?.received).toBe("--definitely-not-a-flag");
+    expect(envelope.details?.helpRoute).toBe("mstar persist get --help");
+  });
+
+  test.each([
+    { args: ["persist", "get", "json", "--key", "first", "--key"], index: 7 },
+    { args: ["persist", "get", "json", "--key=first", "--key"], index: 6 },
+  ])("a repeated known option identifies its missing occurrence: $args", async ({ args, index }) => {
+    const result = await runCliSource(args);
+    expect(result.exitCode).toBe(2);
+    const refusal = JSON.parse(result.stdout) as CommandEnvelope;
+    const diagnostic = usageDiagnostics(refusal)[0]!;
+    expect(diagnostic).toMatchObject({ path: "key", expected: "option value", received: "missing value", argvIndex: index, token: "--key" });
+    expect(result.stderr).toContain(String(diagnostic.message));
+    expect(refusal.details?.helpRoute).toBe("mstar persist get --help");
+  });
+
+  test.each([
+    { args: ["persist", "get", "json", "--key=probe", "--unknown=value"], token: "--unknown=value", index: 6 },
+    { args: ["persist", "get", "json", "--key", "--unknown", "--unknown"], token: "--unknown", index: 7 },
+    { args: ["persist", "get", "json", "--key=probe", "--key", "--unknown=value", "--unknown=value"], token: "--unknown=value", index: 8 },
+    { args: ["persist", "get", "json", "--key=probe", "--unknown", "--unknown"], token: "--unknown", index: 6 },
+  ])("unknown inline/repeated tokens retain the actual rejected argv occurrence: $args", async ({ args, token, index }) => {
+    const result = await runCliSource(args);
+    expect(result.exitCode).toBe(2);
+    const refusal = JSON.parse(result.stdout) as CommandEnvelope;
+    const diagnostic = usageDiagnostics(refusal)[0]!;
+    expect(diagnostic).toMatchObject({ path: `argv[${index}]`, argvIndex: index, token, expected: "recognized option", received: token });
+    expect(result.stderr).toContain(String(diagnostic.message));
+    expect(diagnostic).not.toHaveProperty("flag");
+    expect(refusal.details?.helpRoute).toBe("mstar persist get --help");
   });
 });

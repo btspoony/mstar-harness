@@ -38,6 +38,7 @@
     "access": "public"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.1.0",
     "@mstar-harness/commands": "workspace:*",
     "@mstar-harness/judgment": "workspace:*",
     "@mstar-harness/engine": "workspace:*",
