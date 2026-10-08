@@ -2544,7 +2544,7 @@ async function mutateResidualAdd(
   request: ResidualAddCoordinationRequest,
 ): Promise<CoordinationResult> {
   if (!Array.isArray(request.entries) || request.entries.length === 0) {
-    throw invalidInput("residual-add requires at least one entry");
+    throw invalidInput("residual-add requires at least one entry; provide an entry from the findings you intend to capture for this plan");
   }
   const entries = request.entries;
   const context = planStoreContext(scope);
@@ -2659,10 +2659,10 @@ async function mutateResidualClose(
   sessionPath: string,
   request: ResidualCloseCoordinationRequest,
 ): Promise<CoordinationResult> {
-  if (!isNonEmptyString(request.issueId)) throw invalidInput("issueId is required");
+  if (!isNonEmptyString(request.issueId)) throw invalidInput("issueId is required. Read the current issue revision with mstar issue show, then retry with the observed revision.");
   if (!Number.isInteger(request.expectedIssueRevision) || request.expectedIssueRevision < 0) {
     throw invalidInput(
-      `expectedIssueRevision must be a nonnegative integer \u2014 the issue revision guards the DB mutation; got ${JSON.stringify(request.expectedIssueRevision)}`,
+      `expectedIssueRevision must be a nonnegative integer \u2014 the issue revision guards the DB mutation; got ${JSON.stringify(request.expectedIssueRevision)}. Read the current issue revision with mstar issue show, then retry with the observed revision.`,
       { issue_id: request.issueId },
     );
   }
@@ -2816,7 +2816,7 @@ function resolveRowRevision(anchor: EntryAnchor, planId: string | undefined): nu
   const addressed = planId;
   if (!isNonEmptyString(addressed)) {
     throw invalidInput(
-      "expectedRevision is required here: this request names no plan row whose revision could be derived",
+      "expectedRevision is required here: this request names no plan row whose revision could be derived. Address a row using its plan id from mstar plan show --plan <plan-id>.",
       { workflow_id: anchor.session.workflow_id },
     );
   }
@@ -2835,20 +2835,20 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
     "coordination request",
   );
   if (!isNonEmptyString(request.planId)) {
-    throw invalidInput("planId is required to address a coordinator plan operation", { path: "planId" });
+    throw invalidInput("planId is required to address a coordinator plan operation. Inspect the addressed row with mstar plan show --plan <plan-id>.", { path: "planId" });
   }
   if (request.expectedRevision !== undefined) assertExpectedRevision(request.expectedRevision);
   const expectedRevision = request.expectedRevision ?? resolveRowRevision(anchor, request.planId);
   const operation = request.operation;
   if (!isPlainObject(operation) || !isNonEmptyString(operation.kind)) {
-    throw invalidInput("a coordination request requires an operation with a kind");
+    throw invalidInput("a coordination request requires an operation with a kind. Inspect the addressed row with mstar plan show --plan <plan-id>.");
   }
   if ("expectedRevision" in operation) {
-    throw invalidInput("expectedRevision belongs to the request, not the operation");
+    throw invalidInput("expectedRevision belongs to the request, not the operation. Inspect the addressed row with mstar plan show --plan <plan-id>.");
   }
   const kind = operation.kind;
   if (typeof kind !== "string" || IMPLEMENTED_OPERATIONS[kind] !== true) {
-    throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation`, {
+    throw new CoordinationError("coordination.unknown-operation", `${kind} is not a coordination operation. Use mstar plan show --plan <plan-id> to inspect the row, then choose a supported operation through the owning plan command.`, {
       operation: kind,
     });
   }
@@ -2873,13 +2873,13 @@ export async function mutatePlanCoordination(request: CoordinationRequest): Prom
       assertExactKeys(operation, ["kind", "evidence", "integration"], "complete operation");
       return mutateComplete(scope, session, anchor.sessionPath, { evidence: operation.evidence, integration: operation.integration, expectedRevision });
     default:
-      throw new CoordinationError("coordination.unknown-operation", `${String(kind)} is not a coordinator row operation; use plan show or plan --help for supported operations`, { operation: String(kind) });
+      throw new CoordinationError("coordination.unknown-operation", `${String(kind)} is not a coordinator row operation. Use mstar plan show --plan <plan-id> to inspect the row, then choose a supported operation through the owning plan command.`, { operation: String(kind) });
   }
 }
 
 function assertExpectedRevision(revision: number): void {
   if (!Number.isInteger(revision) || revision < 0) {
-    throw invalidInput(`expectedRevision must be a nonnegative integer \u2014 got ${JSON.stringify(revision)}`, { revision });
+    throw invalidInput(`expectedRevision must be a nonnegative integer \u2014 got ${JSON.stringify(revision)}. Read the current row revision with mstar plan show --plan <plan-id>.`, { revision });
   }
 }
 
@@ -2943,7 +2943,7 @@ function gitUnavailable(cwd: string, args: readonly string[], error: unknown): C
         : String(error);
   return new CoordinationError(
     "coordination.git-unavailable",
-    `cannot read Git state at ${cwd} (git ${args.join(" ")}): ${cause}`,
+    `cannot read Git state at ${cwd} (git ${args.join(" ")}): ${cause}. Restore access to the Git checkout at ${cwd} and retry; mstar status validate can inspect the workflow registration but cannot repair Git availability.`,
     { path: cwd, command: `git ${args.join(" ")}`, cause },
   );
 }
@@ -3041,12 +3041,12 @@ export function captureGitProofWitness(
   const common = gitRead(repository, ["rev-parse", "--git-common-dir"]);
   const head = gitRead(repository, ["rev-parse", "HEAD"]);
   if (gitDir === undefined || common === undefined || head === undefined) {
-    throw new CoordinationError(refusal, `cannot read Git checkout ${repository}; restore the recorded checkout and retry`, { repository });
+    throw new CoordinationError(refusal, `cannot read Git checkout ${repository}; restore the recorded checkout or retry against its current state; inspect registered scope with mstar plan show --plan <plan-id>`, { repository });
   }
   const commonDir = canonicalTarget(resolve(repository, common));
   const current = currentGitHead(gitDir, commonDir);
   if (current.head !== head) {
-    throw new CoordinationError(refusal, `Git HEAD moved at ${repository}; retry against the current checkout`, { repository, expected: head, actual: current.head });
+    throw new CoordinationError(refusal, `Git HEAD moved at ${repository}; expected ${head}, observed ${current.head}. Restore the recorded checkout or retry against its current state; inspect registered scope with mstar plan show --plan <plan-id>`, { repository, expected: head, actual: current.head });
   }
   return {
     repository, refusal, gitDir, commonDir,
@@ -3068,7 +3068,7 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
         canonicalTarget(routing[1]!) !== witness.commonDir) {
       throw new CoordinationError(
         witness.refusal,
-        `Git checkout routing moved at ${witness.repository}; restore the recorded checkout or retry against its current repository`,
+        `Git checkout routing moved at ${witness.repository}; restore the recorded checkout or retry against its current repository; inspect source registration with mstar plan show --plan <plan-id>`,
         { repository: witness.repository },
       );
     }
@@ -3085,11 +3085,11 @@ export function revalidateGitProofWitness(witness: GitProofWitness): void {
     ) return;
   } catch (error) {
     if (error instanceof CoordinationError) throw error;
-    throw new CoordinationError(witness.refusal, `cannot re-read Git identity at ${witness.repository}; restore the recorded checkout and retry`, { repository: witness.repository });
+    throw new CoordinationError(witness.refusal, `cannot re-read Git identity at ${witness.repository}; restore the recorded checkout and retry; inspect source registration with mstar plan show --plan <plan-id>`, { repository: witness.repository });
   }
   throw new CoordinationError(
     witness.refusal,
-    `Git checkout identity, branch, HEAD, cleanliness or operation state moved at ${witness.repository}; restore a clean recorded checkout or retry the proof against its current state`,
+    `Git checkout identity, branch, HEAD, cleanliness or operation state moved at ${witness.repository}; expected HEAD ${witness.head}, observed ${current.head}. Restore a clean recorded checkout or retry against current state; inspect source registration with mstar plan show --plan <plan-id>`,
     { repository: witness.repository, expected: witness.head, actual: current.head },
   );
 }
@@ -3108,25 +3108,25 @@ export function assertFeatureCheckout(worktreePath: string, sourceSha: string, w
   if (checkout === undefined) {
     throw new CoordinationError(
       "coordination.not-in-git",
-      `${what} requires the plan worktree ${worktreePath} to be a readable Git worktree`,
+      `${what} requires the plan worktree ${worktreePath} to be a readable Git worktree. Restore the recorded plan worktree before retrying.`,
       { plan_id: planId, worktree_path: worktreePath },
     );
   }
   if (checkout.operation !== undefined) {
     throw gitProof(
-      `${what} requires a clean plan worktree \u2014 ${worktreePath} has an unfinished ${checkout.operation}`,
+      `${what} requires a clean plan worktree \u2014 ${worktreePath} has an unfinished ${checkout.operation}. Restore the recorded plan worktree, finish or abort its Git operation, then retry.`,
       { plan_id: planId, operation: checkout.operation },
     );
   }
   if (!checkout.clean) {
-    throw gitProof(`${what} requires a clean plan worktree \u2014 ${worktreePath} has uncommitted changes`, {
+    throw gitProof(`${what} requires a clean plan worktree \u2014 ${worktreePath} has uncommitted changes. Restore the recorded plan worktree to a clean state before retrying.`, {
       plan_id: planId,
       head: checkout.head,
     });
   }
   if (checkout.head !== sourceSha) {
     throw gitProof(
-      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${worktreePath} is at ${checkout.head}`,
+      `${what} requires the plan worktree HEAD to be the pinned source ${sourceSha} \u2014 ${worktreePath} is at ${checkout.head}. Restore the pinned commit before retrying.`,
       { plan_id: planId, expected: sourceSha, actual: checkout.head },
     );
   }
