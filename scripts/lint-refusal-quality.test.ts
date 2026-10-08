@@ -47,6 +47,20 @@ describe("refusal quality scanner", () => {
     expect(exitCodeFor(result.findings, result.stale)).toBe(0);
   });
 
+  test("marks an under-filled expectedCount as stale and keeps the lint failing", () => {
+    const snippet = `refusalEnvelope({ code: "x.bad" })`;
+    const finding = {
+      file: "packages/commands/src/fixture.ts", line: 1, column: 1, classification: "missing-recovery" as const,
+      reason: "missing recovery", snippet,
+    };
+    const signature = signatureFor("missing-recovery", finding.file, snippet);
+    const result = applyAllowlist([finding], [{
+      signature, justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT", expectedCount: 3,
+    }], "/repo");
+    expect(result.stale).toEqual([signature]);
+    expect(exitCodeFor(result.findings, result.stale)).toBe(1);
+  });
+
   test("an unallowlisted finding keeps the lint failing beside a matched signature", () => {
     const findings = [
       { file: "scripts/a.ts", line: 1, column: 1, classification: "missing-recovery" as const, reason: "x", snippet: "same()" },

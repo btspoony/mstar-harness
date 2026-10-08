@@ -467,7 +467,7 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
     matched.add(signature);
     output.push({ ...finding, classification: "allowlisted", reason: `${finding.classification}: ${finding.reason} Allowlisted: ${entry.justification} (${entry.trackingIssue}).` });
   }
-  return { findings: output, stale: validated.filter((entry) => !matched.has(entry.signature)).map((entry) => entry.signature), used: validated.filter((entry) => matched.has(entry.signature)) };
+  return { findings: output, stale: validated.filter((entry) => counts.get(entry.signature) !== entry.expectedCount).map((entry) => entry.signature), used: validated.filter((entry) => matched.has(entry.signature)) };
 }
 export function countViolations(findings: RefusalFinding[]): number {
   return findings.filter((finding) => finding.classification !== "allowlisted").length;

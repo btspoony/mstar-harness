@@ -166,4 +166,10 @@ describe("help reachability lint", () => {
     `;
     expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
   });
+  test("rejects runtime substitutions in otherwise-supported recovery templates", () => {
+    const source = 'refusalEnvelope({ code: "NO_STATE", message: "Blocked", recovery: `Run mstar workflow --resume ${flag}` });';
+    const findings = scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar);
+    expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+    expect(findings[0]?.reason).toContain("unresolved runtime substitution — advertised command is not statically provable");
+  });
 });

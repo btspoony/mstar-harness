@@ -98,22 +98,60 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     }
     return node;
   };
+  const hasUnresolvedTemplate = (
+    node: ts.Expression | undefined,
+    scope?: Scope,
+    seenDeclarations = new Set<ts.VariableDeclaration>(),
+    bindings = new Map<string, ts.Expression>(),
+    seenBindings = new Set<string>(),
+  ): boolean => {
+    if (!node) return false;
+    if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) {
+      return hasUnresolvedTemplate(node.expression, scope, seenDeclarations, bindings, seenBindings);
+    }
+    if (ts.isTemplateExpression(node)) return node.templateSpans.length > 0;
+    if (ts.isConditionalExpression(node)) {
+      return hasUnresolvedTemplate(node.whenTrue, scope, seenDeclarations, bindings, seenBindings)
+        || hasUnresolvedTemplate(node.whenFalse, scope, seenDeclarations, bindings, seenBindings);
+    }
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      return hasUnresolvedTemplate(node.left, scope, seenDeclarations, bindings, seenBindings)
+        || hasUnresolvedTemplate(node.right, scope, seenDeclarations, bindings, seenBindings);
+    }
+    if (ts.isIdentifier(node)) {
+      const declaration = resolveDeclaration(scope ?? scopeByNode.get(node), node.text);
+      if (declaration?.initializer && !seenDeclarations.has(declaration)) {
+        return hasUnresolvedTemplate(declaration.initializer, scopeByNode.get(declaration), new Set(seenDeclarations).add(declaration), bindings, seenBindings);
+      }
+      if (bindings.has(node.text) && !seenBindings.has(node.text)) {
+        const actual = bindings.get(node.text)!;
+        return hasUnresolvedTemplate(actual, scopeByNode.get(actual), seenDeclarations, bindings, new Set(seenBindings).add(node.text));
+      }
+    }
+    return false;
+  };
   const findings: HelpReachabilityFinding[] = [];
+  const unresolvedTemplateReason = "unresolved runtime substitution — advertised command is not statically provable";
+  const reportFailure = (node: ts.Node, reason: string): void => {
+    findings.push(makeFinding(source, file, node, reason, node.getText(source)));
+  };
   const inspect = (node: ts.Node, text: string): void => {
     const failure = recoveryFailure(text, grammar);
-    if (failure !== undefined) findings.push(makeFinding(source, file, node, failure, node.getText(source)));
+    if (failure !== undefined) reportFailure(node, failure);
   };
   const inspectEnvelope = (node: ts.Node, input: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     if (!input) return;
     const alternatives = objectAlternatives(resolveBound(input, bindings));
     const failures = alternatives.flatMap(({ fields }) => {
       const recovery = fields.get("recovery");
-      const text = value(recovery, recovery && scopeByNode.get(recovery), new Set(), bindings);
-      if (!recovery || text === undefined) return [];
+      if (!recovery) return [];
+      if (hasUnresolvedTemplate(recovery, scopeByNode.get(recovery), new Set(), bindings)) return [unresolvedTemplateReason];
+      const text = value(recovery, scopeByNode.get(recovery), new Set(), bindings);
+      if (text === undefined) return [];
       const failure = recoveryFailure(text, grammar);
       return failure === undefined ? [] : [failure];
     });
-    if (failures.length > 0) findings.push(makeFinding(source, file, node, failures[0]!, node.getText(source)));
+    if (failures.length > 0) reportFailure(node, failures[0]!);
   };
   const inspectCoordinationError = (node: ts.Node, message: ts.Expression | undefined, bindings = new Map<string, ts.Expression>()): void => {
     const bound = message && resolveBound(message, bindings);
@@ -131,8 +169,12 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
         if (ts.isCallExpression(wrapper.inner)) inspectEnvelope(node, wrapper.inner.arguments[0], bindings);
         else inspectCoordinationError(node, wrapper.inner.arguments?.[1], bindings);
       } else if (callee === "recoveryRefusal") {
-        const text = value(node.arguments[1]);
-        if (text !== undefined) inspect(node, text);
+        const recovery = node.arguments[1];
+        if (hasUnresolvedTemplate(recovery)) reportFailure(node, unresolvedTemplateReason);
+        else {
+          const text = value(recovery);
+          if (text !== undefined) inspect(node, text);
+        }
       } else if (callee === "refusalEnvelope") {
         inspectEnvelope(node, node.arguments[0]);
       }

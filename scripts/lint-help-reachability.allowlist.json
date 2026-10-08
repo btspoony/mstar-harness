@@ -1906,5 +1906,17 @@
     "justification": "PR review round 4 scanner-discovered candidate pending triage.",
     "trackingIssue": "#423",
     "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/issue.ts:aef0768b769d",
+    "justification": "PR review round 5 template recovery rejected pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
+  },
+  {
+    "signature": "capability-unreachable:packages/commands/src/families/issue.ts:5cb8fe0ab00c",
+    "justification": "PR review round 5 template recovery rejected pending triage.",
+    "trackingIssue": "#423",
+    "expectedCount": 1
   }
 ]
