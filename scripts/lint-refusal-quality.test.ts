@@ -1,4 +1,4 @@
-import { applyAllowlist, countViolations, exitCodeFor, normalizeSnippet, parseAllowlist, scanSource, signatureFor } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, normalizeSnippet, parseAllowlist, scanSource, signatureFor, validateAllowlistEntries } from "./lint-refusal-quality";
 
 describe("refusal quality scanner", () => {
   test("finds missing cause codes without enforcing recovery reachability", () => {
@@ -17,7 +17,7 @@ describe("refusal quality scanner", () => {
     expect(scanSource(source, "packages/engine/src/fixture.ts")).toEqual([]);
   });
 
-  test("ignores internal validators and accepts one-level structured refusals", () => {
+  test("ignores internal validators and flags an optional recovery branch", () => {
     const source = `
       const code = "problem.missing";
       const recovery = "Run mstar workflow --resume";
@@ -27,7 +27,7 @@ describe("refusal quality scanner", () => {
       refusalEnvelope({ command: "x", status: "refused", code, exitCode: 1, message: "Failure",
         ...(recovery === undefined ? {} : { recovery }) });
     `;
-    expect(scanSource(source, "packages/engine/src/fixture.ts")).toEqual([]);
+    expect(scanSource(source, "packages/engine/src/fixture.ts").map(({ classification }) => classification)).toEqual(["missing-recovery"]);
   });
 
   test("one allowlist signature suppresses repeated identical occurrences", () => {
@@ -38,7 +38,7 @@ describe("refusal quality scanner", () => {
     }));
     const allowlist = [{
       signature: signatureFor("missing-recovery", "packages/commands/src/fixture.ts", snippet),
-      justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT",
+      justification: "Tracked structured refusal cleanup.", trackingIssue: "SYNTH-REFUSAL-COHORT", expectedCount: 2,
     }];
     const result = applyAllowlist(findings, allowlist, "/repo");
     expect(result.findings.map((finding) => finding.classification)).toEqual(["allowlisted", "allowlisted"]);
@@ -55,10 +55,10 @@ describe("refusal quality scanner", () => {
     ];
     const allowlist = [{
       signature: signatureFor("missing-recovery", "scripts/a.ts", "same()"),
-      justification: "Tracked issue.", trackingIssue: "SYNTH-REACHABILITY-COHORT",
+      justification: "Tracked issue.", trackingIssue: "SYNTH-REACHABILITY-COHORT", expectedCount: 1,
     }];
     const result = applyAllowlist(findings, allowlist, "/repo");
-    expect(countViolations(result.findings)).toBe(1);
+    expect(countViolations(result.findings)).toBe(2);
     expect(exitCodeFor(result.findings, result.stale)).toBe(1);
   });
 
@@ -76,5 +76,53 @@ describe("refusal quality scanner", () => {
     expect(normalizeSnippet("  foo(  bar );  ")).toBe("foo( bar );");
     expect(signatureFor("missing-cause-code", "scripts/file.ts", "foo(  bar );"))
       .toBe(signatureFor("missing-cause-code", "scripts/file.ts", " foo( bar ); "));
+  });
+
+  test("requires nonempty cause and recovery strings", () => {
+    const findings = scanSource(`
+      refusalEnvelope({ code: "", status: "refused", recovery: "Run mstar status validate" });
+      refusalEnvelope({ code: "valid.code", status: "refused", recovery: "" });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-cause-code", "missing-recovery"]);
+  });
+
+  test("each conditional recovery branch must provide nonempty recovery text", () => {
+    const findings = scanSource(`
+      refusalEnvelope({ code: "valid.code", status: "refused", ...(enabled ? { recovery: "Run mstar status validate" } : {}) });
+      refusalEnvelope({ code: "valid.code", status: "refused", ...(enabled ? { recovery: "Run mstar status validate" } : { recovery: "" }) });
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["missing-recovery", "missing-recovery"]);
+  });
+
+  test("validates explicit command references in CoordinationError messages", () => {
+    const findings = scanSource(`
+      new CoordinationError("known.code", "Use mstar nonexistent --bad");
+      new CoordinationError("known.code", "Use mstar status validate");
+    `, "packages/engine/src/fixture.ts");
+    expect(findings.map(({ classification }) => classification)).toEqual(["unreachable-recovery"]);
+  });
+
+  test("allowlist exemptions have a bounded occurrence count", () => {
+    const snippet = "same()";
+    const findings = [1, 2].map((line) => ({
+      file: "scripts/a.ts", line, column: 1, classification: "missing-recovery" as const,
+      reason: "missing recovery", snippet,
+    }));
+    const entry = {
+      signature: signatureFor("missing-recovery", "scripts/a.ts", snippet),
+      justification: "Tracked issue.", trackingIssue: "SYNTH-REFUSAL-COHORT", expectedCount: 1,
+    };
+    const result = applyAllowlist(findings, [entry], "/repo");
+    expect(result.findings.map(({ classification }) => classification)).toEqual(["allowlisted", "missing-recovery"]);
+    expect(countViolations(result.findings)).toBe(1);
+  });
+
+  test("rejects non-positive or non-integer allowlist occurrence bounds", () => {
+    const signature = signatureFor("missing-recovery", "scripts/a.ts", "same()");
+    for (const expectedCount of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => validateAllowlistEntries([{
+        signature, justification: "Tracked.", trackingIssue: "SYNTH", expectedCount,
+      }])).toThrow(/expectedCount must be a positive integer/);
+    }
   });
 });

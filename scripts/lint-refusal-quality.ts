@@ -8,8 +8,7 @@ import { getCommandSchemas } from "../packages/commands/src/families/schema";
 
 export type RefusalClassification = "missing-cause-code" | "missing-recovery" | "unreachable-recovery" | "capability-unreachable" | "allowlisted";
 export interface RefusalFinding { file: string; line: number; column: number; classification: RefusalClassification; reason: string; snippet: string; }
-export interface CliGrammar { verbs: Set<string>; flagsByVerb: Map<string, Set<string>>; positionalsByVerb?: Map<string, readonly { key: string; required: boolean; variadic: boolean }[]>; }
-export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; }
+export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; expectedCount?: number; }
 
 
 export function normalizeSnippet(snippet: string): string { return snippet.trim().replace(/\s+/g, " "); }
@@ -39,7 +38,29 @@ export function extractCliGrammar(): CliGrammar {
     flagsByVerb.set(verb, flags);
     positionalsByVerb.set(verb, schema.cli.arguments.map(({ key, required, variadic }) => ({ key, required, variadic })));
   }
+  for (const flags of flagsByVerb.values()) flags.add("--help");
   return { verbs, flagsByVerb, positionalsByVerb };
+}
+
+export function objectAlternatives(object: ts.ObjectLiteralExpression): Map<string, ts.Expression>[] {
+  let alternatives = [new Map<string, ts.Expression>()];
+  const spreadAlternatives = (expression: ts.Expression): Map<string, ts.Expression>[] => {
+    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) return spreadAlternatives(expression.expression);
+    if (ts.isObjectLiteralExpression(expression)) return objectAlternatives(expression);
+    if (ts.isConditionalExpression(expression)) return [...spreadAlternatives(expression.whenTrue), ...spreadAlternatives(expression.whenFalse)];
+    return [new Map<string, ts.Expression>()];
+  };
+  for (const property of object.properties) {
+    if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) {
+      for (const fields of alternatives) fields.set(property.name.text, property.initializer);
+    } else if (ts.isShorthandPropertyAssignment(property)) {
+      for (const fields of alternatives) fields.set(property.name.text, property.name);
+    } else if (ts.isSpreadAssignment(property)) {
+      const choices = spreadAlternatives(property.expression);
+      alternatives = alternatives.flatMap((base) => choices.map((choice) => new Map([...base, ...choice])));
+    }
+  }
+  return alternatives;
 }
 function walkFiles(path: string): string[] {
   return readdirSync(path).flatMap((name) => { const child = resolve(path, name); return statSync(child).isDirectory() ? walkFiles(child) : child.endsWith(".ts") && !child.endsWith(".test.ts") ? [child] : []; });
@@ -63,7 +84,8 @@ export function recoveryIsReachable(recovery: string, grammar: CliGrammar): bool
       const args = pathTokens.slice(end);
       const positionals = grammar.positionalsByVerb?.get(verb) ?? [];
       const maxArgs = positionals.at(-1)?.variadic ? Number.POSITIVE_INFINITY : positionals.length;
-      if (args.length > maxArgs) continue;
+      const requiredCount = positionals.filter(({ required }) => required).length;
+      if (args.length < requiredCount || args.length > maxArgs) continue;
       const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
       const mentioned = [...clause.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
       if (mentioned.every((flag) => flags.has(flag))) return true;
@@ -117,38 +139,33 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
   const isCauseCode = (node: ts.Expression | undefined): boolean => {
     if (!node) return false;
     if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text.trim().length > 0;
-    if (ts.isIdentifier(node)) return node.text !== "undefined";
+    if (ts.isIdentifier(node)) {
+      const resolved = declarations.get(node.text);
+      if (resolved && (ts.isStringLiteralLike(resolved) || ts.isNoSubstitutionTemplateLiteral(resolved))) return resolved.text.trim().length > 0;
+      return node.text !== "undefined";
+    }
     if (ts.isPropertyAccessExpression(node)) return node.name.text === "code" || node.name.text === "refusal";
     if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isParenthesizedExpression(node)) return isCauseCode(node.expression);
     if (ts.isConditionalExpression(node)) return isCauseCode(node.whenTrue) && isCauseCode(node.whenFalse);
     if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
       return isCauseCode(node.left) && isCauseCode(node.right);
     }
-    if (ts.isTemplateExpression(node)) return node.head.text.length > 0 || node.templateSpans.length > 0;
+    if (ts.isTemplateExpression(node)) return node.head.text.trim().length > 0 || node.templateSpans.length > 0;
     return false;
   };
-  const properties = (node: ts.ObjectLiteralExpression): Map<string, ts.Expression> => {
-    const result = new Map<string, ts.Expression>();
-    const collect = (property: ts.ObjectLiteralElementLike): void => {
-      if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) result.set(property.name.text, property.initializer);
-      else if (ts.isShorthandPropertyAssignment(property)) result.set(property.name.text, property.name);
-      else if (ts.isSpreadAssignment(property)) {
-        const collectExpression = (expression: ts.Expression): void => {
-          if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) collectExpression(expression.expression);
-          else if (ts.isObjectLiteralExpression(expression)) expression.properties.forEach(collect);
-          else if (ts.isConditionalExpression(expression)) { collectExpression(expression.whenTrue); collectExpression(expression.whenFalse); }
-        };
-        collectExpression(property.expression);
-      }
-    };
-    node.properties.forEach(collect);
-    return result;
-  };
+  let grammar: CliGrammar | undefined;
+  const getGrammar = () => grammar ??= extractCliGrammar();
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(sf).split(".").at(-1) === "CoordinationError") {
+      const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+      const add = (classification: RefusalClassification, reason: string) =>
+        findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
       if (!isCauseCode(node.arguments?.[0])) {
-        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        findings.push({ file, line: line + 1, column: character + 1, classification: "missing-cause-code", reason: "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
+        add("missing-cause-code", "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.");
+      }
+      const message = codeValue(node.arguments?.[1]);
+      if (message && /\bmstar\s+[a-z][a-z0-9.-]*/i.test(message) && !recoveryIsReachable(message, getGrammar())) {
+        add("unreachable-recovery", "Rule #341 class 4 (discoverability): CoordinationError message references a CLI command absent from the help grammar.");
       }
       return visitChildren(node);
     }
@@ -157,14 +174,20 @@ export function scanSource(source: string, file: string): RefusalFinding[] {
       if (callee === "refusalEnvelope") {
         const input = node.arguments[0];
         if (!input || !ts.isObjectLiteralExpression(input)) return visitChildren(node);
-        const fields = properties(input);
-        const status = codeValue(fields.get("status"));
+        const variants = objectAlternatives(input);
         const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
         const add = (classification: RefusalClassification, reason: string) =>
           findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
-        if (!fields.has("code")) add("missing-cause-code", "Rule #341 class 2 (named cause): provide the refusal envelope's named `code` field.");
-        const recoveryNode = fields.get("recovery");
-        if (status !== "usage" && !recoveryNode) add("missing-recovery", "Rule #341 class 3 (recovery): provide the refusal envelope's supported `recovery` field.");
+        if (variants.some((fields) => !isCauseCode(fields.get("code")))) {
+          add("missing-cause-code", "Rule #341 class 2 (named cause): provide a nonempty named `code` field on every refusal branch.");
+        }
+        const recoveryMissing = variants.some((fields) => {
+          const recovery = fields.get("recovery");
+          const status = codeValue(fields.get("status"));
+          const text = codeValue(recovery);
+          return status !== "usage" && (!recovery || (text !== undefined && text.trim() === ""));
+        });
+        if (recoveryMissing) add("missing-recovery", "Rule #341 class 3 (recovery): provide a nonempty supported `recovery` field on every refusal branch.");
         return visitChildren(node);
       }
     }
@@ -198,7 +221,9 @@ export function validateAllowlistEntries(value: unknown): AllowlistEntry[] {
     }
     if (seen.has(entry.signature)) throw new Error(`Allowlist contains duplicate signature ${entry.signature}`);
     seen.add(entry.signature);
-    return { signature: entry.signature, justification: (entry.justification as string).trim(), trackingIssue: (entry.trackingIssue as string).trim() };
+    const expectedCount = entry.expectedCount ?? 1;
+    if (!Number.isSafeInteger(expectedCount) || (expectedCount as number) < 1) throw new Error(`Allowlist entry ${index + 1} expectedCount must be a positive integer`);
+    return { signature: entry.signature, justification: (entry.justification as string).trim(), trackingIssue: (entry.trackingIssue as string).trim(), expectedCount: expectedCount as number };
   });
 }
 export function parseAllowlist(content: string): AllowlistEntry[] {
@@ -217,11 +242,14 @@ export function applyAllowlist(findings: RefusalFinding[], entries: AllowlistEnt
   const bySignature = new Map(validated.map((entry) => [entry.signature, entry]));
   const output: RefusalFinding[] = [];
   const matched = new Set<string>();
+  const counts = new Map<string, number>();
   for (const finding of findings) {
     const repoFile = (isAbsolute(finding.file) ? relative(repoRoot, finding.file) : finding.file).split("\\").join("/");
     const signature = signatureFor(finding.classification, repoFile, finding.snippet);
     const entry = bySignature.get(signature);
-    if (!entry) { output.push(finding); continue; }
+    const count = counts.get(signature) ?? 0;
+    counts.set(signature, count + 1);
+    if (!entry || count >= (entry.expectedCount ?? 1)) { output.push(finding); continue; }
     matched.add(signature);
     output.push({ ...finding, classification: "allowlisted", reason: `${finding.classification}: ${finding.reason} Allowlisted: ${entry.justification} (${entry.trackingIssue}).` });
   }

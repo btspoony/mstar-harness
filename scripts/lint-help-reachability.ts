@@ -6,8 +6,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import ts from "typescript";
-import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, recoveryIsReachable, type RefusalFinding } from "./lint-refusal-quality";
-import type { CliGrammar } from "./lint-refusal-quality";
+import { applyAllowlist, countViolations, exitCodeFor, parseAllowlist, extractCliGrammar, objectAlternatives, recoveryIsReachable, type RefusalFinding } from "./lint-refusal-quality";
 
 export type HelpReachabilityFinding = RefusalFinding;
 
@@ -39,47 +38,43 @@ export function scanRecoveryText(sourceText: string, file: string, grammar: CliG
     if (ts.isIdentifier(node)) return value(declarations.get(node.text));
     return undefined;
   };
-  const properties = (object: ts.ObjectLiteralExpression): Map<string, ts.Expression> => {
-    const result = new Map<string, ts.Expression>();
-    const collectProperty = (property: ts.ObjectLiteralElementLike): void => {
-      if (ts.isPropertyAssignment(property)) {
-        const name = propertyName(property.name);
-        if (name) result.set(name, property.initializer);
-      } else if (ts.isShorthandPropertyAssignment(property)) result.set(property.name.text, property.name);
-      else if (ts.isSpreadAssignment(property)) {
-        const collectExpression = (expression: ts.Expression): void => {
-          if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) collectExpression(expression.expression);
-          else if (ts.isObjectLiteralExpression(expression)) expression.properties.forEach(collectProperty);
-          else if (ts.isConditionalExpression(expression)) {
-            collectExpression(expression.whenTrue);
-            collectExpression(expression.whenFalse);
-          }
-        };
-        collectExpression(property.expression);
-      }
-    };
-    object.properties.forEach(collectProperty);
-    return result;
-  };
   const findings: HelpReachabilityFinding[] = [];
   const inspect = (node: ts.Node, text: string): void => {
-    if (/\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|invoke)\b|\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !recoveryIsReachable(text, grammar)) {
-      findings.push(makeFinding(source, file, node, "recovery text references a verb or flag missing from the help grammar", node.getText(source)));
-    }
+    if (recoveryIsReachable(text, grammar)) return;
+    const hasOperationReference = /\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) || /--[a-z][a-z0-9-]*/i.test(text);
+    const reason = hasOperationReference
+      ? "recovery text references a verb, flag, or required argument that is missing from the help grammar"
+      : "recovery text names no CLI operation (manual-escape recovery)";
+    findings.push(makeFinding(source, file, node, reason, node.getText(source)));
   };
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) && node.expression.getText(source).split(".").at(-1) === "CoordinationError") {
       const text = value(node.arguments?.[1]);
-      if (text) inspect(node, text);
+      if (text && !/\bmstar\s+[a-z][a-z0-9.-]*/i.test(text)) inspect(node, text);
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(source).split(".").at(-1);
       if (callee === "recoveryRefusal") {
         const text = value(node.arguments[1]);
-        if (text) inspect(node, text);
+        if (text !== undefined) inspect(node, text);
       } else if (callee === "refusalEnvelope" && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
-        const recovery = properties(node.arguments[0]).get("recovery");
-        const text = value(recovery);
-        if (text) inspect(node, text);
+        const alternatives = objectAlternatives(node.arguments[0]);
+        if (alternatives.some((fields) => {
+          const recovery = fields.get("recovery");
+          if (!recovery) return false;
+          const text = value(recovery);
+          return text !== undefined && !recoveryIsReachable(text, grammar);
+        })) {
+          const fieldTexts = alternatives.flatMap((fields) => {
+            const recovery = fields.get("recovery");
+            const text = value(recovery);
+            return text === undefined ? [] : [text];
+          });
+          const noOperation = fieldTexts.some((text) => !/\bmstar\s+[a-z][a-z0-9.-]*/i.test(text) && !/--[a-z][a-z0-9-]*/i.test(text));
+          const reason = noOperation
+            ? "recovery text names no CLI operation (manual-escape recovery)"
+            : "recovery text references a verb, flag, or required argument that is missing from the help grammar";
+          findings.push(makeFinding(source, file, node, reason, node.getText(source)));
+        }
       }
     }
     ts.forEachChild(node, visit);

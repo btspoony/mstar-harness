@@ -81,4 +81,36 @@ describe("help reachability lint", () => {
     const definition = `const definition = { cli: { path: ${JSON.stringify(verb.split(" "))}, ${options} } };`;
     expect(scanDeclaredCapabilities(definition, "packages/commands/src/fixture.ts", surface)).toEqual([]);
   });
+
+  test("checks every conditional spread recovery alternative", () => {
+    const source = `refusalEnvelope({ code: "NO_STATE", message: "Cannot continue", ...(enabled ? { recovery: "Run mstar nonexistent --bad" } : { recovery: "Run mstar workflow --resume" }) });`;
+    expect(scanRecoveryText(source, "packages/engine/src/fixture.ts", grammar).map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("classifies recovery prose that names no supported operation as a manual escape", () => {
+    const findings = scanRecoveryText(envelope("Delete .mstar/state.json manually"), "packages/engine/src/fixture.ts", grammar);
+    expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+    expect(findings[0]?.reason).toMatch(/manual-escape/i);
+  });
+
+  test("accepts Commander's built-in help flag in extracted grammar", () => {
+    const surface = extractCliGrammar();
+    expect([...surface.flagsByVerb.values()].every((flags) => flags.has("--help"))).toBe(true);
+    expect(scanRecoveryText(envelope("Run mstar status validate --help"), "packages/engine/src/fixture.ts", surface)).toEqual([]);
+  });
+
+  test("rejects recovery missing a required positional argument", () => {
+    const positionalGrammar = {
+      verbs: new Set(["status findings-cleanup"]),
+      flagsByVerb: new Map([["status findings-cleanup", new Set<string>()]]),
+      positionalsByVerb: new Map([["status findings-cleanup", [{ key: "planId", required: true, variadic: false }]]]),
+    };
+    const findings = scanRecoveryText(envelope("Run mstar status findings-cleanup"), "packages/engine/src/fixture.ts", positionalGrammar);
+    expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
+
+  test("empty structured recovery is classified as unreachable", () => {
+    const findings = scanRecoveryText(`refusalEnvelope({ code: "NO_STATE", message: "Cannot continue", recovery: "" });`, "packages/engine/src/fixture.ts", grammar);
+    expect(findings.map(({ classification }) => classification)).toEqual(["capability-unreachable"]);
+  });
 });

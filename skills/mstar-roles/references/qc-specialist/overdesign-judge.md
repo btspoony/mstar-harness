@@ -39,6 +39,10 @@ Preserve these source rules rather than inventing stricter ones:
 
 The #341 prepare-seal owner correction takes precedence over repairing that prohibited gate: deletion of the byte-hash refusal, not a reseal escape. Historical counts and examples below are source evidence, not current-tree findings or numeric thresholds. Do not revive protocols deleted by the [#340 program closure](https://github.com/btspoony/mstar-harness/issues/340#issuecomment-5982147502).
 
+## Default operating-model premise (this repository)
+
+Unless the reviewing Assignment explicitly supplies a different premise, apply this lens to this repository's engine/store under the frozen #340 model: **local, stopped, disposable workspace state**. The operation is a local static file update; do not assume concurrent writers, live services, or irreplaceable process data without evidence. An Assignment may override this default by declaring a different operating-model premise for the reviewed change. For a foreign repository or an Assignment outside this repository that supplies neither this repository default nor an explicit premise, return `cannot-judge: no operating-model premise supplied`.
+
 ## Judgment procedure
 
 1. Read the declared premise and supplied review range. For each changed gate, trace its actual refusal path, the state it protects, its documented contract, and the producer of the rejected input. A lint candidate is a starting point, not proof of semantic misclassification; a clean lint report does not establish semantic conformance.
