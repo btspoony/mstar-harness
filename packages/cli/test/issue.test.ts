@@ -299,7 +299,15 @@ describe("mstar issue CLI bundle", () => {
     ], root);
     expect(result.exitCode).toBe(0);
     expect(jsonOf(result).status).toBe("ok");
-    expect((jsonOf(result).data as { revision: number }).revision).toBe(Number(expectedRevision) + 1);
+    const stale = runBundle("bun-shebang", [
+      "issue", "link", "--id", "I-000001", "--file", file, "--expect", expectedRevision,
+      "--operation-id", "link-stale", "--actor", "project-manager", "--harness", harness,
+    ], root);
+    expect(stale.exitCode).toBe(1);
+    expect(jsonOf(stale)).toMatchObject({ status: "refused", code: "issue.revision-conflict" });
+    expect(String(jsonOf(stale).message)).toContain(
+      "Recovery: Run `mstar issue show --id I-000001`, then retry `mstar issue link --id I-000001 --expect <current-revision>`",
+    );
   });
 
   test("capture reports every missing payload field in one refusal", async () => {

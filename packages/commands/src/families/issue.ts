@@ -65,19 +65,20 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
     ? error.paths as string[]
     : [];
   const issueId = input?.id?.trim() || "<id>";
-  const recovery = id !== "issue.reopen"
-    ? undefined
-    : code === "store.operation-conflict"
-      ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
-      : code === "issue.revision-conflict"
-        ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue reopen --id ${issueId} --expect <current-revision>\` with the same non-empty reason payload.`
+  const verb = id.slice("issue.".length);
+  const recovery = code === "issue.revision-conflict"
+    ? `Run \`mstar issue show --id ${issueId}\`, then retry \`mstar issue ${verb} --id ${issueId} --expect <current-revision>\`${id === "issue.reopen" ? " with the same non-empty reason payload." : ""}`
+    : id !== "issue.reopen"
+      ? undefined
+      : code === "store.operation-conflict"
+        ? `Replay the original request that reserved this operation id unchanged to receive its recorded receipt, or run this operation with a fresh \`--operation-id\`.`
         : code === "issue.invalid-disposition"
-        ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
-        : code === "issue.scope-refused"
-          ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
-          : code === "issue.invalid-payload"
-            ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
-            : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
+          ? `Run \`mstar issue show --id ${issueId}\`; only resolved|waived|duplicate|superseded issues can reopen, and open issues stay open.`
+          : code === "issue.scope-refused"
+            ? `Retry \`mstar issue reopen --id ${issueId}\` with \`--actor project-manager\` and an authorized operation id.`
+            : code === "issue.invalid-payload"
+              ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
+              : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`;
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     ...(paths.length > 0 ? { details: { paths } } : {}),
@@ -251,7 +252,7 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     flags: optionFlags[key]!,
     required: (payloadType[verb] !== undefined && (key === "operationId" || key === "actor")) ||
       (verb === "reopen" && (key === "id" || key === "expect")),
-    ...(verb === "reopen" && key === "expect"
+    ...(key === "expect"
       ? { help: "Exact current issue revision from `mstar issue show --id <id>`; this is a revision CAS, not an execution token." }
       : {}),
   }));
