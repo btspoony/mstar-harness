@@ -11,9 +11,7 @@ export interface RefusalFinding { file: string; line: number; column: number; cl
 export interface CliGrammar { verbs: Set<string>; flagsByVerb: Map<string, Set<string>>; }
 export interface AllowlistEntry { signature: string; justification: string; trackingIssue: string; }
 
-const REFUSAL_CALL = /^(?:fail[A-Za-z0-9_]*|refus[A-Za-z0-9_]*|violation|invalid[A-Za-z0-9_]*|reject[A-Za-z0-9_]*|tokenRefusal|recoveryRefusal|planOperationRefusal|coordinationRefusal|storeRefusal)$/;
-const CAUSE_CODE = /\b(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z][A-Za-z0-9-]*(?:\.[a-z][A-Za-z0-9-]*)+)\b/;
-const RECOVERY = /\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|retrying|invoke)\b[^.!?\n]*/i;
+const RECOVERY = /\b(?:recover|retry|run|use|provide|supply|repair|resolve|reopen|restore|resume|invoke)\b/i;
 
 export function normalizeSnippet(snippet: string): string { return snippet.trim().replace(/\s+/g, " "); }
 export function signatureFor(classification: string, file: string, snippet: string): string {
@@ -48,41 +46,117 @@ function walkFiles(path: string): string[] {
 function recoveryIsReachable(recovery: string, grammar: CliGrammar): boolean {
   const normalized = recovery.replace(/\bmstar\s+/g, "");
   for (const verb of grammar.verbs) {
-    const escaped = verb.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (!new RegExp(`(?:^|\\b)${escaped}(?=\\s|$|--)`).test(normalized)) continue;
-    const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
-    const mentioned = normalized.match(/--?[A-Za-z][A-Za-z0-9-]*/g) ?? [];
-    return mentioned.every((flag) => flags.has(flag));
+    let start = normalized.indexOf(verb);
+    while (start >= 0) {
+      const before = normalized[start - 1];
+      const end = start + verb.length;
+      if ((before === undefined || !/[A-Za-z0-9]/.test(before)) && (normalized[end] === undefined || /\s|--/.test(normalized[end]!))) {
+        const rest = normalized.slice(end);
+        const stop = rest.search(/[.;,]|\bor\b/i);
+        const command = stop < 0 ? rest : rest.slice(0, stop);
+        const mentioned = [...command.matchAll(/(?:^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g)].map((match) => match[1]!);
+        const flags = grammar.flagsByVerb.get(verb) ?? new Set<string>();
+        if (mentioned.every((flag) => flags.has(flag))) return true;
+      }
+      start = normalized.indexOf(verb, start + 1);
+    }
   }
   return false;
 }
+/** Bounded structured-channel scan: typed CoordinationError codes, recoveryRefusal messages,
+ * and refusalEnvelope objects are agent-facing. Internal `violation(...)` results, arbitrary
+ * helper calls, and raw Error invariants are excluded. Recovery presence is enforced only on
+ * refusalEnvelope, which exposes that field; explicit recovery actions are grammar-checked.
+ */
 export function scanSource(source: string, file: string, grammar: CliGrammar): RefusalFinding[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const declarations = new Map<string, ts.Expression>();
+  const visitDeclarations = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) declarations.set(node.name.text, node.initializer);
+    ts.forEachChild(node, visitDeclarations);
+  };
+  visitDeclarations(sf);
   const findings: RefusalFinding[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression.getText(sf).split(".").at(-1) ?? "";
-      if (REFUSAL_CALL.test(callee)) {
-        const strings: string[] = [];
-        const identifiers: string[] = [];
-        const gather = (arg: ts.Node): void => {
-          if (ts.isStringLiteralLike(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) strings.push(arg.text);
-          else if (ts.isIdentifier(arg)) identifiers.push(arg.text);
-          else ts.forEachChild(arg, gather);
+  const codeValue = (node: ts.Expression | undefined): string | undefined => {
+    if (!node) return undefined;
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map((span) => span.literal.text).join("");
+    if (ts.isIdentifier(node)) {
+      const value = declarations.get(node.text);
+      if (value && (ts.isStringLiteralLike(value) || ts.isNoSubstitutionTemplateLiteral(value))) return value.text;
+      if (value && ts.isTemplateExpression(value)) return codeValue(value);
+    }
+    return undefined;
+  };
+  const isCauseCode = (node: ts.Expression | undefined): boolean => {
+    if (!node) return false;
+    if (ts.isStringLiteralLike(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text.trim().length > 0;
+    if (ts.isIdentifier(node)) return node.text !== "undefined";
+    if (ts.isPropertyAccessExpression(node)) return node.name.text === "code" || node.name.text === "refusal";
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isParenthesizedExpression(node)) return isCauseCode(node.expression);
+    if (ts.isConditionalExpression(node)) return isCauseCode(node.whenTrue) && isCauseCode(node.whenFalse);
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
+      return isCauseCode(node.left) && isCauseCode(node.right);
+    }
+    if (ts.isTemplateExpression(node)) return node.head.text.length > 0 || node.templateSpans.length > 0;
+    return false;
+  };
+  const properties = (node: ts.ObjectLiteralExpression): Map<string, ts.Expression> => {
+    const result = new Map<string, ts.Expression>();
+    const collect = (property: ts.ObjectLiteralElementLike): void => {
+      if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name)) result.set(property.name.text, property.initializer);
+      else if (ts.isShorthandPropertyAssignment(property)) result.set(property.name.text, property.name);
+      else if (ts.isSpreadAssignment(property)) {
+        const collectExpression = (expression: ts.Expression): void => {
+          if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) collectExpression(expression.expression);
+          else if (ts.isObjectLiteralExpression(expression)) expression.properties.forEach(collect);
+          else if (ts.isConditionalExpression(expression)) { collectExpression(expression.whenTrue); collectExpression(expression.whenFalse); }
         };
-        node.arguments.forEach(gather);
-        const message = strings.join(" ");
+        collectExpression(property.expression);
+      }
+    };
+    node.properties.forEach(collect);
+    return result;
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isNewExpression(node) && node.expression.getText(sf).split(".").at(-1) === "CoordinationError") {
+      if (!isCauseCode(node.arguments?.[0])) {
         const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        const snippet = node.getText(sf).replace(/\s+/g, " ").slice(0, 240);
-        const add = (classification: RefusalClassification, reason: string) => findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet });
-        if (!CAUSE_CODE.test(message) && !identifiers.some((identifier) => /^[A-Z][A-Z0-9_]+$/.test(identifier))) add("missing-cause-code", "Rule #341 class 2 (named cause): add a stable cause code to the refusal message.");
-        const match = RECOVERY.exec(message);
-        if (!match) add("missing-recovery", "Rule #341 class 3 (recovery): name the supported recovery or repair action in the refusal.");
-        else if (!recoveryIsReachable(match[0], grammar)) add("unreachable-recovery", "Rule #341 class 4 / #365 (discoverability): replace the recovery with a verb and flags present in the canonical CLI grammar.");
+        findings.push({ file, line: line + 1, column: character + 1, classification: "missing-cause-code", reason: "Rule #341 class 2 (named cause): supply a stable code to CoordinationError.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
+      }
+      const message = codeValue(node.arguments?.[1]);
+      if (message && RECOVERY.test(message) && !recoveryIsReachable(message, grammar)) {
+        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+        findings.push({ file, line: line + 1, column: character + 1, classification: "unreachable-recovery", reason: "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
+      }
+      return visitChildren(node);
+    }
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(sf).split(".").at(-1);
+      const message = codeValue(node.arguments[1]);
+      if (callee === "recoveryRefusal" && message && RECOVERY.test(message) && !recoveryIsReachable(message, grammar)) {
+        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+        findings.push({ file, line: line + 1, column: character + 1, classification: "unreachable-recovery", reason: "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.", snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
+      }
+      if (callee === "refusalEnvelope") {
+        const input = node.arguments[0];
+        if (!input || !ts.isObjectLiteralExpression(input)) return visitChildren(node);
+        const fields = properties(input);
+        const status = codeValue(fields.get("status"));
+        const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+        const add = (classification: RefusalClassification, reason: string) =>
+          findings.push({ file, line: line + 1, column: character + 1, classification, reason, snippet: node.getText(sf).replace(/\s+/g, " ").slice(0, 240) });
+        if (!fields.has("code")) add("missing-cause-code", "Rule #341 class 2 (named cause): provide the refusal envelope's named `code` field.");
+        const recoveryNode = fields.get("recovery");
+        if (status !== "usage" && !recoveryNode) add("missing-recovery", "Rule #341 class 3 (recovery): provide the refusal envelope's supported `recovery` field.");
+        const recovery = codeValue(recoveryNode);
+        if (recovery && RECOVERY.test(recovery) && !recoveryIsReachable(recovery, grammar)) add("unreachable-recovery", "Rule #341 class 4 / #365 (discoverability): name only verbs and flags present in the canonical CLI grammar.");
+        return visitChildren(node);
       }
     }
-    ts.forEachChild(node, visit);
+    visitChildren(node);
   };
+  function visitChildren(node: ts.Node): void { ts.forEachChild(node, visit); }
   visit(sf);
   return findings;
 }
