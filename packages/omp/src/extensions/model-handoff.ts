@@ -1671,8 +1671,13 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     operationId: z
       .unknown()
       .optional()
-      .describe("string: the operation id (idempotency key); the adapter mints a fresh one when it is omitted."),
-    reason: z.unknown().optional().describe("string: the ACTIVE recovery's non-empty audited reason."),
+      .describe(
+        "string: the ACTIVE route's operation id (idempotency key); the adapter mints a fresh one when it is omitted. The pre-activation file form never mints one \u2014 it requires the audited id it was authorized under.",
+      ),
+    reason: z
+      .unknown()
+      .optional()
+      .describe("string: the recovery's non-empty audited reason \u2014 required by BOTH recovery forms."),
     attestation: z
       .unknown()
       .optional()
@@ -1691,33 +1696,42 @@ export default function modelHandoff(pi: ExtensionAPI): void {
     name: COORDINATOR_TOOL_NAME,
     label: "Coordinator identity",
     description:
-      'Morning Star coordinator identity entry. The control harness root and the native session id are derived from the host \u2014 never from the call. `{operation:"bind", workflowId}` binds THIS host session as the coordinator of the explicitly named workflow and works on both routes: under an ACTIVE execution authority the adapter reads the workflow\'s current token and mints the operation id itself, so the ordinary call needs nothing else (supply `expected` and `operationId` only to pin your own CAS value and idempotency key \u2014 a repeated bind is then the replayed receipt), while a pre-activation root answers the same call with the managed Prepare bootstrap and refuses those two CAS fields instead of ignoring them. `{operation:"show-recovery", workflowId}` reads the recorded coordinator and the observed state without writing. `{operation:"recover"}` replaces a recorded holder the prior owner can no longer authenticate: an ACTIVE root takes `priorSessionId` (the recorded holder, or null ONLY when the workflow records no coordinator at all), `reason` and the operator\'s own `attestation` document (its token and operation id are derived like the bind\'s); a pre-activation root takes the audited `operationId`, `reason`, `authorizationRef` and `stoppedSessionIds`. No operation accepts a session id, root, caller role, authority flag, credential path or force flag, and a call carrying any unusable field is answered with ONE refusal that names every such field at once \u2014 forbidden keys, absent required keys and unusable values together \u2014 so a single repair is enough and a rejected value is never echoed back. A `store.schema-unsupported` refusal names the loaded entry that answered: refresh the installed package and start a NEW host process/session to load the refreshed registration \u2014 a new session never inherits an existing coordinator binding, so an existing holder is replaced only through this recovery; the public MCP route serves the same operations with an independently acquired identity. A `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
+      'Morning Star coordinator identity entry. The control harness root and the native session id are derived from the host \u2014 never from the call. `{operation:"bind", workflowId}` binds THIS host session as the coordinator of the explicitly named workflow and works on both routes: under an ACTIVE execution authority the adapter reads the workflow\'s current token and mints the operation id itself, so the ordinary call needs nothing else (supply `expected` and `operationId` only to pin your own CAS value and idempotency key \u2014 a repeated bind is then the replayed receipt), while a pre-activation root answers the same call with the managed Prepare bootstrap and refuses those two CAS fields instead of ignoring them. `{operation:"show-recovery", workflowId}` reads the recorded coordinator and the observed state without writing. `{operation:"recover"}` replaces a recorded holder the prior owner can no longer authenticate: an ACTIVE root takes `priorSessionId` (the recorded holder, or null ONLY when the workflow records no coordinator at all), `reason` and the operator\'s own `attestation` document (its token and operation id are derived like the bind\'s); a pre-activation root takes the audited `operationId`, `reason`, `authorizationRef` and `stoppedSessionIds`. No operation accepts a session id, root, caller role, authority flag, credential path or force flag, and a call carrying any unusable field is answered with ONE refusal that names every such field at once \u2014 forbidden keys, absent required keys and unusable values together \u2014 so a single repair is enough and a rejected value is never echoed back. A `store.schema-unsupported` refusal names the loaded entry that answered: refresh the installed package and start a NEW host PROCESS to load the refreshed registration \u2014 a new chat or session inside the SAME process reuses the already-loaded registration, and an inventory listing or a Restart screen is not proof that a matching entry was loaded. A new host identity never inherits an existing coordinator binding, so an existing holder is replaced only through this recovery; the public MCP route serves the same operations with an independently acquired identity. A `plan bind --coordinator` attempted through the shell is refused with a redirect to this tool.',
     // RAW ADMISSION: this registered schema ADVERTISES the documented keys; it
-    // is not the semantic gate. A strict typed union rejected a mixed call (a
-    // forbidden identity key, an absent required key, an unusable value) inside
-    // the host's own parameter parsing, so the caller got a schema-library
+    // is not the semantic gate. A typed/`.strict()` union here rejected a mixed
+    // call (a forbidden identity key, an absent required key, an unusable value)
+    // inside the host's own parameter parsing, so the caller got a schema-library
     // message naming one class at a time instead of the ONE aggregated refusal
-    // the handler owns. Both arms are therefore `.passthrough()`, and the
-    // canonical `CoordinatorShapeContract` classifier in
-    // `../coordinator-identity.ts` remains the single place the valid-field
-    // rules live (forbidden → missing → invalid, plus the separate
-    // `unauthorized` proof verdict).
+    // the handler owns. Every arm is therefore `.passthrough()` and every value
+    // is left untyped, so the canonical `CoordinatorShapeContract` classifier in
+    // `../coordinator-identity.ts` stays the single place the valid-field rules
+    // live (forbidden → missing → invalid, plus the separate `unauthorized`
+    // proof verdict) and every invalid value — a wrong-typed `priorSessionId`
+    // included — reaches it BY NAME instead of dying in the schema library.
     //
-    // The two arms exist for ONE reason: the host's own optional-null
-    // normalization deletes a supplied `null` from an OPTIONAL field, and
+    // Split into two arms for ONE measured reason: this host's own
+    // `validateToolArguments` runs `normalizeOptionalNullsForSchema` first and
+    // DELETES a supplied `null` from any field an arm declares OPTIONAL. A
     // `priorSessionId:null` is the documented explicit "this workflow records no
-    // coordinator at all" claim that must survive to the handler. Declaring it
-    // REQUIRED in the recover arm keeps it, exactly as the previous typed union
-    // did; the general arm admits every other documented shape. `operation`
-    // stays the one enumerated discriminator, so a call carrying no operation is
-    // the only shape refused by the schema itself.
+    // coordinator at all" claim that must survive to the handler, so the recover
+    // arm declares it REQUIRED (a required field is never stripped) and UNTYPED
+    // (`z.unknown()`, so `null` and every invalid type pass). The general arm
+    // covers bind / show-recovery / a holderless recover and deliberately does
+    // NOT declare `priorSessionId`: a later arm that declared it (even as
+    // `unknown().optional()`) would re-introduce the optional-null strip, and a
+    // typed declaration (e.g. `z.string()`) would re-reject the invalid value.
+    // The field stays documented in the tool description and is named by the
+    // classifier whenever it is unusable, so the wire schema omitting it here is
+    // a host-normalizer limitation, not a lost contract. `operation` stays the
+    // one enumerated discriminator, so a call carrying no operation is the only
+    // shape this schema itself refuses.
     parameters: z
       .union([
         z
           .object({
             operation: z.literal("recover").describe("The coordinator operation this call performs."),
             priorSessionId: z
-              .union([z.string(), z.null()])
+              .unknown()
               .describe(
                 "string|null: the ACTIVE recovery's recorded holder, or null only when the workflow records none.",
               ),
@@ -1729,18 +1743,6 @@ export default function modelHandoff(pi: ExtensionAPI): void {
             operation: z
               .enum(["bind", "show-recovery", "recover"])
               .describe("The coordinator operation this call performs."),
-            // Deliberately a plain optional string, NOT `unknown`/nullable: the
-            // host's optional-null normalization deletes a supplied `null` from
-            // an optional field, and arm order decides which shape survives it.
-            // Declaring `priorSessionId` here so this arm REJECTS `null` leaves
-            // the recover arm above — whose required nullable declaration the
-            // normalizer keeps — as the only shape `null` can match, so the
-            // explicit "this workflow records no coordinator" claim always
-            // reaches the handler intact.
-            priorSessionId: z
-              .string()
-              .optional()
-              .describe("string: the recorded holder; `null` is only the recover arm's explicit unowned claim."),
             ...coordinatorAdmissionFields,
           })
           .passthrough(),

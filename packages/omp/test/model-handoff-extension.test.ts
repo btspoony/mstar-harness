@@ -2456,6 +2456,25 @@ describe("prerequisite identity — registered coordinator tool handler", () => 
       fields: ["expected"],
     });
 
+    // A wrong-TYPED supplied holder is an unusable NAMED VALUE, not a schema
+    // error: the recover arm declares `priorSessionId` untyped and REQUIRED
+    // (required so this host's own optional-null normalization cannot delete the
+    // explicit `null` unowned claim), so every one of these reaches the handler's
+    // classifier and is named `invalid` — never refused by the schema library.
+    // The explicit `null` unowned claim itself is exercised by the recovery
+    // suites below through the same registered path.
+    for (const unusable of [7, true, [], { prior: "p" }]) {
+      const typed = await lawful.runCoordinatorTool({
+        operation: "recover",
+        workflowId,
+        priorSessionId: unusable,
+        reason: "the recorded host session was stopped",
+        attestation: { version: 1 },
+      });
+      expect({ unusable, code: coordinatorCodeOf(typed) }).toEqual({ unusable, code: "invalid-input" });
+      expect(typed.details.mstarCoordinator).toMatchObject({ fields: ["priorSessionId"] });
+    }
+
     // Every refusal above wrote nothing.
     expect(coordinatorSnapshotOf(repo, workflowId)).toEqual(JSON.parse(before));
     expect(existsSync(join(repo.harness, "workflows", workflowId, "sessions"))).toBe(false);
