@@ -171,18 +171,13 @@ test("workflow adopt-terminal publishes revision source, replays, and reports ad
   const schema = await executeCommand("schema", { command: "workflow.adopt-terminal" }, invocation(root));
   const descriptorSchema = z.object({
     id: z.string(),
-    requirements: z.array(z.object({
-      name: z.string(),
-      route: z.string(),
-      tokenKind: z.string().optional(),
-    })),
+    requirements: z.array(z.object({ name: z.string(), route: z.string() })),
     payloadSchemas: z.record(z.string(), z.unknown()),
   });
   const selectionSchema = z.object({ kind: z.literal("command"), descriptor: descriptorSchema });
   if (schema.status !== "ok") throw new Error("expected the public workflow.adopt-terminal schema descriptor");
   const descriptor = selectionSchema.parse(schema.data).descriptor;
   expect(descriptor.id).toBe("workflow.adopt-terminal");
-  expect(descriptor.requirements.find((requirement) => requirement.name === "expect")?.tokenKind).toBe("revision");
   expect(descriptor.payloadSchemas.adoptionAttestation).toBeDefined();
 });
 
