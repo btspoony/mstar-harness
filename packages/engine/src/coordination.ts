@@ -4398,7 +4398,7 @@ function prepareReferencePath(harnessRoot: string, value: unknown, field: string
   if (!isNonEmptyString(value) || !isAbsolute(value)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${planId} ${field} must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}`,
+      `plan ${planId} metadata.${field} must be an absolute path \u2014 got ${JSON.stringify(value ?? null)}. Correct the plan metadata, then inspect it with mstar plan show --plan ${planId}.`,
       { plan_id: planId, field, actual: value ?? null },
     );
   }
@@ -4406,12 +4406,12 @@ function prepareReferencePath(harnessRoot: string, value: unknown, field: string
   if (!isWithin(canonicalizeNearestExisting(harnessRoot), canonical)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${planId} ${field} ${canonical} escapes the harness root ${harnessRoot}`,
+      `plan ${planId} metadata.${field} ${canonical} escapes the harness root ${harnessRoot}. Correct the plan metadata, then inspect it with mstar plan show --plan ${planId}.`,
       { plan_id: planId, field, path: canonical, expected: harnessRoot },
     );
   }
   if (!existsSync(canonical) || !statSync(canonical).isFile()) {
-    throw prepareAmendmentRefusal("invalid-plan", `plan ${planId} ${field} does not exist: ${canonical}`, {
+    throw prepareAmendmentRefusal("invalid-plan", `plan ${planId} metadata.${field} must name an existing in-root path; not found: ${canonical}. Correct the plan metadata, then inspect it with mstar plan show --plan ${planId}.`, {
       plan_id: planId,
       field,
       path: canonical,
@@ -4425,7 +4425,7 @@ function prepareReferenceList(harnessRoot: string, value: unknown, field: string
   if (!Array.isArray(value)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${planId} ${field} must be an array of absolute paths \u2014 got ${JSON.stringify(value ?? null)}`,
+      `plan ${planId} metadata.${field} must be an array of absolute paths \u2014 got ${JSON.stringify(value ?? null)}. Correct the plan metadata, then inspect it with mstar plan show --plan ${planId}.`,
       { plan_id: planId, field, actual: value ?? null },
     );
   }
@@ -4438,7 +4438,7 @@ function prepareMetadataString(metadata: Record<string, unknown>, key: string, p
   if (!isNonEmptyString(value)) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${planId} metadata.${key} must be a non-empty string \u2014 got ${JSON.stringify(value ?? null)}`,
+      `plan ${planId} metadata.${key} must be a non-empty string \u2014 got ${JSON.stringify(value ?? null)}. Correct the plan metadata, then inspect it with mstar plan show --plan ${planId}.`,
       { plan_id: planId, field: `metadata.${key}`, actual: value ?? null },
     );
   }
@@ -4462,7 +4462,7 @@ function prepareDerivableMetadataString(
   if (derived === undefined) {
     throw prepareAmendmentRefusal(
       "invalid-plan",
-      `plan ${planId} metadata.${key} is required \u2014 the patch supplies no value and this lifecycle declares none to derive it from`,
+      `plan ${planId} metadata.${key} is required \u2014 the patch supplies no value and this lifecycle declares none to derive it from. Correct the plan metadata, then inspect it with mstar plan show --plan ${planId}.`,
       { plan_id: planId, field: `metadata.${key}` },
     );
   }
