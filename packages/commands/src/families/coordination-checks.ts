@@ -37,7 +37,7 @@ function engineFailure(command: string, error: unknown, fallback: string): Comma
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
     : undefined;
-  return refusalEnvelope({ command, status: "refused", code: "coordination.check-refused", exitCode: 1, message, details: { ...(details ?? {}), underlyingCode: code }, recovery: "Inspect the refusal details and correct the reported condition, then rerun this command." });
+  return refusalEnvelope({ command, status: "refused", code: "coordination.check-refused", exitCode: 1, message, details: { ...(details ?? {}), underlyingCode: code }, recovery: "Use the reported cause and details to correct the addressed workflow's execution authority or snapshot; for an iteration gate, also fix the supplied compass if indicated, then rerun this check." });
 }
 function messageOf(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function errorCode(error: unknown, fallback: string): string {
@@ -158,7 +158,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
             const { readRegisteredWorkflowFromExecutionAuthority } = await import("@mstar-harness/engine");
             const snapshot = await readRegisteredWorkflowFromExecutionAuthority({ harnessDir: root }, input.workflow);
             if (snapshot === null) {
-              return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.workflow-not-found", exitCode: 1, message: `workflow '${input.workflow}' not found in the registered execution authority`, recovery: "Use `mstar workflow show <workflow>` to select a registered workflow, then rerun the iteration gate." });
+              return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.workflow-not-found", exitCode: 1, message: `workflow '${input.workflow}' not found in the registered execution authority`, recovery: "Run `mstar status validate` to inspect the registered workflow IDs, select one, then rerun the iteration gate." });
             }
             const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
               currentBranch: input.branch,
@@ -193,7 +193,7 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
       async execute(input) {
         const id = "iteration.push-cadence";
         const gate = pushCadenceProbe(input.ciRunning === true, input.reviewWave === true);
-        return gate.ok ? ok(id, { allowed: true, violations: [] }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.push-cadence.blocked", exitCode: 1, message: "push blocked by active CI or review wave", details: { violations: gate.violations }, recovery: "Run the command named by each reported gate violation, resolve the listed blockers, then rerun this command." });
+        return gate.ok ? ok(id, { allowed: true, violations: [] }) : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.push-cadence.blocked", exitCode: 1, message: "push blocked by active CI or review wave", details: { violations: gate.violations }, recovery: "Wait for the reported CI/review wave to settle, then retry the push." });
       },
     }),
   ];
