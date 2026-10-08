@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
+import { decodeDiagnostics, engineErrorFacts } from "./family-refusal.js";
 import type { CommandDefinition, CommandEffects, CommandEnvelope, InvocationContext } from "../types.js";
 import type { RunningDashboard } from "../dashboard/server.js";
 const id = "dashboard";
@@ -26,13 +27,15 @@ type DashboardSlot = {
 const dashboards = new WeakMap<CommandEffects, Map<string, DashboardSlot>>();
 
 export function failure(code: string, error: unknown): CommandEnvelope<never> {
+  const { details, recovery } = engineErrorFacts(error);
   return refusalEnvelope({
     command: id,
     status: "refused",
     code,
     exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
-    details: { operation: id },
+    details: { operation: id, ...details },
+    ...(recovery === undefined ? {} : { recovery }),
   });
 }
 
@@ -77,6 +80,7 @@ async function execute(input: Input, context: InvocationContext): Promise<Comman
       code: "command.invalid-input",
       exitCode: 2,
       message: parsed.error.message,
+      diagnostics: decodeDiagnostics(parsed.error),
     });
   }
   const harnessDir = context.controlRoot;
