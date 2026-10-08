@@ -14,6 +14,7 @@ import {
   assertIssueLinkedToPlanOn,
   assertIssueTriageVocabulary,
   IssueError,
+  ISSUE_PAYLOAD_SCHEMAS,
   assertCaptureRequest,
   appendOccurrence,
   captureIssue,
@@ -270,6 +271,45 @@ process.stdout.write(JSON.stringify(receipt));
     ]) {
       expect(message).toContain(field);
     }
+  });
+  test("capture enum refusals identify the invalid field and derive their correction values from the schema vocabulary", () => {
+    let failure: unknown;
+    try {
+      assertCaptureRequest(baseInput({ kind: "tech-debt" as IssueKind }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "issue.scope-refused",
+      details: {
+        causes: [{
+          field: "kind",
+          expected: ISSUE_PAYLOAD_SCHEMAS.CaptureInput.kind.values,
+          received: "tech-debt",
+        }],
+      },
+    });
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain('kind received "tech-debt"');
+    expect(message).toContain("bug, risk, improvement, request, decision, review-obligation");
+    expect(message).not.toContain("severity");
+    expect(message).toContain("mstar schema CaptureInput");
+    expect(message).toContain("mstar plan issue-add --help");
+  });
+  test("capture severity refusal names severity alone and its supported values", () => {
+    let failure: unknown;
+    try {
+      assertCaptureRequest(baseInput({ severity: "urgent" as Severity }));
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "issue.scope-refused",
+      details: { causes: [{ field: "severity", received: "urgent" }] },
+    });
+    expect((failure as Error).message).toContain("critical, high, medium, low, info");
+    expect((failure as Error).message).not.toContain("kind");
   });
 
   test("reopening the DB retains captured data", async () => {

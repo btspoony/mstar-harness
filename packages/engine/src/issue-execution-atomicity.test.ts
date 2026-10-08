@@ -171,23 +171,59 @@ describe("execution-issue-atomicity: the composers of the DB residual transactio
     expect(next.issueId).toBe("I-000001");
     expect(next.created).toBe(true);
   });
-  test("indexed validation reports every invalid issue entry before capture", () => {
+  test("indexed validation retains field causes, accepted values, safe facts, and refuses before store mutation", async () => {
+    const context = await activeStore("invalid-residual-facts");
     const derived = deriveResidualEntries([baseInput({ projectId: "caller-project", occurrenceKey: "event-17" })], "plan-project");
     expect(derived[0]).toMatchObject({ projectId: "plan-project", occurrenceKey: "event-17" });
-
+    const before = await issueFacts(context);
     let failure: unknown;
     try {
       deriveResidualEntries(
-        [{ title: "first", occurrenceKey: "event-18" }, { title: "second", occurrenceKey: "event-19" }],
-        "plan-project",
+        [
+          baseInput({ occurrenceKey: "event-bad-kind", kind: "tech-debt" as never }),
+          baseInput({ occurrenceKey: "event-bad-both", kind: "tech-debt" as never, severity: "urgent" as never }),
+        ],
+        "_default",
       );
     } catch (error) {
       failure = error;
     }
     expect(failure).toMatchObject({
       code: "coordination.invalid-input",
-      details: { problems: [{ path: "entries[0]" }, { path: "entries[1]" }] },
+      details: {
+        problems: [
+          { path: "entries[0]", causes: [{ path: "entries[0].kind", field: "kind", received: "tech-debt" }] },
+          {
+            path: "entries[1]",
+            causes: [
+              { path: "entries[1].kind", field: "kind", received: "tech-debt" },
+              { path: "entries[1].severity", field: "severity", received: "urgent" },
+            ],
+          },
+        ],
+      },
     });
+    const message = (failure as Error).message;
+    expect(message).toContain("entries[0]");
+    expect(message).toContain("entries[1]");
+    expect(message).toContain("kind received");
+    expect(message).toContain("severity received");
+    expect(message).toContain("critical, high, medium, low, info");
+    expect(message).toContain("mstar schema CaptureInput");
+    expect(await issueFacts(context)).toEqual(before);
+
+    const corrected = deriveResidualEntries(
+      [
+        baseInput({ occurrenceKey: "event-corrected-kind", kind: "improvement" }),
+        baseInput({ occurrenceKey: "event-corrected-both", kind: "request", severity: "low" }),
+      ],
+      "_default",
+    );
+    expect(corrected.map(({ kind, severity }) => [kind, severity])).toEqual([
+      ["improvement", "high"],
+      ["request", "low"],
+    ]);
+    expect(await issueFacts(context)).toEqual(before);
   });
   test("indexed residual validation rejects sparse holes", () => {
     let mixedFailure: unknown;

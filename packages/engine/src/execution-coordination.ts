@@ -1023,7 +1023,7 @@ function residualCloseOperationId(sessionId: string, planId: string, issueId: st
 /** Derive plan-owned fields and report every independently invalid entry before writing. */
 export function deriveResidualEntries(entries: readonly unknown[], projectId: string): CaptureInput[] {
   const derived: CaptureInput[] = [];
-  const problems: Array<{ path: string; code: string; message: string }> = [];
+  const problems: Array<{ path: string; code: string; message: string; causes?: unknown[] }> = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
     if (!isPlainObject(entry)) {
@@ -1036,7 +1036,15 @@ export function deriveResidualEntries(entries: readonly unknown[], projectId: st
       derived.push(input);
     } catch (error) {
       if (!(error instanceof IssueError)) throw error;
-      problems.push({ path: `entries[${index}]`, code: error.code, message: error.message });
+      const path = `entries[${index}]`;
+      const causes = Array.isArray(error.details.causes)
+        ? error.details.causes.map((cause) =>
+            isPlainObject(cause) && typeof cause.field === "string"
+              ? { ...cause, path: `${path}.${cause.field}` }
+              : cause,
+          )
+        : undefined;
+      problems.push({ path, code: error.code, message: error.message, ...(causes === undefined ? {} : { causes }) });
     }
   }
   if (problems.length > 0) {

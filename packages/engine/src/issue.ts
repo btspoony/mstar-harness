@@ -23,6 +23,22 @@ export type Severity = "critical" | "high" | "medium" | "low" | "info";
 export type TerminalDisposition = "resolved" | "waived" | "duplicate" | "superseded";
 export type Disposition = "open" | TerminalDisposition;
 
+const KINDS: Record<IssueKind, true> = {
+  bug: true,
+  risk: true,
+  improvement: true,
+  request: true,
+  decision: true,
+  "review-obligation": true,
+};
+const SEVERITIES: Record<Severity, true> = {
+  critical: true,
+  high: true,
+  medium: true,
+  low: true,
+  info: true,
+};
+
 export type MutationContext = {
   operationId: string;
   actor: string;
@@ -74,13 +90,12 @@ export type PayloadFieldSchema = {
   properties?: Record<string, PayloadFieldSchema>;
 };
 
-/** Runtime payload contract; CLI help and `mstar-harness schema` derive from this registry. */
 export const ISSUE_PAYLOAD_SCHEMAS = {
   CaptureInput: {
     projectId: { required: true, type: "string", description: "Project identifier" },
     title: { required: true, type: "string", description: "Finding title" },
-    kind: { required: true, type: "string", description: "Issue kind", values: ["bug", "risk", "improvement", "request", "decision", "review-obligation"] },
-    severity: { required: true, type: "string", description: "Severity", values: ["critical", "high", "medium", "low", "info"] },
+    kind: { required: true, type: "string", description: "Issue kind", values: Object.keys(KINDS) },
+    severity: { required: true, type: "string", description: "Severity", values: Object.keys(SEVERITIES) },
     impact: { required: true, type: "string", description: "User or system impact" },
     acceptance: { required: true, type: "string", description: "Acceptance condition" },
     owner: { required: false, type: "string", description: "Optional owner" },
@@ -326,6 +341,7 @@ export type IssueErrorCode =
 
 export class IssueError extends Error {
   readonly code: IssueErrorCode;
+  details: Record<string, unknown> = {};
 
   constructor(code: IssueErrorCode, message: string) {
     super(`[${code}] ${message}`);
@@ -358,21 +374,6 @@ export function assertIssueLinkVocabulary(link: IssueLink): void {
 
 
 
-const KINDS: Record<IssueKind, true> = {
-  bug: true,
-  risk: true,
-  improvement: true,
-  request: true,
-  decision: true,
-  "review-obligation": true,
-};
-const SEVERITIES: Record<Severity, true> = {
-  critical: true,
-  high: true,
-  medium: true,
-  low: true,
-  info: true,
-};
 const DISPOSITIONS: Record<Disposition, true> = {
   open: true,
   resolved: true,
@@ -424,7 +425,18 @@ function collectIssueRules(rules: readonly (() => void)[]): void {
     const code = failures.some((error) => error.code === "issue.ambiguous-identity")
       ? "issue.ambiguous-identity"
       : "issue.scope-refused";
-    throw new IssueError(code, failures.map((error) => error.message.replace(/^\[[^\]]+\]\s*/, "")).join("; "));
+    throw Object.assign(
+      new IssueError(code, failures.map((error) => error.message.replace(/^\[[^\]]+\]\s*/, "")).join("; ")),
+      {
+        details: {
+          causes: failures.map((error) => ({
+            code: error.code,
+            message: error.message.replace(/^\[[^\]]+\]\s*/, ""),
+            ...error.details,
+          })),
+        },
+      },
+    );
   }
 }
 
@@ -738,6 +750,19 @@ async function withWrite<T>(context: StoreContext, fn: (handle: StoreHandle) => 
   }
 }
 
+function issueVocabularyError(field: "kind" | "severity", value: unknown): IssueError {
+  const vocabulary = field === "kind" ? KINDS : SEVERITIES;
+  const supported = Object.keys(vocabulary);
+  const received = typeof value === "string" ? value : value === null ? "null" : typeof value;
+  const error = new IssueError(
+    "issue.scope-refused",
+    `${field} received ${JSON.stringify(received)}; supported values are ${supported.join(", ")}. ` +
+      `Use \`mstar schema CaptureInput\` or \`mstar plan issue-add --help\` to correct the request.`,
+  );
+  error.details = { field, expected: supported, received };
+  return error;
+}
+
 /**
  * §2 the request half of one capture, validated WITHOUT a store: the contract
  * vocabulary, the four nonblank fields and the occurrence identity columns.
@@ -751,14 +776,10 @@ export function assertCaptureRequest(input: CaptureInput): void {
     () => requireNonblank("acceptance", input.acceptance),
     () => requireNonblank("projectId", input.projectId),
     () => {
-      if (!Object.hasOwn(KINDS, input.kind)) {
-        throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
-      }
+      if (typeof input.kind !== "string" || !Object.hasOwn(KINDS, input.kind)) throw issueVocabularyError("kind", input.kind);
     },
     () => {
-      if (!Object.hasOwn(SEVERITIES, input.severity)) {
-        throw new IssueError("issue.scope-refused", "kind or severity is not a contract vocabulary value");
-      }
+      if (typeof input.severity !== "string" || !Object.hasOwn(SEVERITIES, input.severity)) throw issueVocabularyError("severity", input.severity);
     },
     () => occurrenceColumns(input),
   ];
