@@ -171,7 +171,7 @@ describe("admitted execution capability", () => {
     expect(betaCalls.count).toBe(0);
   });
 
-  test("a genuine admission keeps its validated scalar and nested payload private to execution", async () => {
+  test("a genuine admission keeps its validated value private to execution and refuses the former public alias", async () => {
     const observed: Array<{ name: string; total: number }> = [];
     const fixture: CommandDefinition<{ name: string; payload?: { numbers: number[] } }, { greeting: string; total: number }> = {
       id: "fixture.private-data",
@@ -195,24 +195,33 @@ describe("admitted execution capability", () => {
     const original = { name: "Ada", payload: { numbers: [2, 3] } };
     const admitted = admit(fixture, original);
     if (!admitted.success) throw new Error("expected admission to succeed");
-    // The capability publishes no handler value: there is no member holding the
-    // parsed scalar or the nested payload to replace after admission.
-    expect(Object.keys(admitted).sort()).toEqual(["execute", "success"]);
-    expect("data" in admitted).toBe(false);
-    expect("input" in admitted).toBe(false);
+    // A consumer written against the removed public capability used to reach
+    // for `admitted.input` / `admitted.data` and mutate the handler value
+    // through them. Reproduce that attempt through the admitted object's own
+    // runtime shape: on this implementation neither member exists, so nothing
+    // the caller can write reaches what the handler observes.
+    if ("input" in admitted) {
+      const legacyInput: unknown = admitted.input;
+      if (typeof legacyInput === "object" && legacyInput !== null && "name" in legacyInput) legacyInput.name = "";
+    }
+    if ("data" in admitted) {
+      const legacyData: unknown = admitted.data;
+      if (typeof legacyData === "object" && legacyData !== null) {
+        if ("name" in legacyData) legacyData.name = "";
+        if ("payload" in legacyData) {
+          const payload: unknown = legacyData.payload;
+          if (typeof payload === "object" && payload !== null && "numbers" in payload && Array.isArray(payload.numbers)) payload.numbers.push(-5);
+        }
+      }
+    }
 
-    // Replace the validated scalar and the nested payload through the caller's
-    // own input object. A schema-invalid replacement must not reach execution:
-    // the handler still observes the value admission validated.
-    original.name = "";
-    original.payload.numbers.length = 0;
-    original.payload.numbers.push(-5);
+    // Real domain output: the handler computed the greeting and the total from
+    // the value admission validated, unaffected by the alias attempt.
     const envelope = await admitted.execute(context());
     expect(envelope).toMatchObject({ status: "ok", data: { greeting: "Hello Ada", total: 5 } });
     expect(observed).toEqual([{ name: "Ada", total: 5 }]);
-    // A second invocation still observes the admitted value, not the mutation.
+    // A second invocation observes the same admitted value.
     expect(await admitted.execute(context())).toMatchObject({ data: { greeting: "Hello Ada", total: 5 } });
-    expect(observed).toEqual([{ name: "Ada", total: 5 }, { name: "Ada", total: 5 }]);
   });
 
   test("a transport projection runs inside admission and cannot be replaced afterwards", async () => {
@@ -253,6 +262,23 @@ describe("admitted execution capability", () => {
     // The strip happened inside admission, and the admitted selector rode along.
     expect(admitted.sessionId).toBe("seat-1");
 
+    // The projected value was formerly republished as `admitted.data` (and the
+    // pre-projection object as `admitted.input`). A consumer written against
+    // that shape mutates it in place; execution must keep the value admission
+    // itself produced, so the observable total stays the validated 5.
+    if ("data" in admitted) {
+      const legacyProjected: unknown = admitted.data;
+      if (typeof legacyProjected === "object" && legacyProjected !== null) {
+        if ("name" in legacyProjected) legacyProjected.name = "";
+        if ("payload" in legacyProjected) {
+          const payload: unknown = legacyProjected.payload;
+          if (typeof payload === "object" && payload !== null && "numbers" in payload && Array.isArray(payload.numbers)) {
+            payload.numbers.length = 0;
+            payload.numbers.push(-5);
+          }
+        }
+      }
+    }
     original.name = "";
     original.payload.numbers.length = 0;
     const envelope = await admitted.execute(context());

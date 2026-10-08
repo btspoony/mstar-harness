@@ -179,19 +179,25 @@ export function getCommandDefinitions(): readonly CommandDefinition[] {
  * `contract`, the identity the definition's own selector resolved, the required
  * names the contract computed and the value parsed from the caller's input are
  * fixed when admission runs, and `execute` runs that same definition's
- * `execute` against them. The parsed value stays private to that execution: it
- * is captured lexically and no property, getter or parameter hands it back, so
- * a caller cannot replace an admitted value after admission and thereby bypass
- * the schema that admitted it. There is likewise no public function that
- * accepts a caller-assembled definition/contract/admission triple, and no
+ * `execute` against them. There is no public function that accepts a
+ * caller-assembled definition/contract/admission triple, and no
  * post-admission mutator, so a success-shaped object or an admission for a
  * different schema cannot select a handler or an identity: the only way to
  * obtain an executable capability is `admitCommandInput`.
  *
+ * The parsed value is not republished: no property, getter or parameter hands
+ * the parsed object back, and `execute` closes over the value admission
+ * produced, so a caller holding this capability cannot swap the admitted value
+ * for one of its own before execution. Ownership of the values *inside* that
+ * parsed object is the schema's business, not this capability's: where a field
+ * schema preserves a caller reference (`z.unknown()`, a `z.record()` value, a
+ * passthrough extra), the handler observes that same caller-owned value, and
+ * mutating it through the original input is visible to the handler. Admission
+ * validates the value; it does not deep-copy, freeze, or snapshot it.
+ *
  * The capability publishes only `execute` and the immutable primitive facts a
  * transport needs before execution (the resolved session selector and a
- * command's stdin content). Everything the handler consumes stays reachable
- * only from inside `execute`.
+ * command's stdin content).
  */
 export type AdmittedCommand = Readonly<{
   /**
