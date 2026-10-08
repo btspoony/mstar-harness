@@ -7,9 +7,12 @@ import {
   adoptTerminalWorkflow, commitExecutionRegistration, createFsStore, decodeExecutionSessionRef, declareWorkflowDeliveryKind,
   executionContextFor, mutateExecutionWorkflow, normalizeIterationCompassRef, readCatalogRevisions, readSessionEnvelope,
   recoverPrepareCoordinator, recordWorkflowDelivery, registerShippedCatalogExecution,
-  resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore, showPrepareWorkflow,
-  type ActivationAttestation, type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
+  resolveExecutionReadRoute, resolvePlanDir, resolveProcessHarnessDir, resolveWorkflowDir, setArtifactStore,
+  showPrepareWorkflow,
+  type ActivationAttestation,
+  type CatalogExecutionWorkflow, type ExecutionIdentity, type WorkflowCompoundOutcome, type WorkflowDeliveryEvidence, type WorkflowExecutionOperation,
 } from "@mstar-harness/engine";
+import { activationAttestationDocumentConstraints, activationAttestationDocumentSchema } from "../activation-attestation.js";
 import { commandEnvelopeSchema } from "../definitions.js";
 import { refusalEnvelope } from "../envelope.js";
 import { IDENTITY_SUPPLIES, SESSION_REF_SUPPLIES, TOKEN_SUPPLIES } from "../identity-supplies.js";
@@ -23,6 +26,10 @@ const transitions = [
 function ok<T>(id: string, data: T): CommandEnvelope<T> { return { version: 1, command: id, status: "ok", code: `${id}.ok`, exitCode: 0, data }; }
 const IDENTITY_RECOVERY =
   "launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`";
+const attestationRules = activationAttestationDocumentConstraints
+  .map(({ path: rulePath, rule }) => `${rulePath}: ${rule}`)
+  .join(" ");
+
 
 /**
  * The ACTIVE registration refusal: `expect` and `operation` are required (the
@@ -50,29 +57,64 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
     ? error.details as Record<string, unknown>
     : undefined;
   const message = error instanceof Error ? error.message : String(error);
-  const recovery = code === "workflow.register.title-constraint"
-    ? "Use the title in the selected plan document's H1, or correct that document before registering."
-    : code === "execution.header-revision-conflict"
-      ? "Run `mstar status validate`, then retry `mstar workflow adopt-terminal --workflow <id> --expect <listed-revision>`."
-      : code === "execution.adoption-refused" && message.includes("no terminal header")
-        ? "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection."
-        : code === "execution.adoption-refused" && message.includes("already registered")
-          ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
-          : code === "execution.adoption-refused" && message.includes("ACTIVE coordinator session")
-            ? "No supported exit exists for a terminal header holding an ACTIVE session at the current epoch — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
-            : code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")
-              ? "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
-              : code === "execution.adoption-refused" && message.includes("no recorded terminal reason")
-                ? "No supported exit exists for a stopped/failed header missing its recorded terminal reason; capture an issue with `mstar issue add` and preserve the header."
-                  : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
-                    ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
-                    : code.startsWith("execution.adoption")
-                      ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-                      : undefined;
+  // The structured facts of one settled-adoption refusal, when the engine
+  // carries them: which ACTIVE holders it addressed and which settlement rule
+  // refused. Keying the recovery on these facts (not on refusal wording) lets
+  // the supported recovery name real targets.
+  const adoptionRefusal = code === "execution.adoption-refused" && details !== undefined && typeof details.adoption_refusal === "string"
+    ? details.adoption_refusal
+    : undefined;
+  const holders = details !== undefined && Array.isArray(details.active_holder_sessions)
+    ? details.active_holder_sessions.filter((value): value is string => typeof value === "string")
+    : [];
+  const holderList = holders.map((sessionId) => JSON.stringify(sessionId)).join(", ");
+  const proofRequired = adoptionRefusal === "active-session-proof-required";
+  const proofIncomplete = adoptionRefusal === "active-session-proof-incomplete";
+  const recovery = proofRequired
+    ? `Terminal adoption can settle the eligible unadopted terminal header's ACTIVE coordinator session(s) ${holderList} only against genuine operator stop evidence. The refusal details include attestationContract.schema and attestationContract.constraints for the full document; write an absolute JSON file whose stoppedSessions names every listed target as stopped/reloaded, then retry ` +
+      "`mstar workflow adopt-terminal --workflow <id> --reason <text> --attestation <absolute-json>` (omitted --expect derives the current header revision in the guarded transaction; omitted --operation is generated once). Optional discovery: `mstar schema --command workflow.adopt-terminal`. The engine remains the authority; no stop, consumer-readiness, operator, or authorization facts are generated."
+    : proofIncomplete
+      ? `Add every listed ACTIVE coordinator session (${holderList}) to the attestation's stoppedSessions with state "stopped" or ` +
+        `"reloaded", then retry. The refusal details include the full attestationContract schema and constraints; each addressed holder needs its own genuine stop evidence, and rows outside the addressed workflow are never settled.`
+      : adoptionRefusal === "self-settlement"
+        ? "Run the adoption from a distinct operator identity — an acquired session id other than the one the attestation names " +
+          "stopped/reloaded; the attested stop must come from an observer other than the identity being settled."
+        : code === "workflow.register.title-constraint"
+          ? "Use the title in the selected plan document's H1, or correct that document before registering."
+          : code === "execution.header-revision-conflict"
+            ? "Run `mstar status validate` and retry with its current header revision, or omit --expect to derive the current revision inside the guarded transaction."
+            : code === "execution.adoption-refused" && message.includes("no terminal header")
+              ? "The missing header cannot be adopted; create/register a new workflow through `mstar workflow register` with a valid catalog selection."
+              : code === "execution.adoption-refused" && message.includes("already registered")
+                ? "Run `mstar status workflow-close --workflow <id> --reason <text>` through the existing registered-workflow close path under the ACTIVE coordinator holder's binding."
+                : code === "execution.adoption-refused" && message.includes("non-terminal header without registry membership")
+                  ? "No supported exit exists for a non-terminal header without registry membership — this is the I-000397 residual surface; capture an issue with `mstar issue add`."
+                  : code === "execution.adoption-refused" && message.includes("no recorded terminal reason")
+                    ? "No supported exit exists for a stopped/failed header missing the recorded terminal reason; capture an issue with `mstar issue add` and preserve the header."
+                    : code === "execution.adoption-refused" && message.includes("already has a terminal-adoption record")
+                      ? "Read `mstar status validate`; the existing terminal-adoption record is already the close receipt, so no further adoption is needed."
+                      : code === "workflow.adopt-terminal.attestation-unreadable" || code === "workflow.adopt-terminal.attestation-malformed"
+                        ? "Supply --attestation as an absolute path to the operator's ActivationAttestation JSON document; `mstar schema --command workflow.adopt-terminal` (payload contract adoptionAttestation) publishes its structure and semantic constraints."
+                        : code === "store.attestation-invalid" || code === "store.activation-blocked"
+                          ? "The engine refused this operator attestation. Use `mstar schema --command workflow.adopt-terminal` for the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
+                          : code.startsWith("execution.adoption")
+                            ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
+                            : undefined;
+  const refusalDetails = details === undefined
+    ? undefined
+    : {
+        ...details,
+        ...(proofRequired || proofIncomplete ? {
+          attestationContract: {
+            schema: activationAttestationDocumentSchema.toJSONSchema(),
+            constraints: activationAttestationDocumentConstraints,
+          },
+        } : {}),
+      };
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1,
     message: error instanceof Error ? error.message : String(error),
-    ...(details === undefined ? {} : { details }),
+    ...(refusalDetails === undefined ? {} : { details: refusalDetails }),
     ...(recovery === undefined ? {} : { recovery }),
   });
 }
@@ -91,6 +133,74 @@ function object(value: unknown, field: string): Record<string, unknown> {
 function absolute(value: string | undefined, field: string): string {
   if (value === undefined || !path.isAbsolute(value)) throw new WorkflowInputError(`${field} must be an absolute path`);
   return value;
+}
+
+
+/**
+ * The document is read here but validated by the engine. A malformed document
+ * is reported with the parser's own grammatical cause and, only when the
+ * parser actually reports one, its location.
+ *
+ * Not every quoted span is grammar. A supported runtime quotes source-derived
+ * content after an unexpected/unrecognized diagnostic — the offending operand
+ * (`Unexpected token 'F'`, `Unrecognized token '@'`, `Unexpected identifier
+ * "<token>"`), in either quote style, plus the document excerpt Node appends
+ * before `is not valid JSON` — and those spans are removed. The parser's own
+ * Expected-delimiter/keyword grammar (`Expected '}'`, `Expected property name
+ * or '}'`, `("'")`) is never introduced by those roles and is preserved. No
+ * offset is invented when the parser reports none.
+ */
+function jsonParseDiagnostic(error: unknown): { cause: string; location?: string } {
+  const message = error instanceof Error ? error.message : "";
+  const position = message.match(/\bposition\s+(\d+)\b/i)?.[1];
+  const lineColumn = message.match(/\bline\s+(\d+)\s+column\s+(\d+)\b/i);
+  const location = position !== undefined
+    ? `position ${position}`
+    : lineColumn === null || lineColumn === undefined
+      ? undefined
+      : `line ${lineColumn[1]} column ${lineColumn[2]}`;
+  const cause = message
+    .replace(/^JSON Parse error:\s*/i, "")
+    .replace(/^SyntaxError:\s*/i, "")
+    // The document excerpt Node appends before `is not valid JSON` (a truncated
+    // excerpt carries an embedded `...`). The clause carries raw document bytes,
+    // so the marker and everything from its opening double quote onward is
+    // dropped together.
+    .replace(/[:,]?\s*"[\s\S]*is not valid JSON\s*$/i, "")
+    .replace(/[,\s]+is not valid JSON\s*$/i, "")
+    .replace(/\s+in JSON at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+    .replace(/\s+at position \d+(?:\s*\(line \d+ column \d+\))?/gi, "")
+    .replace(/\s*\(line \d+ column \d+\)/gi, "")
+    // The operand a runtime quotes after `Unexpected token` / `Unexpected
+    // identifier` / `Unrecognized token` is source-derived in EITHER quote style:
+    // `Unexpected token 'F'` quotes the submitted character and `Unexpected
+    // identifier "<token>"` quotes the submitted token. Drop the operand, keep
+    // the diagnostic's own words. Expected-delimiter grammar is not introduced
+    // by those roles, so it is never touched here.
+    .replace(/\b(Unexpected token|Unexpected identifier|Unrecognized token)\b\s*('[^']*'|"[^"]*")/gi, "$1")
+    .replace(/\s+/g, " ")
+    .replace(/[\s,:;]+$/, "")
+    .trim();
+  return { cause: cause === "" ? "syntax error" : cause, ...(location === undefined ? {} : { location }) };
+}
+
+function readAdoptionAttestation(documentPath: string): ActivationAttestation {
+  let text: string;
+  try { text = readFileSync(documentPath, "utf8"); }
+  catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw Object.assign(new Error(`the attestation document ${documentPath} could not be read: ${cause}`), {
+      code: "workflow.adopt-terminal.attestation-unreadable",
+    });
+  }
+  try { return JSON.parse(text) as ActivationAttestation; }
+  catch (error) {
+    const diagnostic = jsonParseDiagnostic(error);
+    throw Object.assign(
+      new Error(`the attestation document ${documentPath} is not valid JSON (${diagnostic.cause}${diagnostic.location === undefined ? "" : ` at ${diagnostic.location}`}); --attestation must point at the operator's ActivationAttestation object`),
+      { code: "workflow.adopt-terminal.attestation-malformed", details: { parser: diagnostic } },
+    );
+  }
 }
 
 async function assertLegacyRoute(harnessDir: string, operation: string): Promise<void> {
@@ -230,6 +340,48 @@ function makeDefinition(
           required: true,
           condition: { field: "interruptedIntegrationMergeClaim", equals: true },
           constraint: "the pre-activation engine requires this operator attestation only when an interrupted integration-merge claim is held",
+        },
+      ],
+    } : {}),
+    ...(id === "workflow.adopt-terminal" ? {
+      requirements: [
+        ...(["expect", "operation"] as const).flatMap((name) => [
+          {
+            name,
+            ownership: "caller" as const,
+            route: "cli" as const,
+            required: false,
+            // The explicit entry overrides the route-derived `expect` hint, so
+            // it is also the entry that must publish the CAS token kind.
+            ...(name === "expect" ? { tokenKind: "revision" as const } : {}),
+            constraint: name === "expect"
+              ? "optional positive header revision CAS; when omitted, the current addressed revision is derived inside the adoption transaction"
+              : "optional replay identifier; when omitted, one operation id is generated for this invocation",
+          },
+          {
+            name,
+            ownership: "caller" as const,
+            route: "mcp" as const,
+            required: false,
+            ...(name === "expect" ? { tokenKind: "revision" as const } : {}),
+            constraint: name === "expect"
+              ? "optional positive header revision CAS; when omitted, the current addressed revision is derived inside the adoption transaction"
+              : "optional replay identifier; when omitted, one operation id is generated for this invocation",
+          },
+        ]),
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route: "cli" as const,
+          required: false,
+          constraint: `required only for an eligible unadopted terminal header with current-epoch ACTIVE coordinator session(s); --attestation remains an absolute JSON file path, and its stoppedSessions must name every exact target as stopped/reloaded. The engine refuses undeclared/credential-bearing fields and self-settlement. ${attestationRules}`,
+        },
+        {
+          name: "attestation",
+          ownership: "caller" as const,
+          route: "mcp" as const,
+          required: false,
+          constraint: `the same absolute JSON path string (same-host paths remain usable); the structure is adoptionAttestation in the command schema, and engine-semantic constraints are: ${attestationRules}`,
         },
       ],
     } : {}),
@@ -447,9 +599,9 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
     }),
     makeDefinition(
       "workflow.adopt-terminal",
-      "Record an adoption receipt for an already-terminal header without registry membership. Read `mstar status validate` and use the listed `revision` with --expect; this is a header revision, not an execution token.",
+      "Adopt an eligible unadopted terminal header without registry membership. An optional --expect is a positive header-revision CAS; if omitted, the engine derives the current revision inside the guarded transaction. An omitted --operation gets one generated id for this invocation. If the eligible header holds current-epoch ACTIVE coordinator session(s), the same transaction settles only the exact sessions supported by genuine operator stop evidence supplied through --attestation <absolute-json>; its stoppedSessions must name every target stopped/reloaded. The engine refuses self-settlement, invalid proof, and changed proof under a committed operation id. It does not infer that a process stopped or that consumer/operator facts are true.",
       "write",
-      ["workflow", "harness", "expect", "operation", "reason"],
+      ["workflow", "harness", "expect", "operation", "reason", "attestation"],
       async (input, context) => {
         const id = "workflow.adopt-terminal";
         try {
@@ -458,15 +610,18 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           }
           const acquired = context.executionIdentity;
           const workflowId = input.workflow ?? acquired?.workflowId;
-          if (workflowId === undefined || input.expect === undefined || input.operation === undefined || input.reason === undefined) {
-            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow, expect (header revision), operation and reason are required; obtain the revision from status validate" });
+          if (workflowId === undefined || input.reason === undefined) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "workflow and reason are required; expect and operation may be omitted safely" });
           }
-          if (!/^[1-9]\d*$/.test(input.expect) || !Number.isSafeInteger(Number(input.expect))) {
-            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--expect must be the positive integer header revision listed by status validate" });
+          if (input.expect !== undefined && (!/^[1-9]\d*$/.test(input.expect) || !Number.isSafeInteger(Number(input.expect)))) {
+            return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "--expect must be a positive integer header revision" });
           }
           if (acquired !== undefined && (acquired.workflowId !== workflowId || acquired.role !== "coordinator")) {
             return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "acquired caller identity does not address the selected coordinator workflow" });
           }
+          const attestation = input.attestation === undefined
+            ? undefined
+            : readAdoptionAttestation(absolute(input.attestation, "attestation"));
           const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness);
           if (harnessDir === null) return refusalEnvelope({ command: id, status: "usage", code: "command.invalid-input", exitCode: 2, message: "no control harness resolved; supply an absolute harness" });
           const active = await resolveExecutionReadRoute({ harnessDir });
@@ -483,16 +638,22 @@ export function getWorkflowCommandDefinitions(): readonly CommandDefinition[] {
           const identity = acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId, role: "coordinator" as const };
           return ok(id, await adoptTerminalWorkflow(executionContextFor({ harnessDir }, identity), {
             workflowId,
-            expectedRevision: Number(input.expect),
+            ...(input.expect === undefined ? {} : { expectedRevision: Number(input.expect) }),
             reason: input.reason,
-            operationId: input.operation,
+            operationId: input.operation ?? randomUUID(),
+            ...(attestation === undefined ? {} : { attestation }),
           }));
         } catch (error) {
           return engineRefusal(id, error);
         }
       },
       [{ key: "sessionId", context: "sessionId" }],
-      { expect: "Header revision CAS (positive integer) acquired from the terminalUnregistered[].revision entry in `mstar status validate`, not an execution token." },
+      {
+        expect: "Optional positive header-revision CAS; when omitted the engine derives the current addressed revision inside the guarded adoption transaction.",
+        operation: "Optional idempotency/replay id; when omitted one id is generated for this invocation.",
+        attestation: `absolute JSON file path for operator proof; required only for eligible unadopted terminal headers with current-epoch ACTIVE coordinator sessions. Exact structure is payload adoptionAttestation; shared semantic constraints: ${attestationRules}`,
+      },
+      { adoptionAttestation: activationAttestationDocumentSchema },
     ),
   ];
   for (const transition of transitions) {
