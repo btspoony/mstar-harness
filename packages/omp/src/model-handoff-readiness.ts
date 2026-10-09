@@ -521,6 +521,7 @@ function gitPath(cwd: string, name: string): string | null {
 
 /** Id of a registered ACTIVE plan row. */
 function rowId(row: unknown): string | null {
+  if (!isPlainObject(row)) return null;
   return isNonEmptyString(row.id) ? row.id : null;
 }
 
@@ -648,6 +649,10 @@ export async function inspectPhase1Readiness(
   }
   const iterationArea = join(iterationDir, binding.workflowId);
   const expectedCompass = canonicalizeNearestExisting(join(iterationDir, binding.workflowId, COMPASS_FILE));
+  let anchors: Readonly<{ base: string; integration: string }> | null = null;
+  let integrationWorktree: string | null = null;
+  let rows: readonly unknown[] = [];
+  let compassRef: string | null = null;
   // The bound paths were re-derived from the Git-derived control root above.
   const session = adopted.session;
     if (
