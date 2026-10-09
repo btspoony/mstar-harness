@@ -333,6 +333,38 @@ describe("issue command family", () => {
     if (missingMutation.status === "refused") expect(missingMutation.details?.paths).toEqual(["actor"]);
   });
 
+  test("a nested payload enum violation carries its per-field facts", async () => {
+    const context = await testContext();
+    const invalid = await definition("issue.add").execute({
+      payload: { ...capture(), kind: "not-a-kind" },
+      operationId: "invalid-enum",
+      actor: "project-manager",
+    }, context);
+    expect(invalid.status).toBe("refused");
+    if (invalid.status !== "refused") return;
+    expect(invalid.details?.diagnostics).toContainEqual(expect.objectContaining({
+      path: "payload.kind",
+      code: "invalid_value",
+      expected: "bug | risk | improvement | request | decision | review-obligation",
+      received: "not-a-kind",
+    }));
+  });
+
+  test("an aggregated capture failure keeps its typed engine causes alongside the family paths", async () => {
+    const context = await testContext();
+    const ambiguous = capture({ sourceIdentity: "unknown", rootCauseKey: "unknown", acceptanceKey: "?" });
+    const refused = await definition("issue.add").execute({ payload: ambiguous, operationId: "ambiguous", actor: "project-manager" }, context);
+    expect(refused.status).toBe("refused");
+    if (refused.status !== "refused") return;
+    expect(refused.code).toBe("issue.ambiguous-identity");
+    // The engine's structured causes survive the family mapper instead of
+    // being dropped when the family has its own paths to report.
+    const causes = refused.details?.causes as Array<{ code: string; causes?: Array<{ code: string }> }> | undefined;
+    expect(causes?.length).toBeGreaterThanOrEqual(1);
+    expect(causes?.every((cause) => cause.code === "issue.ambiguous-identity")).toBe(true);
+    expect(causes?.[0]?.causes?.length).toBeGreaterThanOrEqual(2);
+  });
+
   test("a declared string-or-null payload field keeps its type instead of accepting any JSON", async () => {
     const context = await testContext();
     // `IssueTriage.owner` is the registry's `"string | null"` field: the

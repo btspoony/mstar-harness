@@ -26,8 +26,9 @@ import {
 import type { PayloadFieldSchema } from "@mstar-harness/engine";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
-import { refusalEnvelope } from "../envelope.js";
+import { refusalEnvelope, type RefusalDiagnostic } from "../envelope.js";
 import { commandEnvelopeSchema } from "../definitions.js";
+import { decodeInputDiagnostics } from "../input-diagnostics.js";
 import { engineErrorFacts } from "./family-refusal.js";
 
 const inputSchema = z.object({
@@ -90,7 +91,13 @@ function refused(id: string, error: unknown, input?: IssueInput): CommandEnvelop
                 ? `Retry \`mstar issue reopen --id ${issueId}\` with a non-empty \`payload.reason\`.`
                 : `Run \`mstar issue show --id ${issueId}\` to verify the issue before retrying reopen.`
   );
-  const details = engineDetails ?? (hasPaths ? { paths } : undefined);
+  // Engine-authored details (e.g. `causes`) are never replaced by the family's
+  // own diagnostic paths: whichever facts the thrown error carries are all
+  // reported, so a structured capture failure keeps both its per-cause facts
+  // and the fields the family rejected.
+  const details = engineDetails === undefined
+    ? (hasPaths ? { paths } : undefined)
+    : (hasPaths ? { paths, ...engineDetails } : engineDetails);
   return refusalEnvelope({
     command: id, status: "refused", code, exitCode: 1, message,
     details: details ?? {},
@@ -260,14 +267,30 @@ function payloadSchema(typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, verb: strin
   return z.object(Object.fromEntries(Object.entries(fields).map(([name, field]) => [name, fieldSchema(field, verb)])));
 }
 
+/**
+ * The nested payload rejection as refusal diagnostics. The schema is bound to
+ * the `payload` input field, so its issue paths are prefixed to name the same
+ * `payload.<field>` positions both routes address, and the projection runs
+ * through the shared input-aware decoder so each failure carries per-field
+ * code/expected/received facts instead of collapsing to prose name lists.
+ */
+function payloadDiagnostics(error: z.ZodError, value: unknown): RefusalDiagnostic[] {
+  return decodeInputDiagnostics(error, value).map((diagnostic) => ({
+    ...diagnostic,
+    path: diagnostic.path === "" ? "payload" : `payload.${diagnostic.path}`,
+  }));
+}
+
 function validatePayload(input: IssueInput, typeName: keyof typeof ISSUE_PAYLOAD_SCHEMAS, verb: string): unknown {
   const value = payload(input);
   const result = payloadSchema(typeName, verb).safeParse(value);
   if (!result.success) {
-    const paths = result.error.issues.map((issue) => `payload.${issue.path.join(".")}`);
-    const error = new Error(`invalid payload: ${paths.join(", ")}`) as Error & { code: string; paths: string[] };
+    const diagnostics = payloadDiagnostics(result.error, value);
+    const paths = diagnostics.map((diagnostic) => diagnostic.path ?? "payload");
+    const error = new Error(`invalid payload: ${paths.join(", ")}`) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
     error.code = "issue.invalid-payload";
     error.paths = paths;
+    error.details = { diagnostics };
     throw error;
   }
   return result.data;
