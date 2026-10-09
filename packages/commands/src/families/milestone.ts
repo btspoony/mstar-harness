@@ -5,12 +5,12 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../definitions.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
-const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), session: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
+const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), sessionRef: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
 type Input = z.infer<typeof schema>;
 const verbs = ["add", "update", "assign", "list", "status"] as const;
-const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",target:"--target <YYYY-MM-DD>",clearTarget:"--clear-target",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",session:"--session <path>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
-const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","target","expectStore","operation","harness"], update:["project","id","name","ordinal","target","clearTarget","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","session","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
-const required: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","expectStore","operation"], update:["project","id","expectStore","operation"], assign:["project","issue","reason","expectIssue","expectStore","operation","session","actor"], list:["project"], status:["project","id"] };
+const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",target:"--target <YYYY-MM-DD>",clearTarget:"--clear-target",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",sessionRef:"--session-ref <wire>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
+const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","target","expectStore","operation","harness"], update:["project","id","name","ordinal","target","clearTarget","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","sessionRef","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
+const required: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","expectStore","operation"], update:["project","id","expectStore","operation"], assign:["project","issue","reason","expectIssue","expectStore","operation","sessionRef","actor"], list:["project"], status:["project","id"] };
 class UsageError extends Error {}
 function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
 function context(input: Input, invocation: InvocationContext): StoreContext { const root = resolveProcessHarnessDir(invocation.cwd, input.harness); return { harnessDir: root ?? input.harness ?? invocation.controlRoot ?? invocation.cwd }; }
@@ -23,7 +23,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
     : id === "milestone.update"
       ? "Read the current milestone and store revision, then retain only the intended patch. Run mstar milestone update --project project-id --id milestone-id --expect-store 0 --operation retry-id."
       : id === "milestone.assign"
-        ? "Verify the issue and milestone ids and revisions. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --session session-path --actor project-manager."
+        ? "Verify the issue and milestone ids and revisions. Obtain the current ACTIVE coordinator identity. Run mstar milestone assign --project project-id --issue issue-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --session-ref session-ref --actor project-manager."
         : "Select the existing milestone project and retry the requested read.";
   if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery: fallbackRecovery });
   return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: recovery ?? fallbackRecovery });
@@ -43,7 +43,7 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
   }
   if ((input.id !== undefined) === (input.clear === true)) throw new UsageError("exactly one of --id or --clear is required");
   if (input.expectIssue === undefined) throw new UsageError("--expect-issue is required");
-  const mutation: MutationContext & {expectedStoreRevision:number} = {operationId,actor:requireValue(input.actor,"--actor"),sessionFile:requireValue(input.session,"--session"),expectedRevision:input.expectIssue,expectedStoreRevision:input.expectStore};
+  const mutation: MutationContext & {expectedStoreRevision:number} = {operationId,actor:requireValue(input.actor,"--actor"),sessionRef:requireValue(input.sessionRef,"--session-ref"),expectedRevision:input.expectIssue,expectedStoreRevision:input.expectStore};
   return envelope(id,await assignIssueMilestone(store,requireValue(input.issue,"--issue"),{projectId,milestoneId:input.clear ? null : requireValue(input.id,"--id"),reason:requireValue(input.reason,"--reason")},mutation));
  } catch(error) { return failure(id, error); }
 }

@@ -8,16 +8,10 @@
  */
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
-import { join } from "node:path";
-import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination-envelope.js";
-import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
-import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
-import {
-  WORKFLOW_SNAPSHOT_FILE,
-  isTerminalSnapshot,
-  readWorkflowSnapshot,
-  type WorkflowSnapshot,
-} from "./workflow.js";
+import { decodeExecutionSessionRef } from "./execution-session.js";
+import type { ExecutionSessionRef } from "./execution-store.js";
+import { withExecutionReadGuard, MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
+
 
 export type IssueKind = "bug" | "risk" | "improvement" | "request" | "decision" | "review-obligation";
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
@@ -45,7 +39,7 @@ const SEVERITY_VALUES = Object.keys(SEVERITIES);
 export type MutationContext = {
   operationId: string;
   actor: string;
-  sessionFile?: string;
+  sessionRef?: string;
   expectedRevision?: number;
 };
 
@@ -726,7 +720,7 @@ export type ComposedTransactionRevision = {
  * authorize it themselves before the transaction they own; the DB coordination
  * route supplies the same shape from its own store-held session.
  */
-export type AuthorizedIssueMutation = Omit<MutationContext, "sessionFile">;
+export type AuthorizedIssueMutation = Omit<MutationContext, "sessionRef">;
 
 /**
  * The transaction of ONE public issue mutation: this transport opens the store,
@@ -1294,9 +1288,7 @@ export function assertTerminalDisposition(disposition: TerminalDisposition): voi
 /**
  * Shared role-to-seat mapping for session-authorized issue paths.
  */
-const ENVELOPE_SEATS: Record<CoordinationSession["role"], string> = {
-  coordinator: "project-manager",
-};
+const COORDINATOR_SEAT = "project-manager";
 
 /**
  * The seat that owns a confirmed outcome and may write it (contract §6): the
@@ -1308,10 +1300,10 @@ const CAPTURE_SEAT = "project-manager";
 
 /** Derive the audited actor for coordinator-authorized issue capture and closure. */
 export function issueWriteSeat(role: string): string {
-  if (!Object.hasOwn(ENVELOPE_SEATS, role)) {
+  if (role !== "coordinator") {
     throw new IssueError("issue.scope-refused", `Session role ${JSON.stringify(role)} holds no issue-write seat`);
   }
-  return ENVELOPE_SEATS[role as CoordinationSession["role"]];
+  return COORDINATOR_SEAT;
 }
 
 function requireCaptureSeat(actor: string): void {
@@ -1326,144 +1318,81 @@ function requireCaptureSeat(actor: string): void {
 }
 
 /**
- * Bind the workflow coordinator envelope for milestone assignment or addressed
- * plan issue coordination. Unscoped issue writes use `requireCaptureSeat`.
+ * Read and validate the ACTIVE coordinator session reference against the
+ * current store authority and its live coordinator row.
  */
-function authorizeMutation(context: StoreContext, mutation: Pick<MutationContext, "actor" | "sessionFile">): CoordinationSession {
-  const { session, sessionPath } = readScopedSession(mutation.sessionFile);
-  assertEngineIssuedSession(context.harnessDir, sessionPath, session);
-  const seat = ENVELOPE_SEATS[session.role];
-  if (mutation.actor.trim() !== seat) {
+function readScopedSession(context: StoreContext, sessionRef: string | undefined): ExecutionSessionRef {
+  if (!sessionRef) {
     throw new IssueError(
       "issue.scope-refused",
-      `Actor "${mutation.actor}" is not the "${seat}" seat the session envelope authorizes; a privileged ` +
-        `mutation is authorized by the envelope, not by the actor label.`,
+      "This mutation requires the ACTIVE coordinator session reference; obtain the current identity and pass it with --session-ref.",
+    );
+  }
+  let session: ExecutionSessionRef;
+  try {
+    session = decodeExecutionSessionRef(sessionRef);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new IssueError(
+      "issue.scope-refused",
+      `${message}. Obtain the current ACTIVE coordinator identity and retry with --session-ref; file-envelope inputs are not accepted.`,
+    );
+  }
+  try {
+    withExecutionReadGuard(context, (db, authority) => assertSessionBinding(db, authority, session));
+  } catch (error) {
+    if (error instanceof IssueError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new IssueError(
+      "issue.scope-refused",
+      `${message}. Obtain the current ACTIVE coordinator identity and retry with --session-ref; file-envelope inputs are not accepted.`,
     );
   }
   return session;
 }
 
-/** Re-check the engine-issued coordinator session for issue coordination. */
-export function assertPlanIssueSession(context: StoreContext, sessionFile: string): void {
-  authorizeMutation(context, { actor: "project-manager", sessionFile });
+function assertSessionBinding(
+  db: StoreDb,
+  authority: { storeId: string; epoch: number },
+  session: ExecutionSessionRef,
+): void {
+  if (session.storeId !== authority.storeId || session.epoch !== authority.epoch) {
+    throw refuseAuthority("The coordinator session reference belongs to a stale or different ACTIVE store authority");
+  }
+  const row = db.prepare(
+    "select epoch, state from execution_sessions where workflow_id = ? and role = 'coordinator' and session_id = ?",
+  ).get(session.workflowId, session.sessionId) as { epoch?: unknown; state?: unknown } | undefined;
+  if (row?.state !== "active" || row.epoch !== session.epoch) {
+    throw refuseAuthority(`Workflow ${session.workflowId} has no matching ACTIVE coordinator session binding`);
+  }
 }
 
-/**
- * The workflow directory of this session, and the envelope path shape(s) an
- * engine bind ever issued for it — the canonical `{WORKFLOW_DIR}/<id>/
- * sessions/<role>-<session-id>.json` a current bind writes, and the pre-#264
- * bare name `sessions/<session-id>.json`.
- *
- * Upgrade tolerance (path SHAPE of the recorded binding only): the released
- * 3.11.0 engine issued EVERY role's envelope at the bare name (v3.11.0
- * `sessionFilePath` had no role parameter), and the workflows it created
- * recorded exactly that binding, so an upgraded binary must still accept the
- * shape for both roles or refuse a valid legacy session. Acceptance itself is
- * tied to the workflow's recorded `session_file` (see
- * `assertEngineIssuedSession`) — every content binding (workflow, plan row or
- * coordinator record, session id, live lifecycle) is checked unchanged.
- */
-function issuedSessionLocation(session: CoordinationSession): { dir: string; path: string; legacyPath: string } {
-  const dir = join(resolveWorkflowDir(session.harness_root, { harnessDir: session.harness_root }), session.workflow_id);
-  return {
-    dir,
-    path: sessionFilePath(session.harness_root, session.workflow_id, session.role, session.session_id),
-    legacyPath: join(dir, "sessions", `${session.session_id}.json`),
-  };
-}
-
-/** True when `sessionPath` is a path shape an engine bind ever issued for
- * this session: the current canonical name, or the pre-#264 bare name. */
-function isIssuedSessionPath(sessionPath: string, issued: { path: string; legacyPath: string }): boolean {
-  return (
-    canonicalizeNearestExisting(sessionPath) === canonicalizeNearestExisting(issued.path) ||
-    canonicalizeNearestExisting(sessionPath) === canonicalizeNearestExisting(issued.legacyPath)
-  );
-}
-
-/** A §4 authority refusal — the store's existing code, never a new one. */
+/** A refusal for a stale or non-current ACTIVE execution session reference. */
 function refuseAuthority(message: string): IssueError {
   return new IssueError(
     "issue.scope-refused",
-    `${message}. A privileged mutation is authorized only by the engine-issued session envelope of a live ` +
-      `workflow (contract \u00a74); a file that merely parses as an envelope is not a credential.`,
+    `${message}. Obtain the current ACTIVE coordinator identity and retry with --session-ref; file-envelope inputs are not accepted.`,
   );
 }
 
-/** The live workflow's snapshot, or a refusal (a terminal workflow authorizes nothing). */
-function liveSnapshotOf(
-  session: CoordinationSession,
-  sessionPath: string,
-  workflowDir: string,
-): WorkflowSnapshot {
-  let snapshot: WorkflowSnapshot;
-  try {
-    snapshot = readWorkflowSnapshot(workflowDir).snapshot;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw refuseAuthority(
-      `Session envelope ${sessionPath} names workflow ${session.workflow_id}, whose snapshot is not readable (${message})`,
-    );
-  }
-  if (snapshot.id !== session.workflow_id) {
-    throw refuseAuthority(
-      `Workflow snapshot ${join(workflowDir, WORKFLOW_SNAPSHOT_FILE)} records id ${JSON.stringify(snapshot.id)}, not the envelope's workflow_id ${JSON.stringify(session.workflow_id)}`,
-    );
-  }
-  if (isTerminalSnapshot(snapshot)) {
-    throw refuseAuthority(`Workflow ${snapshot.id} is ${snapshot.status} \u2014 a finished lifecycle holds no live authority`);
-  }
-  return snapshot;
-}
-
-
-/** Every §4 condition above, or a refusal. */
-function assertEngineIssuedSession(harnessDir: string, sessionPath: string, session: CoordinationSession): void {
-  if (canonicalizeNearestExisting(session.harness_root) !== canonicalizeNearestExisting(harnessDir)) {
-    throw refuseAuthority(
-      `Session envelope ${sessionPath} was issued for harness root ${session.harness_root}, not for the root that owns this store (${harnessDir})`,
-    );
-  }
-  const issued = issuedSessionLocation(session);
-  const snapshot = liveSnapshotOf(session, sessionPath, issued.dir);
-  const binding = snapshot.coordination?.coordinator;
-  if (binding === undefined) {
-    throw refuseAuthority(`Workflow ${snapshot.id} records no coordinator binding for ${issued.path}`);
-  }
-  if (binding.session_id !== session.session_id) {
-    throw refuseAuthority(
-      `Workflow ${snapshot.id} records session ${binding.session_id}, not the envelope's session ${session.session_id}`,
-    );
-  }
-  if (!isIssuedSessionPath(binding.session_file, issued)) {
-    throw refuseAuthority(
-      `Workflow ${snapshot.id} records session ${binding.session_id} at ${binding.session_file}, which is not an engine-issued ` +
-        `path for this session (${issued.path} or the pre-#264 bound form ${issued.legacyPath})`,
-    );
-  }
-  if (canonicalizeNearestExisting(sessionPath) !== canonicalizeNearestExisting(binding.session_file)) {
-    throw refuseAuthority(
-      `Session envelope ${sessionPath} is not the workflow's bound session file ${binding.session_file} \u2014 issue authorization follows the recorded path exactly`,
-    );
-  }
-}
-
-/**
- * Read the coordinator envelope used by milestone assignment and addressed plan coordination.
- */
-function readScopedSession(sessionFile: string | undefined): { session: CoordinationSession; sessionPath: string } {
-  if (!sessionFile) {
+function authorizeMutation(
+  context: StoreContext,
+  mutation: Pick<MutationContext, "actor" | "sessionRef">,
+): ExecutionSessionRef {
+  const session = readScopedSession(context, mutation.sessionRef);
+  const seat = issueWriteSeat(session.role);
+  if (mutation.actor.trim() !== seat) {
     throw new IssueError(
       "issue.scope-refused",
-      "This mutation requires an existing coordinator session envelope; no session credential is written to the store.",
+      `Actor "${mutation.actor}" is not the "${seat}" coordinator seat authorized by the ACTIVE session; obtain the current identity and retry with --session-ref.`,
     );
   }
-  try {
-    return { session: readSessionEnvelope(sessionFile), sessionPath: sessionFile };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new IssueError("issue.scope-refused", message);
-  }
+  return session;
+}
+
+/** Re-check the ACTIVE coordinator session for addressed plan issue coordination. */
+export function assertPlanIssueSession(context: StoreContext, sessionRef: string): void {
+  authorizeMutation(context, { actor: COORDINATOR_SEAT, sessionRef });
 }
 
 
@@ -1794,7 +1723,7 @@ export async function assignIssueMilestone(
   }
   const projectId = input.projectId.trim();
   const reason = input.reason.trim();
-  authorizeMutation(context, mutation);
+  const session = authorizeMutation(context, mutation);
   if (!mutation.operationId?.trim() || !Number.isSafeInteger(mutation.expectedStoreRevision) || mutation.expectedStoreRevision < 0) {
     throw new IssueError("issue.scope-refused", "operationId and expectedStoreRevision are required");
   }
@@ -1805,6 +1734,7 @@ export async function assignIssueMilestone(
   });
   return withWrite(context, (handle) => {
     const db = handle.db;
+    assertSessionBinding(db, handle, session);
     const schema = db.prepare("select max(version) as version from schema_version").get() as { version?: number } | undefined;
     if (!Number.isInteger(schema?.version) || (schema?.version ?? 0) < 7) {
       throw new IssueError("milestone.schema-outdated", 'Milestone assignment requires schema 7; run "mstar store upgrade --operator <name>" first.');

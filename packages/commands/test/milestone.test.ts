@@ -90,7 +90,7 @@ const usageDiagnostics=(envelope:{status:string;details?:Record<string,unknown>}
 };
 const assignment=(clear:boolean)=>executeCommand("milestone.assign",{
  project:"proj-admission",issue:"I-999999",clear,reason:"test",expectIssue:0,expectStore:storeRevision,
- operation:`assign-${clear}`,session:"session.json",actor:"test",harness,
+ operation:`assign-${clear}`,sessionRef:"invalid-session-ref",actor:"project-manager",harness,
 },invocation(cwd));
 // `clear=false` selects neither alternative: the selector admission refuses
 // `exactly one of id | clear=true` before any engine work.
