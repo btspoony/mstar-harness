@@ -58,6 +58,7 @@ import {
 } from "../src/store.js";
 import { withProtectedWrite } from "../src/coordination-write.js";
 import { initializeStore } from "../src/store-db.js";
+import { PERSIST_PAYLOAD_CONTRACTS } from "../src/coordination.js";
 
 const ENV_KEY = "MSTAR_HARNESS_DIR";
 
@@ -215,6 +216,31 @@ beforeEach(() => {
 afterEach(() => {
   setArtifactStore(undefined);
   delete process.env[ENV_KEY];
+});
+
+describe("persist-family kind retirement", () => {
+  test("persist payload contracts contain only review and json", () => {
+    expect(Object.keys(PERSIST_PAYLOAD_CONTRACTS)).toEqual(["review", "json"]);
+    expect(PERSIST_PAYLOAD_CONTRACTS).not.toHaveProperty("status");
+    expect(PERSIST_PAYLOAD_CONTRACTS).not.toHaveProperty("snapshot");
+  });
+});
+
+describe("migration-scoped store kinds", () => {
+  test("status and snapshot remain available for migration staging round-trips", async () => {
+    const root = tmpRoot("store-migration-kinds-");
+    try {
+      const store = authorizedStore(createFsStore(root));
+      const status = { version: 2, updated_at: "2026-10-10", workflows: [] };
+      const snapshot = { id: "wf-migration", status: "running" };
+      await store.put({ kind: "status", key: "root", payload: status });
+      await store.put({ kind: "snapshot", key: "wf-migration", payload: snapshot });
+      expect(await store.get<typeof status>({ kind: "status", key: "root" })).toEqual(status);
+      expect(await store.get<typeof snapshot>({ kind: "snapshot", key: "wf-migration" })).toEqual(snapshot);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

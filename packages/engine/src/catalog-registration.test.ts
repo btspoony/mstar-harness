@@ -119,8 +119,8 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
   });
 
-  // T17: purge reaches withWorkflowPurgeLocks -> assertExecutionFileWriteAllowed (status.ts:890).
-  // Keep this refusal until T17 retires the purge-entry veto; do not claim ACTIVE purge success yet.
+  // T21 owns the purge-entry veto under withWorkflowPurgeLocks.
+  // Keep this refusal until T21 retires that veto; T17 removes only the replace-chain caller.
   test("ACTIVE purge refuses through the file-write veto without deleting the recorded snapshot", async () => {
     const { harnessDir, context } = await fixture("purge");
     const workflowId = "wf-purge";
