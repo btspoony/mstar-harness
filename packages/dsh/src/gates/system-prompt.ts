@@ -43,12 +43,10 @@
  *   direction / iteration-gate detail stay exclusive to the pre-step row.
  *   v3 : the
  *   digest reads ONLY the catalog row (`state` — itself aggregated from the
- *   SELECTED workflow snapshot + project registers) — no direct
- *   status.json / snapshot file reads to change. The build is TTL-memoized
- *   PER RESOLVED HARNESS DIR
- *   (`DEFAULT_CATALOG_TTL_MS`) so the per-assembly hot path does not
- *   re-read status.json / the compass / the ledger on every prompt
- *   assembly (the catalog's documented staleness tradeoff).
+ *   ACTIVE execution graph + project registers) — no direct status.json /
+ *   snapshot-file reads. The build is TTL-memoized PER RESOLVED HARNESS DIR
+ *   (`DEFAULT_CATALOG_TTL_MS`) so the per-assembly hot path does not re-read
+ *   the compass / ledger on every prompt assembly (the documented tradeoff).
  *
  * Degradation (boot is never affected — the persona channel's contained-degrade
  * discipline):
@@ -290,8 +288,8 @@ function harnessRulesText(harnessDir: string | null, enforcement: EnforcementFla
  * PER ASSEMBLY from the assembly context's agent , and the memo is keyed by the resolved harness dir so
  * distinct session workspaces keep independent bounded rows instead of
  * sharing one stale boot row. The memo keeps one bounded disk read per
- * `DEFAULT_CATALOG_TTL_MS` per resolved dir instead of a status.json /
- * compass / ledger read on every prompt assembly.
+ * `DEFAULT_CATALOG_TTL_MS` per resolved dir instead of rereading the compass
+ * / ledger on every prompt assembly.
  */
 // simplify: separate per-provider TTL cache — a ledger-change invalidation
 // clears the CATALOG's entry but not this memo, so the provider serves up to

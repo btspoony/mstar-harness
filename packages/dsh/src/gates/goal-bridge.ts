@@ -18,7 +18,7 @@
  *
  * Observe-only: the listener reads the envelope and the goal-owning
  * session's workspace attribution and writes nothing at all — no goal state,
- * no harness state (`{HARNESS_DIR}` / status.json stay SSOT). Every listener
+ * no execution-state writes (`store.db` remains authoritative). Every listener
  * body is try/catch-contained: a throwing seam degrades to ONE log line and
  * never breaks a session.
  */
@@ -150,7 +150,7 @@ function blockedAdvisoryOf(envelope: unknown): BlockedGoalAdvisory | undefined {
  * bounded objective summary, and the open-item authority pointer
  * (`{HARNESS_DIR}/store.db` — the sole issue authority; `mstar issue list`
  * reads it) — the operator acts without reverse-engineering the host.
- * Advisory-only: ZERO harness writes (status.json stays SSOT) and ZERO goal
+ * Advisory-only: ZERO harness writes (ACTIVE execution state remains in store.db) and ZERO goal
  * writes. Never throws (the sink is a no-op before bind; `log` itself is a
  * plain call).
  */
