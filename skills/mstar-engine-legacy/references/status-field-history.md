@@ -79,7 +79,7 @@ Closed residual entries added: `lifecycle`, `closed_at`, `closure_note`; optiona
 
 ### Removed historical per-row execution exclusion
 
-Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS. Historical fields never authorize takeover or require recreating a claim.
+Older transports recorded a per-plan cooperative holder and source checkout in execution_lease. The current coordinator cutover removes this admission/claim model; current source facts live in row metadata and state writes use transactions/CAS (engine-present mechanics → `mstar-artifacts`). Historical fields never authorize takeover or require recreating a claim.
 
 ## v1 root `metadata` standard optional fields
 
@@ -150,7 +150,7 @@ Legacy read paths (root `residual_findings` / `metadata.residual_findings` / `ar
 
 ## v2 file-transport destinations (historical — superseded by the ACTIVE store.db authority)
 
-The v2 file transport itself is retired: these facts now live in `{HARNESS_DIR}/store.db` (`execution_*`), and the file surfaces below are migration sources only. The mapping is retained as field history.
+The v2 file transport itself is retired: these facts now live in `{HARNESS_DIR}/store.db` (`execution_*`), and the file surfaces below are migration sources only. Engine-present field and authority details → `mstar-artifacts`. The mapping is retained as field history.
 
 | v1 surface | v2 home |
 | --- | --- |
