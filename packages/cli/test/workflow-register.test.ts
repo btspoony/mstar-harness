@@ -112,9 +112,12 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   mkdirSync(join(harness, "plans"), { recursive: true });
   writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), "# CLI example plan\n\n**plan_id:** 20260916-plan-cli-example\n");
   writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), "# Verification plan\n\n**plan_id:** 20260916-plan-verify\n");
-  // Contract §3: registration goes through the catalog journal, which requires
-  // an initialized ACTIVE store — the fixture provisions one.
-  await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  // These cases pin the pre-activation file transport contract. Store
+  // initialization now activates execution authority, so explicitly restore
+  // legacy state for this fixture instead of exercising the ACTIVE route.
+  const store = await initializeStore({ harnessDir: harness });
+  store.db.prepare("update execution_meta set authority_state = 'legacy' where id = 1").run();
+  store.close();
   try {
     await fn(harness, {
       root: join(harness, "status.json"),

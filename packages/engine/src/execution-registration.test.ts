@@ -53,7 +53,6 @@ import { readExecutionAuthority } from "./execution-read.js";
 import { commitExecutionRegistration } from "./execution-registration.js";
 import {
   bindExecutionSession,
-  initializeExecutionAuthority,
   readExecutionState,
   type ExecutionCaller,
   type ExecutionContext,
@@ -111,7 +110,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
-  const initialized = await initializeExecutionAuthority(context);
+  const initialized = await readExecutionState(context);
   return {
     workspace,
     harnessRoot: realpathSync(harnessRoot),
@@ -886,8 +885,8 @@ describe("execution-registration \u2014 recovery-first registration", () => {
 
     // Exactly one registration effect, and no file-protocol byte beside it.
     expect(await footprint(fixture.context)).toMatchObject({
-      root_revision: 3,
-      store_revision: 2,
+      root_revision: 2,
+      store_revision: 1,
       catalog_revision: 1,
       workflows: 1,
       registry: 1,
@@ -1064,8 +1063,8 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     const accepted = await commitExecutionRegistration({ ...fixture.context, caller: fixture.caller }, { ...reviewed, expected: fixture.rootToken });
     const registered = await footprint(fixture.context);
     expect(registered).toMatchObject({
-      root_revision: 3,
-      store_revision: 2,
+      root_revision: 2,
+      store_revision: 1,
       catalog_revision: 1,
       workflows: 1,
       registry: 1,
