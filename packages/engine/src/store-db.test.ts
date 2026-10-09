@@ -437,10 +437,12 @@ describe("store-db read-open converges across the writer-close window", () => {
     // block: the retry spent its budget on a shape that never converged. The
     // driver classifies the same shape differently per platform (macOS
     // SQLITE_CANTOPEN "unable to open database file"; Linux SQLITE_NOTADB
-    // "file is not a database"), so the test accepts either verbatim detail.
+    // "file is not a database" or SQLITE_CORRUPT "database disk image is
+    // malformed"), so the test accepts any verbatim driver unreadability
+    // detail.
     await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({
       code: "store.corrupt",
-      message: expect.stringMatching(/unable to open database file|not a database/),
+      message: expect.stringMatching(/unable to open database file|not a database|disk image is malformed/),
     });
     // The refused shape gains no sidecar, exactly as before this change.
     expect(existsSync(join(dir, "store.db-wal"))).toBe(false);
