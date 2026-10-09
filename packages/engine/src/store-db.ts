@@ -1744,9 +1744,15 @@ function isOpenLevelFailure(error: unknown): boolean {
  * a real store verdict? Bun 1.4.0's `node:sqlite` completes a closed handle's
  * cleanup — checkpoint, then removal of the now-empty `-wal`/`-shm` — when the
  * handle is COLLECTED, so a read-only open (or a read through it) can have its
- * sidecars deleted underneath it and report SQLITE_CANTOPEN "unable to open
- * database file" for a store that is entirely intact. The window is transient:
- * once the deferred cleanup settles, the same open converges.
+ * sidecars deleted underneath it and report SQLITE_CANTOPEN for a store that is
+ * entirely intact. The window is transient: once the deferred cleanup settles,
+ * the same open converges.
+ *
+ * The discrimination reads the DRIVER's own structured fact on the raw error —
+ * the numeric SQLITE error code (`errcode` 14 = SQLITE_CANTOPEN) — and never
+ * the mapped refusal shape or the database path: a harness path that merely
+ * contains the word "open" must not turn an ordinary content failure into a
+ * retry, and a `store.corrupt` `StoreError` is never transient.
  *
  * Only that shape is transient, and only while the database FILE itself still
  * exists: a missing file is the caller's own `store.not-initialized` decision
@@ -1756,17 +1762,17 @@ function isOpenLevelFailure(error: unknown): boolean {
  * retried, so no genuine refusal is deferred or weakened.
  */
 function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
-  const err = error as { errcode?: unknown; message?: string };
-  const cantopen = err?.errcode === 14 || /unable to open database file/i.test(String(err?.message ?? ""));
-  return cantopen && existsSync(dbPath);
+  if (error instanceof StoreError) return false;
+  const err = error as { errcode?: unknown };
+  if (err?.errcode !== 14) return false;
+  return existsSync(dbPath);
 }
 
 /** Bounded retry budget for a read open that meets a same-process writer's
  * deferred cleanup. Only reached after a transient CANTOPEN, so a healthy
  * store pays nothing for it. This is a deliberate bounded workaround for the
  * Bun 1.4.0 `node:sqlite` collection-timed cleanup defect: it removes once the
- * runtime quiesces a closed handle's sidecars at close (removal path tracked
- * against issue I-000483 in the harness store). */
+ * runtime quiesces a closed handle's sidecars at close. */
 const READ_OPEN_ATTEMPTS = 5;
 /** Delay before the next read-open attempt. The observed window closes on the
  * runtime's next collection, which the retry's own allocation and this yield
@@ -2032,11 +2038,12 @@ export type StoreHandle = {
  * verified on every request; drift/newer/corrupt refuses before mutation.
  *
  * A READ open is retried on a bounded budget when the store file itself still
- * exists and the driver reports the transient CANTOPEN of a same-process
- * writer-close window (`isTransientReadOpenFailure`). Each attempt re-runs the
- * existing journal preparation and the whole content verification, so a
- * settled store converges and nothing else changes: a persistent failure still
- * refuses with the same code and message the single-shot open produced.
+ * exists and the raw driver error carries SQLITE_CANTOPEN (`errcode` 14), the
+ * transient shape a same-process writer-close window produces
+ * (`isTransientReadOpenFailure`). Each attempt re-runs the existing journal
+ * preparation and the whole content verification, so a settled store converges
+ * and nothing else changes: a persistent failure still refuses with the same
+ * code and message the single-shot open produced.
  */
 export async function openStore(context: StoreContext, mode: "read" | "write"): Promise<StoreHandle> {
   assertStoreRuntimeSupported();
@@ -2069,7 +2076,10 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
 }
 
 /** One open attempt: connect, then verify the schema and store identity on the
- * same connection. The caller owns retrying the transient read-open window. */
+ * same connection. A connect/pragma failure is already mapped by
+ * `openConnection`; the CONTENT stage rethrows the driver's own error so the
+ * caller can tell a transient read-open CANTOPEN (raw `errcode` 14) from a real
+ * content verdict, and owns both retrying the former and mapping either. */
 async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<StoreHandle> {
   let db: StoreDb;
   try {
@@ -2092,7 +2102,7 @@ async function openStoreOnce(dbPath: string, mode: "read" | "write"): Promise<St
     };
   } catch (error) {
     db.close();
-    refuseOpenFailure(error, dbPath);
+    throw error;
   }
 }
 

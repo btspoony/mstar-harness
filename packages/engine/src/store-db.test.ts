@@ -378,9 +378,7 @@ describe("store-db read-open converges across the writer-close window", () => {
   // it is invisible to a plain open. Forcing a minor collection between the
   // writer close and the read opens it deterministically enough to make a
   // regression (a single-shot open) fail instead of flaking; without it the
-  // read happens to succeed and the case would prove nothing. This suite runs
-  // under Bun like its siblings (see `Bun.gc` in execution-store.test.ts).
-  const collectGarbage = (): void => Bun.gc(false);
+  // read happens to succeed and the case would prove nothing.
   /** A store with one committed issue, so convergence is proven by a real read. */
   const seedStoreWithIssue = async (dir: string): Promise<void> => {
     const writer = await initializeStore({ harnessDir: dir });
@@ -394,7 +392,7 @@ describe("store-db read-open converges across the writer-close window", () => {
   test("a read right after a writer close converges without a reader seal", async () => {
     const dir = mkdtempSync(join(ROOT, "read-open-window-"));
     await seedStoreWithIssue(dir);
-    collectGarbage?.(false);
+    Bun.gc(false);
     const reader = await openStore({ harnessDir: dir }, "read");
     expect(reader.epoch).toBe(1);
     expect(reader.schemaVersion).toBe(MIGRATIONS.length);
@@ -407,7 +405,7 @@ describe("store-db read-open converges across the writer-close window", () => {
     for (let iteration = 0; iteration < 20; iteration++) {
       const dir = mkdtempSync(join(ROOT, `read-open-loop-${iteration}-`));
       await seedStoreWithIssue(dir);
-      collectGarbage?.(false);
+      Bun.gc(false);
       const reader = await openStore({ harnessDir: dir }, "read");
       expect(reader.db.prepare("select count(*) as n from issues").get()).toEqual({ n: 1 });
       reader.close();
@@ -430,7 +428,12 @@ describe("store-db read-open converges across the writer-close window", () => {
     bytes[22] = 32;
     bytes[23] = 32;
     writeFileSync(join(dir, "store.db"), bytes);
-    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({ code: "store.corrupt" });
+    // The refusal keeps the driver's own CANTOPEN detail, not a generic block:
+    // the retry spent its budget on a shape that never converged.
+    await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({
+      code: "store.corrupt",
+      message: expect.stringContaining("unable to open database file"),
+    });
     // The refused shape gains no sidecar, exactly as before this change.
     expect(existsSync(join(dir, "store.db-wal"))).toBe(false);
   });
