@@ -109,7 +109,6 @@ export {
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
-  unregisterWorkflow,
   validatePlanRow,
   validateResidual,
   validateStatus,
