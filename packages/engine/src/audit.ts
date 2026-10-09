@@ -15,15 +15,11 @@
  * requirements.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import type { GateResult, ValidationResult } from "./core.js";
-import { withStatusWriteLock } from "./lease.js";
-import { withProtectedWrite } from "./coordination-write.js";
-import { assertSafePathComponent } from "./path.js";
-import { getArtifactStore } from "./store.js";
-import { registerWorkflowEntryLocked, validateWorkflowEntry, type PlanRow, type WorkflowEntry } from "./status.js";
-import { WORKFLOW_SNAPSHOT_FILE, assertDeliveryRegistrationCoherence, writeWorkflowSnapshot, WORKFLOW_DELIVERY_KINDS, type WorkflowDeliveryKind, type WorkflowSnapshot } from "./workflow.js";
+import type { WorkflowDeliveryKind, WorkflowSnapshot } from "./workflow.js";
+import type { PlanRow } from "./status.js";
 
 function violation(severity: ValidationResult["severity"], code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -1515,49 +1511,27 @@ export function scaffoldAuditPlan(
 }
 
 // ---------------------------------------------------------------------------
-// Plan promotion — v2 workflow registration for selected audit plans
-// (snapshot FIRST, then registerWorkflow; register refuses a missing snapshot)
+// Audit-plan registration derivation — consumed by the ACTIVE execution seam
 // ---------------------------------------------------------------------------
 
-/** Options for `promoteAuditPlans`. `harnessDir` is required — the snapshot
- * and `status.json` live under the harness, never beside the audit dir. */
-export type PromoteAuditPlansOptions = {
- /** Absolute harness dir that contains `status.json` + `workflows/`. Required. */
+/** Input fields used to derive an ACTIVE audit workflow snapshot. */
+export type AuditWorkflowOptions = {
+  /** Harness directory used to derive the workflow identity. */
   harnessDir: string;
- /** Default: basename of `outDir` (e.g. `audit-2026-08-22`). */
+  /** Defaults to the basename of outDir. */
   workflowId?: string;
-  /**
-   * Delivery kind declared for the promoted plans (contract §1/§4a). Required —
-   * the promoted lifecycle is a `type: plan` workflow, so its delivery kind is
-   * declared at registration, never inferred and never defaulted in code (an
-   * audit promotion that left it unset minted an active snapshot no close path
-   * could complete).
-   */
+  /** Delivery kind declared by the caller; never inferred or defaulted. */
   deliveryKind: WorkflowDeliveryKind;
-  /** Delivery source branch, recorded as `branch.source`. Required for `development`. */
   branchSource?: string;
-  /** Delivery target branch, recorded as `branch.target`. Required for `development`. */
   branchTarget?: string;
-  /** Completion policy for `verification/report-only` promotions. Required for that kind. */
   completionPolicy?: string;
 };
 
 /**
- * The `Todo` plan rows a promotion of `selected` registers: one row per
- * selected `NNN-*.md` file, `id` from the file stem and `file` from the
- * `{PLAN_DIR}`-relative path.
- *
- * The TITLE comes from the plan document body itself
- * (`readPlanFileSummary`). The audit directory's report README is a report
- * artifact and a catalog import source, never the registration authority
- * (state-projection-contract §2: plan id/title/path are DB catalog metadata
- * and the body stays the file; §4 retires maintained index rows) — the
- * former `## Execution order & status` index read is gone, so a hand-edited
- * index can no longer silently rename a promoted plan row.
- *
- * Exported for the catalog registration journal
- * (`catalog-registration.ts`), which recomputes the SAME registration
- * identity from the reviewed request before publishing a catalog delta.
+ * The `Todo` plan rows derived from the selected `NNN-*.md` documents. Identity,
+ * title and location come from each document rather than the report README.
+ * The ACTIVE execution composer uses these same rows for its snapshot and
+ * catalog delta.
  */
 export function promotedAuditPlanRows(outDir: string, selected: readonly string[]): PlanRow[] {
   const planFiles = resolveSelectedPlanFiles(outDir, selected);
@@ -1573,17 +1547,14 @@ export function promotedAuditPlanRows(outDir: string, selected: readonly string[
 }
 
 /**
- * The create-only `type: plan` snapshot `promoteAuditPlans` writes: the
- * selected plans as `Todo` rows plus the declared delivery fields. Extracted
- * so the catalog registration journal recomputes this exact registration
- * identity (which excludes timestamps) for the reviewed request before it
- * publishes the catalog delta — one snapshot definition, no second source.
+ * The in-memory `type: plan` snapshot committed by `registerShippedCatalogExecution`.
+ * This shares its selected rows with the catalog delta and has no file writer.
  */
 export function promotedAuditSnapshot(
   workflowId: string,
   outDir: string,
   selected: readonly string[],
-  options: PromoteAuditPlansOptions,
+  options: AuditWorkflowOptions,
   startedAt: string,
 ): WorkflowSnapshot {
   const snapshot: WorkflowSnapshot = {
@@ -1606,147 +1577,6 @@ export function promotedAuditSnapshot(
   return snapshot;
 }
 
-/**
- * Promote selected audit plans into the v2 workflow lifecycle as a
- * `type: "plan"` workflow (mstar-audit SKILL.md § Plan output (all variants) — handoff): write the workflow
- * snapshot FIRST (with one Todo PlanRow per selected file), then register
- * the workflow entry — `validateStatusV2` validates the full status doc
- * including the per-snapshot existence check, so the snapshot must exist
- * before the registration. Plan rows are built from the selected plan
- * documents themselves (`promotedAuditPlanRows`), never from the report
- * README index.
- *
- * Run-once semantics: a workflow id whose snapshot already exists refuses
- * the promote (re-promote would drop its registered plan rows); remove
- * that workflow first.
- *
- * The re-promote guard, the snapshot write, and the root upsert run in ONE
- * atomic section under the root `withStatusWriteLock(statusPath)` — the
- * same root lock `registerWorkflow` uses — so the guard is check-then-act
- * safe: two concurrent same-id promotes cannot both pass it (one writes
- * and registers; the other re-checks under the lock and refuses). The
- * snapshot is written create-only through the routed
- * `writeWorkflowSnapshot(snapshot, dir, { createOnly: true })`, whose own
- * snapshot-dir lock nests inside the root lock (root → snapshot is the
- * documented acquisition order). The root upsert replicates
- * `registerWorkflow` semantics inline
- * via the shared `registerWorkflowEntryLocked` helper (calling
- * `registerWorkflow` itself would re-enter the non-reentrant root lock).
- *
- * On any failure inside the lock, the snapshot this call created (and only
- * that exact byte version) plus the now-empty workflow dir are rolled back so
- * a retry converges after the root conflict is resolved.
- */
-export async function promoteAuditPlans(
-  outDir: string,
-  selected: readonly string[],
-  options: PromoteAuditPlansOptions,
-): Promise<{ workflowId: string; snapshotPath: string }> {
-  if (selected.length === 0) {
-    throw new Error("promoteAuditPlans: at least one plan id must be selected (--plans 001,002,\u2026)");
-  }
-  if (typeof options.harnessDir !== "string" || options.harnessDir.trim() === "") {
-    throw new Error("promoteAuditPlans: options.harnessDir is required (must contain status.json + workflows/)");
-  }
-  // Contract §1/§4a: the promoted lifecycle declares its delivery kind here —
-  // the SAME per-kind coherence rule the normal-entry register enforces, so a
-  // promotion can never mint an unclosable `development` (or a
-  // `verification/report-only` without its completion policy).
-  if (
-    typeof options.deliveryKind !== "string" ||
-    !(WORKFLOW_DELIVERY_KINDS as readonly string[]).includes(options.deliveryKind)
-  ) {
-    throw new Error(
-      `promoteAuditPlans: options.deliveryKind must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")} \u2014 got ${JSON.stringify(options.deliveryKind)} (a promoted plan workflow declares its delivery kind at registration; it is never inferred and never defaulted)`,
-    );
-  }
-  assertDeliveryRegistrationCoherence(options.deliveryKind, options, "promoteAuditPlans");
-
-  const workflowId = options.workflowId ?? basename(resolve(outDir));
-  assertSafePathComponent(workflowId, "workflow id");
-
- // Refuse re-promote instead of silently whole-rewriting
- // the snapshot and dropping previously promoted Todo rows. The workflow
- // dir is the existence probe — a second promote would otherwise overwrite
- // (snapshot) / upsert (status.json) with a fresh set, losing the prior
- // subset. Recovery: remove the workflow first (`mstar sdd`/manual
- // `unregisterWorkflow` + snapshot removal). Greptile (fix-1): this guard
- // is check-then-act — it must run INSIDE the root write lock, atomically
- // with the snapshot write + root upsert below.
-  const harnessDir = resolve(options.harnessDir);
-  const statusPath = join(harnessDir, "status.json");
-  const workflowDir = join(harnessDir, "workflows", workflowId);
-  const snapshotPath = join(workflowDir, WORKFLOW_SNAPSHOT_FILE);
-  const store = getArtifactStore();
-
-  const snapshot = promotedAuditSnapshot(workflowId, outDir, selected, options, new Date().toISOString());
-  const entry: WorkflowEntry = {
-    id: workflowId,
-    type: "plan",
-    started_at: snapshot.started_at,
-    dir: `workflows/${workflowId}`,
-  };
-  const entryGate = validateWorkflowEntry(entry);
-  if (!entryGate.ok) {
-    throw new Error(
-      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
-    );
-  }
-
- // Greptile (fix-1): the re-promote guard, the snapshot write, and the root
- // upsert are ONE atomic section under the root status.json write lock —
- // the same serialization point `registerWorkflow` uses. The guard is the
- // lock's first statement, so two concurrent same-id promotes cannot both
- // pass it (check-then-act closed). The snapshot goes through the routed
- // create-only writer, whose snapshot-dir lock nests inside this root lock
- // (root → snapshot): the root lock stays the serialization point for the
- // guard and the root upsert, and the snapshot can never be replaced.
-  await withStatusWriteLock(statusPath, async () => {
-    if (existsSync(snapshotPath)) {
-      throw new Error(
-        `refusing to promote audit plans: workflow ${JSON.stringify(workflowId)} already exists ` +
-          `(snapshot at ${snapshotPath}) \u2014 re-promote would drop its registered plan rows; ` +
-          `remove that workflow before promoting again`,
-      );
-    }
-    let snapshotCreated = false;
-    try {
-      // Create-only (`absent`) under the root lock: the snapshot is written
-      // through the routed writer, which validates it, refuses to replace an
-      // existing document and enters the private protected-write context
-      // (spec §C4). The snapshot's own lock nests inside the root lock --
-      // root → snapshot is the documented acquisition order.
-      await writeWorkflowSnapshot(snapshot, workflowDir, { createOnly: true });
-      snapshotCreated = true;
-      await registerWorkflowEntryLocked(statusPath, entry);
-    } catch (error) {
-      // Roll back only a snapshot this attempt actually created.
-      await withStatusWriteLock(snapshotPath, async () => {
-        if (!snapshotCreated || !existsSync(snapshotPath)) return;
-        const remove = store.delete?.bind(store);
-        if (remove !== undefined) {
-          await withProtectedWrite(snapshotPath, "delete", () => remove({ kind: "snapshot", key: workflowId }));
-        }
-      });
-      try {
- // Remove the workflow dir only when empty — a concurrent writer's
- // snapshot/rows are never destroyed; rmdirSync throws ENOTEMPTY if
- // content appeared between the readdir and the removal, and the
- // re-promote guard would refuse the retry anyway, keeping this
- // promote's partial state out of the way.
-        if (readdirSync(workflowDir).length === 0) {
-          rmdirSync(workflowDir);
-        }
-      } catch {
- // Dir non-empty or already gone — leave it; never force-remove.
-      }
-      throw error;
-    }
-    return { workflowId, snapshotPath };
-  });
-
-  return { workflowId, snapshotPath };
-}
 
 /**
  * Resolve every selected id (`001`, `001-slug`, or `001-slug.md`) to its
@@ -1779,7 +1609,7 @@ function resolveSelectedPlanFiles(outDir: string, selected: readonly string[]): 
     const file = byNum.get(id) ?? byStem.get(id) ?? byStem.get(id.replace(/\.md$/, ""));
     if (file === undefined) {
       throw new Error(
-        `promoteAuditPlans: selected plan ${JSON.stringify(id)} does not match any NNN-*.md file in ${resolve(outDir)}`,
+        `audit registration: selected plan ${JSON.stringify(id)} does not match any NNN-*.md file in ${resolve(outDir)}`,
       );
     }
     if (!seen.has(file)) {

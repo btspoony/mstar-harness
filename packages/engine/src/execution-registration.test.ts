@@ -22,11 +22,10 @@
  * - `execution-registration-replays-*` / `-refuses-a-stale-*`: an exact retry is
  *   stable and writes nothing; an operation-id collision, a stale root token and
  *   a stale catalog revision each refuse.
- * - `execution-registration-refuses-a-legacy-pending-*`: active mode never
- *   adopts (or overwrites) pending file work.
+ * - `execution-registration-refuses-a-legacy-pending-*`: ACTIVE registration
+ *   refuses prepared legacy journal rows; recovery is abort/purge, never adoption.
  * - `execution-registration-blocks-migration-*` / `-refuses-an-imported-pin-*`:
- *   the legacy pending journal and an incoherent imported pin each block the
- *   migration route.
+ *   legacy pending journals and incoherent imported pins remain guarded.
  * - Registration-created catalog revision pins remain in authoritative
  *   row/store state alongside the committed operation receipt.
  * - `registration recovery` / `semantic replay` / `interrupted registration`
@@ -45,12 +44,11 @@ import { promotedAuditPlanRows } from "./audit.js";
 import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogLinkInput } from "./catalog.js";
 import {
   listPendingCatalogRegistrations,
-  resolveCatalogRegistrationState,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
 } from "./catalog-registration.js";
 import { readExecutionAuthority } from "./execution-read.js";
-import { commitExecutionRegistration } from "./execution-registration.js";
+import { commitExecutionRegistration, registerShippedCatalogExecution } from "./execution-registration.js";
 import {
   bindExecutionSession,
   readExecutionState,
@@ -274,7 +272,7 @@ function noJsonRegistrationFiles(workspace: string): boolean {
   return !existsSync(join(workspace, "status.json")) && !existsSync(join(workspace, "workflows"));
 }
 
-/** A pending legacy journal row, exactly as the file route leaves one mid-flight. */
+/** A pending journal row from the retired file-registration protocol. */
 async function plantPendingLegacyOperation(context: StoreContext, operationId: string, workflowId: string): Promise<void> {
   await fixtureWrite(
     context,
@@ -381,18 +379,16 @@ describe("execution-registration", () => {
       bindings: 1,
     });
 
-    // (d) NO JSON registration file, and no intermediate journal phase: the DB
-    // route neither wrote the file protocol's bytes nor its pending marker.
+    // (d) NO JSON registration file. The ACTIVE producer does not create a
+    // legacy file-journal phase.
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
-    expect((await resolveCatalogRegistrationState(fixture.context, WORKFLOW_ID)).pending).toBeNull();
     expect(await listPendingCatalogRegistrations(fixture.context)).toEqual([]);
   });
 
   test("execution-registration-registers-with-an-unset-session-identity-as-a-null-creator", async () => {
     // A transport that supplies no session identity (the omp MCP surface
     // without host injection) registers anyway: creator attribution is unset,
-    // the catalog delta still publishes, and the first coordinator bind adopts
-    // the unowned workflow.
+    // the first coordinator bind claims the workflow for its coordinator.
     const fixture = await activeFixture("unset-creator");
     const before = await footprint(fixture.context);
     const receipt = await commitExecutionRegistration(
@@ -537,12 +533,9 @@ describe("execution-registration", () => {
       catalog_id: iterationId,
       catalog_revision: 1,
     });
-    // The iteration snapshot's own row metadata is the sealed input: the
-    // registration publishes catalog rows and never rewrites the plan row — but
-    // the row's POINTER is the canonical registered plan file, because §4
-    // resolves it through the one registered-plan path contract before the
-    // intent is hashed, sealed or persisted (E07 fold: the DB route used to keep
-    // the caller's spelling verbatim while the file route canonicalized it).
+    // The iteration snapshot's own row metadata is the sealed input. The ACTIVE
+    // composer canonicalizes the plan pointer before hashing and sealing, while
+    // the registration itself never rewrites the catalog plan row.
     const sealed = await sealedInput(fixture.context, row.id, iterationId);
     expect(JSON.parse(String(sealed?.input_json))).toMatchObject({
       plan_id: row.id,
@@ -786,7 +779,7 @@ describe("execution-registration", () => {
     expect(await footprint(fixture.context)).toEqual(accepted);
   });
 
-  test("execution-registration-refuses-a-legacy-pending-operation-instead-of-adopting-it", async () => {
+  test("execution-registration-refuses-a-legacy-pending-operation-with-abort-and-purge-recovery", async () => {
     const fixture = await activeFixture("pending-legacy");
     await plantPendingLegacyOperation(fixture.context, "op-legacy-pending", WORKFLOW_ID);
     const before = await footprint(fixture.context);
@@ -794,11 +787,9 @@ describe("execution-registration", () => {
     const refusal = await refusalOf(() => registerPlanWorkflow(fixture, "op-db-registration"));
     expect(refusal.code).toBe("catalog.registration-pending");
     expect(refusal.message).toContain("op-legacy-pending");
-    // The SAME verdict and the same recovery instruction the file route gives.
-    expect(refusal.message).toContain("catalog reconcile");
+    expect(refusal.message).toContain("mstar catalog reconcile --abort");
+    expect(refusal.message).toContain("mstar catalog purge-registration");
 
-    // Nothing was adopted, published or written: the pending file operation is
-    // left exactly where the file route can settle it.
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
     expect((await listCatalog(fixture.context, {})).total).toBe(0);
@@ -1095,6 +1086,30 @@ describe("execution-registration \u2014 recovery-first registration", () => {
       ),
     ).toEqual(accepted);
     expect(await footprint(fixture.context)).toEqual(registered);
+    expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
+  });
+  test("shipped registration derives the CAS inputs and commits through the ACTIVE transaction", async () => {
+    const fixture = await activeFixture("shipped-registration");
+    const reviewed = planRequest({ context: fixture.context, operationId: "unused-shipped-operation" });
+    const context: ExecutionContext = { ...fixture.context, caller: fixture.caller };
+    const receipt = await registerShippedCatalogExecution(context, {
+      actor: "project-manager",
+      workflow: reviewed.workflow,
+      expected: fixture.rootToken,
+      expectedCatalogRevision: 0,
+    });
+
+    expect(receipt).toMatchObject({ workflowId: WORKFLOW_ID, catalogRevision: 1, recovered: false });
+    expect(receipt.operationId).toMatch(/^op-[a-f0-9]{24}$/);
+    expect(await footprint(fixture.context)).toMatchObject({
+      workflows: 1,
+      registry: 1,
+      catalog_revision: 1,
+      operations: 1,
+      entities: 1,
+      bindings: 1,
+      pending: 0,
+    });
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
   });
 });

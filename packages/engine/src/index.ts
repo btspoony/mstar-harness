@@ -372,7 +372,6 @@ export type {
   AuditSeverityRank,
   AuditTraceKind,
   AuditTraceStep,
-  PromoteAuditPlansOptions,
   RedactResult,
   ScaffoldAuditPlanOptions,
   ScaffoldAuditPlanResult,
@@ -389,7 +388,6 @@ export {
   AUDIT_PRIORITIES,
   AUDIT_RISKS,
   listAuditPlanIds,
-  promoteAuditPlans,
   scaffoldAuditPlan,
   scanSecrets,
   supplyChainChecks,
@@ -751,7 +749,6 @@ export type {
   CatalogExecutionRequest,
   CatalogExecutionWorkflow,
   CatalogRegistrationErrorCode,
-  CatalogRegistrationState,
   PendingCatalogRegistration,
   PurgeCatalogRegistrationReceipt,
 } from "./catalog-registration.js";
@@ -759,25 +756,19 @@ export {
   CATALOG_REGISTRATION_JOURNAL_VERSION,
   CatalogRegistrationError,
   abortCatalogExecution,
-  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   readCatalogRevisions,
-  reconcileCatalogExecution,
-  registerCatalogExecution,
-  registerShippedCatalogExecution,
-  resolveCatalogRegistrationState,
   purgeCatalogRegistration,
 } from "./catalog-registration.js";
+export { registerShippedCatalogExecution } from "./execution-registration.js";
 // §7 the ACTIVE registration route: the ONE verb that publishes a reviewed
-// catalog delta together with the execution lifecycle it registers. It is the
-// DB-transport sibling of `registerCatalogExecution` and shares every reviewed
-// derivation with it (`resolveCatalogExecutionPlan`, the workflow entry, the
-// catalog domain's handle-taking verbs); what differs is the boundary — one
-// `BEGIN IMMEDIATE` transaction over the workflow header, registry membership,
-// plan rows, sealed inputs, catalog delta, binding and committed receipt, with
-// no JSON registration file and no intermediate `prepared` phase ever written.
-// ADDITIVE export: the composed admission frame stays module-scoped, and the
-// legacy journal remains the only file-route entry point.
+// catalog delta together with the execution lifecycle it registers.
+// `registerShippedCatalogExecution` (execution-registration.ts) composes onto
+// the atomic `commitExecutionRegistration`, deriving the root creation token
+// and catalog revision internally; identity is transport-resolved. The
+// journaled file-registration route and its `prepared` phase are retired —
+// recovery for legacy journals is `catalog reconcile --abort` /
+// `catalog purge-registration`, never adoption.
 export { commitExecutionRegistration } from "./execution-registration.js";
 // §5 the single source READ adapter: one read transaction, an exact
 // workflow/plan address and the token of the scope that was actually read
