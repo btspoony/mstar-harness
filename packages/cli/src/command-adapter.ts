@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Command, CommanderError } from "commander";
-import { refusalEnvelope } from "@mstar-harness/commands";
+import { refusalEnvelope, safeReceivedValue } from "@mstar-harness/commands";
 import {
   executeCommand,
   getCommandDefinitions,
@@ -385,34 +385,23 @@ function decodePayloadInputs(
   if (definition.payloads === undefined) return { input, diagnostics: [] };
   const decoded = { ...input };
   const diagnostics: Record<string, unknown>[] = [];
-  for (const [field, descriptor] of Object.entries(definition.payloads)) {
+  for (const field of Object.keys(definition.payloads)) {
     if (!Object.hasOwn(decoded, field)) continue;
-    let value = decoded[field];
-    if (typeof value === "string") {
-      try {
-        value = JSON.parse(value) as unknown;
-        decoded[field] = value;
-      } catch {
-        diagnostics.push({ path: field, code: "invalid_json", message: `${field} must contain valid JSON` });
-        continue;
-      }
-    }
-    const parsed = descriptor.schema.safeParse(value);
-    if (parsed.success) {
-      decoded[field] = parsed.data;
-      continue;
-    }
-    for (const issue of parsed.error.issues) {
-      const suffix = issue.path.reduce((path: string, part: string | number | symbol) =>
-        typeof part === "number" ? `${path}[${String(part)}]` : `${path}.${String(part)}`,
-      "");
-      const path = `${field}${suffix}`;
-      const index = issue.path.find((part) => typeof part === "number");
+    const value = decoded[field];
+    // Transport decoding only: a CLI payload field arrives as a JSON string and
+    // is parsed here. Shape and requirement failures belong to shared admission
+    // (the same grouped path MCP reaches), so a malformed JSON document is the
+    // adapter's own fact and everything else is reported there.
+    if (typeof value !== "string") continue;
+    try {
+      decoded[field] = JSON.parse(value) as unknown;
+    } catch {
       diagnostics.push({
-        path,
-        code: issue.code,
-        message: issue.message,
-        ...(typeof index === "number" ? { index } : {}),
+        path: field,
+        code: "invalid_json",
+        message: `${field} must contain valid JSON`,
+        expected: "valid JSON",
+        received: safeReceivedValue(value),
       });
     }
   }

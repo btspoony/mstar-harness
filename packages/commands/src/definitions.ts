@@ -1,4 +1,4 @@
-import { refusalEnvelope } from "./envelope.js";
+import { refusalEnvelope, type RefusalDiagnostic } from "./envelope.js";
 import { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
 import { z } from "zod";
 import type { CommandDefinition, CommandEnvelope, CommandRequirement, InvocationContext } from "./types.js";
@@ -70,6 +70,33 @@ export class CommandDefinitionError extends Error {
     super(message);
     this.name = "CommandDefinitionError";
   }
+}
+
+/**
+ * True when a declaration left a field as the permissive `z.unknown()`
+ * placeholder a payload contract replaces. A field the family already shaped
+ * (its own transport contract) is never a placeholder, so composition is
+ * idempotent and a second pass over a composed schema is a no-op.
+ */
+export function isPayloadPlaceholder(field: z.core.$ZodType | undefined): boolean {
+  return field instanceof z.ZodUnknown || (field instanceof z.ZodOptional && field.unwrap() instanceof z.ZodUnknown);
+}
+
+/**
+ * The one composition from a declaration's payload contracts to the schema a
+ * transport validates: every placeholder payload field gains its declared
+ * domain shape, optional (the requirement table still owns whether the field
+ * itself is required). The MCP route validates this same object; the CLI's
+ * pre-admission uses it so both routes report identical nested diagnostics for
+ * one payload instead of one route collapsing them to prose.
+ */
+export function payloadComposedSchema(definition: CommandDefinition, schema: z.ZodType = definition.input): z.ZodType {
+  if (!(schema instanceof z.ZodObject)) return schema;
+  const composed: Record<string, z.core.$ZodType> = {};
+  for (const [field, payload] of Object.entries(definition.payloads ?? {})) {
+    if (isPayloadPlaceholder(schema.shape[field])) composed[field] = payload.schema.optional();
+  }
+  return Object.keys(composed).length === 0 ? schema : schema.safeExtend(composed);
 }
 
 function validateOne(definition: CommandDefinition): void {
@@ -446,7 +473,11 @@ export async function executeCommand(id: string, input: unknown, context: Invoca
     return { version: 1, command: id, status: "error", code: "command.unknown", exitCode: 1, message: `unknown command: ${id}` };
   }
   const contract = commandSchemasById.get(definition.id)!;
-  const admitted = admitCommandInput(definition, input, contract, undefined, undefined, context);
+  // The declared payload contract is part of the input contract on BOTH
+  // transports, so the CLI entry validates the composed schema exactly as the
+  // MCP route does: one payload failure and one missing requirement are
+  // reported together, with the same nested per-field facts.
+  const admitted = admitCommandInput(definition, input, contract, payloadComposedSchema(definition), undefined, context);
   if (!admitted.success) return admitted.envelope;
   return admitted.execute(context);
 }

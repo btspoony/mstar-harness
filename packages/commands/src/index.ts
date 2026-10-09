@@ -1,13 +1,15 @@
 export * from "./types.js";
 export { refusalEnvelope } from "./envelope.js";
 export type { RefusalDiagnostic, RefusalInput } from "./envelope.js";
-export { decodeInputDiagnostics } from "./input-diagnostics.js";
+export { decodeInputDiagnostics, safeReceivedValue } from "./input-diagnostics.js";
 export {
   CommandDefinitionError,
   commandEnvelopeSchema,
   getCommandDefinitions,
   executeCommand,
   admitCommandInput,
+  isPayloadPlaceholder,
+  payloadComposedSchema,
   validateCommandDefinitions,
 } from "./definitions.js";
 export type { AdmittedCommand, CommandAdmission } from "./definitions.js";

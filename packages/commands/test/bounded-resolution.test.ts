@@ -442,16 +442,19 @@ describe("issue family witnesses", () => {
     const interaction: Interaction = { label: "validated capture", context: "warm", extraDependency: "", calls: [] };
 
     const malformed = await countedCall(interaction, "execute", "issue.add", { payload: {}, operationId: "op-malformed", actor: "project-manager" }, context);
-    expect(malformed).toMatchObject({ status: "refused", code: "issue.invalid-payload", exitCode: 1 });
+    // The nested payload shape is part of the admitted input contract on both
+    // transports: the public entry refuses it as grouped usage with per-field
+    // diagnostics rather than reaching the handler-fixed `details.paths`.
+    expect(malformed).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2 });
     // Exact missing fields come from the published payload contract for the
     // add verb, not a hardcoded list in this suite.
     const contract = getPayloadSchema("CaptureInput");
     const requiredFields = contract.fields
       .filter((field) => field.required === true || field.requiredWhen?.includes("add") === true)
       .map((field) => `payload.${field.name}`);
-    if (malformed.status === "refused") {
-      const diagnostics = malformed.details as { paths: string[] }; // refusal shape is handler-fixed (issue.ts refused())
-      expect(diagnostics.paths).toEqual(requiredFields);
+    if (malformed.status === "usage") {
+      const diagnostics = malformed.details as { diagnostics: Array<{ path: string }> };
+      expect(diagnostics.diagnostics.map(({ path }) => path)).toEqual(requiredFields);
     }
 
     const listed = await countedCall(interaction, "execute", "issue.list", {}, context);
@@ -712,7 +715,9 @@ describe("call-depth accounting", () => {
     const incomplete = { ...fromContract };
     delete incomplete.evidence;
     const failed = await countedCall(interaction, "execute", "issue.add", { payload: incomplete, operationId: "op-cold-1", actor: "project-manager" }, context);
-    expect(failed.status).toBe("refused");
+    // The omitted field the contract named is refused by grouped admission
+    // (usage, exit 2) — a failed attempt that still counts against the budget.
+    expect(failed.status).toBe("usage");
     // 3-5. Corrected capture (every discovered required field), verification
     //    read, triage mutation.
     const added = await countedCall(interaction, "execute", "issue.add", { payload: fromContract, operationId: "op-cold-2", actor: "project-manager" }, context);
