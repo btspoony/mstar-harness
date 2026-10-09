@@ -1,6 +1,6 @@
 # Engine-check boilerplate explanation (archived)
 
-> Engine-absent fallback: explains what the `Engine check (when available)` blockquotes in runtime skills mean, and how the fallback rule works when the engine is absent.
+> Engine-absent archive: explains what the `Engine check (when available)` blockquotes in runtime skills mean, and what the standalone guarantee means when the engine is absent.
 
 ## What the boilerplate says
 
@@ -13,7 +13,7 @@ Runtime skills carry short contract pointers shaped as blockquote runs that open
 import { validateStatus } from "@mstar-harness/engine";
 ```
 2. **Fail clause.** `On fail -> do not proceed; fix and re-run.` A failed engine check means the contract is violated: the operator must fix the underlying state (not paper over the violation) and re-run the check before continuing.
-3. **Standalone guarantee.** The blockquote closes with "Skill text below remains authoritative when the runtime is absent." — i.e. when the engine is not available in the host (no CLI, no import), the skill text itself (including this archive's full prose) is the contract; when the engine is available, the engine check is the authoritative enforcer and the prose is the fallback reference.
+3. **Standalone guarantee.** The blockquote closes with "Skill text below remains authoritative when the runtime is absent." — i.e. when the engine is not available in the host (no CLI, no import), the skill text itself (including this archive's full prose) is the contract for field history, safety and invariants — never an execution route. When the engine is available, the engine check is the authoritative enforcer and the prose is the reference.
 
 ## Why the archive exists
 
@@ -23,4 +23,5 @@ When engine validators enforce a contract (status schema, lease fields, QC seat 
 
 - See the marker → read the surrounding runtime-skill text for the short contract, and open this skill's matching reference for the full prose (status fields → `status-field-history.md`; leases → `lease-protocol.md`; QC seats → `qc-seat-n-restatements.md`; anti-recursion → `anti-recursion-checklists.md`).
 - The fail clause means the same discipline applies manually: verify the artifact satisfies the contract before proceeding.
+- Execution state is out of scope: engine-absent hosts track execution state in conversation (no-plan mode) — no blockquote or archive reference recreates a file execution route.
 - The standalone guarantee is why this archive is authoritative for you — the runtime skills deliberately defer the full text here.
