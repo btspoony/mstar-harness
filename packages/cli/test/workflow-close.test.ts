@@ -1,38 +1,48 @@
 /**
  * CLI `mstar status workflow-close` — the post-merge lifecycle close verb.
  *
- * Thin wrapper over engine `closeWorkflow` + `unregisterWorkflow` (P2 T2):
- * terminal snapshot write under the snapshot lock FIRST, then the idempotent
- * v2 root unregister. Contract pinned here:
- * - exit 0: fresh close (snapshot `completed` + `ended_at`, root entry
- *   removed, root still validates) and the fully-closed retry (already-closed
- *   notice, neither file rewritten, original `ended_at` kept).
- * - exit 1 gate/IO refusals before any write: missing snapshot (no workflow
- *   dir side effect), dangling integration merge lease, unfinished plan row;
- *   an unregister failure AFTER the durable snapshot write reports a partial
- *   close and a fixed-root retry finishes the unregister without changing
- *   `ended_at`.
- * - exit 2 usage: missing `--workflow`.
- * - a coordinated snapshot closes only for its bound coordinator envelope
- *   (`--session <path>`); a missing or mismatched envelope is refused without
- *   writing terminal state or removing the root entry.
- * - exit 1: a hostile workflow id is rejected up front by the shared
- *   `assertWorkflowId` guard (same convention as every other
- *   `--workflow <id>` verb).
+ * The close runs on the ACTIVE execution authority only: it is one terminal
+ * `lifecycle` transition on the workflow mutation API, which re-checks the
+ * plan-row completion prerequisite, consults the registered delivery evidence,
+ * refuses a dangling integration merge claim, writes the terminal state and
+ * unregisters the root entry in one transaction. The pre-activation file route
+ * (`closeFileWorkflow`, the `--ended-at` / `--session <path>` transports) is
+ * retired, so this suite pins:
+ * - exit 0: a fully-closed ACTIVE lifecycle (stored `completed` + `ended_at`,
+ *   the root register no longer serving the id, the phase-6 projection passing
+ *   on the same state).
+ * - exit 1 refusals before any write: an unfinished plan row
+ *   (`coordination.invalid-transition`, header bytes unchanged), a control root
+ *   with no ACTIVE authority (`execution.not-active` — the recovery names the
+ *   ACTIVE route, and the legacy `status.json` / snapshot bytes are untouched),
+ *   and a missing caller identity (`coordination.identity-missing`).
+ * - exit 2 usage: missing `--workflow`; the removed file-route transports.
+ * - exit 1: a hostile workflow id is rejected up front by the shared id guard.
  *
- * Every case runs the real CLI as a subprocess against a temp fixture
- * harness — no live workflow is ever touched.
+ * Every case runs the real CLI as a subprocess against a temp fixture with an
+ * ACTIVE authority (or, for the retired-route case, a legacy file root) — no
+ * live workflow is ever touched.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { expectUsageDiagnostic } from "./support/cli-assertions";
+import { dirname, join, resolve } from "node:path";
+import {
+  initializeStore,
+  openStore,
+  readExecutionAuthority,
+  serializeExecutionValue,
+  type ExecutionIdentity,
+  type StoreContext,
+} from "@mstar-harness/engine";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const SRC_ENTRY = join(CLI_ROOT, "src/index.ts");
 const WORKFLOW_ID = "wf-close";
+const PLAN_ID = "plan-close";
+const COORDINATOR_ID = "coord-close";
+const COMPLETION_POLICY = "acceptance report at plans/plan-close/report.md";
 
 interface RunResult {
   exitCode: number | null;
@@ -51,6 +61,12 @@ interface CommandEnvelope {
   details?: Record<string, unknown>;
 }
 
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
 function envelope(result: RunResult): CommandEnvelope {
   return JSON.parse(result.stdout) as CommandEnvelope;
 }
@@ -59,706 +75,373 @@ function message(result: RunResult): string {
   return envelope(result).message ?? "";
 }
 
-function violationCodes(result: RunResult): string[] {
-  const gate = envelope(result).details?.gate as { violations?: Array<{ code: string }> } | undefined;
-  return gate?.violations?.map(({ code }) => code) ?? [];
+function recoveryOf(result: RunResult): string {
+  const recovery = envelope(result).details?.recovery;
+  return typeof recovery === "string" ? recovery : "";
+}
+
+function writeText(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text, "utf8");
+}
+
+function writeJson(path: string, value: unknown): void {
+  writeText(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readJson(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
 /**
- * Spawn env with ambient harness env vars pinned out: the CLI
- * resolves harness dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead
- * of probing, and SDD_DIR redirects default outfile paths — ambient values
- * would redirect every fixture spuriously.
+ * Spawn env with ambient harness env vars pinned out: the CLI resolves harness
+ * dirs from MSTAR_HARNESS_DIR / MSTAR_CONTROL_ROOT ahead of probing, and
+ * SDD_DIR redirects default outfile paths — ambient values would redirect every
+ * fixture spuriously.
  */
-function cliEnv(): Record<string, string> {
+function cliEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === "MSTAR_HARNESS_DIR" || key === "MSTAR_CONTROL_ROOT" || key === "SDD_DIR") continue;
+    if (key === "MSTAR_HOST_SESSION_ID" || key === "MSTAR_EXECUTION_IDENTITY") continue;
     if (value !== undefined) env[key] = value;
   }
-  return env;
+  return { ...env, ...extra };
 }
 
-function runCli(args: string[], cwd = CLI_ROOT): RunResult {
+function runCli(args: string[], cwd: string, extra: Record<string, string> = {}): RunResult {
   const proc = Bun.spawnSync([process.execPath, "run", SRC_ENTRY, ...args], {
     cwd,
-    env: cliEnv(),
+    env: cliEnv(extra),
     stdout: "pipe",
     stderr: "pipe",
   });
   return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
 }
 
-function closeArgs(harness: string, extra: string[] = []): string[] {
-  return ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", harness, ...extra];
-}
-
-/** Acquire the envelope through the public bind from the fixture's own primary checkout. */
-function bindCoordinator(harness: string): string {
-  const bound = runCli([
-    "plan", "bind", "--coordinator", "--workflow", WORKFLOW_ID, "--harness", harness,
-    "--session-id", "11111111-2222-3333-4444-555555555555",
-  ], harness);
-  if (bound.exitCode !== 0) throw new Error(`coordinator bind failed: ${bound.stdout}\n${bound.stderr}`);
-  const sessionFile = envelope(bound).data?.session_file;
-  if (typeof sessionFile !== "string") throw new Error(`coordinator bind returned no session file: ${bound.stdout}`);
-  return sessionFile;
-}
-
-/**
- * Minimal valid running snapshot whose single plan row is fully Done, carrying
- * the COMPLETE registered delivery shape the close consults (contract
- * §1/§4c/§4d/§4f: delivery kind, delivery anchors, collected evidence).
- * Override a member to pin a refusal.
- */
-function snapshotDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    schema_version: 1,
-    id: WORKFLOW_ID,
-    type: "plan",
-    status: "running",
-    started_at: "2026-08-01",
-    updated_at: "2026-08-19",
-    delivery_kind: "development",
-    branch: { source: "feature/plan-a", target: "main" },
-    delivery: {
-      compound: { outcome: "created" },
-      pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
-      merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
-    },
-    plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "Done" }],
-    ...overrides,
-  };
-}
-
-/** Minimal v2 root doc with the given active entries. */
-function rootDoc(workflows: unknown[] = []): Record<string, unknown> {
-  return { version: 2, updated_at: "2026-08-19", workflows };
-}
-
-function rootEntry(): Record<string, unknown> {
-  return { id: WORKFLOW_ID, type: "plan", started_at: "2026-08-01", dir: `workflows/${WORKFLOW_ID}` };
-}
-
-interface HarnessFixture {
-  /** `null` — do not create the workflow snapshot (default: running snapshot). */
-  snapshot?: Record<string, unknown> | null;
-  /** `null` — do not write the root file (default: v2 root with the entry). */
-  root?: Record<string, unknown> | null;
-}
-
-/** Temp harness with `workflows/<id>/snapshot.json` + `status.json` fixtures. */
-function setupHarness(fn: (harness: string, paths: { snapshot: string; root: string }) => void, fixture: HarnessFixture = {}): void {
-  const harness = mkdtempSync(join(tmpdir(), "mstar-workflow-close-"));
+function jsonOf(result: RunResult): Record<string, unknown> {
   try {
-    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: harness });
-    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: harness });
-    mkdirSync(join(harness, "plans"), { recursive: true });
-    writeFileSync(join(harness, "plans", "plan-a.md"), "# Plan A\n\n**plan_id:** plan-a\n");
-    const snapshot = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
-    const root = join(harness, "status.json");
-    if (fixture.snapshot !== null) {
-      mkdirSync(join(harness, "workflows", WORKFLOW_ID), { recursive: true });
-      writeFileSync(snapshot, JSON.stringify(fixture.snapshot ?? snapshotDoc(), null, 2));
-    }
-    if (fixture.root !== null) {
-      writeFileSync(root, JSON.stringify(fixture.root ?? rootDoc([rootEntry()]), null, 2));
-    }
-    fn(harness, { snapshot, root });
-  } finally {
-    rmSync(harness, { recursive: true, force: true });
+    return JSON.parse(result.stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error(`expected JSON stdout, got ${JSON.stringify(result.stdout)} (stderr: ${result.stderr})`);
   }
 }
 
-describe("mstar status workflow-close", () => {
-  test("fixture close writes the terminal snapshot and removes the root entry (exit 0)", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-      expect(result.exitCode).toBe(0);
+function dataOf(result: RunResult): Record<string, unknown> {
+  const data = jsonOf(result).data;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error(`expected a data object, got ${result.stdout}`);
+  }
+  return data as Record<string, unknown>;
+}
 
-      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(doc.status).toBe("completed");
-      expect(doc.ended_at).toBe("2026-09-12");
-      expect(doc.updated_at).toBe("2026-09-12");
-      expect((doc.plans as Array<Record<string, unknown>>).every((row) => row.status === "Done")).toBe(true);
+interface Fixture {
+  root: string;
+  harness: string;
+  context: StoreContext;
+  worktree: string;
+  baseSha: string;
+  sourceSha: string;
+  qcReport: string;
+  qcConsolidated: string;
+  qaReport: string;
+}
 
-      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootAfter.workflows).toEqual([]);
+function coordinatorIdentity(): ExecutionIdentity {
+  return { source: "local", sessionId: COORDINATOR_ID, workflowId: WORKFLOW_ID, role: "coordinator" };
+}
 
-      // Fresh close (not the already-closed notice).
-      expect(envelope(result)).toMatchObject({ command: "status.workflow-close", status: "ok" });
-      expect(envelope(result).data?.unregistered).toBe(true);
+/** The launcher channel that carries the caller's acquired identity. */
+function identityEnv(): Record<string, string> {
+  return { MSTAR_EXECUTION_IDENTITY: serializeExecutionValue(coordinatorIdentity()) };
+}
 
-      // Product contract: the unregistered root still validates (exit 0).
-      const validate = runCli(["status", "validate", root]);
-      expect(validate.exitCode).toBe(0);
-    });
-  });
+function gitOut(args: string[], cwd: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
 
-  test("dangling integration merge lease refuses before write (exit 1, bytes unchanged)", () => {
-    setupHarness(
-      (harness, { snapshot, root }) => {
-        const beforeSnapshot = readFileSync(snapshot, "utf8");
-        const beforeRoot = readFileSync(root, "utf8");
+/**
+ * A temp Git workspace whose `.mstar` holds an ACTIVE execution authority, a
+ * real feature checkout and the registered report-only plan document. The row's
+ * delivery is `verification/report-only`, so its completion is the recorded
+ * fulfilment of the declared policy plus QC/QA evidence — no merge, no
+ * integration pair.
+ */
+async function activeFixture(label: string): Promise<Fixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
+  roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  const harness = join(root, ".mstar");
+  mkdirSync(harness, { recursive: true });
+  const context: StoreContext = { harnessDir: harness };
+  const store = await initializeStore(context);
+  store.close();
+  const baseSha = gitOut(["rev-parse", "HEAD"], root);
 
-        const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-        expect(result.exitCode).toBe(1);
-        expect(envelope(result).code).toBe("coordination.invalid-transition");
+  const worktree = join(root, "wt-feature");
+  execFileSync("git", ["worktree", "add", "-q", "-b", "feature/close", worktree], { cwd: root });
+  writeText(join(worktree, "slice.txt"), "slice\n");
+  execFileSync("git", ["add", "slice.txt"], { cwd: worktree });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: slice"], { cwd: worktree });
+  const sourceSha = gitOut(["rev-parse", "HEAD"], worktree);
 
-        // Before-write refusal preserves bytes (snapshot AND root — the
-        // unregister never runs when the close refuses).
-        expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
-        expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-      },
-      {
-        snapshot: snapshotDoc({
-          integration_merge_lease: {
-            holder: "pm",
-            claimed_at: "2026-08-19",
-            plan_id: "plan-a",
-            source_branch: "feature/plan-a",
-            target_branch: "main",
-          },
-        }),
-      },
-    );
-  });
+  writeText(join(harness, "plans", `${PLAN_ID}.md`), `# Close plan\n\n**plan_id:** ${PLAN_ID}\n\n**title:** Close plan\n`);
+  const sdd = join(harness, "sdd", PLAN_ID);
+  const qcReport = join(sdd, "review", "qc1.md");
+  const qcConsolidated = join(sdd, "review", "qc.md");
+  const qaReport = join(sdd, "qa.md");
+  writeText(qcReport, "# QC 1\ndecision: Approve\n");
+  writeText(qcConsolidated, "# QC consolidated\ndecision: Approve\n");
+  writeText(qaReport, "# QA\nverdict: pass\n");
+  return { root, harness, context, worktree, baseSha, sourceSha, qcReport, qcConsolidated, qaReport };
+}
 
-  test("an authorized coordinator cannot close an unfinished plan row (exit 1, bytes unchanged)", () => {
-    setupHarness(
-      (harness, { snapshot, root }) => {
-        const beforeRoot = readFileSync(root, "utf8");
+/** `register → bind`: the ACTIVE producer chain the close consumes. */
+async function registerAndBind(fixture: Fixture): Promise<void> {
+  const rootToken = (await readExecutionAuthority(fixture.context)).token;
+  const registered = runCli([
+    "workflow", "register",
+    "--workflow", WORKFLOW_ID,
+    "--plan-id", PLAN_ID,
+    "--plan-title", "Close plan",
+    "--plan-file", `plans/${PLAN_ID}.md`,
+    "--delivery-kind", "verification/report-only",
+    "--completion-policy", COMPLETION_POLICY,
+    "--expect", rootToken,
+    "--operation", "register-1",
+    "--harness", fixture.harness,
+  ], fixture.root, identityEnv());
+  if (registered.exitCode !== 0) throw new Error(`workflow register failed: ${registered.stdout}${registered.stderr}`);
 
-        const sessionFile = bindCoordinator(harness);
-        const coordinated = readFileSync(snapshot, "utf8");
+  const state = await readExecutionAuthority(fixture.context, { workflowId: WORKFLOW_ID });
+  if (!("workflows" in state.data)) throw new Error("the workflow read did not return a state");
+  const workflow = state.data.workflows.find((entry) => entry.state.id === WORKFLOW_ID);
+  if (workflow === undefined) throw new Error(`workflow ${WORKFLOW_ID} is not in the authority register`);
+  const bound = runCli([
+    "plan", "bind",
+    "--execution",
+    "--workflow", WORKFLOW_ID,
+    "--coordinator",
+    "--expect", workflow.workflowToken,
+    "--operation", "bind-1",
+    "--harness", fixture.harness,
+  ], fixture.root, identityEnv());
+  if (bound.exitCode !== 0) throw new Error(`plan bind failed: ${bound.stdout}${bound.stderr}`);
+}
 
-        const result = runCli(closeArgs(harness, ["--session", sessionFile]));
-        expect(result.exitCode).toBe(1);
-        // Row completion is an explicit close prerequisite, not a prepare gate.
-        expect(envelope(result).code).toBe("coordination.invalid-input");
+function closeArgs(fixture: Fixture, extra: string[] = []): string[] {
+  return ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", fixture.harness, ...extra];
+}
 
-        expect(readFileSync(snapshot, "utf8")).toBe(coordinated);
-        expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-      },
-      {
-        snapshot: snapshotDoc({
-          plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
-        }),
-      },
-    );
-  });
+/** Drive the row and the delivery evidence up to the close prerequisite. */
+async function driveToDone(fixture: Fixture): Promise<void> {
+  const prepared = runCli([
+    "plan", "prepare",
+    "--plan", PLAN_ID,
+    "--worktree-path", fixture.worktree,
+    "--working-branch", "feature/close",
+    "--qa-gate", "mandatory",
+    "--findings-cleanup", "allow-residual",
+    "--harness", fixture.harness,
+  ], fixture.root, identityEnv());
+  if (prepared.exitCode !== 0) throw new Error(`plan prepare failed: ${prepared.stdout}${prepared.stderr}`);
 
-  test("missing snapshot refuses without side effects (exit 1)", () => {
-    setupHarness(
-      (harness, { snapshot }) => {
-        const result = runCli(["status", "workflow-close", "--workflow", "wf-missing", "--harness", harness]);
-        expect(result.exitCode).toBe(1);
-        // The refusal is asserted by its STABLE code, not its prose: the
-        // coordinated-writer frame reports the unresolved target
-        // (`coordination.workflow-not-found`) and names what it withheld.
-        expect(envelope(result).code).toBe("coordination.workflow-not-found");
-        // No snapshot, no dir side effect for the unknown id.
-        expect(existsSync(snapshot)).toBe(false);
-        expect(existsSync(join(harness, "workflows", "wf-missing"))).toBe(false);
-      },
-      { snapshot: null, root: null },
-    );
-  });
-
-  test("fully closed retry rewrites nothing and keeps ended_at (exit 0, already closed)", () => {
-    setupHarness(
-      (harness, { snapshot, root }) => {
-        const beforeSnapshot = readFileSync(snapshot, "utf8");
-        const beforeRoot = readFileSync(root, "utf8");
-
-        // No --ended-at: the default (today) must NOT reach the files.
-        const result = runCli(closeArgs(harness));
-        expect(result.exitCode).toBe(0);
-        expect(envelope(result)).toMatchObject({ command: "status.workflow-close", status: "ok" });
-        expect(envelope(result).data?.unregistered).toBe(false);
-
-        // Neither file is rewritten — the original terminal timestamps stay.
-        expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
-        expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-        const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-        expect(doc.ended_at).toBe("2026-09-01");
-      },
-      {
-        snapshot: snapshotDoc({ status: "completed", updated_at: "2026-09-01", ended_at: "2026-09-01" }),
-        root: rootDoc(),
-      },
-    );
-  });
-
-  test("an unaddressable root register reports a partial close; the retry finishes it without changing ended_at", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      // Round 1: a v1 root is unaddressable by the v2 JSON writer, so the
-      // register entry cannot be REMOVED. Contract §3 (close row): "root-removal
-      // failure is explicit partial closure" — the terminal snapshot is already
-      // durable and is never rolled back, but the close is refused and says so.
-      const v1Root = JSON.stringify({ version: 1, updated_at: "2026-08-19", plans: [] }, null, 2);
-      writeFileSync(root, v1Root);
-      const partial = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-      expect(partial.exitCode).toBe(1);
-      expect(envelope(partial).code).toBe("coordination.root-register-unwritable");
-
-      const afterPartial = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(afterPartial.status).toBe("completed");
-      expect(afterPartial.ended_at).toBe("2026-09-12");
-      expect(readFileSync(root, "utf8")).toBe(v1Root);
-
-      // Round 2: the root is migrated (v2 + the stale entry); the retry only
-      // finishes the unregister — a DIFFERENT --ended-at must not touch the
-      // already-terminal snapshot, which keeps the FIRST close's timestamp.
-      writeFileSync(root, JSON.stringify(rootDoc([rootEntry()]), null, 2));
-      const retry = runCli(closeArgs(harness, ["--ended-at", "2026-09-20"]));
-      expect(retry.exitCode).toBe(0);
-      expect(envelope(retry)).toMatchObject({ command: "status.workflow-close", status: "ok" });
-      expect(envelope(retry).data?.unregistered).toBe(true);
-
-      const docAfter = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(docAfter.ended_at).toBe("2026-09-12");
-      expect(docAfter.updated_at).toBe("2026-09-12");
-      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>;
-      expect(rootAfter.workflows).toEqual([]);
-    });
-  });
-
-  test("missing workflow selector remains a usage error when no minted workflow scope is acquired", () => {
-    setupHarness((harness) => {
-      const result = runCli(["status", "workflow-close", "--harness", harness]);
-      expect(result.exitCode).toBe(2);
-      expect(envelope(result).code).toBe("command.invalid-input");
-    });
-  });
-
-  test("hostile workflow id (path traversal) is rejected by the shared id guard (exit 1)", () => {
-    setupHarness((harness) => {
-      const result = runCli(["status", "workflow-close", "--workflow", "../escape", "--harness", harness]);
-      expect(result.exitCode).toBe(1);
-      expect(message(result)).toContain("invalid workflow id");
-      // The guard fires before any I/O — no dir appears at the escaped path.
-      expect(existsSync(join(harness, "escape"))).toBe(false);
-    });
-  });
-});
-
-/** Public coordinator binding authorizes close; missing/foreign envelopes and unfinished rows do not. */
-describe("mstar status workflow-close — coordinated-writer boundary", () => {
-  /** Snapshot whose row is done, with a well-formed coordinator binding. */
-  function coordinatedSnapshotDoc(harness: string, rowStatus: string): string {
-    const snapshot = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
-    writeFileSync(snapshot, JSON.stringify(snapshotDoc({
-      plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: rowStatus }],
-    }), null, 2));
-    bindCoordinator(harness);
-    return readFileSync(snapshot, "utf8");
+  for (const status of ["InProgress", "InReview"]) {
+    const payload = join(fixture.root, `progress-${status}.json`);
+    writeJson(payload, { status, summary: `${status} for close`, evidence_paths: [fixture.qcReport] });
+    const moved = runCli(["plan", "progress", "--plan", PLAN_ID, "--file", payload, "--harness", fixture.harness], fixture.root, identityEnv());
+    if (moved.exitCode !== 0) throw new Error(`plan progress ${status} failed: ${moved.stdout}${moved.stderr}`);
   }
 
-  /** Read the envelope produced by the ordinary coordinator bind. */
-  function coordinatorSessionPath(harness: string): string {
-    const snapshot = JSON.parse(readFileSync(join(harness, "workflows", WORKFLOW_ID, "snapshot.json"), "utf8")) as {
-      coordination: { coordinator: { session_file: string } };
+  const delivery = join(fixture.root, "delivery.json");
+  writeJson(delivery, { completion: { policy: COMPLETION_POLICY, evidence: "acceptance/plan-close/report.md" } });
+  const recorded = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", delivery, "--harness", fixture.harness], fixture.root, identityEnv());
+  if (recorded.exitCode !== 0) throw new Error(`workflow evidence failed: ${recorded.stdout}${recorded.stderr}`);
+
+  const completion = join(fixture.root, "completion.json");
+  writeJson(completion, {
+    source_sha: fixture.sourceSha,
+    review_base: fixture.baseSha,
+    review_head: fixture.sourceSha,
+    qc: { decision: "Approve", reports: [fixture.qcReport], consolidated: fixture.qcConsolidated },
+    qa: { gate: "mandatory", decision: "pass", report: fixture.qaReport },
+  });
+  const completed = runCli(["plan", "complete", "--plan", PLAN_ID, "--file", completion, "--harness", fixture.harness], fixture.root, identityEnv());
+  if (completed.exitCode !== 0) throw new Error(`plan complete failed: ${completed.stdout}${completed.stderr}`);
+}
+
+/** The stored header of the workflow, read from the real row. */
+async function storedHeader(fixture: Fixture): Promise<{ status?: unknown; ended_at?: unknown }> {
+  const handle = await openStore(fixture.context, "read");
+  try {
+    const row = handle.db.prepare("select state_json from execution_workflows where workflow_id = ?").get(WORKFLOW_ID);
+    if (typeof row !== "object" || row === null || !("state_json" in row) || typeof row.state_json !== "string") {
+      throw new Error(`no stored row for ${WORKFLOW_ID}`);
+    }
+    const parsed: unknown = JSON.parse(row.state_json);
+    if (typeof parsed !== "object" || parsed === null) throw new Error("stored row is not an object");
+    return {
+      ...("status" in parsed ? { status: parsed.status } : {}),
+      ...("ended_at" in parsed ? { ended_at: parsed.ended_at } : {}),
     };
-    return snapshot.coordination.coordinator.session_file;
+  } finally {
+    handle.close();
   }
+}
 
-  test("a coordinated snapshot closes for its bound coordinator session (exit 0)", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      coordinatedSnapshotDoc(harness, "Done");
-      const sessionPath = coordinatorSessionPath(harness);
+/** The IDs the authority's root register currently serves. */
+async function servedRoot(fixture: Fixture): Promise<readonly { id: string }[]> {
+  const read = await readExecutionAuthority(fixture.context);
+  if (!("workflows" in read.data)) throw new Error("the register read did not return the whole state");
+  return read.data.root.workflows;
+}
 
-      const result = runCli(closeArgs(harness, ["--ended-at", "2026-09-12", "--session", sessionPath]));
-      expect(result.exitCode).toBe(0);
-      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(doc.status).toBe("completed");
-      expect(doc.ended_at).toBe("2026-09-12");
-      expect((JSON.parse(readFileSync(root, "utf8")) as Record<string, unknown>).workflows).toEqual([]);
-    });
-  });
+describe("mstar status workflow-close — ACTIVE lifecycle close", () => {
+  test("closes the finished lifecycle: terminal state, root unregister and the phase-6 projection", async () => {
+    const fixture = await activeFixture("mstar-close-active");
+    await registerAndBind(fixture);
+    await driveToDone(fixture);
 
-  test("a coordinated snapshot without --session refuses even when every row is Done (exit 1, bytes + root intact)", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      const fixture = coordinatedSnapshotDoc(harness, "Done");
+    expect((await storedHeader(fixture)).status).toBe("running");
+    expect(await servedRoot(fixture)).toHaveLength(1);
 
-      const beforeRoot = readFileSync(root, "utf8");
-      const result = runCli(closeArgs(harness));
-      expect(result.exitCode).toBe(1);
-      expect(envelope(result).code).toBe("coordination.identity-mismatch");
-      expect(readFileSync(snapshot, "utf8")).toBe(fixture);
-      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-    });
-  });
+    const closed = runCli(closeArgs(fixture, ["--reason", "delivery complete"]), fixture.root, identityEnv());
+    expect(closed.exitCode, closed.stdout).toBe(0);
+    expect(jsonOf(closed)).toMatchObject({ command: "status.workflow-close", status: "ok" });
 
-  test("a coordinated snapshot with an unfinished row refuses before writing anything (bytes + root intact)", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      const fixture = coordinatedSnapshotDoc(harness, "InReview");
-      const sessionPath = coordinatorSessionPath(harness);
-      const beforeRoot = readFileSync(root, "utf8");
+    // The terminal state is persisted in the same transaction that dropped the
+    // registry row: the row survives in `execution_workflows`, the register no
+    // longer serves the id.
+    const terminal = await storedHeader(fixture);
+    expect(terminal.status).toBe("completed");
+    expect(typeof terminal.ended_at).toBe("string");
+    expect(await servedRoot(fixture)).toHaveLength(0);
 
-      const result = runCli(closeArgs(harness, ["--session", sessionPath]));
-      expect(result.exitCode).toBe(1);
-      expect(envelope(result).code).toBe("coordination.invalid-input");
-      expect(readFileSync(snapshot, "utf8")).toBe(fixture);
-      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-    });
-  });
+    // The read-only phase-6 projection passes on the same lifecycle state.
+    const phase6 = runCli(["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", fixture.harness], fixture.root);
+    expect(phase6.exitCode, phase6.stdout).toBe(0);
+    expect(jsonOf(phase6)).toMatchObject({ status: "ok", data: { phase: 6 } });
+  }, 30_000);
 
-  test("a session path outside the bound coordinator envelope refuses without writes", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      const fixture = coordinatedSnapshotDoc(harness, "Done");
-      const beforeRoot = readFileSync(root, "utf8");
+  test("a repeated close of the closed lifecycle refuses without a second write", async () => {
+    const fixture = await activeFixture("mstar-close-retry");
+    await registerAndBind(fixture);
+    await driveToDone(fixture);
 
-      const result = runCli(closeArgs(harness, ["--session", "workflows/coordinator.json"]));
-      expect(result.exitCode).toBe(1);
-      expect(envelope(result).code).toBe("coordination.identity-mismatch");
-      expect(readFileSync(snapshot, "utf8")).toBe(fixture);
-      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-    });
-  });
+    expect(runCli(closeArgs(fixture), fixture.root, identityEnv()).exitCode).toBe(0);
+    const terminal = await storedHeader(fixture);
+
+    const retry = runCli(closeArgs(fixture, ["--reason", "again"]), fixture.root, identityEnv());
+    expect(retry.exitCode).toBe(1);
+    // The registry no longer serves the closed lifecycle, so the exact-address
+    // read refuses it; the recorded terminal state is left as it was.
+    expect(envelope(retry).code).toBe("coordination.workflow-not-found");
+    expect(await storedHeader(fixture)).toEqual(terminal);
+  }, 30_000);
 });
 
-/**
- * CLI `mstar iteration gate --phase 6` — the additive post-merge close
- * local-state gate form (P2 T4). Thin wrapper over engine
- * `evaluatePostMergeClose`: no `--compass` required (standalone plans have
- * none); exit 0 pass / 1 gate fail or error / 2 usage. The Phase 2–5
- * transition form (requires `--compass`) is pinned unchanged in the last
- * test. Every case runs the real CLI as a subprocess against a temp fixture
- * harness — no live workflow is ever touched.
- */
-describe("mstar iteration gate --phase 6", () => {
-  const gateArgs = (harness: string, workflow = WORKFLOW_ID): string[] =>
-    ["iteration", "gate", "--phase", "6", "--workflow", workflow, "--harness", harness];
+describe("mstar status workflow-close — prerequisite refusals", () => {
+  test("an unfinished plan row refuses before any write", async () => {
+    const fixture = await activeFixture("mstar-close-unfinished");
+    await registerAndBind(fixture);
 
-  test("closed + unregistered standalone plan passes without --compass (exit 0)", () => {
-    setupHarness(
-      (harness) => {
-        const result = runCli(gateArgs(harness));
-        expect(result.exitCode).toBe(0);
-        const response = envelope(result);
-        const gate = response.data?.gate as { ok?: boolean };
-        expect(response).toMatchObject({ command: "iteration.gate", status: "ok" });
-        expect(gate.ok).toBe(true);
-      },
-      // Seam S3 (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §6 S3): the phase-6 gate
-      // consults the registered delivery-kind evidence — the shared
-      // `snapshotDoc()` fixture carries the complete development shape
-      // (kind + delivery anchors + collected evidence).
-      { snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }), root: rootDoc() },
-    );
-  });
+    const before = await storedHeader(fixture);
+    const result = runCli(closeArgs(fixture, ["--reason", "too early"]), fixture.root, identityEnv());
+    expect(result.exitCode).toBe(1);
+    expect(envelope(result).code).toBe("coordination.invalid-transition");
+    // Row completion is an explicit close prerequisite, not a transition the
+    // close invents: the header keeps its running lifecycle.
+    expect(await storedHeader(fixture)).toEqual(before);
+    expect(await servedRoot(fixture)).toHaveLength(1);
+  }, 30_000);
 
-  test("running snapshot (close not yet run) → exit 1 with PHASE6_NOT_TERMINAL", () => {
-    setupHarness((harness) => {
-      const result = runCli(gateArgs(harness));
-      expect(result.exitCode).toBe(1);
-      expect(violationCodes(result)).toContain("PHASE6_NOT_TERMINAL");
+  test("a missing caller identity refuses and names the identity recovery", async () => {
+    const fixture = await activeFixture("mstar-close-identity");
+    await registerAndBind(fixture);
+
+    const result = runCli(closeArgs(fixture), fixture.root);
+    expect(result.exitCode).toBe(1);
+    expect(envelope(result).code).toBe("coordination.identity-missing");
+    // The recovery states the supported route: mint/bind a coordinator identity.
+    expect(message(result)).toContain("mstar session run");
+    expect(message(result)).toContain("mstar plan bind --execution");
+    expect((await storedHeader(fixture)).status).toBe("running");
+  }, 30_000);
+
+  test("a control root with no ACTIVE authority refuses, names the ACTIVE route, and leaves the file bytes untouched", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-close-legacy-")));
+    roots.push(root);
+    const harness = join(root, ".mstar");
+    writeText(join(harness, "plans", `${PLAN_ID}.md`), `# Close plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    const statusPath = join(harness, "status.json");
+    const snapshotPath = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
+    writeJson(statusPath, {
+      version: 2,
+      updated_at: "2026-09-15",
+      workflows: [{ id: WORKFLOW_ID, type: "plan", started_at: "2026-09-01", dir: `workflows/${WORKFLOW_ID}` }],
     });
-  });
-
-  test("root entry still registered → exit 1 with PHASE6_ROOT_ENTRY_PRESENT", () => {
-    setupHarness(
-      (harness) => {
-        const result = runCli(gateArgs(harness));
-        expect(result.exitCode).toBe(1);
-        expect(violationCodes(result)).toContain("PHASE6_ROOT_ENTRY_PRESENT");
-      },
-      { snapshot: snapshotDoc({ status: "completed", ended_at: "2026-09-12", updated_at: "2026-09-12" }) },
-    );
-  });
-
-  test("dangling integration merge lease → exit 1 with PHASE6_DANGLING_LEASE", () => {
-    setupHarness(
-      (harness) => {
-        const result = runCli(gateArgs(harness));
-        expect(result.exitCode).toBe(1);
-        expect(violationCodes(result)).toContain("PHASE6_DANGLING_LEASE");
-      },
-      {
-        snapshot: snapshotDoc({
-          status: "completed",
-          ended_at: "2026-09-12",
-          updated_at: "2026-09-12",
-          integration_merge_lease: {
-            holder: "pm",
-            claimed_at: "2026-08-19",
-            plan_id: "plan-a",
-            source_branch: "feature/plan-a",
-            target_branch: "main",
-          },
-        }),
-        root: rootDoc(),
-      },
-    );
-  });
-
-  test("missing snapshot file refuses (exit 1)", () => {
-    setupHarness(
-      (harness) => {
-        const result = runCli(gateArgs(harness, "wf-missing"));
-        expect(result.exitCode).toBe(1);
-        expect(envelope(result).code).toBe("iteration.gate.snapshot-not-found");
-      },
-      { snapshot: null, root: null },
-    );
-  });
-
-  test("unsupported --phase value is a usage error (exit 2)", () => {
-    setupHarness((harness) => {
-      const result = runCli(["iteration", "gate", "--phase", "5", "--workflow", WORKFLOW_ID, "--harness", harness]);
-      expect(result.exitCode).toBe(2);
-      expect(message(result)).toContain("usage");
-    });
-  });
-
-  test("existing transition form is intact: --compass still required (exit 2 without it) and the evaluation still exits 0/1", () => {
-    setupHarness(
-      (harness) => {
-        const compassPath = join(harness, "delivery-compass.md");
-        writeFileSync(
-          compassPath,
-          "---\niteration_id: v9.9.9\nstart_date: 2026-08-01\nstatus: active\niteration_base_branch: main\ntarget_branch: main\nplans:\n  - plan-a\n---\n",
-          "utf8",
-        );
-        // Running plan row → phase-2-execute verdict, gate passes (exit 0).
-        const okRun = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--compass", compassPath, "--harness", harness]);
-        expect(okRun.exitCode).toBe(0);
-        expect((envelope(okRun).data?.transition)).toBe("phase-2-execute");
-
-        // Phase 2–5 form without --compass → usage error (exit 2).
-        const noCompass = runCli(["iteration", "gate", "--workflow", WORKFLOW_ID, "--harness", harness]);
-        expect(noCompass.exitCode).toBe(2);
-        expect(message(noCompass)).toContain("usage");
-      },
-      {
-        snapshot: snapshotDoc({
-          plans: [{ id: "plan-a", title: "Plan A", file: "plans/plan-a.md", status: "InProgress" }],
-        }),
-      },
-    );
-  });
-});
-
-/**
- * CLI `mstar workflow evidence` — the authorized delivery-evidence recording
- * verb (mstar-artifacts/references/plan-workflow-lifecycle-contract.md §3/§4c/§4d/§4f, seam S3). Thin
- * wrapper over engine `recordWorkflowDelivery`: the payload JSON is merged
- * into the snapshot's `delivery` block under the snapshot lock, so evidence is
- * collected stage by stage and the close consultation can pass. Contract
- * pinned here:
- * - exit 0: recording the missing member lets the close succeed end to end,
- *   and re-recording identical evidence rewrites nothing.
- * - exit 1: a coordinated snapshot is written only for its own bound
- *   coordinator envelope (`--session`), and a partial/incoherent payload is
- *   refused by the engine with no byte change.
- * - exit 2: usage — a missing/relative/malformed `--file`.
- */
-describe("mstar workflow evidence", () => {
-  const evidenceArgs = (harness: string, payload: string, extra: string[] = []): string[] =>
-    ["workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", payload, "--harness", harness, ...extra];
-
-  /** Write a delivery-evidence payload into the fixture harness; returns its absolute path. */
-  function writePayload(harness: string, body: unknown): string {
-    const payload = join(harness, "delivery-evidence.json");
-    writeFileSync(payload, JSON.stringify(body), "utf8");
-    return payload;
-  }
-
-  /** The shared fixture minus one member — the evidence the close must refuse on. */
-  function withoutMember(member: string): Record<string, unknown> {
-    const delivery = { ...(snapshotDoc().delivery as Record<string, unknown>) };
-    delete delivery[member];
-    return snapshotDoc({ delivery });
-  }
-
-  test("records the missing member, is idempotent, and unblocks the close (exit 0)", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      writeFileSync(snapshot, JSON.stringify(withoutMember("merge"), null, 2), "utf8");
-      const beforeSnapshot = readFileSync(snapshot, "utf8");
-      const beforeRoot = readFileSync(root, "utf8");
-
-      // The close refuses first — incomplete delivery, zero writes.
-      const refused = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-      expect(refused.exitCode).toBe(1);
-      expect(message(refused)).toContain("PHASE6_DELIVERY_EVIDENCE_INCOMPLETE");
-      expect(message(refused)).toContain("delivery.merge");
-      expect(message(refused)).toContain("mstar workflow evidence");
-      expect(readFileSync(snapshot, "utf8")).toBe(beforeSnapshot);
-      expect(readFileSync(root, "utf8")).toBe(beforeRoot);
-
-      const payload = writePayload(harness, {
-        merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
-      });
-      const recorded = runCli(evidenceArgs(harness, payload, ["--at", "2026-09-12T01:00:00Z"]));
-      expect(recorded.exitCode).toBe(0);
-      expect(envelope(recorded)).toMatchObject({ command: "workflow.evidence", status: "ok" });
-
-      // Idempotent re-recording: same evidence, no rewrite (byte-identical).
-      const afterRecord = readFileSync(snapshot, "utf8");
-      const again = runCli(evidenceArgs(harness, payload, ["--at", "2026-09-13T01:00:00Z"]));
-      expect(again.exitCode).toBe(0);
-      expect(envelope(again)).toMatchObject({ command: "workflow.evidence", status: "ok" });
-      expect(readFileSync(snapshot, "utf8")).toBe(afterRecord);
-
-      // The close now completes and unregisters the root entry.
-      const closed = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-      expect(closed.exitCode).toBe(0);
-      const doc = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(doc.status).toBe("completed");
-      expect(doc.ended_at).toBe("2026-09-12");
-      // Fixture JSON read back from disk — the delivery block is a plain object.
-      const delivery = doc.delivery as Record<string, unknown>;
-      expect(delivery.merge).toEqual({
-        provider: "github",
-        evidence: "PR #244 verified merged at 2c792c01",
-      });
-      const rootAfter = JSON.parse(readFileSync(root, "utf8")) as { workflows: unknown[] };
-      expect(rootAfter.workflows).toEqual([]);
-    });
-  });
-
-  test("a coordinated workflow refuses without its bound coordinator envelope (exit 1, bytes unchanged)", () => {
-    setupHarness((harness, { snapshot }) => {
-      writeFileSync(snapshot, JSON.stringify(snapshotDoc({ delivery: undefined }), null, 2), "utf8");
-      const sessionFile = bindCoordinator(harness);
-      const payload = writePayload(harness, { compound: { outcome: "created" } });
-      const before = readFileSync(snapshot, "utf8");
-
-      const refused = runCli(evidenceArgs(harness, payload));
-      expect(refused.exitCode).toBe(1);
-      expect(envelope(refused).code).toBe("coordination.identity-mismatch");
-      expect(readFileSync(snapshot, "utf8")).toBe(before);
-
-      const recorded = runCli(evidenceArgs(harness, payload, ["--session", sessionFile, "--at", "2026-09-12T01:00:00Z"]));
-      expect(recorded.exitCode).toBe(0);
-      const stored = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(stored.delivery).toEqual({ compound: { outcome: "created" } });
-    });
-  });
-
-  test("usage refusals stay exit 2 and never touch the snapshot", () => {
-    setupHarness((harness, { snapshot }) => {
-      const before = readFileSync(snapshot, "utf8");
-      // Missing --file.
-      const missing = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--harness", harness]);
-      expect(missing.exitCode).toBe(2);
-      expect(envelope(missing)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      // Relative --file.
-      const relative = runCli(evidenceArgs(harness, "delivery-evidence.json"));
-      expect(relative.exitCode).toBe(2);
-      expect(envelope(relative)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      // Malformed JSON payload.
-      const badPath = join(harness, "bad.json");
-      writeFileSync(badPath, "{ not json", "utf8");
-      const malformed = runCli(evidenceArgs(harness, badPath));
-      expect(malformed.exitCode).toBe(1);
-      // The two modes are exclusive, and the declared kind is an enum.
-      const both = runCli([
-        "workflow", "evidence", "--workflow", WORKFLOW_ID, "--file", badPath,
-        "--declare-kind", "development", "--branch-source", "feature/a", "--branch-target", "main", "--harness", harness,
-      ]);
-      expect(both.exitCode).toBe(2);
-      expect(envelope(both)).toMatchObject({ status: "usage", code: "command.invalid-input" });
-      const unknownKind = runCli(["workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "wing-it", "--harness", harness]);
-      expect(unknownKind.exitCode).toBe(2);
-      expect(message(unknownKind)).toContain("--declare-kind must be one of");
-      expect(readFileSync(snapshot, "utf8")).toBe(before);
-    });
-  });
-
-  test("--declare-kind: the one-time declaration unblocks the close end to end (kind never inferred, §1/§4a)", () => {
-    setupHarness((harness, { snapshot, root }) => {
-      // The audit-promotion / v1-lift shape: active, no kind, no anchors, no evidence.
-      writeFileSync(snapshot, JSON.stringify(snapshotDoc({ delivery_kind: undefined, branch: undefined, delivery: undefined }), null, 2), "utf8");
-      const beforeRoot = readFileSync(root, "utf8");
-
-      // The close refuses: no declared kind (and it is never inferred).
-      const refused = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-      expect(refused.exitCode).toBe(1);
-      expect(message(refused)).toContain("PHASE6_DELIVERY_KIND_UNREGISTERED");
-
-      // The declaration is incomplete without both delivery anchors; the
-      // command reports the missing target before attempting any write.
-      const beforeIncoherentSnapshot = readFileSync(snapshot, "utf8");
-      const incoherent = runCli([
-        "workflow", "evidence", "--workflow", WORKFLOW_ID, "--declare-kind", "development", "--branch-source", "feature/a", "--harness", harness,
-      ]);
-      expect(incoherent.exitCode).toBe(2);
-      expectUsageDiagnostic(incoherent, "branchTarget");
-      expect(readFileSync(snapshot, "utf8")).toBe(beforeIncoherentSnapshot);
-
-      const declared = runCli([
-        "workflow", "evidence", "--workflow", WORKFLOW_ID,
-        "--declare-kind", "development", "--branch-source", "feature/plan-a", "--branch-target", "main",
-        "--at", "2026-09-12T01:00:00Z", "--harness", harness,
-      ]);
-      expect(declared.exitCode).toBe(0);
-      expect(envelope(declared)).toMatchObject({ command: "workflow.evidence", status: "ok" });
-
-      // One-time: a second declaration is refused, even with the same kind.
-      const again = runCli([
-        "workflow", "evidence", "--workflow", WORKFLOW_ID,
-        "--declare-kind", "development", "--branch-source", "feature/plan-a", "--branch-target", "main", "--harness", harness,
-      ]);
-      expect(again.exitCode).toBe(1);
-      expect(message(again)).toContain("already declares");
-
-      // Record the evidence, then close: the declaration, the anchors and every
-      // member agree, so the close completes and the gate passes.
-      const payload = writePayload(harness, {
+    writeJson(snapshotPath, {
+      schema_version: 1, id: WORKFLOW_ID, type: "plan", status: "running",
+      started_at: "2026-09-01", updated_at: "2026-09-15", delivery_kind: "development",
+      branch: { source: "feature/close", target: "main" },
+      delivery: {
         compound: { outcome: "created" },
-        pr: { repo: "btspoony/mstar-harness", head: "feature/plan-a", target: "main" },
-        merge: { provider: "github", evidence: "PR #244 verified merged at 2c792c01" },
-      });
-      expect(runCli(evidenceArgs(harness, payload)).exitCode).toBe(0);
-
-      const closed = runCli(closeArgs(harness, ["--ended-at", "2026-09-12"]));
-      expect(closed.exitCode).toBe(0);
-      const stored = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(stored.status).toBe("completed");
-      expect(stored.delivery_kind).toBe("development");
-      const gate = runCli(["iteration", "gate", "--phase", "6", "--workflow", WORKFLOW_ID, "--harness", harness]);
-      expect(gate.exitCode).toBe(0);
-      expect((envelope(gate).data?.gate as { ok?: boolean }).ok).toBe(true);
-      // The declaration never touched the root register (nothing was unregistered yet).
-      expect(readFileSync(root, "utf8")).not.toBe(beforeRoot);
+        pr: { repo: "synthetic/example", head: "feature/close", target: "main" },
+        merge: { provider: "synthetic-fixture", evidence: "fixture verified-merge record" },
+      },
+      plans: [{ id: PLAN_ID, title: "Close plan", file: `plans/${PLAN_ID}.md`, status: "Done" }],
     });
-  });
+    const beforeStatus = readFileSync(statusPath, "utf8");
+    const beforeSnapshot = readFileSync(snapshotPath, "utf8");
 
-  test("--declare-kind: a supplied anchor conflicting with a registered one is refused, the identical value restates it (§1)", () => {
-    setupHarness((harness, { snapshot }) => {
-      // Kind-less, but already carrying the delivery anchors of an earlier
-      // producer-shaped write: the declaration fills the kind, never re-points
-      // the delivery.
-      writeFileSync(
-        snapshot,
-        JSON.stringify(
-          snapshotDoc({ delivery_kind: undefined, branch: { source: "feature/registered", target: "main" }, delivery: undefined }),
-          null,
-          2,
-        ),
-        "utf8",
-      );
-      const before = readFileSync(snapshot, "utf8");
+    const result = runCli(
+      ["status", "workflow-close", "--workflow", WORKFLOW_ID, "--harness", harness, "--reason", "close"],
+      root,
+      identityEnv(),
+    );
+    expect(result.exitCode).toBe(1);
+    // The retired file route never answers: the ACTIVE authority is the only
+    // route, and its refusal names how a control root acquires one.
+    expect(envelope(result).code).toBe("execution.not-active");
+    expect(recoveryOf(result)).toContain("mstar store init");
+    expect(readFileSync(statusPath, "utf8")).toBe(beforeStatus);
+    expect(readFileSync(snapshotPath, "utf8")).toBe(beforeSnapshot);
+  }, 30_000);
+});
 
-      const conflicting = runCli([
-        "workflow", "evidence", "--workflow", WORKFLOW_ID,
-        "--declare-kind", "development", "--branch-source", "feature/other", "--branch-target", "main", "--harness", harness,
-      ]);
-      expect(conflicting.exitCode).toBe(1);
-      expect(message(conflicting)).toContain('branch.source is already "feature/registered"');
-      expect(readFileSync(snapshot, "utf8")).toBe(before);
+describe("mstar status workflow-close — usage and the retired file transports", () => {
+  test("missing workflow selector is a usage refusal", async () => {
+    const fixture = await activeFixture("mstar-close-usage");
+    const result = runCli(["status", "workflow-close", "--harness", fixture.harness], fixture.root);
+    expect(result.exitCode).toBe(2);
+    expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+  }, 30_000);
 
-      const restated = runCli([
-        "workflow", "evidence", "--workflow", WORKFLOW_ID,
-        "--declare-kind", "development", "--branch-source", "feature/registered", "--branch-target", "main",
-        "--at", "2026-09-16T03:00:00Z", "--harness", harness,
-      ]);
-      expect(restated.exitCode).toBe(0);
-      const stored = JSON.parse(readFileSync(snapshot, "utf8")) as Record<string, unknown>;
-      expect(stored.delivery_kind).toBe("development");
-      expect(stored.branch).toEqual({ source: "feature/registered", target: "main" });
-    });
-  });
+  test("a retired file-route input refuses by naming the ACTIVE route", async () => {
+    const fixture = await activeFixture("mstar-close-file-flags");
+    await registerAndBind(fixture);
+
+    for (const [fileInput, flag] of [["--ended-at", "--ended-at"], ["--session", "--session"]] as const) {
+      const values = fileInput === "--ended-at" ? ["2026-09-12"] : [join(fixture.harness, "session.json")];
+      const result = runCli(closeArgs(fixture, [fileInput, ...values]), fixture.root, identityEnv());
+      expect(result.exitCode).toBe(2);
+      expect(envelope(result)).toMatchObject({ status: "usage", code: "command.invalid-input" });
+      // The refusal names the retired input AND the supported ACTIVE route.
+      expect(message(result)).toContain(flag);
+      expect(message(result)).toContain("ACTIVE execution authority");
+      expect(recoveryOf(result)).toContain("mstar status workflow-close --workflow <id> --reason <text>");
+      // The retired transport never reached a write: the lifecycle stays open.
+      expect((await storedHeader(fixture)).status).toBe("running");
+    }
+  }, 30_000);
+
+  test("a hostile workflow id is rejected by the shared id guard", async () => {
+    const fixture = await activeFixture("mstar-close-hostile");
+    const result = runCli(["status", "workflow-close", "--workflow", "../escape", "--harness", fixture.harness], fixture.root);
+    expect(result.exitCode).toBe(1);
+    expect(envelope(result).code).toBe("workflow.invalid-id");
+    expect(message(result)).toContain("invalid workflow id");
+    expect(existsSync(join(fixture.root, "escape"))).toBe(false);
+  }, 30_000);
 });
