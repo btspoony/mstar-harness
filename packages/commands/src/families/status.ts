@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
-  closeFileWorkflow,
-  createFsStore,
   decodeExecutionSessionRef,
   executionContextFor,
   findingsCleanupGate,
@@ -13,11 +11,7 @@ import {
   readWorkflowSnapshot,
   resolveExecutionReadRoute,
   resolveCurrentAuthority,
-  resolveIntentRoot,
-  resolveIntentTarget,
   resolveProcessHarnessDir,
-  resolveWorkflowDir,
-  setArtifactStore,
   validateStatusV2,
   WORKFLOW_SNAPSHOT_FILE,
   WorkflowSnapshotValidationError,
@@ -78,15 +72,23 @@ function isDetailsRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function todayString(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
-
-
 function executionHarness(context: InvocationContext, override?: string): string | null {
   return resolveProcessHarnessDir(context.cwd, override);
 }
+
+/**
+ * The retired file close route's inputs stay RECOGNIZED so their use is a named
+ * refusal that states the ACTIVE route, not commander's generic unknown-option
+ * usage. The help text carries the same statement to `--help`.
+ */
+const RETIRED_FILE_CLOSE_HELP =
+  "retired file-close transport: the terminal timestamp and coordinator envelope belong to the pre-activation route. " +
+  "This verb closes through the ACTIVE execution authority; the authority records the terminal timestamp itself.";
+
+/** The one recovery sentence every retired-file-input refusal carries. */
+const ACTIVE_CLOSE_RECOVERY =
+  "Close through the ACTIVE execution authority: bind the workflow's coordinator (mstar plan bind --execution --workflow <id> --coordinator), " +
+  "then run mstar status workflow-close --workflow <id> --reason <text>. A control root with no ACTIVE authority is created with mstar harness scaffold then mstar store init (or mstar store upgrade to import historical file state).";
 
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {
   return definition;
@@ -194,17 +196,21 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
       },
     }),
     /**
-     * Lifecycle close uses the engine's composed file close: it resolves row
-     * completion, terminal state and root unregister as one resumable domain
-     * operation. The DB route remains the workflow mutation API.
+     * Lifecycle close runs on the ACTIVE execution authority only: the close is
+     * the workflow mutation API's terminal `lifecycle` transition, which
+     * resolves the plan-row completion prerequisite, the terminal state and the
+     * root unregister as one transaction. The pre-activation file route is
+     * retired, so `closeFileWorkflow` and the file-route root/target resolution
+     * are gone with it; a control root that holds no ACTIVE authority is refused
+     * with the ACTIVE route's own recovery instead of falling back to files.
      */
     command({
       id: "status.workflow-close",
       cli: { path: ["status", "workflow-close"], aliases: [], arguments: [], options: [
         { key: "workflow", flags: "--workflow <id>", required: false },
         { key: "harness", flags: "--harness <path>", required: false },
-        { key: "endedAt", flags: "--ended-at <date>", required: false },
-        { key: "session", flags: "--session <path>", required: false },
+        { key: "endedAt", flags: "--ended-at <date>", required: false, help: RETIRED_FILE_CLOSE_HELP },
+        { key: "session", flags: "--session <path>", required: false, help: RETIRED_FILE_CLOSE_HELP },
         { key: "sessionRef", flags: "--session-ref <wire>", required: false, help: SESSION_REF_SUPPLIES },
         { key: "expect", flags: "--expect <token>", required: false, help: `CAS expectation: ${TOKEN_SUPPLIES.workflow}` },
         { key: "operation", flags: "--operation <id>", required: false },
@@ -227,7 +233,6 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         const parsed = schema.safeParse(input);
         if (!parsed.success) return invalid("status.workflow-close", parsed.error);
         const workflow = parsed.data.workflow ?? context.executionIdentity?.workflowId;
-        const { harness, endedAt, session } = parsed.data;
         if (workflow === undefined) {
           return refusalEnvelope({
             command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2,
@@ -237,87 +242,72 @@ export function getStatusCommandDefinitions(): readonly CommandDefinition[] {
         if (workflow === "." || workflow === ".." || workflow.includes("/") || workflow.includes("\\")) {
           return refused("status.workflow-close", "workflow.invalid-id", `invalid workflow id ${JSON.stringify(workflow)}`, undefined, "Rerun mstar status workflow-close with a valid registered workflow id.");
         }
+        // The file-close transport is retired, so a caller that supplies one of
+        // its inputs is told the cause and the ACTIVE route rather than being
+        // answered by a fallback that no longer exists.
+        const retiredInput = parsed.data.endedAt === undefined
+          ? (parsed.data.session === undefined ? undefined : "--session")
+          : "--ended-at";
+        if (retiredInput !== undefined) {
+          return refusalEnvelope({
+            command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2,
+            message:
+              `workflow-close runs on the ACTIVE execution authority only: ${retiredInput} belongs to the retired file close route, ` +
+              "and its terminal timestamp is the authority's own. Nothing was written.",
+            recovery: ACTIVE_CLOSE_RECOVERY,
+          });
+        }
         try {
-          const harnessDir = executionHarness(context, harness);
-          if (harnessDir === null) return refused("status.workflow-close", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold to create the harness directory, then rerun the close.");
-          const activeFields = [parsed.data.sessionRef, parsed.data.expect, parsed.data.operation];
-          const activeRequested = activeFields.some((field) => field !== undefined);
-          const active = (await resolveExecutionReadRoute({ harnessDir })) === "execution";
-          if (activeRequested || active) {
-            if (endedAt !== undefined || session !== undefined) {
-              return refusalEnvelope({
-                command: "status.workflow-close", status: "usage", code: "command.invalid-input", exitCode: 2,
-                message: "active execution close cannot combine --ended-at or --session with its CAS envelope",
-              });
-            }
-            if (context.sessionId === undefined || context.sessionId.trim() === "") {
-              return refused(
-                "status.workflow-close",
-                "coordination.identity-missing",
-                "This close needs an acquired coordinator identity: launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`.",
-                undefined,
-                "Acquire a coordinator identity for this workflow, then rerun mstar status workflow-close.",
-              );
-            }
-            const acquired = context.executionIdentity;
-            if (acquired !== undefined && (acquired.workflowId !== workflow || acquired.role !== "coordinator")) {
-              return refused("status.workflow-close", "coordination.identity-mismatch", "acquired caller identity does not address this workflow's coordinator seat", undefined, "Rerun mstar status workflow-close after acquiring the coordinator identity that addresses this workflow.");
-            }
-            const executionContext = executionContextFor(
-              { harnessDir },
-              acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator" },
+          const harnessDir = executionHarness(context, parsed.data.harness);
+          if (harnessDir === null) return refused("status.workflow-close", "status.harness-not-found", "Harness directory not found", undefined, "Run mstar harness scaffold then mstar store init to create an ACTIVE control root, then rerun the close.");
+          if (context.sessionId === undefined || context.sessionId.trim() === "") {
+            return refused(
+              "status.workflow-close",
+              "coordination.identity-missing",
+              "This close needs an acquired coordinator identity: launch `mstar session run --workflow <id> --role coordinator -- <argv>` for a minted identity, or pass an explicit acquired `--session-id`; a launch does not bind, so first establish the binding with `mstar plan bind --execution --workflow <id> --coordinator`.",
+              undefined,
+              "Acquire a coordinator identity for this workflow, then rerun mstar status workflow-close.",
             );
-            const ref = parsed.data.sessionRef === undefined ? undefined : decodeExecutionSessionRef(parsed.data.sessionRef);
-            if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator")) {
-              return refused("status.workflow-close", "coordination.identity-mismatch", "sessionRef must address this workflow's coordinator seat", undefined, "Rerun mstar status workflow-close after acquiring the coordinator identity that owns this sessionRef.");
-            }
-            const receipt = await mutateExecutionWorkflow(executionContext, {
-              workflowId: workflow,
-              ...(ref === undefined ? {} : { session: ref }),
-              ...(parsed.data.expect === undefined ? {} : { expected: parsed.data.expect as ExecutionToken }),
-              operationId: parsed.data.operation ?? randomUUID(),
-              operation: { kind: "lifecycle", status: "completed", reason: parsed.data.reason ?? "closed through status workflow-close" },
-            });
-            return ok("status.workflow-close", receipt);
           }
-          const rootResolution = resolveIntentRoot({
-            cwd: context.cwd,
-            ...(harnessDir === undefined ? {} : { controlRoot: harnessDir }),
+          const acquired = context.executionIdentity;
+          if (acquired !== undefined && (acquired.workflowId !== workflow || acquired.role !== "coordinator")) {
+            return refused("status.workflow-close", "coordination.identity-mismatch", "acquired caller identity does not address this workflow's coordinator seat", undefined, "Rerun mstar status workflow-close after acquiring the coordinator identity that addresses this workflow.");
+          }
+          const executionContext = executionContextFor(
+            { harnessDir },
+            acquired ?? { source: context.host === undefined ? "local" : "host", sessionId: context.sessionId, workflowId: workflow, role: "coordinator" },
+          );
+          const ref = parsed.data.sessionRef === undefined ? undefined : decodeExecutionSessionRef(parsed.data.sessionRef);
+          if (ref !== undefined && (ref.workflowId !== workflow || ref.role !== "coordinator")) {
+            return refused("status.workflow-close", "coordination.identity-mismatch", "sessionRef must address this workflow's coordinator seat", undefined, "Rerun mstar status workflow-close after acquiring the coordinator identity that owns this sessionRef.");
+          }
+          const receipt = await mutateExecutionWorkflow(executionContext, {
+            workflowId: workflow,
+            ...(ref === undefined ? {} : { session: ref }),
+            ...(parsed.data.expect === undefined ? {} : { expected: parsed.data.expect as ExecutionToken }),
+            operationId: parsed.data.operation ?? randomUUID(),
+            operation: { kind: "lifecycle", status: "completed", reason: parsed.data.reason ?? "closed through status workflow-close" },
           });
-          if (!rootResolution.ok) throw Object.assign(new Error(rootResolution.problem.needed), {
-            code: rootResolution.problem.code,
-            details: { recoveryFacts: { unresolved: [rootResolution.problem] } },
-          });
-          const target = resolveIntentTarget({ root: rootResolution.root, selection: { workflowId: workflow } });
-          if (!target.ok) throw Object.assign(new Error(target.problem.needed), {
-            code: target.problem.code,
-            details: { recoveryFacts: { unresolved: [target.problem] } },
-          });
-          setArtifactStore(createFsStore(rootResolution.root));
-          const closed = await closeFileWorkflow({
-            harnessRoot: rootResolution.root,
-            workflowId: target.workflowId,
-            endedAt: endedAt ?? todayString(),
-            ...(session === undefined ? {} : { sessionPath: session }),
-          });
-          return ok("status.workflow-close", { ...closed, statusFile: path.join(rootResolution.root, "status.json") });
+          return ok("status.workflow-close", receipt);
         } catch (error) {
-          // A refused close reports the engine's own typed cause: the field
-          // facts travel with the code and message, and the intent-resolution
-          // problems travel under `details.recoveryFacts` so they never collide
-          // with the envelope's own `recovery` string below.
+          // A refused close reports the engine's own typed cause verbatim (code,
+          // message and `details`), and the recovery names the ACTIVE route: the
+          // file route is retired, so a store-less or pre-cutover control root is
+          // a routing problem, never a reason to fall back to files.
           const code = engineCode(error, "workflow.close-refused");
           const details =
             error !== null && typeof error === "object" && "details" in error && isDetailsRecord(error.details)
               ? error.details
               : undefined;
-          if (code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable") {
-            return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Select the control root that holds the workflow, then rerun mstar status workflow-close.");
-          }
-          if (code === "coordination.invalid-input" || code === "coordination.workflow-not-found" || code === "coordination.plan-not-found") {
-            return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Select a workflow and plan this control root holds, then rerun mstar status workflow-close.");
-          }
-          return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, "Correct the reported workflow lifecycle problem, then rerun mstar status workflow-close.");
+          const recovery =
+            code === "execution.not-active" || code === "store.not-initialized" || code === "store.not-active"
+              ? "Select the control root that holds the workflow's ACTIVE execution authority, or create one with mstar harness scaffold then mstar store init (or mstar store upgrade to import historical file state); the file close route is retired and never falls back."
+              : code === "coordination.scope-mismatch" || code === "coordination.harness-not-found" || code === "coordination.git-unavailable"
+                ? "Select the control root that holds the workflow, then rerun mstar status workflow-close."
+                : code === "coordination.invalid-input" || code === "coordination.workflow-not-found" || code === "coordination.plan-not-found"
+                  ? "Select a workflow and plan this control root's ACTIVE authority holds, then rerun mstar status workflow-close."
+                  : "Correct the reported workflow lifecycle problem, then rerun mstar status workflow-close.";
+          return refused("status.workflow-close", code || "workflow.close-refused", messageOf(error), details, recovery);
         }
       },
     }),
