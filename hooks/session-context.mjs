@@ -2,8 +2,8 @@
 // Morning Star harness — ZCode SessionStart hook.
 // Detects a harness-managed workspace ({HARNESS_DIR} discovery per mstar-conventions:
 // `.mstarc` harness_dir override -> `.mstar/` -> `.agents/` -> `.plans/`/`plans/`,
-// probed at the git workspace root) and injects a compact status summary so the
-// session knows the harness is active before any role work starts.
+// probed at the git workspace root) and injects a compact ACTIVE execution
+// summary so the session knows the harness is active before any role work starts.
 // Silent no-op outside harness workspaces. Never fails the session: any error exits 0.
 
 import fs from "node:fs";
