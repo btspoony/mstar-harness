@@ -1730,7 +1730,9 @@ function readExecutionMeta(db: StoreDb, schemaVersion: number): ExecutionMeta | 
  * legacy one.
  */
 type ExecutionAuthorityProbe =
-  | { kind: "state"; dbPath: string; state: ExecutionAuthorityState | null }
+  | { kind: "active"; dbPath: string }
+  | { kind: "absent"; dbPath: string }
+  | { kind: "not-active"; dbPath: string; state: ExecutionAuthorityState | null }
   | { kind: "unreadable"; dbPath: string; error: unknown };
 
 /** Driver codes a store file that exists but cannot be read reports:
@@ -1888,7 +1890,7 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
   assertAbsentOrRegularStoreFile(dbPath);
   if (!existsSync(dbPath)) {
     dropProbeConnection();
-    return { kind: "state", dbPath, state: null };
+    return { kind: "absent", dbPath };
   }
   assertStoreRuntimeSupported();
   let db: StoreDb | null;
@@ -1899,11 +1901,12 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
     if (isOpenLevelFailure(error) || isBusyError(error)) return { kind: "unreadable", dbPath, error };
     return refuseOpenFailure(error, dbPath);
   }
-  if (db === null) return { kind: "state", dbPath, state: null };
+  if (db === null) return { kind: "absent", dbPath };
   try {
     const schemaVersion = validateAppliedMigrations(readAppliedMigrations(db, false));
     readStoreMeta(db);
-    return { kind: "state", dbPath, state: readExecutionMeta(db, schemaVersion)?.authorityState ?? null };
+    const state = readExecutionMeta(db, schemaVersion)?.authorityState ?? null;
+    return state === "active" ? { kind: "active", dbPath } : { kind: "not-active", dbPath, state };
   } catch (error) {
     // A failed read leaves the connection's state unknown: never reuse it.
     dropProbeConnection();
@@ -1932,7 +1935,7 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
 export function assertExecutionFileWriteAllowed(context: StoreContext): void {
   const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.state !== "active") return;
+  if (probe.kind !== "active") return;
   throw new StoreError(
     "execution.direct-write-refused",
     `The execution authority of ${probe.dbPath} is ACTIVE \u2014 root, workflow-snapshot and ` +
@@ -1974,7 +1977,7 @@ export function assertExecutionFileWriteAllowed(context: StoreContext): void {
 export function assertExecutionFileReadAllowed(context: StoreContext): void {
   const probe = probeExecutionAuthority(executionFileStorePath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.state !== "active") return;
+  if (probe.kind !== "active") return;
   throw new StoreError(
     "execution.consumer-not-ready",
     `The execution authority of ${probe.dbPath} is ACTIVE \u2014 this legacy file reader would serve ` +
@@ -1993,7 +1996,7 @@ export function withExecutionReadGuard<T>(
 ): T {
   const probe = probeExecutionAuthority(storeDbPath(context));
   if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.state !== "active") {
+  if (probe.kind !== "active") {
     throw new StoreError(
       "execution.consumer-not-ready",
       "The execution authority is not ACTIVE; a current-session assertion cannot authorize a file commit.",
@@ -2063,10 +2066,11 @@ export async function openStore(context: StoreContext, mode: "read" | "write"): 
   if (!existsSync(dbPath)) {
     throw new StoreError(
       "store.not-initialized",
-      `No issue store exists at ${dbPath}. For a genuinely empty workspace, run ` +
-        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" ` +
-        `to create and activate the selected store (or "mstar store init" with the same --harness ` +
-        `when its directory already exists). Use staged migration for an existing workspace. Nothing was created.`,
+      `No execution store exists at ${dbPath}, and the pre-activation file route is retired. For a genuinely ` +
+        `empty workspace, run "mstar harness scaffold" then "mstar store init" to create and activate the store; ` +
+        `for a workspace holding historical file state, run ` +
+        `"mstar store upgrade --harness ${JSON.stringify(resolve(context.harnessDir))} --operator <name>" to ` +
+        `import it and activate the store. Nothing was created.`,
     );
   }
   const attempts = mode === "read" ? READ_OPEN_ATTEMPTS : 1;

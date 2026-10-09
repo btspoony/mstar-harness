@@ -1523,14 +1523,14 @@ export async function replaceCoordinatedArtifact(input: CoordinatedReplacement):
   }
   const session = readSessionEnvelope(input.sessionPath);
   if (session.role !== "coordinator") {
-    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate. Use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file after checking the recorded workflow.", {
+    throw new CoordinationError("coordination.session-role", "A coordinator session is required. Inspect the harness with mstar status validate, then bind the workflow's coordinator with mstar plan bind --execution --workflow <id> --coordinator.", {
       role: session.role,
     });
   }
   if (session.workflow_id !== input.ref.key) {
     throw new CoordinationError(
       "coordination.scope-mismatch",
-      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; use mstar plan bind --resume=PATH, where PATH is the recorded session envelope file.",
+      "Session workflow does not match the requested artifact. Inspect authority with mstar status validate; bind the addressed workflow's coordinator with mstar plan bind --execution --workflow <id> --coordinator.",
       { expected: session.workflow_id, actual: input.ref.key },
     );
   }

@@ -780,7 +780,6 @@ export type {
 } from "./projection.js";
 export {
   PROJECTION_FORMAT_VERSION,
-  PROJECTION_ROOT_FILE,
   ProjectionError,
   captureProjectionSources,
   publishProjectionCapture,
