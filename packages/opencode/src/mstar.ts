@@ -853,8 +853,10 @@ async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWri
     return { kind: "unavailable", code: "execution.route-unavailable", message: "the installed engine does not expose ACTIVE execution routing" };
   }
   try {
-    await resolve(harnessDir);
-    return { kind: "active" };
+    const route = await resolve(harnessDir);
+    return route === "execution"
+      ? { kind: "active" }
+      : { kind: "unavailable", code: "execution.not-active", message: "the pre-activation file route is retired" };
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }

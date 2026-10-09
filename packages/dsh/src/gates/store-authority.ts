@@ -168,13 +168,15 @@ function hasEntry(dir: string, name: string): boolean {
  * that this gate has no ACTIVE-authority veto to apply.
  */
 type ExecutionWriteRoute =
-  | { kind: 'inactive' }
   | { kind: 'active' }
   | { kind: 'unavailable'; code: string; message: string }
 
 async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
   try {
-    return (await resolveExecutionReadRoute({ harnessDir })) === 'execution' ? { kind: 'active' } : { kind: 'inactive' }
+    const route = await resolveExecutionReadRoute({ harnessDir })
+    return route === 'execution'
+      ? { kind: 'active' }
+      : { kind: 'unavailable', code: 'execution.not-active', message: 'the pre-activation file route is retired' }
   } catch (error) {
     return { kind: 'unavailable', ...refusalOf(error) }
   }
