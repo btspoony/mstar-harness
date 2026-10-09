@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Command, CommanderError } from "commander";
-import { refusalEnvelope, safeReceivedValue } from "@mstar-harness/commands";
+import { refusalEnvelope, safeReceivedValue, admitCommandInput, type RefusalDiagnostic } from "@mstar-harness/commands";
 import {
   executeCommand,
   getCommandDefinitions,
@@ -191,6 +191,7 @@ function rejectedOptionIndex(
  */
 function excessArgumentIndex(argv: readonly string[], definition: CommandDefinition): number | undefined {
   const options = definition.cli.options.map((option) => ({
+    option,
     flags: cliOptionFlags(definition, option),
     names: option.flags.split(/[ ,|]+/).filter((flag) => flag.startsWith("-")),
   }));
@@ -207,8 +208,13 @@ function excessArgumentIndex(argv: readonly string[], definition: CommandDefinit
       const known = options.find((entry) => entry.names.includes(name));
       if (known !== undefined) {
         if (token.includes("=")) continue;
-        if (known.flags.includes("<")) index++;
-        else if (known.flags.includes("[") && argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) index++;
+        if (known.flags.includes("<")) {
+          if (known.option.variadic) {
+            while (argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) index++;
+          } else {
+            index++;
+          }
+        } else if (known.flags.includes("[") && argv[index + 1] !== undefined && !argv[index + 1]!.startsWith("-")) index++;
         continue;
       }
     }
@@ -793,7 +799,22 @@ export function registerCliCommands(
         const collected = decodeCliOptions(definition, collectInput(definition, args));
         const payload = decodePayloadInputs(definition, collected);
         if (payload.diagnostics.length > 0) {
-          writeEnvelope(usageEnvelope(definition.id, "Invalid command payload.", { diagnostics: payload.diagnostics }));
+          const independentInput = { ...collected };
+          for (const field of Object.keys(definition.payloads ?? {})) delete independentInput[field];
+          const admission = admitCommandInput(
+            definition,
+            independentInput,
+            getCommandSchemas([definition])[0]!,
+          );
+          const admissionDiagnostics = admission.success
+            ? []
+            : (admission.envelope.details?.diagnostics as RefusalDiagnostic[] | undefined ?? [])
+              .filter((diagnostic) => typeof diagnostic.path !== "string" || !Object.keys(definition.payloads ?? {}).some(
+                (field) => diagnostic.path === field || diagnostic.path?.startsWith(`${field}.`),
+              ));
+          writeEnvelope(usageEnvelope(definition.id, "Invalid command payload.", {
+            diagnostics: [...payload.diagnostics, ...admissionDiagnostics],
+          }));
           return;
         }
         const input = definition.decodeCliInput?.(payload.input);
