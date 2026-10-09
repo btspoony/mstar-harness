@@ -65,6 +65,8 @@ async function workspace(name: string): Promise<Fixture> {
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
+  // These read-boundary cases exercise pre-activation transport behavior.
+  handle.db.prepare("update execution_meta set authority_state = 'legacy', activated_at = null where id = 1").run();
   handle.close();
   return { dir, harness, context };
 }

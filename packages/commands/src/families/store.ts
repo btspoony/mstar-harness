@@ -45,17 +45,26 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
     : `${id}.internal-error`;
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
-    : refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message , recovery: id === "store.init"
-        ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
-        : id === "store.upgrade"
-          ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
-          : id === "store.migrate"
-            ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
-            : id === "store.backup"
-              ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
-              : id === "store.activate"
-                ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
-                : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire."});
+    : refusalEnvelope({
+      command: id,
+      status: "refused",
+      code,
+      exitCode: 1,
+      message,
+      recovery: id === "store.init" && message.includes("legacy execution state exists at ")
+        ? 'For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade".'
+        : id === "store.init"
+          ? "Choose an empty harness root or resolve the legacy files that block creation. Run mstar store init."
+          : id === "store.upgrade"
+            ? "Correct the operator input and legacy-store state named by the upgrade diagnostic. Run mstar store upgrade."
+            : id === "store.migrate"
+              ? "Correct the legacy source layout or manifest named by the migration diagnostic. Run mstar store migrate."
+              : id === "store.backup"
+                ? "Choose a writable backup destination and confirm the active store is readable. Run mstar store backup."
+                : id === "store.activate"
+                  ? "Align the migration manifest and activation attestation to the same verified store state. Run mstar store activate."
+                  : "Resolve the retirement preconditions and recorded activation evidence named by the diagnostic. Run mstar store retire.",
+    });
 }
 
 function findLegacyWorkspaceFact(harnessDir: string): string | null {
@@ -66,6 +75,17 @@ function findLegacyWorkspaceFact(harnessDir: string): string | null {
     for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
       if (entry.isDirectory() && !entry.isSymbolicLink() && existsSync(path.join(projectsDir, entry.name, "residuals.json"))) {
         return "legacy project residual registers require the staged catalog migration; use the staged migration, not store init";
+      }
+    }
+  }
+  const statusPath = path.join(harnessDir, "status.json");
+  if (existsSync(statusPath)) return `legacy execution state exists at ${statusPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade"`;
+  const workflowsDir = path.join(harnessDir, "workflows");
+  if (existsSync(workflowsDir)) {
+    for (const entry of readdirSync(workflowsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        const snapshotPath = path.join(workflowsDir, entry.name, "snapshot.json");
+        if (existsSync(snapshotPath)) return `legacy execution state exists at ${snapshotPath} and prevents store initialization. For a fresh workspace, run "mstar harness scaffold" then "mstar store init"; to preserve historical file state, run "mstar store upgrade"`;
       }
     }
   }

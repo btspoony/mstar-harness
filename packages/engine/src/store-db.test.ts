@@ -304,6 +304,7 @@ describe("store-db L2 fix round", () => {
       authority_epoch?: number;
     };
     expect(meta.authority_state).toBe("active");
+    expect(handle.execution?.authorityState).toBe("active");
     expect(meta.authority_epoch).toBe(1);
     handle.close();
   });

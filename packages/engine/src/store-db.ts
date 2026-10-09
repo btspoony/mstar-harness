@@ -2167,6 +2167,7 @@ export async function initializeStore(
       }
       applyPendingMigrations(db, { alreadyInTransaction: true, attestation });
       db.prepare("update store_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
+      db.prepare("update execution_meta set authority_state = 'active', activated_at = ? where id = 1").run(nowRfc3339());
       db.exec("commit");
     } catch (error) {
       try {
@@ -2185,8 +2186,7 @@ export async function initializeStore(
       storeId: meta.storeId,
       epoch: meta.epoch,
       schemaVersion: MIGRATIONS.length,
-      // A freshly initialized store is active for issue/catalog and `legacy`
-      // for execution: initialization is not an execution activation.
+      // Init creates an active execution authority together with the schema.
       execution: readExecutionMeta(openDb, MIGRATIONS.length),
       close(): void {
         openDb.close();
