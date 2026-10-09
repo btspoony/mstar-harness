@@ -839,27 +839,24 @@ function authorityUnavailableRefusal(
 }
 
 /**
- * §5 (plan S4) what the control harness's EXECUTION authority says about a
- * coordination-document write in this host's dialect. `resolveExecutionReadRoute`
- * (through the lazy store holder) is the ONE place a consumer decides between
- * the DB authority and the file route; a store that EXISTS and cannot be read
- * is `unavailable` (fail-closed, never a fall-through to the file route) and a
- * harness with no store keeps the file route (§2.1: absence is not an
- * authority verdict). An installed engine without the route export is the
- * pre-execution engine: there is no authority to classify, so the documents
- * keep their unchanged document lint.
+ * Resolve the ACTIVE execution authority for a coordination-document write.
+ * Missing runtime authority is unavailable; this adapter has no file route.
  */
 type ExecutionWriteRoute =
-  | { kind: "files" }
   | { kind: "active" }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWriteRoute> {
   const api = await storeApiLoader.load();
   const resolve = api?.resolveExecutionRoute;
-  if (resolve === undefined) return { kind: "files" };
+  if (resolve === undefined) {
+    return { kind: "unavailable", code: "execution.route-unavailable", message: "the installed engine does not expose ACTIVE execution routing" };
+  }
   try {
-    return (await resolve(harnessDir)) === "execution" ? { kind: "active" } : { kind: "files" };
+    const route = await resolve(harnessDir);
+    return route === "execution"
+      ? { kind: "active" }
+      : { kind: "unavailable", code: "execution.not-active", message: "the pre-activation file route is retired" };
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }

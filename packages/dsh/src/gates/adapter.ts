@@ -21,9 +21,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
   assignmentHeaderRegion,
-  readJson,
   validateIntegrationMergeLease,
-  WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type {
   AssignmentFields,
@@ -38,7 +36,7 @@ import type { HarnessResolver, Config, SessionHintRead } from './_shared.ts'
 import { readWorkflowSessionBinding } from '../engine-status-store.ts'
 import { harnessDocKindOfTarget, validateStatusDoc, validateStatusValue, type HarnessDocKind } from './status.ts'
 import { storeAuthorityRefusals } from './store-authority.ts'
-import { catalogRegistrationRefusal, resolveActiveWorkflow } from './workflow-selection.ts'
+import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import {
   dispatchGateCore,
@@ -267,13 +265,13 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * `tools/pre-execute` listener derives it once and shares it with the
    * workflow branch); omitted → derived here from `exec.agent`.
    */
-  dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): GateResult {
+  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt, hint)
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, hint)
     if (exec !== undefined) {
-      violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt, hint))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, prompt, hint))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -294,20 +292,24 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
     if (harnessDir !== null && session.kind === 'ok' && isAssignmentShaped(assignmentHeaderRegion(prompt))) {
-      try {
-        recordDispatch({
-          harnessDir,
-          exec,
-          prompt,
-          violations,
-          hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
-          pairing: this.pairing,
-          ...(hint !== undefined ? { hint } : {}),
-        })
-      } catch (error) {
-        this.ctx.logger(AGENT_FLOW_LOGGER).error(
-          `agent-flow dispatch record failed (contained — dispatch proceeds): ${(error as Error).message}`,
-        )
+      const source = await readExecutionWorkflowSource({ harnessDir }, hint)
+      if (source.kind === 'active') {
+        try {
+          recordDispatch({
+            harnessDir,
+            exec,
+            prompt,
+            violations,
+            hard: hard ?? resolveDispatchHard(harnessDir, this.config, prompt),
+            pairing: this.pairing,
+            resolvedWorkflowDir: join(harnessDir, source.dir),
+            ...(hint !== undefined ? { hint } : {}),
+          })
+        } catch (error) {
+          this.ctx.logger(AGENT_FLOW_LOGGER).error(
+            `agent-flow dispatch record failed (contained — dispatch proceeds): ${(error as Error).message}`,
+          )
+        }
       }
     }
     return { ok: violations.length === 0, violations }
@@ -395,34 +397,18 @@ export class DshHostAdapter extends Service implements HostAdapter {
    */
   async beforeDispatch(assignment: AssignmentFields | string): Promise<GateResult> {
     const prompt = typeof assignment === 'string' ? assignment : assignmentTextFromFields(assignment)
+    const harnessDir = this.resolver.forWorkspace(undefined)
     // The hook contract carries no exec/session context, so the harness dir
     // resolves to the explicit config or null (never a process-cwd probe) —
     // the exec-bound `tools/pre-execute` listener is the per-workspace path.
     // `hard` resolves ONCE  and is
     // shared by the record block (via dispatchGate) and this enforcement
     // decision — no duplicate compass read per dispatch.
-    const harnessDir = this.resolver.forWorkspace(undefined)
     const hard = resolveDispatchHard(harnessDir, this.config, prompt)
-    const gate = this.dispatchGate(prompt, undefined, hard)
-    // Catalog-registration gate (state-projection contract §3 step 3): the
-    // hook has no session context, so it can only speak for the unique-active
-    // selection — the exec-bound listener additionally gates the
-    // session-bound one. A half-registered workflow refuses here regardless
-    // of the enforcement flag (never a soft-gate judgment call).
-    //
-    // Contract note for hook-only hosts (no exec-bound listener composed): the
-    // registration gate then covers the unique-active selection ONLY — in a
-    // multi-active workspace whose session is bound to another lifecycle, that
-    // lifecycle's registration is gated by the `tools/pre-execute` listener
-    // alone (dsh always composes it; S-G4a-02).
+    const gate = await this.dispatchGate(prompt, undefined, hard)
     if (harnessDir !== null) {
-      // R-1 (§5/§4.3): the selection below is the LEGACY file route (the root
-      // register's `workflows[]`). While the execution authority is ACTIVE that
-      // register is retired — the DB registry is the active set — so consult the
-      // authority BEFORE the read: no registration verdict is derived from a
-      // file-named lifecycle, and an authority that exists and cannot be read
-      // refuses fail-closed. The refusal is UNCONDITIONAL, exactly like the
-      // registration veto it pre-empts (it is not the soft/hard axis).
+      // T21 veto seam: preserve the ACTIVE-authority guard until the terminal
+      // direct-write veto sweep removes this helper.
       const authority = executionAuthorityRefusal(harnessDir)
       if (authority !== null) {
         return {
@@ -432,30 +418,9 @@ export class DshHostAdapter extends Service implements HostAdapter {
             ok: false,
             severity: 'high',
             code: authority.code,
-            message:
-              `${authority.message} — the catalog-registration gate refuses instead of selecting this workspace's ` +
-              'active lifecycle from the retired root register',
-            fix: 'dispatch against the execution DB route (or restore the authority): a retired root register cannot name the lifecycle this hook gates',
+            message: `${authority.message} — the ACTIVE execution authority cannot be verified for dispatch`,
+            fix: 'restore the ACTIVE execution authority, then retry dispatch',
           }],
-        }
-      }
-      const selection = resolveActiveWorkflow(harnessDir)
-      if (selection.kind === 'active') {
-        const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
-        if (refusal !== null) {
-          return {
-            ok: false,
-            hardBlocked: true,
-            violations: [{
-              ok: false,
-              severity: 'high',
-              code: refusal.code,
-              message:
-                `workflow ${selection.workflowId} has no committed catalog registration — ${refusal.message} ` +
-                '(this refusal is unconditional: it is not the soft/hard enforcement axis)',
-              fix: 'reconcile the pending catalog registration, then dispatch',
-            }],
-          }
         }
       }
     }
@@ -463,82 +428,47 @@ export class DshHostAdapter extends Service implements HostAdapter {
   }
 
   /**
-   * `HostAdapter.beforeMerge` — reserve/validate the integration merge
-   * lease. v3 relocation : the
-   * `integration_merge_lease` home is the ACTIVE workflow snapshot
-   * (`workflows/<id>/snapshot.json` top-level — the v1 root-metadata home
-   * is gone), so the hook READS the snapshot's current lease and validates
-   * it (CLI `lease verify-integration` parity) plus a no-steal comparison
-   * against the passed lease. The passed lease object is still
-   * shape-validated (the hook contract). Degrade edges (never false
-   * positives): no harness dir (exec-less hook — the explicit config
-   * resolves or nothing), no active workflow, an unreadable/missing
-   * snapshot, or a snapshot WITHOUT an `integration_merge_lease`
-   * (unclaimed) all skip the snapshot read — the passed-lease shape gate
-   * stands alone.
-   *
-   * R-1 (§5/§4.3): that snapshot read is the LEGACY file route, so the hook
-   * consults the execution authority BEFORE it. On an ACTIVE authority the
-   * snapshot is retired — its lease is not the active reservation — so the
-   * refusal (`execution.consumer-not-ready`) joins the violations instead of a
-   * lease verdict derived from those bytes; an authority that exists and cannot
-   * be read refuses fail-closed. A harness with no store keeps the snapshot
-   * read unchanged (§2.1: absence is not an authority verdict).
-   * @param lease - the `metadata.integration_merge_lease` object being
-   * reserved/validated.
+   * Validate the supplied merge lease against ACTIVE workflow state when a
+   * workflow is selected. File snapshots are never read as an execution source.
    */
   async beforeMerge(lease: IntegrationMergeLease): Promise<GateResult> {
     const violations = [...validateIntegrationMergeLease(lease).violations]
     const harnessDir = this.resolver.forWorkspace(undefined)
     if (harnessDir !== null) {
-      // R-1 (§5/§4.3): the snapshot read below is the LEGACY file route — while
-      // the execution authority is ACTIVE that snapshot is retired, so its
-      // `integration_merge_lease` is not the active reservation. Consult the
-      // authority BEFORE the read: the hook refuses with the engine's own code
-      // instead of validating (or admitting) a lease against retired bytes, and
-      // refuses fail-closed when the authority exists and cannot be read.
-      const authority = executionAuthorityRefusal(harnessDir)
-      if (authority !== null) {
+      const source = await readExecutionWorkflowSource({ harnessDir })
+      if (source.kind === 'active') {
+        const stored = source.snapshot.integration_merge_lease
+        if (stored !== undefined) {
+          violations.push(...validateIntegrationMergeLease(stored).violations)
+          if (!mergeLeasesMatch(lease, stored)) {
+            violations.push({
+              ok: false,
+              severity: 'high',
+              code: 'lease.merge.snapshot-mismatch',
+              message: `ACTIVE workflow ${source.workflowId}'s integration lease differs from the lease being reserved`,
+              fix: 'merge only under the ACTIVE workflow-recorded integration lease',
+            })
+          }
+        }
+      } else if (source.kind === 'unavailable') {
         violations.push({
           ok: false,
           severity: 'high',
-          code: authority.code,
-          message:
-            `${authority.message} — the merge hook refuses instead of validating the integration merge lease ` +
-            'against the retired workflow snapshot',
-          fix: 'reserve/verify the integration merge lease through the execution DB route (or restore the authority): a retired snapshot cannot confirm the active merge',
+          code: source.code,
+          message: `${source.message} — the ACTIVE integration merge lease cannot be verified`,
+          fix: 'restore the ACTIVE execution authority, then retry the integration merge',
         })
-        return { ok: false, violations }
-      }
-      const selection = resolveActiveWorkflow(harnessDir)
-      if (selection.kind === 'active') {
-        const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
-        try {
-          const snapshot = readJson(snapshotPath) as Record<string, unknown> | null | undefined
-          const stored = snapshot?.integration_merge_lease
-          if (stored !== undefined) {
-            // The durable lease validates (CLI parity), and the passed lease
-            // must be the SAME reservation (no-steal — a different holder /
-            // plan / branch pair is not the active merge).
-            violations.push(...validateIntegrationMergeLease(stored).violations)
-            if (!mergeLeasesMatch(lease, stored)) {
-              violations.push({
-                ok: false,
-                severity: 'high',
-                code: 'lease.merge.snapshot-mismatch',
-                message: `snapshot integration_merge_lease (${snapshotPath}) differs from the lease being reserved — the active merge belongs to another holder/plan`,
-                fix: 'merge only under the snapshot-recorded integration_merge_lease (or release the lease with user authorization + audit note)',
-              })
-            }
-          }
-        } catch (error) {
-          // Contained: an unreadable snapshot cannot harden the shape gate
-          // (the passed-lease violations above still stand). The snapshot
-          // write gate owns the document's validity.
-          this.ctx.logger(HOST_LOGGER).warn(
-            `beforeMerge snapshot lease read failed (contained — the passed-lease shape gate stands): ${(error as Error).message}`,
-          )
-        }
+      } else if (
+        source.kind === 'error' &&
+        !(source.selection.kind === 'error' && source.selection.code === 'workflow.selection.no-active')
+      ) {
+        violations.push({
+          ok: false,
+          severity: 'high',
+          code: source.selection.kind === 'error' ? source.selection.code : 'workflow.selection.unavailable',
+          message: `${source.selection.kind === 'error' ? source.selection.message : 'ACTIVE workflow selection failed'} — the integration merge lease cannot be verified`,
+          fix: 'resolve the ACTIVE workflow selection before retrying the integration merge',
+        })
       }
     }
     return { ok: violations.length === 0, violations }

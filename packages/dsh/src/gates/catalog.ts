@@ -46,15 +46,11 @@ import {
   parseCompassFrontmatter,
   parseCompassFrontmatterText,
   queryDashboard,
-  readJson,
   resolveRepoEnforcement,
-  readWorkflowSnapshot,
   withStoreRead,
   listRoadmapAuthority,
-  WORKFLOW_SNAPSHOT_FILE,
 } from '@mstar-harness/engine'
 import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
-import type { CatalogRegistrationRefusal } from './workflow-selection.ts'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -74,9 +70,9 @@ import type {
   StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
-import { STATUS_FILE, CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
+import { CATALOG_STATE_JOIN_LIMIT, asRecord, joinCapped, agentIdOf, sessionCwdOf, sessionHeaderIdOf, sessionHintOf, HarnessResolver, iterationViolationView, iterationGateView } from './_shared.ts'
 import { readAgentFlow, AGENT_FLOW_DEFAULT_LIMIT } from './agent-flow.ts'
-import { catalogRegistrationRefusal, readExecutionWorkflowSource, refusalOf, resolveReadWorkflow, type SessionHint } from './workflow-selection.ts'
+import { readExecutionWorkflowSource, refusalOf, type SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { readWorkflowSessionBinding, writeEngineStatusSnapshot } from '../engine-status-store.ts'
 /** Logger label for the engine-status catalog (dsh logger naming: `<scope>/<subject>`). */
@@ -135,29 +131,22 @@ function engineStatusSource(): MstarEngineStatusSource {
 }
 
 /**
- * The SYNCHRONOUS build's route decision (§5, plan S4) — the counterpart of
- * the async pre-read's {@link readExecutionWorkflowSource} for the builders
- * that cannot await it (the `mstar:engine-status` context provider and direct
- * tool/test calls). It calls the engine's own synchronous legacy-reader guard
- * (`assertExecutionFileReadAllowed` — the same primitive the dsh gate seams
- * use, never a re-implementation), so an ACTIVE execution authority makes the
- * selection a structured REFUSAL instead of an `active` selection assembled
- * from the retired `status.json` / snapshot bytes, and an authority that
- * exists and cannot be read refuses fail-closed. A harness with no store file
- * at all keeps the unchanged file route (§2.1: absence is not an authority
- * verdict), exactly as the read adapter discriminates.
- * @param harnessDir - the resolved `{HARNESS_DIR}` (never null: the caller
- *   returns before this on a null dir).
- * @param hint - the carrying session's effective selection hint.
+ * Synchronous catalog consumers cannot read ACTIVE execution state. Retain the
+ * T21 direct-file veto seam, then report no synchronous selection: file-backed
+ * coordination documents are not an execution authority.
  */
-function syncAuthoritySelection(harnessDir: string, hint?: SessionHint): WorkflowSelectionView {
+function syncAuthoritySelection(harnessDir: string, _hint?: SessionHint): WorkflowSelectionView {
   try {
     assertExecutionFileReadAllowed({ harnessDir })
   } catch (error) {
     const refusal = refusalOf(error)
     return { kind: 'error', code: refusal.code, message: refusal.message }
   }
-  return resolveReadWorkflow(harnessDir, hint)
+  return {
+    kind: 'error',
+    code: 'status.missing',
+    message: 'no ACTIVE execution workflow was read by the synchronous catalog consumer',
+  }
 }
 
 /**
@@ -187,20 +176,10 @@ function syncAuthoritySelection(harnessDir: string, hint?: SessionHint): Workflo
  *   while the execution authority is ACTIVE.
  */
 function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, facts?: StoreFacts): MstarEngineStatusPayload {
-  // ONE read-path resolution per build (D4): the state section AND the
-  // iteration gate consume the SAME selection — never two independent
-  // resolutions that could disagree. Root routing is the ROUTE's answer: the
-  // store-backed pre-read's verdict when it ran (§5: the DB registry on an
-  // ACTIVE execution authority, its own refusal when the authority exists and
-  // cannot be read), the unchanged file resolver otherwise.
+  // The pre-read's ACTIVE/error/unavailable verdict is the sole route. A
+  // synchronous consumer can only apply the direct-file veto and report that
+  // it did not read an ACTIVE execution workflow.
   const authority = facts?.authority
-  // Route decision, in order: the store-backed pre-read's OWN verdict when it
-  // ran (`active` with the materialized state, its structured `error`, or the
-  // fail-closed `unavailable`); the SYNCHRONOUS guard when no pre-read ran (the
-  // synchronous builders cannot await the route — the engine's synchronous
-  // legacy-reader guard decides instead: an ACTIVE or unreadable authority
-  // REFUSES, while a harness with no store file keeps the unchanged file
-  // route); and the file resolver for the pre-read's own `files` verdict.
   const resolved = harnessDir === null
     ? undefined
     : authority === undefined
@@ -211,15 +190,12 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
           ? authority.selection
           : authority.kind === 'unavailable'
             ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
-            : resolveReadWorkflow(harnessDir, hint)
+            : ({ kind: 'error', code: 'status.missing', message: 'no ACTIVE execution workflow was read' } as const)
   // The materialized lifecycle the route selected (an ACTIVE execution
   // authority hands its own state over): the sections below never re-read a
   // retired document to find out what the selection was about.
   const snapshot = authority?.kind === 'active' ? authority.snapshot : undefined
-  const refusal = facts?.selectionRefusal
-  const selection = resolved !== undefined && resolved.kind === 'active' && refusal !== undefined
-    ? { kind: 'error' as const, code: refusal.code, message: refusal.message }
-    : resolved
+  const selection = resolved
   const iteration = harnessDir !== null ? iterationGateSource(harnessDir, selection, snapshot) : undefined
   return {
     version: pluginVersion(),
@@ -458,22 +434,8 @@ async function catalogPayloadFor(
 async function readBuildFacts(harnessDir: string | null, hint: SessionHint | undefined): Promise<StoreFacts | undefined> {
   if (harnessDir === null) return undefined
   const facts = await readStoreFacts(harnessDir)
-  // §5 (plan S4): the ONE route decision for this build — never a file-route
-  // selection derived from the retired register while the execution authority
-  // is ACTIVE, and never a fallback when that authority exists and cannot be
-  // read. The verdict travels with the facts so the synchronous payload
-  // assembly below cannot re-read a document to disagree with it.
   const authority = await readExecutionWorkflowSource({ harnessDir }, hint)
-  const selection = authority.kind === 'active'
-    ? ({ kind: 'active', workflowId: authority.workflowId, dir: authority.dir } as const)
-    : authority.kind === 'error'
-      ? authority.selection
-      : authority.kind === 'unavailable'
-        ? ({ kind: 'error', code: authority.code, message: authority.message } as const)
-        : resolveReadWorkflow(harnessDir, hint)
-  if (selection.kind !== 'active') return { ...facts, authority }
-  const refusal = await catalogRegistrationRefusal(harnessDir, selection.workflowId)
-  return refusal === null ? { ...facts, authority } : { ...facts, authority, selectionRefusal: refusal }
+  return { ...facts, authority }
 }
 
 /** Model-facing rendering of the unified engine-status catalog (the `<mstar_engine_status>` block). */
@@ -625,71 +587,25 @@ function harnessStateSource(
   facts: StoreFacts,
   authoritySnapshot?: Record<string, unknown>,
 ): MstarHarnessState | null {
-  const statusPath = join(harnessDir, STATUS_FILE)
-  // A structured selection verdict is the operator-visible reason this
-  // workspace cannot be aggregated, and it must survive the retirement of the
-  // file registry: an ACTIVE (or unreadable) execution authority, an empty DB
-  // registry and an unbound multi-active set all arrive with NO status.json on
-  // disk, so the file-existence gate below may not swallow them into a silent
-  // null state section. The ONE verdict that keeps the advisory-degrade null is
-  // `status.missing` — "no coordination document anywhere", which is what an
-  // absent harness resolves to on the file route.
   if (selection.kind === 'error') {
     return selection.code === 'status.missing' ? null : selectionErrorState(selection, facts, harnessDir)
   }
-  if (authoritySnapshot === undefined && !existsSync(statusPath)) return null
+  if (authoritySnapshot === undefined) {
+    return selectionErrorState({
+      kind: 'error',
+      code: 'execution.state-unavailable',
+      message: 'the ACTIVE workflow state was not supplied to the catalog reader',
+    }, facts, harnessDir)
+  }
   try {
     const str = (value: unknown): string | null =>
       typeof value === 'string' && value.trim() !== '' ? value.trim() : null
     /** `plans[].metadata.iteration_refs` → non-empty string[]; missing/non-array → [] (lossless). */
     const iterationRefsOf = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string' && v.trim() !== '') : []
-    const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
-    let snapshot: Record<string, unknown>
-    if (authoritySnapshot !== undefined) {
-      // §5 (plan S4): the execution authority already materialized this
-      // lifecycle's state — the retired snapshot is not opened at all (its
-      // bytes are refused by the engine's own reader anyway).
-      snapshot = authoritySnapshot
-    } else if (!existsSync(snapshotPath)) {
-      // S-d: an active/terminal selection whose snapshot is
-      // MISSING degrades to a STRUCTURED selection error (the state section
-      // stays PRESENT with the operator-visible reason and empty
-      // aggregates) — never a silent null state section. (`readJson` would
-      // return `{}` for a missing file — an empty aggregate with a lying
-      // `active` selection; the engine helper's ENOENT-lossless contract.)
-      return selectionErrorState(
-        {
-          kind: 'error',
-          code: 'workflow.selection.snapshot-unreadable',
-          message: `cannot read the selected workflow snapshot ${snapshotPath}`,
-        },
-        facts,
-        harnessDir,
-      )
-    } else {
-      try {
-        // Canonical reader: legacy-only snapshots stay readable through the
-        // single sanctioned alias normalization (the v1
-        // `control_worktree_path` key reads as `integration_worktree_path`);
-        // any other validation violation refuses the read → the same
-        // structured snapshot-unreadable degrade. The reader's migration
-        // diagnostic is advisory and the catalog has no note channel — the
-        // CLI surface prints it instead.
-        snapshot = readWorkflowSnapshot(join(harnessDir, selection.dir)).snapshot
-      } catch {
-        // Same structured degrade for an unreadable/corrupt snapshot file.
-        return selectionErrorState(
-          {
-            kind: 'error',
-            code: 'workflow.selection.snapshot-unreadable',
-            message: `cannot read the selected workflow snapshot ${snapshotPath}`,
-          },
-          facts,
-          harnessDir,
-        )
-      }
-    }
+    const snapshot = authoritySnapshot
+    // The ACTIVE execution authority materializes the selected workflow state;
+    // this consumer never reads a coordination snapshot from disk.
     // The SELECTED snapshot's OWN compass (D4): direction and the branch
     // fallbacks read this lifecycle's `compass_ref` only — a session never
     // borrows another iteration's direction.
@@ -839,23 +755,7 @@ interface StoreFacts {
   readonly residuals: readonly HarnessResidualView[]
   readonly residualFindings: readonly ResidualFindingView[] | null
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
-  /**
-   * The catalog-registration refusal for the SELECTED workflow, when the store
-   * reports one: the state renders it as a structured selection error instead
-   * of presenting a half-registered lifecycle as healthy.
-   */
-  readonly selectionRefusal?: CatalogRegistrationRefusal
-  /**
-   * §5 (plan S4) the ONE route decision the async pre-read made for this
-   * build: the execution authority's own active-set answer (`active` with the
-   * selected lifecycle's materialized state, `error`, `unavailable`) or
-   * `files` when the pre-activation file route still answers. Absent only on
-   * the synchronous build (no pre-read ran) — that build decides through the
-   * engine's synchronous legacy-reader guard
-   * ({@link syncAuthoritySelection}), so it refuses on an ACTIVE/unreadable
-   * authority instead of presenting a file-derived selection as the
-   * authority's.
-   */
+  /** The one ACTIVE/error/unavailable execution-authority verdict for this build. */
   readonly authority?: ExecutionWorkflowSourceRead
 }
 
@@ -1133,18 +1033,9 @@ function iterationGateSource(
   selection: WorkflowSelectionView | undefined,
   authoritySnapshot?: Record<string, unknown>,
 ): MstarIterationGateView | undefined {
-  if (harnessDir === null || selection === undefined || selection.kind === 'error') return undefined
-  if (authoritySnapshot === undefined) {
-    const statusPath = join(harnessDir, STATUS_FILE)
-    if (!existsSync(statusPath)) return undefined
-  }
-  const snapshotPath = join(harnessDir, selection.dir, WORKFLOW_SNAPSHOT_FILE)
+  if (harnessDir === null || selection === undefined || selection.kind === 'error' || authoritySnapshot === undefined) return undefined
   try {
-    // v3 relocation: the gate's first doc is the SELECTED workflow snapshot
-    // (`workflows/<id>/snapshot.json`); its own `compass_ref` is the second.
-    // §5: on the execution route that doc is the authority's own materialized
-    // state, never the retired file.
-    const snapshotDoc = authoritySnapshot ?? readJson(snapshotPath)
+    const snapshotDoc = authoritySnapshot
     const compass = selectedCompass(harnessDir, selection.workflowId, snapshotDoc)
     if (compass === undefined) return undefined
     // No git probes at boot: the row reports what the two control docs
@@ -1168,12 +1059,6 @@ function iterationGateSource(
       : undefined
     return {
       iterationId: compass.iterationId,
-      // The evaluated doc: the selected workflow snapshot (v3), not the root
-      // status.json — mirrors the CLI `iteration gate --workflow <id>` input.
-      // On the execution route this names that lifecycle's canonical snapshot
-      // ADDRESS; the evaluated bytes are the authority's own materialized
-      // state (they are read from the DB, not from this path).
-      statusPath: snapshotPath,
       compassPath: compass.compassPath,
       gate,
       ...(compassStatus !== undefined ? { compassStatus } : {}),

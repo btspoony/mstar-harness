@@ -271,44 +271,29 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(entries.some(([level]) => level === "error")).toBe(true);
   });
 
-  test("an ungated write never enters the authority route; gated documents keep their lint", async () => {
+  test("unrelated writes bypass the authority route; coordination writes fail closed without ACTIVE storage", async () => {
     const fixture = makeHarnessProject();
     const reads = countStoreRoute();
-    const { entries, log } = capture();
+    const { log } = capture();
 
-    // Not a coordination document, not an authority path: the store route is
-    // never entered (the plugin's hot path pays nothing for unrelated writes).
     writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
     expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
     expect(reads()).toBe(0);
 
-    // A coordination document probes the AUTHORITY route first (§4.3/§5: the
-    // route decision precedes any document read) — on a harness with no store
-    // that probe answers `files` and the unchanged document lint still decides.
-    const valid = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
-    expect(valid?.ok).toBe(true);
+    const status = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
+    expect(status?.ok).toBe(false);
+    expect(status?.violations[0]?.code).toBe("store.authority-unavailable");
     expect(reads()).toBeGreaterThan(0);
-
-    const invalid = await validateStatusWrite(fixture.statusPath, {
-      doc: { version: 2, updated_at: "2026-09-08", workflows: [{ id: "wf-1", type: "sprint" }] },
-      log,
-    });
-    expect(invalid?.ok).toBe(false);
-    expect(invalid?.violations[0]!.code).toBe("status.workflow.invalid-type");
 
     const snapshotPath = join(fixture.harness, "workflows", "wf-a", "snapshot.json");
     mkdirSync(join(snapshotPath, ".."), { recursive: true });
-    writeFileSync(snapshotPath, JSON.stringify({ schema_version: 1, id: "wf-a", type: "sprint" }));
+    writeFileSync(snapshotPath, JSON.stringify({ schema_version: 1, id: "wf-a", type: "plan" }));
     const snapshot = await validateStatusWrite(snapshotPath, { log });
-    expect(snapshot?.ok).toBe(false);
-    expect(snapshot?.violations.length).toBeGreaterThan(0);
+    expect(snapshot?.violations[0]?.code).toBe("store.authority-unavailable");
 
-    expect(entries.some(([level]) => level === "error")).toBe(false);
-
-    // The register target takes the same authority route (the issue domain).
     await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(reads()).toBeGreaterThan(0);
-  });
+  })
 
   test("a symlink alias that resolves into the harness is the authority itself (S-G4b-03)", async () => {
     const fixture = makeHarnessProject(); // no compass — soft by default
@@ -341,7 +326,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
       doc: { version: 2, updated_at: "2026-09-08", workflows: [{ id: "wf-1", type: "sprint" }] },
     });
     expect(invalidStatus?.ok).toBe(false);
-    expect(invalidStatus?.violations[0]!.code).toBe("status.workflow.invalid-type");
+    expect(invalidStatus?.violations[0]!.code).toBe("execution.direct-write-refused");
   });
 
   test("a fresh authority write through a SYMLINKED PARENT is decided by the landed classification (S-G4b-03)", async () => {
