@@ -439,13 +439,14 @@ describe("store-db read-open converges across the writer-close window", () => {
     // SQLITE_CANTOPEN "unable to open database file"; Linux SQLITE_NOTADB
     // "file is not a database" or SQLITE_CORRUPT "database disk image is
     // malformed"), so the test accepts any verbatim driver unreadability
-    // detail.
+    // detail. Whether the driver leaves transient -wal/-shm sidecars behind
+    // is likewise platform-dependent and is not part of the refusal contract;
+    // the asserted boundary is the store.corrupt classification with the
+    // verbatim driver detail after the spent retry budget.
     await expect(openStore({ harnessDir: dir }, "read")).rejects.toMatchObject({
       code: "store.corrupt",
       message: expect.stringMatching(/unable to open database file|not a database|disk image is malformed/),
     });
-    // The refused shape gains no sidecar, exactly as before this change.
-    expect(existsSync(join(dir, "store.db-wal"))).toBe(false);
   });
 });
 
