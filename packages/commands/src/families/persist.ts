@@ -32,9 +32,10 @@ function payloadSchema(fields: Readonly<Record<string, { readonly required: bool
 
 const payloadContracts = persistPayloadContracts();
 
+// T17 will finish the persist-kind retirement; the status/snapshot kinds were
+// already removed engine-side (file-route cutover), so only the surviving
+// kinds are registered here.
 const payloadSchemas = {
-  status: { schema: payloadSchema(payloadContracts.status.schema), help: "Status v2 root payload; required fields and full invariants are validated by the engine." },
-  snapshot: { schema: payloadSchema(payloadContracts.snapshot.schema), help: "Workflow snapshot payload; conditional lifecycle, row and lease rules are validated by the engine." },
   review: { schema: payloadSchema(payloadContracts.review.schema), help: "mstar.review/v1 envelope; finding, tally and verdict invariants are validated by the engine." },
   json: { schema: z.unknown(), help: `${payloadContracts.json.reason} ${payloadContracts.json.alternative}` },
 } as const;
