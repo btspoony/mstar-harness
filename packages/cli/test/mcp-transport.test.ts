@@ -245,6 +245,26 @@ generated_at: 2026-01-02
     });
   });
 
+  test("the SDD missing-task exit-3 refusal survives the MCP consumer round trip", async () => {
+    await withClient([definition("sdd.task-brief")], async (client, cwd) => {
+      const planFile = join(cwd, "plan.md");
+      writeFileSync(planFile, "# Plan\n\n### Task 1: first task\n\n- [ ] step one\n");
+      const result = await client.callTool({
+        name: "mstar_sdd_task_brief",
+        arguments: { planFile, taskNumber: "9", outfile: join(cwd, "task-9-brief.md") },
+      });
+      expect(result.isError).toBe(true);
+      const refusal = envelope(result);
+      // The nonstandard exit 3 is the SDD contract; the MCP surface must carry
+      // it, the engine's first-line message, and the recovery metadata — not
+      // collapse it to a generic exit 1 with a re-derived message.
+      expect(refusal).toMatchObject({ command: "sdd.task-brief", status: "refused", exitCode: 3 });
+      expect(String(refusal.message).split("\n")[0]).toContain("task 9 not found");
+      expect(refusal.details?.helpRoute).toBe("mstar sdd task-brief --help");
+      expect(refusal.details?.recovery).toEqual(expect.stringContaining("mstar sdd task-brief"));
+    });
+  });
+
   test("domain payloads stay constructible while pathname and kind-keyed contracts keep their actual transport", async () => {
     await withClient([definition("issue.add"), definition("workflow.execution-policy"), definition("persist.write")], async (client) => {
       const { tools } = await client.listTools();
