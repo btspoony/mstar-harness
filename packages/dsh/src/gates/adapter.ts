@@ -267,13 +267,13 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * `tools/pre-execute` listener derives it once and shares it with the
    * workflow branch); omitted → derived here from `exec.agent`.
    */
-  dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): GateResult {
+  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
-    const { violations, writable } = dispatchGateCore(this.config, harnessDir, prompt, hint)
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, prompt, hint)
     if (exec !== undefined) {
-      violations.push(...leaseGateViolations(harnessDir, exec, writable, prompt, hint))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, prompt, hint))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`
@@ -401,9 +401,8 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // `hard` resolves ONCE  and is
     // shared by the record block (via dispatchGate) and this enforcement
     // decision — no duplicate compass read per dispatch.
-    const harnessDir = this.resolver.forWorkspace(undefined)
     const hard = resolveDispatchHard(harnessDir, this.config, prompt)
-    const gate = this.dispatchGate(prompt, undefined, hard)
+    const gate = await this.dispatchGate(prompt, undefined, hard)
     // Catalog-registration gate (state-projection contract §3 step 3): the
     // hook has no session context, so it can only speak for the unique-active
     // selection — the exec-bound listener additionally gates the
