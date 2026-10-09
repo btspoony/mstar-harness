@@ -30,8 +30,6 @@ import { dirname, join } from "node:path";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import {
   normalizeSeverity,
-  registerWorkflow,
-  registerWorkflowEntryLocked,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
@@ -41,12 +39,11 @@ import {
   validateStatus,
   validateStatusV2,
 } from "../src/status.js";
-import { withStatusWriteLock } from "../src/lease.js";
+import { WORKFLOW_SNAPSHOT_FILE } from "../src/workflow.js";
 import { readJson, writeJson } from "../src/core.js";
 import type { GateResult, ValidationResult } from "../src/core.js";
 import type { WorkflowEntry } from "../src/status.js";
 import type { FindingsCleanupMode } from "../src/project.js";
-import { WORKFLOW_SNAPSHOT_FILE, writeWorkflowSnapshot } from "../src/workflow.js";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const EMPTY_TEMPLATE = join(FIXTURES, "status.empty.json");
@@ -137,37 +134,35 @@ function wfEntry(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
-/** Write a minimal active (running) snapshot at `harnessDir/workflows/<id>/snapshot.json`. */
+/** Write minimal legacy snapshot fixtures directly to disk. */
 async function writeRunningSnapshot(harnessDir: string, id: string): Promise<void> {
-  await writeWorkflowSnapshot(
-    {
-      schema_version: 1,
-      id,
-      type: "plan",
-      status: "running",
-      started_at: "2026-08-19T08:00:00Z",
-      updated_at: "2026-08-19",
-      plans: [],
-    },
-    join(harnessDir, "workflows", id),
-  );
+  const dir = join(harnessDir, "workflows", id);
+  mkdirSync(dir, { recursive: true });
+  writeJson(join(dir, "snapshot.json"), {
+    schema_version: 1,
+    id,
+    type: "plan",
+    status: "running",
+    started_at: "2026-08-19T08:00:00Z",
+    updated_at: "2026-08-19",
+    plans: [],
+  });
 }
 
-/** Write a minimal terminal (completed) snapshot at `harnessDir/workflows/<id>/snapshot.json`. */
+/** Write a minimal terminal legacy snapshot fixture directly to disk. */
 async function writeTerminalSnapshot(harnessDir: string, id: string): Promise<void> {
-  await writeWorkflowSnapshot(
-    {
-      schema_version: 1,
-      id,
-      type: "plan",
-      status: "completed",
-      started_at: "2026-08-19T08:00:00Z",
-      ended_at: "2026-08-19T09:00:00Z",
-      updated_at: "2026-08-19",
-      plans: [],
-    },
-    join(harnessDir, "workflows", id),
-  );
+  const dir = join(harnessDir, "workflows", id);
+  mkdirSync(dir, { recursive: true });
+  writeJson(join(dir, "snapshot.json"), {
+    schema_version: 1,
+    id,
+    type: "plan",
+    status: "completed",
+    started_at: "2026-08-19T08:00:00Z",
+    ended_at: "2026-08-19T09:00:00Z",
+    updated_at: "2026-08-19",
+    plans: [],
+  });
 }
 
 describe("normalizeSeverity (legacy read path)", () => {
@@ -558,160 +553,52 @@ describe("validateStatus (relocated v2 validator — v1 handling deleted in Task
   });
 });
 
-describe("registerWorkflow / unregisterWorkflow (root writers under the root-file write lock)", () => {
+describe("unregisterWorkflow", () => {
   const entry: WorkflowEntry = { id: "wf-1", type: "plan", started_at: "2026-08-19T08:00:00Z", dir: "workflows/wf-1" };
 
-  async function harnessWithRunningSnapshot(prefix: string): Promise<string> {
-    const dir = harnessRoot(prefix);
-    await writeRunningSnapshot(dir, "wf-1");
-    return dir;
+  async function seedRegisteredRoot(dir: string): Promise<string> {
+    await writeRunningSnapshot(dir, entry.id);
+    const statusPath = join(dir, "status.json");
+    writeJson(statusPath, v2doc({ workflows: [entry] }));
+    return statusPath;
   }
 
-  test("registerWorkflow creates the v2 root when status.json is missing and appends the entry", async () => {
-    const dir = await harnessWithRunningSnapshot("status-register-create-");
+  test("removes a seeded legacy root entry and validates the result", async () => {
+    const dir = harnessRoot("status-unregister-");
     try {
-      const statusPath = join(dir, "status.json");
-      const doc = await registerWorkflow(statusPath, entry);
-      expect(doc.version).toBe(2);
-      expect(doc.workflows).toEqual([entry]);
-      expect(doc.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      const onDisk = readJson(statusPath);
-      expect(onDisk.version).toBe(2);
-      expect((onDisk.workflows as unknown[]).length).toBe(1);
-      expect(validateStatusV2(statusPath).ok).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("registerWorkflowEntryLocked upserts under a held root lock (shared by registerWorkflow and the audit promote path)", async () => {
-    const dir = await harnessWithRunningSnapshot("status-register-locked-");
-    try {
-      const statusPath = join(dir, "status.json");
- // Locking is the CALLER's duty (registerWorkflow and the audit
- // promote path hold the root lock); the helper performs the same
- // idempotent upsert + validation as registerWorkflow — missing root
- // initialized, entry appended, doc validated, atomic write.
-      const doc = await withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, entry));
-      expect(doc.version).toBe(2);
-      expect(doc.workflows).toEqual([entry]);
-      await withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, { ...entry }));
-      const onDisk = readJson(statusPath);
-      expect((onDisk.workflows as unknown[]).length).toBe(1);
-      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toEqual(entry);
-      expect(validateStatusV2(statusPath).ok).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("registerWorkflow upserts the same id (idempotent, no duplicate entries)", async () => {
-    const dir = await harnessWithRunningSnapshot("status-register-upsert-");
-    try {
-      const statusPath = join(dir, "status.json");
-      await registerWorkflow(statusPath, entry);
- // Re-registering the same id must not duplicate. Fields that mirror
- // the snapshot (type/started_at cross-check) cannot
- // drift in a root update, so the upsert carries the identical entry.
-      await registerWorkflow(statusPath, { ...entry });
-      const onDisk = readJson(statusPath);
-      expect((onDisk.workflows as unknown[]).length).toBe(1);
-      expect((onDisk.workflows as Array<Record<string, unknown>>)[0]).toEqual(entry);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("registerWorkflow refuses an entry whose snapshot is missing (invariant at write time, nothing written)", async () => {
-    const dir = harnessRoot("status-register-no-snapshot-");
-    try {
-      const statusPath = join(dir, "status.json");
-      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/snapshot/);
-      expect(existsSync(statusPath)).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("registerWorkflow refuses to modify a v1 root (migration hint, root untouched)", async () => {
-    const dir = harnessRoot("status-register-v1-");
-    try {
-      const statusPath = join(dir, "status.json");
-      const v1 = '{\n  "version": 1,\n  "updated_at": "2026-08-08",\n  "plans": [],\n  "residual_findings": {},\n  "metadata": {}\n}\n';
-      writeFileSync(statusPath, v1);
-      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/mstar migrate/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("registerWorkflow refuses an invalid entry", async () => {
-    const dir = await harnessWithRunningSnapshot("status-register-invalid-entry-");
-    try {
-      const statusPath = join(dir, "status.json");
-      await expect(registerWorkflow(statusPath, { ...entry, type: "sprint" })).rejects.toThrow(/invalid workflow entry/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("unregisterWorkflow removes the entry and bumps updated_at", async () => {
-    const dir = await harnessWithRunningSnapshot("status-unregister-");
-    try {
-      const statusPath = join(dir, "status.json");
-      await registerWorkflow(statusPath, entry);
-      const after = await unregisterWorkflow(statusPath, "wf-1");
+      const statusPath = await seedRegisteredRoot(dir);
+      const after = await unregisterWorkflow(statusPath, entry.id);
       expect(after.workflows).toEqual([]);
-      const onDisk = readJson(statusPath);
-      expect((onDisk.workflows as unknown[]).length).toBe(0);
       expect(validateStatusV2(statusPath).ok).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("unregisterWorkflow is idempotent: removing an absent id is a no-op with no write", async () => {
-    const dir = await harnessWithRunningSnapshot("status-unregister-idem-");
+  test("absent ids are idempotent and a missing root is not created", async () => {
+    const dir = harnessRoot("status-unregister-idem-");
     try {
-      const statusPath = join(dir, "status.json");
-      await registerWorkflow(statusPath, entry);
-      const after = await unregisterWorkflow(statusPath, "no-such-id");
-      expect((after.workflows as unknown[]).length).toBe(1);
+      const statusPath = await seedRegisteredRoot(dir);
+      const before = readFileSync(statusPath, "utf8");
+      await unregisterWorkflow(statusPath, "absent");
+      expect(readFileSync(statusPath, "utf8")).toBe(before);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
 
-  test("unregisterWorkflow on a missing root is a no-op that never creates the file", async () => {
-    const dir = harnessRoot("status-unregister-missing-");
+    const missingRoot = harnessRoot("status-unregister-missing-");
     try {
-      const statusPath = join(dir, "status.json");
-      const after = await unregisterWorkflow(statusPath, "wf-1");
-      expect(after.workflows).toEqual([]);
+      const statusPath = join(missingRoot, "status.json");
+      expect((await unregisterWorkflow(statusPath, "wf-1")).workflows).toEqual([]);
       expect(existsSync(statusPath)).toBe(false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-  test("registerWorkflow fails loud when the root file lies outside the store root ; nothing written", async () => {
-    const root = tmpRoot("status-register-outside-");
-    const other = tmpRoot("status-outside-");
-    setArtifactStore(createFsStore(root));
-    try {
-      const statusPath = join(other, "status.json");
-      await expect(registerWorkflow(statusPath, entry)).rejects.toThrow(/routed writer path mismatch/);
-      expect(existsSync(statusPath)).toBe(false);
-      expect(existsSync(join(root, "status.json"))).toBe(false);
-      expect(existsSync(join(other, ".status-write.lockdir"))).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-      rmSync(other, { recursive: true, force: true });
+      rmSync(missingRoot, { recursive: true, force: true });
     }
   });
 
-  test("unregisterWorkflow fails loud when the root file lies outside the store root ; nothing written", async () => {
-    const root = tmpRoot("status-unregister-outside-");
-    const other = tmpRoot("status-outside-");
+  test("refuses a root whose path is outside the configured artifact store", async () => {
+    const root = tmpRoot("status-unregister-store-");
+    const other = tmpRoot("status-unregister-outside-");
     setArtifactStore(createFsStore(root));
     try {
       const statusPath = join(other, "status.json");
@@ -980,8 +867,25 @@ describe("coordinated-writer — coordinated root-register refusals", () => {
   };
 
   async function registeredCoordinatedWorkflow(root: string): Promise<void> {
-    await writeWorkflowSnapshot(COORDINATED_SNAPSHOT as never, join(root, "workflows", COORDINATED_ID));
-    await registerWorkflow(join(root, "status.json"), COORDINATED_ENTRY);
+    const snapshotDir = join(root, "workflows", COORDINATED_ID);
+    mkdirSync(snapshotDir, { recursive: true });
+    writeJson(join(snapshotDir, "snapshot.json"), COORDINATED_SNAPSHOT);
+    writeJson(join(root, "status.json"), v2doc({ workflows: [COORDINATED_ENTRY] }));
+  }
+  async function uncoordinatedRegistered(prefix: string): Promise<{ root: string; statusPath: string; snapshotDir: string; snapshotPath: string; lockDir: string }> {
+    const root = harnessRoot(prefix);
+    const statusPath = join(root, "status.json");
+    const snapshotDir = join(root, "workflows", COORDINATED_ID);
+    mkdirSync(snapshotDir, { recursive: true });
+    writeJson(join(snapshotDir, "snapshot.json"), { ...COORDINATED_SNAPSHOT, coordination: undefined });
+    writeJson(statusPath, v2doc({ workflows: [COORDINATED_ENTRY] }));
+    return {
+      root,
+      statusPath,
+      snapshotDir,
+      snapshotPath: join(snapshotDir, WORKFLOW_SNAPSHOT_FILE),
+      lockDir: join(snapshotDir, ".status-write.lockdir"),
+    };
   }
 
   test("refuses to unregister a running coordinated workflow and leaves the root bytes unchanged", async () => {
@@ -996,65 +900,18 @@ describe("coordinated-writer — coordinated root-register refusals", () => {
     }
   });
 
-  test("refuses to re-point a coordinated workflow entry and leaves the root bytes unchanged", async () => {
-    const root = harnessRoot("coordinated-writer-status-repoint-");
-    try {
-      await registeredCoordinatedWorkflow(root);
-      await expect(
-        registerWorkflow(join(root, "status.json"), { ...COORDINATED_ENTRY, dir: "workflows/moved" }),
-      ).rejects.toMatchObject({ code: "coordination.invalid-transition" });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
-  test("still unregisters and re-registers an uncoordinated workflow", async () => {
-    const root = harnessRoot("coordinated-writer-status-plain-");
-    try {
-      const entry: WorkflowEntry = {
-        id: "wf-plain",
-        type: "plan",
-        started_at: "2026-09-15T00:00:00Z",
-        dir: "workflows/wf-plain",
-      };
-      await writeWorkflowSnapshot(
-        {
-          schema_version: 1,
-          id: "wf-plain",
-          type: "plan",
-          status: "running",
-          started_at: "2026-09-15T00:00:00Z",
-          updated_at: "2026-09-15",
-          plans: [],
-        } as never,
-        join(root, "workflows", "wf-plain"),
-      );
-      const statusPath = join(root, "status.json");
-      await registerWorkflow(statusPath, entry);
-      await registerWorkflow(statusPath, entry);
-      await unregisterWorkflow(statusPath, "wf-plain");
-      expect(existsSync(join(root, "status.json"))).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 
-  // The two cases below pin the root → snapshot acquisition order (spec §C3):
-  // the coordination identification is re-taken from a snapshot read under the
-  // snapshot lock, held across the root replacement. The held lockdir below is
-  // a concurrent binder: it adds the coordination block while the root writer
-  // is already inside its root-locked section, so a decision made from an
-  // earlier bare read would remove / re-point a workflow being taken over.
-  async function uncoordinatedRegistered(prefix: string): Promise<{ root: string; statusPath: string; snapshotDir: string; snapshotPath: string; lockDir: string }> {
+  async function uncoordinatedRegistered(prefix: string): Promise<{ root: string; statusPath: string; snapshotPath: string; lockDir: string }> {
     const root = harnessRoot(prefix);
     const statusPath = join(root, "status.json");
     const snapshotDir = join(root, "workflows", COORDINATED_ID);
-    await writeWorkflowSnapshot({ ...COORDINATED_SNAPSHOT, coordination: undefined } as never, snapshotDir);
-    await registerWorkflow(statusPath, COORDINATED_ENTRY);
+    mkdirSync(snapshotDir, { recursive: true });
+    writeJson(join(snapshotDir, "snapshot.json"), { ...COORDINATED_SNAPSHOT, coordination: undefined });
+    writeJson(statusPath, v2doc({ workflows: [COORDINATED_ENTRY] }));
     return {
       root,
       statusPath,
-      snapshotDir,
       snapshotPath: join(snapshotDir, WORKFLOW_SNAPSHOT_FILE),
       lockDir: join(snapshotDir, ".status-write.lockdir"),
     };
@@ -1075,18 +932,4 @@ describe("coordinated-writer — coordinated root-register refusals", () => {
     }
   });
 
-  test("refuses to re-point a workflow whose snapshot gains coordination while the root write is in flight", async () => {
-    const { root, statusPath, snapshotPath, lockDir } = await uncoordinatedRegistered(
-      "coordinated-writer-status-lockorder-repoint-",
-    );
-    try {
-      mkdirSync(lockDir, { recursive: true });
-      const pending = registerWorkflow(statusPath, { ...COORDINATED_ENTRY, dir: "workflows/moved" });
-      writeJson(snapshotPath, COORDINATED_SNAPSHOT);
-      rmSync(lockDir, { recursive: true, force: true });
-      await expect(pending).rejects.toMatchObject({ code: "coordination.invalid-transition" });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });

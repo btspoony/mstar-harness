@@ -680,112 +680,6 @@ export function validateStatusV2(
  */
 export const validateStatus = validateStatusV2;
 
-/**
- * Root-file workflow upsert, to be called ONLY while the caller holds the
- * root `withStatusWriteLock(statusPath)` (see `registerWorkflow` and the
- * audit promote path, which call this from inside their lock — the root
- * lock is the serialization point for read-check-replace-verify).
- *
- * Idempotent upsert by entry `id`, bumping root `updated_at`. A
- * missing/empty root file is initialized from the v2 template (never a v1
- * tree); a v1 root is refused with the `mstar migrate` hint (no silent
- * mutation of an un-migrated tree). The final document is validated with
- * `validateStatusV2` (including the removal-at-terminal snapshot invariant
- * against `dirname(statusPath)`) before the write — an entry whose
- * snapshot is missing or terminal is refused and nothing is written.
- *
- * The caller must validate the entry (`validateWorkflowEntry`) before
- * acquiring the lock; this helper asserts it as a safety net (cheap —
- * an invalid entry would fail `validateStatusV2` anyway, but the explicit
- * gate keeps the pre-lock fail-fast contract of `registerWorkflow`).
- *
- * Replacing an existing entry additionally takes that entry's snapshot lock
- * (spec §C3 root → snapshot order, `withRegisteredSnapshotLock`) and holds it
- * across the root write; callers must therefore hold the root lock only, not
- * a snapshot lock.
- *
- * Async-only (architect-locked 2026-08-27): the durable write goes through
- * `getArtifactStore().put({ kind: "status", key: "root", ... })` inside the
- * caller's lock — the store is the persist backend, never a second lock.
- * Fails loud when the active FsStore would resolve its
- * `status.json` to a path other than `statusPath` — callers whose root
- * differs from the active store's root MUST
- * `setArtifactStore(createFsStore(root))` first.
- */
-export async function registerWorkflowEntryLocked(statusPath: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
- // simplify: full-doc validation (incl. per-snapshot reads of the whole
- // active set) under the root lock is O(active workflows) per root write.
- // Realistic active-set size is 1–3 (microseconds); correctness-preserving.
-   // Upgrade path: scope the on-disk invariant to the touched entry.
-  const harnessDir = dirname(statusPath);
-  // Canonical authority discrimination precedes every read and validation
-  // below (spec §4.3): with an ACTIVE execution authority the root register is
-  // retired as a persistence route, whatever store the caller injected.
-  assertExecutionFileWriteAllowed({ harnessDir });
-  const store = getArtifactStore();
- // Fail-loud path agreement : the caller's lock serializes
- // `statusPath`; the store put must land on that same file. A divergence
- // throws before any read-modify-write — nothing is written anywhere.
-  assertFsStorePath(store, { kind: "status", key: "root" }, statusPath);
-  const current = readJson(statusPath) as Record<string, unknown>;
-  const fresh = Object.keys(current).length === 0;
-  const doc: StatusV2Doc = fresh
-    ? { version: 2, updated_at: todayString(), workflows: [] }
-    : (current as StatusV2Doc);
-  if (!fresh && !Array.isArray(doc.workflows)) {
-    throw new Error(
-      "refusing to modify status.json: workflows must be an array \u2014 a v1 root must be migrated first (run `mstar migrate`)",
-    );
-  }
-  const existing = doc.workflows.findIndex((wf) => wf.id === entry.id);
-  /**
-   * Finalize the root document: bump `updated_at`, validate the whole v2
-   * document (per-snapshot invariants included) and persist through the
-   * private protected-write context. Runs inside the caller's root lock — and
-   * inside the target snapshot lock when the call started from an existing
-   * entry (spec §C3 root → snapshot), so the coordination decision behind the
-   * replacement still holds when these bytes land.
-   */
-  const commit = async (): Promise<StatusV2Doc> => {
-    doc.updated_at = todayString();
-    const gate = validateStatusV2(doc, { harnessDir });
-    if (!gate.ok) {
-      throw new Error(`refusing to write invalid status.json: ${gate.violations.map((v) => v.message).join("; ")}`);
-    }
-    await withProtectedWrite(statusPath, "put", () => store.put({ kind: "status", key: "root", payload: doc }));
-    return doc;
-  };
-  if (existing < 0) {
-    doc.workflows.push(entry);
-    return commit();
-  }
-  // A register call must not re-point an existing COORDINATED workflow
-  // (spec §C4): its snapshot is the coordination authority, so replacing the
-  // entry's identity would detach the coordination record from the file it
-  // lives in. Uncoordinated entries keep the idempotent upsert below.
-  //
-  // The identification is re-taken UNDER the snapshot lock (spec §C3 root →
-  // snapshot order) with that lock held across the root replacement: a bind
-  // holds only the snapshot lock, so deciding from a bare read taken earlier
-  // in this root-locked section can miss a coordination block added in
-  // between and re-point a workflow another coordinator owns.
-  const prior = doc.workflows[existing];
-  return withRegisteredSnapshotLock(harnessDir, prior, async (snapshot) => {
-    const priorCoordination = snapshot?.coordination;
-    if (isPlainObject(priorCoordination) && isPlainObject(priorCoordination.coordinator)) {
-      const drifted = (["dir", "type", "started_at"] as const).filter((field) => prior[field] !== entry[field]);
-      if (drifted.length > 0) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          "Cannot re-register a coordinated workflow with changed coordinated fields. Inspect the registered workflow with mstar status validate.",
-          { workflow_id: entry.id, fields: [...drifted] },
-        );
-      }
-    }
-    doc.workflows[existing] = entry;
-    return commit();
-  });
-}
 
 /**
  * Run `fn` with the registered entry's snapshot lock held, reading the
@@ -853,34 +747,6 @@ export function findRegisteredWorkflow(harnessDir: string, id: string): Workflow
   return isPlainObject(entry) ? (entry as WorkflowEntry) : undefined;
 }
 
-/**
- * Register one active workflow entry in the v2 root file ().
- * Idempotent upsert by entry `id` under the root-file `withStatusWriteLock`,
- * bumping root `updated_at`. A missing/empty root file is initialized from
- * the v2 template (never a v1 tree); a v1 root is refused with the
- * `mstar migrate` hint (no silent mutation of an un-migrated tree).
- *
- * The final document is validated with `validateStatusV2` (including the
- * removal-at-terminal snapshot invariant against `dirname(root)`) before the
- * write — an entry whose snapshot is missing or terminal is refused and
- * nothing is written.
- */
-export async function registerWorkflow(root: string, entry: WorkflowEntry): Promise<StatusV2Doc> {
-  const statusPath = resolve(root);
-  // Canonical authority discrimination precedes the entry validation below
-  // (spec §4.3): with an ACTIVE execution authority the root register is
-  // retired as a persistence route, so no entry — valid or not — reaches it.
-  // `registerWorkflowEntryLocked` keeps its own guard for its other callers
-  // (audit promotion, migration), so no route can bypass the veto.
-  assertExecutionFileWriteAllowed({ harnessDir: dirname(statusPath) });
-  const entryGate = validateWorkflowEntry(entry);
-  if (!entryGate.ok) {
-    throw new Error(
-      `refusing to register invalid workflow entry: ${entryGate.violations.map((v) => v.message).join("; ")}`,
-    );
-  }
-  return withStatusWriteLock(statusPath, () => registerWorkflowEntryLocked(statusPath, entry));
-}
 
 /**
  * Remove one workflow entry from the v2 root file (). Idempotent:
@@ -898,6 +764,7 @@ export async function registerWorkflow(root: string, entry: WorkflowEntry): Prom
  * `status.json` to a path other than the caller's root — the no-op branches
  * below never mask a store/path mismatch.
  */
+// T17: coordination.ts retains its replacement chain caller.
 export async function unregisterWorkflow(root: string, id: string): Promise<StatusV2Doc> {
   const statusPath = resolve(root);
   // Canonical authority discrimination IS the entry boundary (spec §4.3): the
@@ -966,6 +833,7 @@ export async function unregisterWorkflow(root: string, id: string): Promise<Stat
 }
 
 /** Remove a workflow only while its root entry still names the expected snapshot. */
+// T17: catalog purge calls this conditional root removal helper.
 export async function unregisterWorkflowIfMatches(
   root: string,
   id: string,

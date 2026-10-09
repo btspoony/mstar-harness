@@ -106,7 +106,6 @@ export { STATUS_V2_PAYLOAD_SCHEMA } from "./status.js";
 
 export {
   normalizeSeverity,
-  registerWorkflow,
   resolveCompassEnforcement,
   resolveMstarcEnforcement,
   resolveRepoEnforcement,
@@ -120,16 +119,9 @@ export {
 export type { IntegrationMergeLease } from "./lease.js";
 export { validateIntegrationMergeLease, withStatusWriteLock } from "./lease.js";
 export type {
-  CloseWorkflowOptions,
-  DeclareWorkflowDeliveryKindOptions,
   DeliveryRegistrationEvidence,
-  RecordWorkflowDeliveryOptions,
-  RecordWorkflowDeliveryResult,
   RegisterIterationWorkflowOptions,
-  RegisterIterationWorkflowResult,
   RegisterPlanWorkflowOptions,
-  RegisterPlanWorkflowResult,
-  WorkflowBranchAnchors,
   WorkflowCompoundOutcome,
   WorkflowDeliveryEvidence,
   WorkflowDeliveryKind,
@@ -137,29 +129,20 @@ export type {
   WorkflowLifecycleStatus,
   WorkflowLifecycleType,
   WorkflowSnapshot,
-  WorkflowSnapshotRead,
 } from "./workflow.js";
 export {
   assertDeliveryRegistrationCoherence,
-  closeWorkflow,
   consultDeliveryEvidence,
-  declareWorkflowDeliveryKind,
   isTerminalSnapshot,
   LEGACY_WORKTREE_PATH_CODE,
   deliveryEvidenceViolations,
-  recordWorkflowDelivery,
   normalizeIterationCompassRef,
-  registerIterationWorkflow,
-  registerPlanWorkflow,
-  WORKFLOW_COMPOUND_OUTCOMES,
   WORKFLOW_DELIVERY_KINDS,
   WORKFLOW_LIFECYCLE_STATUSES,
   WORKFLOW_LIFECYCLE_TYPES,
   WORKFLOW_SNAPSHOT_FILE,
   WORKFLOW_TERMINAL_STATUSES,
-  readWorkflowSnapshot,
   validateWorkflowSnapshot,
-  writeWorkflowSnapshot,
 } from "./workflow.js";
 export { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow.js";
 
