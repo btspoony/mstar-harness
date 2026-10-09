@@ -799,7 +799,7 @@ function normalizeWorkflowSnapshot(doc: unknown, snapshotPath: string): Workflow
  * The delta allowed here is `phase` + `updated_at` and nothing else - a
  * coordinator persists its phase projection through this writer without ever
  * gaining a backdoor to row owners, leases, lifecycle scalars or branch
- * anchors. Lifecycle terminal changes belong to `closeWorkflow` (spec §C4).
+ * anchors. ACTIVE execution workflow operations own lifecycle terminal changes.
  */
 export type WriteWorkflowSnapshotOptions = {
   createOnly?: boolean;
@@ -826,7 +826,7 @@ export type WriteWorkflowSnapshotOptions = {
  * whose target root differs from the active store's root MUST
  * `setArtifactStore(createFsStore(root))` first.
  */
-// T17: coordination.ts replaceWorkflowChain remains the last writer caller.
+// Migration importer remains a permanent caller; coordination.ts replacement is the T17-only caller.
 export async function writeWorkflowSnapshot(
   snapshot: WorkflowSnapshot,
   dir: string,
@@ -915,9 +915,6 @@ function assertNoRecoveryHistoryOnCreate(payload: unknown, snapshotPath: string)
  * Coordinated snapshots are replaced only by their own bound coordinator
  * (spec §C4) - the `mstar persist replace snapshot` door authenticates on the
  * session envelope, and a replacement can never add or drop the
- * `coordination` block (the field-scoped merge already pins it to disk).
- * `CloseWorkflowOptions.sessionPath` reaches the same seam, so the refusal
- * names the operation that was refused.
  */
 function assertCoordinatedSnapshotWriter(
   stored: unknown,
@@ -1119,33 +1116,19 @@ export function assertDeliveryRegistrationCoherence(
 }
 
 /**
- * Delivery-kind evidence consultation (seam S3 - contract §4g + §6 S3): the
- * ONE implementation behind both the read-only Phase-6 gate
- * (`evaluatePostMergeClose`) and the close write path (`closeWorkflow`), so
- * the gate's verdict and the close's refusal can never drift apart. Pure,
- * read-only, no writes; the input snapshot is consumed as read.
+ * Delivery-kind evidence consultation is the shared pure rule used by ACTIVE
+ * workflow completion and the read-only Phase-6 gate; neither consumer may
+ * duplicate the registered-kind member map or evidence-shape checks.
  *
- * Only `type: plan` lifecycles consult (an iteration declares no delivery
- * kind - §1); WHEN the consultation runs is the caller's rule, and both
- * callers scope it to a delivered lifecycle: `closeWorkflow` consults the
- * running snapshot it is about to complete, and the Phase-6 gate consults a
- * `completed` terminal snapshot. A `failed`/`stopped` close is therefore never
- * demanded delivery evidence (§5). The DECLARED kind decides the required
- * evidence; nothing is inferred from which fields happen to be present, and a
- * missing field is incomplete registration, never an exemption (§1):
+ * Only `type: plan` lifecycles consult this rule (an iteration declares no
+ * delivery kind — §1). The registered kind, never inferred fields, determines
+ * required evidence, and missing evidence is incomplete registration:
  *
- * - no registered `delivery_kind` → `PHASE6_DELIVERY_KIND_UNREGISTERED` (a
- *   legacy terminal snapshot cannot be backfilled: the register producer is
- *   create-only and preserves the terminal bytes);
- * - `development` → the registered `branch.source`/`branch.target` plus the
- *   collected `delivery` evidence: compound disposition (§4c), PR identity
- *   (§4d) and the PM's verified-merge record (§4f - the engine never verifies
- *   the remote merge itself);
- * - `verification/report-only` → the recorded `completion_policy` plus its
- *   fulfilment record, which must name that same policy (§1).
- *
- * Everything missing is named in one refusal (`PHASE6_DELIVERY_EVIDENCE_INCOMPLETE`)
- * whose fix hint points at the authorized recording seam.
+ * - no registered `delivery_kind` → `PHASE6_DELIVERY_KIND_UNREGISTERED`;
+ * - `development` → registered `branch.source`/`branch.target` plus compound
+ *   disposition, PR identity and the PM's verified-merge record;
+ * - `verification/report-only` → registered `completion_policy` plus a
+ *   fulfilment record naming that same policy.
  */
 export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationResult[] {
   if (snapshot.type !== "plan") return [];
@@ -1224,194 +1207,9 @@ export function consultDeliveryEvidence(snapshot: WorkflowSnapshot): ValidationR
   ];
 }
 
-/**
- * §R11/A21 the terminal outcomes a close may RECORD. A close never records a
- * non-terminal status, and the three members are the snapshot schema's terminal
- * set - `failed`/`stopped` are the explicit terminal intents #270 requires, and
- * they carry NO successful-delivery precondition (contract §5).
- */
-export type CloseWorkflowOutcome = "completed" | "failed" | "stopped";
-
-export type CloseWorkflowOptions = {
-  endedAt: string;
-  /**
-   * The terminal outcome this close records (#270/R11). Default `completed` -
-   * the delivery-gated close, whose behavior is unchanged.
-   *
-   * `failed`/`stopped` record an EXPLICIT terminal intent: every plan row's
-   * `Done` state and the declared delivery kind's evidence are NOT consulted
-   * (a failure close is never treated as a delivery), and the workflow's own
-   * held claims are settled in the same locked snapshot write - a claim whose
-   * holder is no longer one of this workflow's recorded session identities AND
-   * whose stop a recorded identity-recovery attestation establishes is released
-   * (the file route's release is the lease key's absence), while a claim a live
-   * holder still holds, or one whose holder no recorded stop or transfer
-   * accounts for, refuses the outcome with that holder named.
-   * A recorded terminal outcome is never rewritten: a `failed`/`stopped` request
-   * against a lifecycle that already records a DIFFERENT terminal status is
-   * refused.
-   */
-  outcome?: CloseWorkflowOutcome;
-  /**
-   * Canonical coordinator session envelope path (spec §C4). Required when the
-   * stored snapshot is coordinated: the close writes the snapshot, so only the
-   * snapshot's own bound coordinator may pass. A missing/mismatched envelope
-   * refuses the close with `coordination.identity-mismatch` before anything is
-   * written. Non-coordinated snapshots ignore it; an already-terminal snapshot
-   * is returned unchanged (no write, no authorization needed).
-   */
-  sessionPath?: string;
-};
-
-/**
- * The timestamp form a lifecycle close accepts (`YYYY-MM-DD` or RFC3339 with a
- * time), exported for the composed file-authority close, which validates the
- * requested terminal timestamp BEFORE it composes anything (a malformed
- * `endedAt` must refuse before a row is completed, not after).
- */
-export function isCloseTimestamp(value: string): boolean {
-  if (typeof value !== "string") return false;
-  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/.exec(value);
-  if (!match) return false;
-  // Date.parse normalizes impossible dates such as February 30; compare the
-  // calendar date independently of the optional timestamp's UTC offset.
-  const date = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value.slice(0, 10);
-}
 
 
-/**
- * Complete the latest snapshot under its write lock. Never releases leases.
- *
- * §3/§5 the `outcome` the caller states decides which terminal write runs:
- *
- * - `completed` (the default, unchanged): every owned row must be `Done` and
- *   the registered delivery kind's evidence is consulted through
- *   `consultDeliveryEvidence` - the SAME pure function the read-only Phase-6
- *   gate runs (contract §4g/§6 S3), so the gate's verdict and this refusal can
- *   never disagree. An incomplete delivery throws with every missing item named
- *   and ZERO writes: the snapshot stays `running` and the root entry stays
- *   registered, so the workflow remains resumable. The local close never
- *   verifies a remote merge (§4f keeps that as the PM's separate check).
- * - `failed`/`stopped` (#270/R11/A21): an explicit terminal intent, recorded
- *   WITHOUT any successful-delivery precondition - no row-`Done` requirement, no
- *   delivery-evidence consultation (a failure close is never treated as a
- * delivery; the Phase-6 gate passes such a snapshot by the same rule). A
- * failed/stopped close may settle the workflow mutex only when coordinator
- * recovery records that the exact mutex holder stopped; live or unattested
- * holders remain protected.
- *
- * A valid terminal snapshot is returned unchanged - including `failed`/`stopped`
- * (idempotent preservation: nothing is rewritten, not even the timestamp). Two
- * requests behave exactly that way: the RESTATEMENT of the status the lifecycle
- * already records (the residue a crash between the terminal write and the root
- * cleanup leaves - the next normal close continues that cleanup without
- * replaying work or resetting `ended_at`), and a `completed` close over a
- * `failed`/`stopped` outcome, which is returned as THAT outcome (R10: an
- * existing result is never rewritten as `completed`). A `failed`/`stopped`
- * request against a lifecycle that records a different terminal status is
- * REFUSED - a closed lifecycle is never amended (§5).
- *
- * A coordinated snapshot is closed only by its own bound coordinator
- * (spec §C4) - the same envelope seam as `writeWorkflowSnapshot` - so a plan
- * actor or a bare CLI call can never complete a lifecycle it does not own. The
- * authorization precedes the claim settle, so an unauthorized address releases
- * nothing.
- */
-// T17: coordination.ts replaceWorkflowChain remains the last close caller.
-export async function closeWorkflow(workflowId: string, dir: string, opts: CloseWorkflowOptions): Promise<WorkflowSnapshot> {
-  // Canonical authority discrimination precedes every payload check below and
-  // the unchanged-snapshot shortcut (spec §4.3).
-  assertExecutionFileWriteAllowed({ harnessDir: dir });
-  const outcome = opts.outcome ?? "completed";
-  if (outcome !== "completed" && outcome !== "failed" && outcome !== "stopped") {
-    throw new Error(`outcome must be one of completed | failed | stopped \u2014 got ${JSON.stringify(opts.outcome)}`);
-  }
-  if (!isCloseTimestamp(opts.endedAt)) {
-    throw new Error("endedAt must be a valid YYYY-MM-DD date or RFC3339 timestamp");
-  }
-  const snapshotPath = join(dir, WORKFLOW_SNAPSHOT_FILE);
-  const store = getArtifactStore();
-  const ref = { kind: "snapshot" as const, key: workflowId };
-  assertFsStorePath(store, ref, snapshotPath);
-  mkdirSync(dir, { recursive: true });
-  return withStatusWriteLock(snapshotPath, async () => {
-    const doc = await store.get(ref);
-    if (doc === undefined) throw new Error(`workflow snapshot not found: ${snapshotPath}`);
-    const { snapshot } = normalizeWorkflowSnapshot(doc, snapshotPath);
-    if (snapshot.id !== workflowId) {
-      throw new Error(`workflow snapshot identity mismatch: expected ${workflowId}, got ${snapshot.id}`);
-    }
-    if (isTerminalSnapshot(snapshot)) {
-      // The restatement and the ordinary `completed` read are the no-write
-      // paths above; recording a DIFFERENT terminal status here would be
-      // amending a closed lifecycle, so it is refused before the write path.
-      if (outcome === "completed" || outcome === snapshot.status) return snapshot;
-      throw new CoordinationError(
-        "coordination.invalid-transition",
-        `workflow ${workflowId} is ${snapshot.status} \u2014 a closed lifecycle is never amended, and its history stays exactly as ` +
-          `it was recorded`,
-        { workflow_id: workflowId, status: snapshot.status, requested: outcome },
-      );
-    }
-    // Authorization sits on the write path only: a terminal snapshot returned
-    // above is never written. For a coordinated snapshot the stored payload
-    // (not the normalized view) carries the `coordination` block, exactly as
-    // the replacement door reads it.
-    assertCoordinatedSnapshotWriter(doc, snapshotPath, opts.sessionPath, "close");
-    if (outcome === "completed") {
-      if (snapshot.plans.some((row) => row.status !== "Done")) {
-        throw new Error("refusing to close workflow: every plan row must be Done");
-      }
-      const deliveryViolations = consultDeliveryEvidence(snapshot);
-      if (deliveryViolations.length > 0) {
-        const detail = deliveryViolations
-          .map((v) => `${v.code}: ${v.message}${v.fix !== undefined ? ` (fix: ${v.fix})` : ""}`)
-          .join("; ");
-        throw new Error(`refusing to close workflow: ${detail}`);
-      }
-    }
-    let closeBase = snapshot;
-    const coordinatorSessionId = snapshot.coordination?.coordinator?.session_id;
-    const lease = snapshot.integration_merge_lease;
-    if (lease !== undefined) {
-      const leaseClaimedAt = Date.parse(lease.claimed_at);
-      const attestedStopped =
-        outcome !== "completed" &&
-        coordinatorSessionId !== undefined &&
-        lease.holder !== coordinatorSessionId &&
-        Number.isFinite(leaseClaimedAt) &&
-        (snapshot.coordination?.identity_recoveries ?? []).some((recovery) => {
-          const stoppedAt = Date.parse(recovery.attested_at ?? "");
-          const recoveredAt = Date.parse(recovery.recovered_at);
-          return (
-            recovery.workflow_id === workflowId &&
-            recovery.prior_session_id === lease.holder &&
-            recovery.session_id === coordinatorSessionId &&
-            recovery.stopped_session_ids.includes(lease.holder) &&
-            !recovery.stopped_session_ids.includes(coordinatorSessionId) &&
-            Number.isFinite(stoppedAt) &&
-            Number.isFinite(recoveredAt) &&
-            leaseClaimedAt <= stoppedAt &&
-            stoppedAt <= recoveredAt
-          );
-        });
-      if (!attestedStopped) {
-        throw new CoordinationError(
-          "coordination.invalid-transition",
-          "The workflow cannot become the requested status while its integration mutex holder is live or lacks a matching stop attestation at or after the claim; recover the recorded coordinator on the pre-activation FILE route with mstar workflow recover-coordinator. Inspect the workflow with mstar status validate.",
-          { workflow_id: workflowId, status: outcome, holder: lease.holder, current_coordinator: coordinatorSessionId ?? null },
-        );
-      }
-      const { integration_merge_lease: _settled, ...withoutMutex } = snapshot;
-      closeBase = withoutMutex;
-    }
-    const closed: WorkflowSnapshot = { ...closeBase, status: outcome, ended_at: opts.endedAt, updated_at: opts.endedAt };
-    // Strict terminal validation enforces that the mutex is settled before close.
-    await validateAndPutWorkflowSnapshot(store, closed, snapshotPath);
-    return closed;
-  });
-}
+
 
 
 

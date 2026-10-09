@@ -145,14 +145,8 @@ export {
 } from "./workflow.js";
 export { WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA } from "./workflow.js";
 
-// Lifecycle-phase derivation (S3/E06a) and the terminal outcome a close records
-// (S3/E12b): the three phase labels a document's own facts derive to, the code
-// of the reader's derived-phase diagnostic, the ONE derivation the file
-// producer, the catalog journal and the derived Prepare view share, and the
-// outcome a caller names on a close. Re-exported so T03/T09 consume the sparse
-// registration intent and the derived phase instead of re-deriving either, and
-// so a transport can type the terminal outcome it passes. ADDITIVE export.
-export type { CloseWorkflowOutcome, DerivedPlanRegistration, LifecyclePhaseDerivation } from "./workflow.js";
+// Lifecycle-phase derivation and sparse registration intent are shared by migration and ACTIVE workflow operations.
+export type { DerivedPlanRegistration, LifecyclePhaseDerivation } from "./workflow.js";
 export {
   CLOSE_PHASE,
   DERIVED_PHASE_CODE,
@@ -485,8 +479,8 @@ export { persistPayloadContracts, PERSIST_PAYLOAD_CONTRACTS } from "./coordinati
 
 export { assertFsStorePath, createFsStore, getArtifactStore, guardInjectedStore, loadStoreModule, resolveArtifactPath, setArtifactStore } from "./store.js";
 
-export { activeLifecyclePlanId, collectActiveLifecycleBranches } from "./lifecycle-branches.js";
-export type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
+export { activeLifecyclePlanId, collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "./lifecycle-branches.js";
+export type { ActiveLifecycleBranch, ActiveLifecycleScan } from "./lifecycle-branches.js";
 
 export { WorkflowSnapshotValidationError } from "./workflow.js";
 

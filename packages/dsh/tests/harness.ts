@@ -25,15 +25,11 @@ import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import {
   captureIssue,
-  createFsStore,
   initializeStore,
   openStore,
   registerCatalogEntity,
-  registerWorkflow,
-  setArtifactStore,
-  writeWorkflowSnapshot,
 } from '@mstar-harness/engine'
-import type { CaptureInput, WorkflowSnapshot } from '@mstar-harness/engine'
+import type { CaptureInput } from '@mstar-harness/engine'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { JobDoneSnapshot } from '../src/gates/agent-flow.ts'
 import type { LoaderEntryView } from '../src/gates/fallbacks-probe.ts'
@@ -858,9 +854,8 @@ export function v2RootWithWorkflow(workflowId = 'wf-1'): string {
 }
 
 /**
- * Create valid pre-activation workflow documents through the public producers.
- * Explicitly select this temporary harness's store; never let the process cwd
- * choose the snapshot destination. Malformed/retired-byte cases use seedHarness.
+ * Seed legacy file-route documents directly for migration and consumer tests.
+ * This fixture does not exercise the retired register/snapshot writer APIs.
  */
 export async function seedFileWorkflow(
   harnessDir: string,
@@ -868,20 +863,10 @@ export async function seedFileWorkflow(
   plans: Record<string, unknown>[] = [],
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
-  const snapshot = JSON.parse(v2SnapshotWithPlans(workflowId, plans, overrides)) as WorkflowSnapshot
-  setArtifactStore(createFsStore(harnessDir))
-  try {
-    await writeWorkflowSnapshot(snapshot, join(harnessDir, 'workflows', workflowId), { createOnly: true })
-    await registerWorkflow(join(harnessDir, 'status.json'), {
-      id: workflowId,
-      type: snapshot.type,
-      started_at: snapshot.started_at,
-      dir: `workflows/${workflowId}`,
-    })
-  } finally {
-    // Restore the engine's lazy default store (no test injects one).
-    setArtifactStore(undefined)
-  }
+  const workflowDir = join(harnessDir, 'workflows', workflowId)
+  await mkdir(workflowDir, { recursive: true })
+  await writeFile(join(workflowDir, 'snapshot.json'), v2SnapshotWithPlans(workflowId, plans, overrides), 'utf8')
+  await writeFile(join(harnessDir, 'status.json'), v2RootWithWorkflow(workflowId), 'utf8')
 }
 
 /** A minimal project register doc (`projects/<id>/residuals.json` — entries keyed by plan id). */

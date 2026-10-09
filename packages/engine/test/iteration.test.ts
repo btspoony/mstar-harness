@@ -52,8 +52,6 @@ import type { SnapshotDoc } from "../src/iteration.js";
 import { readJson } from "../src/core.js";
 import { registerCatalogEntity } from "../src/catalog.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
-import { registerPlanWorkflow } from "../src/workflow.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const REAL_STATUS_PATH = join(import.meta.dir, "fixtures", "status.real-shape.json");
 
@@ -484,7 +482,7 @@ describe("evaluatePostMergeClose — Phase 6 post-merge close local-state gate (
   });
 });
 
-/** Minimal registered + closed standalone plan snapshot (contract §1/§6 S3 shape from `registerPlanWorkflow`). */
+/** Minimal terminal plan snapshot used by the Phase-6 delivery gate. */
 function phase6PlanSnapshot(overrides: Record<string, unknown> = {}): SnapshotDoc {
   return {
     schema_version: 1,
@@ -712,66 +710,31 @@ describe("evaluatePostMergeClose — plan-type delivery-kind consultation (mstar
     expect(result.violations.some((v) => v.code === "PHASE6_ROOT_ENTRY_PRESENT")).toBe(true);
   });
 
-  test("legacy terminal snapshot without a delivery_kind is a documented dead end: the gate refuses and 'mstar workflow register' cannot backfill it (§1)", async () => {
- // On-disk legacy state — a pre-contract terminal `type: plan` snapshot with
- // no delivery_kind — in the post-close orphan shape (root entry already
- // gone), read back from bytes exactly as the gate consumes them.
+  test("legacy terminal snapshot without a delivery_kind remains a documented dead end (§1)", () => {
     const root = tmpRoot("phase6-legacy-terminal-");
-    const snapshotDir = join(root, "workflows", "wf-plan-1");
-    mkdirSync(snapshotDir, { recursive: true });
-    writeFileSync(
-      join(snapshotDir, "snapshot.json"),
-      JSON.stringify(phase6PlanSnapshot({ delivery_kind: undefined })),
-      "utf8",
-    );
-    writeFileSync(join(root, "status.json"), JSON.stringify(phase6Root([])), "utf8");
-    const gate = evaluatePostMergeClose(
-      readJson(join(snapshotDir, "snapshot.json")) as SnapshotDoc,
-      readJson(join(root, "status.json")),
-    );
-    expect(gate.ok).toBe(false);
-    const unregistered = gate.violations.find((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED");
-    expect(unregistered).toBeDefined();
-// The remediation states the truth: a still-ACTIVE kind-less workflow has the
-// one-time declaration seam, while a TERMINAL snapshot cannot be backfilled
-// (the register verb is create-only, the declaration refuses a closed
-// lifecycle), so its repair is an explicit owner snapshot amendment — the
-// refusal never sends the operator into the register dead end.
-    expect(unregistered!.fix).toContain("--declare-kind");
-    expect(unregistered!.fix).toContain("TERMINAL legacy snapshot cannot be backfilled");
-    expect(unregistered!.fix).toContain("owner snapshot amendment");
-    expect(unregistered!.fix).toContain("audit-promotion");
- // Pinning the dead end itself: registering over the legacy terminal
- // snapshot refuses — the recovery identity (status + delivery_kind) can
- // never match a constructed registration, and create-only never rewrites
- // the existing bytes.
-    setArtifactStore(createFsStore(root));
     try {
-      // The SELECTED plan document the registration proves (§4/R1): its `plan_id`
-      // header is the identity authority and its heading the title authority, so
-      // the refusal under test is the create-only identity one — not a pointer
-      // refusal.
-      mkdirSync(join(root, "plans"), { recursive: true });
-      writeFileSync(join(root, "plans", "plan-a.md"), "# Plan A\n\n**plan_id:** plan-a\n");
-      let refusal = "";
-      try {
-        await registerPlanWorkflow("wf-plan-1", {
-          harnessDir: root,
-          plan: { id: "plan-a", title: "Plan A", file: "plans/plan-a.md" },
-          deliveryKind: "development",
-          branchSource: "main",
-          branchTarget: "feature/plan-a",
-        });
-      } catch (error) {
-        refusal = error instanceof Error ? error.message : String(error);
-      }
-      expect(refusal).toContain("different registration identity");
+      const snapshotDir = join(root, "workflows", "wf-plan-1");
+      mkdirSync(snapshotDir, { recursive: true });
+      writeFileSync(
+        join(snapshotDir, "snapshot.json"),
+        JSON.stringify(phase6PlanSnapshot({ delivery_kind: undefined })),
+        "utf8",
+      );
+      writeFileSync(join(root, "status.json"), JSON.stringify(phase6Root([])), "utf8");
+      const gate = evaluatePostMergeClose(
+        readJson(join(snapshotDir, "snapshot.json")) as SnapshotDoc,
+        readJson(join(root, "status.json")),
+      );
+      expect(gate.ok).toBe(false);
+      const unregistered = gate.violations.find((v) => v.code === "PHASE6_DELIVERY_KIND_UNREGISTERED");
+      expect(unregistered).toBeDefined();
+      expect(unregistered!.fix).toContain("TERMINAL legacy snapshot cannot be backfilled");
+      expect(unregistered!.fix).toContain("owner snapshot amendment");
+      expect(unregistered!.fix).toContain("audit-promotion");
     } finally {
-      setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
     }
   });
-
   test("iteration-type snapshots stay outside the consultation: no delivery kind required (zero iteration drift)", () => {
     const result = evaluatePostMergeClose(phase6Snapshot(), phase6Root([]));
     expect(result.ok).toBe(true);

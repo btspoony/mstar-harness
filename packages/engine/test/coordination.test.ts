@@ -29,7 +29,6 @@ import { commitExecutionRegistration } from "../src/execution-registration.js";
 import { readExecutionAuthority } from "../src/execution-read.js";
 import { initializeStore, openStore } from "../src/store-db.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
-import { registerIterationWorkflow } from "../src/workflow.js";
 import {
   WORKFLOW_ID, PLAN_ID, PEER_PLAN_ID, FIXTURE_COORDINATOR_ID,
   git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureCode, failureOf,
@@ -66,30 +65,11 @@ describe("registration route parity — one canonical plan pointer (E07 fold)", 
     }
   }
 
-  test("the DB registration route stores the same canonical row pointer as the file producer (pointer correction — route parity)", async () => {
-    const fileRoot = makeFixture();
+  test("the ACTIVE DB registration route stores the canonical row pointer", async () => {
     const dbRoot = makeFixture();
-    for (const fixture of [fileRoot, dbRoot]) {
-      writeText(join(fixture.harness, "plans", `${ROUTE_PLAN}.md`), `# Plan ${ROUTE_PLAN}\n\n**plan_id:** ${ROUTE_PLAN}\n`);
-    }
-    // The reviewed row pointer, spelled the one way both routes accept.
+    writeText(join(dbRoot.harness, "plans", `${ROUTE_PLAN}.md`), `# Plan ${ROUTE_PLAN}\n\n**plan_id:** ${ROUTE_PLAN}\n`);
     const rows = [{ id: ROUTE_PLAN, title: `Plan ${ROUTE_PLAN}`, file: `plans/${ROUTE_PLAN}.md` }];
-
-    // The file producer, on the migration-era authority it owns.
-    setArtifactStore(createFsStore(fileRoot.harness));
-    await registerIterationWorkflow("iter-route-file", {
-      harnessDir: fileRoot.harness,
-      compassRef: "iterations/iter-route-file/delivery-compass.md",
-      branch: { base: "main", integration: "iteration/iter-route-file", target: "main" },
-      rows,
-    });
-    const fileRoute = readJson(join(fileRoot.harness, "workflows", "iter-route-file", "snapshot.json"));
-    const filePlans = fileRoute.plans as Array<{ file: string }>;
-    expect(filePlans[0]!.file).toBe(canonicalRowPointer(fileRoot.harness, ROUTE_PLAN));
-
-    // The ACTIVE DB route, on its own control root.
-    // This fixture exercises fresh authority initialization, not migration of
-    // the unrelated FILE workflow that makeFixture seeds for other cases.
+    // Initialize a fresh ACTIVE authority, not a fixture's legacy FILE workflow.
     rmSync(join(dbRoot.harness, "status.json"));
     rmSync(join(dbRoot.harness, "workflows"), { recursive: true });
     const store = await initializeStore({ harnessDir: dbRoot.harness });

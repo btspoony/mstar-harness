@@ -44,8 +44,6 @@ import {
   type ImplementerSessionLedger,
   type SddExecutionContext,
 } from "../src/sdd.js";
-import { readWorkflowSnapshot, registerPlanWorkflow } from "../src/workflow.js";
-import { createFsStore, setArtifactStore } from "../src/store.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -1408,7 +1406,6 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
  // The refusal names the registration command and the recovery path.
       expect(err.message).toContain("mstar workflow register");
       expect(err.message).toContain("--delivery-kind");
-      expect(err.message).toContain("registerPlanWorkflow");
       expect(err.message).toContain("retry");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1447,68 +1444,6 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       expect(err.exitCode).toBe(1);
       expect(err.message).toContain("sdd.context.register-unreadable");
     } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("registration clears the refusal: register then retry proceeds, prior state preserved (S2 recovery path)", async () => {
-    const root = tmpRoot("sdd-ctx-register-recovery-");
-    try {
-      const f = executionFixture(root, { primaryHarness: true });
-      writeStatusRegister(f, ["wf-other"]);
-      writeSnapshot(f, "wf-other", [
-        { id: "another-plan", title: "other plan", file: "plans/another-plan.md", status: "InProgress" },
-      ]);
-      const otherSnapshotPath = join(f.harnessDir, "workflows", "wf-other", "snapshot.json");
-      const otherSnapshotBefore = readFileSync(otherSnapshotPath, "utf8");
-      const otherEntryBefore = JSON.parse(readFileSync(join(f.harnessDir, "status.json"), "utf8")).workflows[0];
-      const err = errOf(() => resolveSddExecutionContext(contextOf(f)));
-      expect(err.message).toContain("sdd.context.plan-not-registered");
-
- // Recovery exactly as the refusal documents: register (create-only — the
- // pre-existing wf-other entry stays), then retry the execution.
-      setArtifactStore(createFsStore(f.harnessDir));
-      await registerPlanWorkflow("wf-recovered", {
-        harnessDir: f.harnessDir,
-        // The declared title is the one the selected document states (its
-        // heading is the title authority, §4/R1).
-        plan: { id: PLAN_ID, title: "Plan", file: `plans/${PLAN_ID}.md` },
-        deliveryKind: "development",
-        branchSource: "main",
-        branchTarget: f.workingBranch,
-      });
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
-      const rootDoc = JSON.parse(readFileSync(join(f.harnessDir, "status.json"), "utf8")) as {
-        workflows: { id: string }[];
-      };
-      expect(rootDoc.workflows.map((w) => w.id).sort()).toEqual(["wf-other", "wf-recovered"]);
-      expect(rootDoc.workflows.find((w) => w.id === "wf-other")).toEqual(otherEntryBefore);
-      expect(readFileSync(otherSnapshotPath, "utf8")).toBe(otherSnapshotBefore);
-    } finally {
-      setArtifactStore(undefined);
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("a registered verification/report-only workflow without branch.target proceeds (registration is the only admission demand)", async () => {
-    const root = tmpRoot("sdd-ctx-verification-");
-    try {
-      const f = executionFixture(root, { primaryHarness: true });
- // Recorded alternative completion policy, no branch fields — admission
- // demands registration only, never a PR (contract §1 binding negatives).
-      setArtifactStore(createFsStore(f.harnessDir));
-      await registerPlanWorkflow("wf-verify", {
-        harnessDir: f.harnessDir,
-        plan: { id: PLAN_ID, title: "Plan", file: `plans/${PLAN_ID}.md` },
-        deliveryKind: "verification/report-only",
-        completionPolicy: "acceptance artifacts recorded under the plan's sddDir",
-      });
-      expect(resolveSddExecutionContext(contextOf(f)).planId).toBe(PLAN_ID);
-      const { snapshot } = readWorkflowSnapshot(join(f.harnessDir, "workflows", "wf-verify"));
-      expect(snapshot.branch).toBeUndefined();
-      expect(snapshot.completion_policy).toBe("acceptance artifacts recorded under the plan's sddDir");
-    } finally {
-      setArtifactStore(undefined);
       rmSync(root, { recursive: true, force: true });
     }
   });

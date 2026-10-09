@@ -107,7 +107,7 @@ import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
 import { CatalogError } from "./catalog.js";
 import { PlanPathError, planDeclaredHeaders, resolveRegisteredPlanFile, type RegisteredPlanFile } from "./plan-path.js";
 import { parseCompassFrontmatterText } from "./iteration.js";
-import { findRegisteredWorkflow, rowPlanIds, unregisterWorkflow, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
+import { findRegisteredWorkflow, rowPlanIds, validatePlanRow, validateStatusV2, type PlanRow, type StatusV2Doc } from "./status.js";
 import { getArtifactStore, resolveArtifactPath, type ArtifactRef, type ArtifactStore } from "./store.js";
 import {
   StoreError,
@@ -133,9 +133,7 @@ import {
 import { isDistinctCheckout, readMainWorktree, type MainWorktreeInfo } from "./worktree.js";
 import {
   DERIVED_PHASE_CODE,
-  closeWorkflow,
   deriveLifecyclePhase,
-  isCloseTimestamp,
   isStandaloneDevelopmentWorkflow,
   isStandaloneReportOnlyWorkflow,
   isTerminalSnapshot,

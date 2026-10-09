@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { collectActiveLifecycleBranches } from "../src/lifecycle-branches.js";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { collectActiveLifecycleBranches, scanActiveLifecycleBranches } from "../src/lifecycle-branches.js";
 
 test("ownership includes retained tracks and excludes base/target anchors", () => {
   expect(collectActiveLifecycleBranches([
@@ -14,4 +17,58 @@ test("ownership includes retained tracks and excludes base/target anchors", () =
     { branch: "feature/a", workflowId: "wf-a", planId: "plan-a" },
     { branch: "feature/retained", workflowId: "wf-a", planId: "plan-a" },
   ]);
+});
+
+test("unreadable active register shapes fail closed, including null", () => {
+  const root = mkdtempSync(join(tmpdir(), "lifecycle-register-"));
+  try {
+    for (const value of [null, [], { version: 2, workflows: [null] }, { version: 2, workflows: [{ id: "../escape" }] }]) {
+      writeFileSync(join(root, "status.json"), JSON.stringify(value));
+      expect(scanActiveLifecycleBranches(root, "wf-a")).toMatchObject({ kind: "refusal", code: "worktree.l1.lifecycle-register-unreadable" });
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a running sibling row's branch intent is reported by the scan", () => {
+  const root = mkdtempSync(join(tmpdir(), "lifecycle-ownership-"));
+  try {
+    const harness = join(root, ".mstar");
+    const workflowDir = join(harness, "workflows", "wf-running");
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(
+      join(harness, "status.json"),
+      JSON.stringify({
+        version: 2,
+        updated_at: "2026-09-16",
+        workflows: [{ id: "wf-running", status: "running", type: "iteration", started_at: "2026-09-16", dir: "workflows/wf-running" }],
+      }),
+    );
+    writeFileSync(
+      join(workflowDir, "snapshot.json"),
+      `${JSON.stringify({
+        schema_version: 1,
+        id: "wf-running",
+        type: "iteration",
+        status: "running",
+        started_at: "2026-09-16",
+        updated_at: "2026-09-16",
+        branch: { base: "main", integration: "iteration/wf-running", target: "main" },
+        plans: [{
+          id: "plan-running",
+          title: "Plan plan-running",
+          file: join(harness, "plans", "plan-running.md"),
+          status: "InProgress",
+          progress: 40,
+          metadata: { worktree_path: join(root, "wt-running"), working_branch: "feature/plan-running" },
+        }],
+      }, null, 2)}\n`,
+    );
+    const scan = scanActiveLifecycleBranches(harness, "wf-governing");
+    expect(scan.kind).toBe("ok");
+    if (scan.kind !== "ok") throw new Error("the active register must be readable");
+    expect(scan.branches).toEqual([
+      { branch: "iteration/wf-running", workflowId: "wf-running", planId: null },
+      { branch: "feature/plan-running", workflowId: "wf-running", planId: "plan-running" },
+    ]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
