@@ -3365,6 +3365,41 @@ describe("native coordinator tool on the ACTIVE route", () => {
     expect(String(details.loadedEntry)).toMatch(/\.(ts|js)$/);
     expect(JSON.stringify(details)).not.toContain("sessions/");
   }, 120_000);
+
+  test("an identical bind retry with only an explicit operation id is the recorded replay (BUG-101)", async () => {
+    const repo = buildControlRepo("fixture-sibling-iteration", { legacySources: false });
+    const session = newSession(repo.main);
+    const harness = await createHarness({ cwd: repo.main, sessionDir: scratchDir("unused-"), sessionManager: session });
+    const hostId = harness.sessionManager.getSessionId();
+    const workflowId = "native-bind-replay-iteration";
+    await seedBindableActiveWorkflow(repo, hostId, workflowId);
+
+    // The documented minimal lost-response recovery: the caller pins its OWN
+    // operation id and nothing else. The engine resolves the workflow's current
+    // token itself, so the first commit's revision advance never turns the
+    // unchanged retry into `execution.operation-conflict`; freshness the caller
+    // never supplied stays out of the request fingerprint.
+    const request = { operation: "bind", workflowId, operationId: "native-bind-replay-op-1" };
+    const first = await harness.runCoordinatorTool(request);
+    expect(first.isError).toBe(false);
+    const firstReceipt = first.details.mstarCoordinator as Record<string, unknown>;
+    expect(firstReceipt).toMatchObject({ workflowId, sessionId: hostId, operationId: "native-bind-replay-op-1", replayed: false });
+    const headerAfterFirst = await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId });
+    const operationsAfterFirst = executionOperationCount(repo);
+
+    const retry = await harness.runCoordinatorTool(request);
+    expect(retry.isError).toBe(false);
+    const replayed = retry.details.mstarCoordinator as Record<string, unknown>;
+    expect(replayed.replayed).toBe(true);
+    // The replay restored the RECORDED receipt: same owner, same session token
+    // and the same single accepted-operation row.
+    expect(replayed.sessionId).toBe(hostId);
+    expect(replayed.epoch).toBe(firstReceipt.epoch);
+    expect(replayed.storeId).toBe(firstReceipt.storeId);
+    expect(await activeCoordinatorOf(repo, workflowId)).toBe(hostId);
+    expect((await readExecutionAuthority({ harnessDir: repo.harness }, { workflowId })).token).toBe(headerAfterFirst.token);
+    expect(executionOperationCount(repo)).toBe(operationsAfterFirst);
+  }, 120_000);
 });
 
 /* ------------------------------------------------------------------------ *

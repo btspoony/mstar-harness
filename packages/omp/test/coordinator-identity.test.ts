@@ -580,6 +580,39 @@ describe("prerequisite identity — the active coordinator forms call the DB ver
     expect(JSON.stringify(result)).not.toContain(WORKFLOW_TOKEN);
   });
 
+  test("the ACTIVE bind forwards an omitted expected and replays an identical operation id (BUG-101)", async () => {
+    const engine = fakeAuthority();
+    // The documented minimal shape: workflow + the caller's own operation id and
+    // NO token. The adapter must NOT read the workflow token to synthesize a CAS
+    // value — the engine resolves the current token from its own header, which is
+    // what keeps the request fingerprint stable across the first commit's revision
+    // advance so the unchanged retry is the engine's replay.
+    const result = await bindCoordinatorIdentity(
+      { operation: "bind", workflowId: "wf-a", operationId: OPERATION_ID },
+      FACTS,
+      undefined as never,
+      engine.deps,
+    );
+    expect({ ok: result.ok, code: result.code }).toEqual({ ok: true, code: "bound" });
+    expect(engine.calls.read).toHaveLength(0);
+    expect(engine.calls.bind).toHaveLength(1);
+    expect(engine.calls.bind[0]?.operationId).toBe(OPERATION_ID);
+    // `expected` is absent from the derived input, not a synthesized token.
+    expect(engine.calls.bind[0]).not.toHaveProperty("expected");
+  });
+
+  test("the ACTIVE bind still forwards an explicit expected as a strict CAS", async () => {
+    const engine = fakeAuthority();
+    const result = await bindCoordinatorIdentity(
+      { operation: "bind", workflowId: "wf-a", expected: WORKFLOW_TOKEN, operationId: OPERATION_ID },
+      FACTS,
+      undefined as never,
+      engine.deps,
+    );
+    expect(result.ok).toBe(true);
+    expect(engine.calls.bind[0]?.expected).toBe(WORKFLOW_TOKEN);
+  });
+
   test("a combined forbidden and invalid call is refused whole before the authority", async () => {
     // The advertised single repair: one refusal names EVERY unusable field, so a
     // caller that follows it reaches a working call without discovering a second
