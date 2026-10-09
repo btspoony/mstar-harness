@@ -1037,6 +1037,7 @@ function iterationGateSource(
   try {
     const snapshotDoc = authoritySnapshot
     const compass = selectedCompass(harnessDir, selection.workflowId, snapshotDoc)
+    if (compass === undefined) return undefined
     // No git probes at boot: the row reports what the two control docs
     // prove (the tool remains the explicit-probe surface for branch checks).
     const result = evaluatePhaseGate(snapshotDoc, compass.doc)

@@ -516,7 +516,6 @@ export function resolveActiveWorkflow(harnessDir: string, hint?: SessionHint): A
  * caller never re-reads a document to find out what it selected.
  */
 export type ExecutionWorkflowSourceRead =
-  | { readonly kind: 'files' }
   | {
       readonly kind: 'active'
       readonly workflowId: string
@@ -584,13 +583,11 @@ export async function readExecutionWorkflowSource(
   context: StoreContext,
   hint?: SessionHint,
 ): Promise<ExecutionWorkflowSourceRead> {
-  let route: 'execution' | 'files'
   try {
-    route = await resolveExecutionReadRoute(context)
+    await resolveExecutionReadRoute(context)
   } catch (error) {
     return { kind: 'unavailable', ...refusalOf(error) }
   }
-  if (route === 'files') return { kind: 'files' }
 
   let read: ExecutionRead<ExecutionState | ExecutionPlanView>
   try {
@@ -707,15 +704,6 @@ export async function resolveExecutionLedgerTarget(sessionId: string, cwd: strin
   const source = await readExecutionWorkflowSource({ harnessDir }, hint)
   if (source.kind === 'unavailable' || source.kind === 'error') return null
   const workflowRoot = resolveWorkflowDir(harnessDir, { harnessDir })
-  if (source.kind === 'files') {
-    if (executionBinding !== undefined && executionBinding !== null) return null
-    const legacy = resolveActiveWorkflow(harnessDir, hint)
-    if (legacy.kind !== 'active') return null
-    const targetDir = ledgerTargetDir(workflowRoot, legacy.workflowId)
-    return targetDir === null
-      ? null
-      : { workflowId: legacy.workflowId, workflowDir: targetDir, sessionId, source: 'legacy', epoch: null }
-  }
   if (executionBinding === undefined || executionBinding === null) return null
   if (executionBinding.harnessRoot !== harnessDir ||
     executionBinding.session.sessionId !== sessionId ||

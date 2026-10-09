@@ -425,7 +425,7 @@ export async function leaseGateViolations(
     if (!sdd && source.kind === 'error' && source.selection.kind === 'error' && source.selection.code === 'workflow.selection.no-active') return []
     return [leaseViolation(
       'lease.dispatch.unverifiable',
-      source.kind === 'unavailable' ? source.message : source.kind === 'error' ? source.selection.message : 'the ACTIVE execution store is not initialized',
+      source.kind === 'unavailable' ? source.message : 'the ACTIVE workflow could not be selected',
       'initialize or upgrade the ACTIVE store, then register the workflow and prepare the plan before dispatch',
     )]
   }
