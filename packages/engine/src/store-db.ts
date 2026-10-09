@@ -1835,25 +1835,6 @@ function probeConnectionFor(dbPath: string): StoreDb | null {
   return db;
 }
 
-/** FILE guards receive target directories, including not-yet-created workflow
- * directories. Keep their existing process/control discovery separate from
- * selected StoreContexts: otherwise a future target could bypass an ACTIVE
- * parent store. The resolver retains main-worktree and linked-fail-closed rules. */
-function executionFileStorePath(context: StoreContext): string {
-  if (!context?.harnessDir) throw new StoreError("store.corrupt", "StoreContext.harnessDir is required");
-  const target = resolve(context.harnessDir);
-  // Git cannot use a future directory as cwd. Probe its existing ancestor
-  // before any writer mkdir/lock, while retaining the original null fallback.
-  let start = target;
-  while (!existsSync(start)) {
-    const parent = dirname(start);
-    if (parent === start) break;
-    start = parent;
-  }
-  const root = resolveProcessHarnessDir(start);
-  // A non-Git harness may contain its own plans/ child; it is not a new root.
-  return join(root === join(start, "plans") ? start : root ?? target, "store.db");
-}
 
 /**
  * The execution authority state at the caller's selected database path,
@@ -1915,75 +1896,6 @@ function probeExecutionAuthority(dbPath: string): ExecutionAuthorityProbe {
   }
 }
 
-/**
- * Refuse a protected file write while the control harness's execution authority
- * is ACTIVE. Root status, workflow snapshots and session envelopes are no
- * longer a persistence route, so persisting them — even from inside the
- * authorized protected-write context, through an injected `ArtifactStore`, or
- * with a valid byte token — would create a second authority.
- *
- * Synchronous by contract (primary spec §4.3): its callers are synchronous file
- * writers, so the probe above must never become an unawaited async guard, and
- * the authority verdict precedes payload validation at every call site.
- *
- * A store file that EXISTS and cannot be read is a refusal here too (primary
- * spec §5: no protected mutation while the authority cannot be established) —
- * never a fall back to the retired file route. Only a path with no store file
- * at all keeps the legacy route (there is no authority to establish).
- */
-// T17: coordination.ts and status.ts purge entry still require the file-write veto.
-export function assertExecutionFileWriteAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(executionFileStorePath(context));
-  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.kind !== "active") return;
-  throw new StoreError(
-    "execution.direct-write-refused",
-    `The execution authority of ${probe.dbPath} is ACTIVE \u2014 root, workflow-snapshot and ` +
-      `session-envelope files are retired as a persistence route. Nothing was written: use the execution ` +
-      `DB route (the coordination/registration APIs against the active store), not a file writer.`,
-  );
-}
-
-/**
- * Refuse a legacy root/snapshot authority READ while the control harness's
- * execution authority is ACTIVE. The bytes may still sit on disk (migration
- * keeps its own explicit byte-witness readers), but no domain reader may
- * present them as authoritative success: a consumer that needs execution state
- * reads it through the DB adapter instead.
- *
- * Synchronous by contract (primary spec §4.3): legacy authority readers are
- * synchronous, and they share the write guard's lazy probe.
- *
- * Disposition, in the two cases the probe distinguishes (§2.1/§5):
- *
- * - a store file EXISTS at the probed path and cannot be read (`unreadable`:
- *   SQLITE_CANTOPEN / an I/O error / another writer past the bounded wait) →
- *   REFUSED with the store's own reader refusal (`store.corrupt` / `store.busy`,
- *   the same mapping `openStore(…, "read")` produces). Serving leftover JSON
- *   there would be exactly the forbidden fallback: bytes that cannot be
- *   checked against the authority are not an authority answer.
- * - no store file exists at the probed path (`state: null`, the
- *   never-initialized legacy/staged case) → the read proceeds, i.e. the legacy
- *   read route keeps its pre-guard behaviour. There is no store to read, so
- *   there is no authority verdict to make (§2.1: absence is not an authority
- *   verdict; closing that with the durable installed binding is the explicit 2b
- *   obligation).
- *
- * A store that is observable but broken (corrupt content, drifted/unknown
- * schema, unsupported runtime) throws out of the probe and refuses through
- * this guard as well.
- */
-// T17: coordination.ts reads and lifecycle-branches.ts scanning still require the file-read veto.
-export function assertExecutionFileReadAllowed(context: StoreContext): void {
-  const probe = probeExecutionAuthority(executionFileStorePath(context));
-  if (probe.kind === "unreadable") refuseOpenFailure(probe.error, probe.dbPath);
-  if (probe.kind !== "active") return;
-  throw new StoreError(
-    "execution.consumer-not-ready",
-    `The execution authority of ${probe.dbPath} is ACTIVE \u2014 this legacy file reader would serve ` +
-      `retired root/snapshot JSON as authority. Nothing was read: consume the execution DB adapter instead.`,
-  );
-}
 /**
  * Execute a synchronous read-only callback against the current execution
  * authority. This is the guard used immediately before file-native commits:
