@@ -133,7 +133,7 @@ Before writing: record `git rev-parse --short HEAD` — every plan stamps the co
 
 When the user selects plans to pursue:
 
-1. PM registers the workflow + plan rows in store.db through public producer verbs (see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or through `mstar workflow register` and public plan verbs per `mstar-artifacts` (file fallback only pre-activation / engine-absent).
+1. PM registers the workflow + plan rows in store.db through public producer verbs (see `mstar-artifacts`), with the main plan in `{PLAN_DIR}` — via `mstar audit promote <audit-dir> --plans <ids>` when the CLI is available, or through `mstar workflow register` and public plan verbs per `mstar-artifacts`. A harness without an ACTIVE store has no execution authority: track the plans in conversation (no-plan mode) — the gates still apply.
 2. Each plan enters the normal state machine: `Todo → InProgress → InReview → Done`.
 3. PM may fast-track Prepare since the audit plan already contains spec, current-state excerpts, and verification gates — but the intent gate and clarify discipline still apply (`mstar-phase-gates`).
 4. Execution follows normal SDD or inline dispatch.
