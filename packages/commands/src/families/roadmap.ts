@@ -129,7 +129,7 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
           ? "Read the current project and roadmap revisions, then retry with the complete intended roadmap content."
           : id === "roadmap.show"
             ? "Select the registered project id and correct the reported store-read cause before showing its roadmap again."
-            : "Choose a writable export destination and retry the roadmap export."});
+            : "Verify the project id names an existing registered project, then retry the roadmap export."});
 }
 function escapeMarkdown(value: string): string {
   return value.replace(/[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, "\\$&");

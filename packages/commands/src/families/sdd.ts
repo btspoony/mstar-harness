@@ -50,7 +50,7 @@ export function failed(id: string, error: unknown): CommandEnvelope<never> {
     exitCode: error instanceof SddScriptError ? error.exitCode : 1,
     message,
    recovery: id === "sdd.workspace"
-        ? "Select a registered plan file and writable SDD directory for workspace resolution."
+        ? "Supply the plan id whose SDD workspace is requested; when the control harness root cannot be resolved from the current directory, provide that control root."
         : id === "sdd.task-brief"
           ? "Correct the plan file and task number, then retry extraction to the intended output file."
           : id === "sdd.review-package"
