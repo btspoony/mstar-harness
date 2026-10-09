@@ -644,10 +644,8 @@ describe("Prepare workflow amendment", () => {
 
       const label = `${planCase.name}: `;
       expect(`${label}${failure.code}`).toBe(`${label}coordination.prepare-amendment.invalid-plan`);
-      // The refusal names the missing declaration, the row and the reviewed
-      // file as facts, so it stays actionable without pinning one sentence.
-      expect(failure.message).toContain(planCase.names);
-      expect(failure.message).toContain(planPath);
+      // The refusal gives static correction guidance; structured details retain the row, field and reviewed file.
+      expect(failure.message).toContain("Correct the plan document/metadata to agree with the reviewed compass");
       expect(failure.details).toMatchObject({ plan_id: PREPARE_APPEND, field: planCase.field, path: planPath });
       expect(prepareSnapshotOf(fixture).plans.map(({ id, status, file }) => ({ id, status, file }))).toEqual(beforeRows);
     }

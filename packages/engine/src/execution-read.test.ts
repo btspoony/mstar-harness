@@ -76,7 +76,7 @@ describe("execution-cleanup-read", () => {
     const context = await fixture("unknown");
     await expect(readExecutionCleanupState(context, "wf-not-recorded")).rejects.toMatchObject({
       code: "coordination.workflow-not-found",
-      message: expect.stringContaining("List registered workflow ids via mstar status validate (data.workflows[].id), then re-run mstar worktree cleanup --workflow <listedId>; if no registered workflow remains, there is nothing to clean."),
+      message: expect.stringContaining("The requested workflow is not registered in this execution authority. Inspect registered workflows with mstar status validate; if none remain, no workflow-scoped cleanup can be selected."),
     });
   });
   test("missing plan refusal names direct read recovery", async () => {

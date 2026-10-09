@@ -897,7 +897,7 @@ describe("scaffoldHarness (plan-conventions § 初始化 Plan 目录 + templates
       writeFileSync(statusPath, custom);
       // Create-only (spec §C4): an existing document the validators reject is
       // never silently replaced — the run fails and the bytes survive.
-      await expect(scaffoldHarness(root)).rejects.toThrow(/already exists but is invalid/);
+      await expect(scaffoldHarness(root)).rejects.toThrow(/existing coordination document is invalid/);
       expect(readJson(statusPath)).toEqual(JSON.parse(custom));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1391,7 +1391,7 @@ describe("coordinated-writer — scaffoldHarness create-only bootstrap", () => {
       writeFileSync(statusPath, "{}\n", "utf8");
 
       // The create-only contract refuses the malformed existing document.
-      await expect(scaffoldHarness(root)).rejects.toThrow(/already exists but is invalid/);
+      await expect(scaffoldHarness(root)).rejects.toThrow(/existing coordination document is invalid/);
       expect(existsSync(statusPath)).toBe(true);
       // The refused document is untouched: still the malformed `{}` it was.
       expect(readJson(statusPath)).toEqual({});
