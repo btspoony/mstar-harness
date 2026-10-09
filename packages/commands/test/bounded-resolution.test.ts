@@ -29,9 +29,9 @@ import {
   createFsStore,
   encodeExecutionSessionRef,
   executionContextFor,
-  initializeExecutionAuthority,
   initializeStore,
   openStore,
+  readExecutionState,
   setArtifactStore,
   WORKFLOW_SNAPSHOT_FILE,
   type ExecutionIdentity,
@@ -240,7 +240,6 @@ function capturePayload(overrides: Record<string, unknown> = {}): Record<string,
 }
 
 
-const STATUS = { version: 2, updated_at: "2026-09-26", workflows: [] };
 
 function persistContext(): { root: string; harness: string; context: InvocationContext } {
   const root = mkdtempSync(join(tmpdir(), "bounded-persist-"));
@@ -259,7 +258,7 @@ async function activeNotesContext(): Promise<{ root: string; harness: string; wo
   mkdirSync(harness, { recursive: true });
   const storeContext = { harnessDir: harness };
   (await initializeStore(storeContext)).close();
-  const authority = await initializeExecutionAuthority(storeContext);
+  const authority = await readExecutionState(storeContext);
   const workflow = "wf-bounded-notes";
   const sessionId = "coordinator-bounded-notes";
   const identity: ExecutionIdentity = { source: "local", sessionId, workflowId: workflow, role: "coordinator" };
@@ -398,41 +397,46 @@ describe("persist family witnesses", () => {
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true })).toMatchObject({ compliant: true, countedCalls: 1 });
   });
 
-  test("explicit replacement is last-write-wins in one call; a malformed replacement refuses without any write", async () => {
-    const { harness, context } = persistContext();
-    writeFileSync(join(harness, "status.json"), JSON.stringify(STATUS));
+  test("explicit JSON replacement is last-write-wins; malformed JSON preserves the stored payload", async () => {
+    const { root, harness, context } = persistContext();
+    const key = join(root, "payload.json");
+    const store = createFsStore(harness);
+    const interaction: Interaction = { label: "explicit JSON replacement", context: "warm", extraDependency: "", calls: [] };
 
-    const interaction: Interaction = { label: "explicit last-write-wins replace", context: "warm", extraDependency: "", calls: [] };
+    const first = await countedCall(interaction, "execute", "persist.write", { kind: "json", key, input: JSON.stringify({ answer: 41 }) }, context);
+    expect(first).toMatchObject({ status: "ok", data: { kind: "json", key } });
+    const replaced = await countedCall(interaction, "execute", "persist.write", { kind: "json", key, input: JSON.stringify({ answer: 42 }) }, context);
+    expect(replaced).toMatchObject({ status: "ok", data: { kind: "json", key } });
+    expect(await store.get({ kind: "json", key })).toEqual({ answer: 42 });
 
-    // Replacement leg: an explicit whole-document replace needs no byte token.
-    const replaced = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify(STATUS) }, context);
-    expect(replaced.status).toBe("ok");
-    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
-
-    // Refusal leg: a malformed document is refused by the semantic validator
-    // and the stored bytes survive.
-    const malformed = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: JSON.stringify({ version: 2, workflows: "bad" }) }, context);
-    expect(malformed).toMatchObject({ status: "refused", code: "persist.write-refused", exitCode: 1 });
-    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
+    const malformed = await countedCall(interaction, "execute", "persist.write", { kind: "json", key, input: "{bad json" }, context);
+    expect(malformed).toMatchObject({ status: "refused", code: "persist.invalid-json", exitCode: 1 });
+    expect(await store.get({ kind: "json", key })).toEqual({ answer: 42 });
 
     expect(audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true }))
-      .toMatchObject({ compliant: true, countedCalls: 2 });
+      .toMatchObject({ compliant: true, countedCalls: 3 });
   });
 
-  test("protected deletion and retired kinds refuse and mutate nothing", async () => {
-    const { harness, context } = persistContext();
-    writeFileSync(join(harness, "status.json"), JSON.stringify(STATUS));
-    const interaction: Interaction = { label: "protected writes", context: "warm", extraDependency: "", calls: [] };
+  test("JSON deletion succeeds; unsupported and retired kinds return their current envelopes", async () => {
+    const { root, harness, context } = persistContext();
+    const key = join(root, "delete-me.json");
+    const store = createFsStore(harness);
+    const interaction: Interaction = { label: "persist kind boundaries", context: "warm", extraDependency: "", calls: [] };
 
-    const deletion = await countedCall(interaction, "execute", "persist.delete", { kind: "status", key: "root" }, context);
-    expect(deletion).toMatchObject({ status: "refused", exitCode: 1 });
-    expect(JSON.parse(readFileSync(join(harness, "status.json"), "utf8"))).toEqual(STATUS);
+    const seeded = await setupCall(interaction, "persist.write", { kind: "json", key, input: "{}" }, context);
+    expect(seeded).toMatchObject({ status: "ok" });
+    const deletion = await countedCall(interaction, "execute", "persist.delete", { kind: "json", key }, context);
+    expect(deletion).toMatchObject({ status: "ok", data: { kind: "json", key, deleted: true } });
+    expect(await store.get({ kind: "json", key })).toBeUndefined();
+
+    const unsupported = await countedCall(interaction, "execute", "persist.write", { kind: "status", key: "root", input: "{}" }, context);
+    expect(unsupported).toMatchObject({ status: "usage", code: "command.invalid-input", exitCode: 2, message: "kind must be review or json" });
 
     const retired = await countedCall(interaction, "execute", "persist.write", { kind: "residuals", key: "legacy", input: "{}" }, context);
     expect(retired).toMatchObject({ status: "refused", code: "persist.kind-retired", exitCode: 1 });
 
     const verdict = audit(interaction, { unvalidatedMutation: false, refusalBypassed: false, receiptsMatchStore: true, complete: true });
-    expect(verdict).toMatchObject({ compliant: true, countedCalls: 2 });
+    expect(verdict).toMatchObject({ compliant: true, countedCalls: 3 });
   });
 });
 
