@@ -472,8 +472,8 @@ describe("generated CLI adapter", () => {
       const help = renderCommandContract(definition, "cli");
       expect(help).toContain("reason (required) (string)");
       if (id === "issue.close") {
-        expect(help).toContain("references (requiredWhen: close) (string[])");
-        expect(help).toContain("alignmentRef (requiredWhen: close or waive) (string)");
+        expect(help).toContain("references (requiredWhen: resolved) (string[])");
+        expect(help).toContain("alignmentRef (requiredWhen: resolved or waived) (string)");
       }
     }
   });
