@@ -45,6 +45,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
 import type { ActiveLifecycleBranch } from "./lifecycle-branches.js";
 import type { WorkflowLifecycleType } from "./workflow.js";
+import { validateIntegrationMergeLease } from "./lease.js";
 
 /**
  * Git probe timeout — bounded so a hung git (dead NFS mount, pathological
@@ -218,12 +219,77 @@ export type BranchProbeOptions = {
    * subprocess.
    */
   branchOf?: (worktreePath: string) => string | undefined;
+  /** Precomputed output of `git status --porcelain`; undefined uses git. */
+  statusOf?: (worktreePath: string) => string | undefined;
   /**
    * Git probe timeout in ms (default 10s; `MSTAR_GIT_PROBE_TIMEOUT_MS` env
    * overrides; per-call value wins). On timeout the probe fails closed into
-   * `branch-probe-failed` — never hangs, never guesses a branch.   */
+   * `branch-probe-failed` — never hangs, never guesses a branch.
+   */
   timeoutMs?: number;
 };
+
+export type WorkflowEntryPreDispatchInput = {
+  workflowId: string;
+  branch: { base?: string; target?: string; integration?: string };
+  integrationWorktreePath?: string;
+  mainWorktree: MainWorktreeInfo | null;
+  lifecycleBranches: readonly ActiveLifecycleBranch[];
+  integrationLease?: unknown;
+};
+
+export type WorkflowEntryPreDispatchResult = GateResult & {
+  lease: { claimed: boolean; lease?: unknown };
+  scope: "engine-enforced workflow-entry facts only";
+};
+
+function probeStatus(worktreePath: string, opts: BranchProbeOptions): { status: string } | { error: string } {
+  const precomputed = opts.statusOf?.(worktreePath);
+  if (precomputed !== undefined) return { status: precomputed };
+  const timeout = opts.timeoutMs ?? gitProbeTimeoutMs();
+  try {
+    return { status: execFileSync(opts.gitPath ?? "git", ["-C", worktreePath, "status", "--porcelain"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout }) };
+  } catch (error) {
+    return { error: (error as { message?: string }).message ?? "git status probe failed" };
+  }
+}
+
+/** Engine-enforced workflow-entry subset; this does not clear the full pre-dispatch checklist. */
+export function workflowEntryPreDispatchCheck(input: WorkflowEntryPreDispatchInput, opts: BranchProbeOptions = {}): WorkflowEntryPreDispatchResult {
+  const violations: ValidationResult[] = [];
+  const { base = "", target = "", integration = "" } = input.branch;
+  for (const [key, value] of [["base", base], ["target", target], ["integration", integration]] as const) {
+    if (value.trim() === "") violations.push(violation("high", `worktree.entry.branch-${key}-missing`, `workflow "${input.workflowId}" has no registered branch.${key}`, "Run mstar workflow integration-worktree or mstar plan prepare to record the workflow branch metadata."));
+  }
+  if (input.mainWorktree === null) {
+    violations.push(violation("high", "worktree.main.unresolved", `main worktree identity cannot be proved for workflow "${input.workflowId}"`, "Run from inside the repository so the main worktree can be discovered."));
+  } else {
+    const expected = base.trim();
+    if (expected === "") violations.push(violation("high", "worktree.main.expected-branch-missing", `workflow "${input.workflowId}" has no recorded main branch expectation`, "Run mstar workflow integration-worktree or mstar plan prepare to record branch.base."));
+    else violations.push(...assertMainWorktreeResidency(input.mainWorktree, expected).violations);
+    const owner = input.lifecycleBranches.find((entry) => entry.branch === input.mainWorktree!.branch && entry.branch !== expected);
+    if (owner) violations.push(violation("high", "worktree.main.residency-switched", `main worktree branch "${owner.branch}" is owned by workflow ${owner.workflowId ?? "unknown"}`, "Have the owning workflow coordinator finish or correct its branch metadata."));
+  }
+  const integrationPath = input.integrationWorktreePath?.trim() ?? "";
+  if (integrationPath === "") {
+    violations.push(violation("high", "worktree.entry.integration-path-missing", `workflow "${input.workflowId}" has no recorded integration_worktree_path`, "Run mstar workflow integration-worktree to register the integration checkout."));
+  } else if (!existsSync(integrationPath)) {
+    violations.push(violation("high", "worktree.entry.integration-missing", `integration worktree "${integrationPath}" does not exist`, "Run mstar workflow integration-worktree to create and record the integration checkout."));
+  } else {
+    const probe = probeBranch(integrationPath, opts);
+    if ("error" in probe) violations.push(violation("high", "worktree.entry.integration-branch-probe-failed", `cannot probe integration branch: ${probe.error}`, "Run mstar workflow integration-worktree to repair the integration checkout."));
+    else if (probe.branch !== integration) violations.push(violation("high", "worktree.entry.integration-branch-mismatch", `integration worktree is on "${probe.branch}", expected branch.integration "${integration}"`, "Run mstar workflow integration-worktree to align the integration checkout."));
+    const status = probeStatus(integrationPath, opts);
+    if ("error" in status) violations.push(violation("high", "worktree.entry.integration-status-probe-failed", `cannot inspect integration worktree status: ${status.error}`, "Run mstar workflow integration-worktree after the checkout is accessible."));
+    else if (status.status.trim() !== "") violations.push(violation("high", "worktree.entry.integration-dirty", "integration worktree has uncommitted changes", "Clean or commit the integration worktree before entry."));
+  }
+  const lease = input.integrationLease == null ? { claimed: false } : { claimed: true, lease: input.integrationLease };
+  if (lease.claimed) {
+    const result = validateIntegrationMergeLease(lease.lease);
+    violations.push(...result.violations);
+  }
+  return { ok: violations.length === 0, violations, lease, scope: "engine-enforced workflow-entry facts only" };
+}
 
 /**
  * QC/QA alignment fields — `plan_id` + `Review range`/`Diff basis` must be

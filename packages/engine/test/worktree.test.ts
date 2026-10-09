@@ -46,6 +46,7 @@ import {
   l2PreDispatchCheck,
   readMainWorktree,
   singleReviewSnapshot,
+  workflowEntryPreDispatchCheck,
   type MainWorktreeInfo,
 } from "../src/worktree.js";
 
@@ -1427,4 +1428,61 @@ test("L1 identity probes are once per checkout per invocation, never cached acro
     expect(l1PreDispatchCheck(input, { gitPath: shim }).ok).toBe(true);
     expect(readFileSync(log, "utf8").split("\n").filter((line) => line.endsWith("rev-parse --git-dir"))).toHaveLength(6);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+describe("workflowEntryPreDispatchCheck", () => {
+  test("passes with complete branch metadata, resident main, clean integration checkout, and unclaimed lease", () => {
+    const root = tmpRoot("wt-entry-ok-");
+    try {
+      const checkouts = worktreeFixture(root, ["integration"]);
+      const repo = join(root, "repo");
+      const main = mainInfo(repo);
+      const result = workflowEntryPreDispatchCheck({
+        workflowId: "wf",
+        branch: { base: main.branch, target: "release", integration: "integration" },
+        integrationWorktreePath: checkouts.get("integration")!,
+        mainWorktree: main,
+        lifecycleBranches: [],
+      });
+      expect(result.ok).toBe(true);
+      expect(result.lease).toEqual({ claimed: false });
+      expect(result.scope).toContain("engine-enforced");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("reports incomplete branch metadata, wrong integration branch, dirty checkout, and invalid lease", () => {
+    const root = tmpRoot("wt-entry-invalid-");
+    try {
+      const checkouts = worktreeFixture(root, ["integration"]);
+      const repo = join(root, "repo");
+      const integration = checkouts.get("integration")!;
+      writeFileSync(join(integration, "dirty.txt"), "dirty\n");
+      const result = workflowEntryPreDispatchCheck({
+        workflowId: "wf",
+        branch: { base: "main", target: "", integration: "wrong" },
+        integrationWorktreePath: integration,
+        mainWorktree: mainInfo(repo),
+        lifecycleBranches: [],
+        integrationLease: {},
+      });
+      const codes = result.violations.map((entry) => entry.code);
+      expect(codes).toContain("worktree.entry.branch-target-missing");
+      expect(codes).toContain("worktree.entry.integration-branch-mismatch");
+      expect(codes).toContain("worktree.entry.integration-dirty");
+      expect(codes).toContain("lease.merge-lease.missing-holder");
+      expect(result.lease).toEqual({ claimed: true, lease: {} });
+      expect(result.violations.find((entry) => entry.code === "worktree.entry.branch-target-missing")?.fix).toContain("mstar workflow integration-worktree");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("reports a missing recorded integration checkout", () => {
+    const result = workflowEntryPreDispatchCheck({
+      workflowId: "wf",
+      branch: { base: "main", target: "release", integration: "integration" },
+      integrationWorktreePath: "/missing/integration",
+      mainWorktree: null,
+      lifecycleBranches: [],
+    });
+    expect(result.violations.map((entry) => entry.code)).toContain("worktree.entry.integration-missing");
+    expect(result.violations.map((entry) => entry.code)).toContain("worktree.main.unresolved");
+  });
 });

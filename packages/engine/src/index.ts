@@ -218,6 +218,8 @@ export type {
   MainWorktreeInfo,
   QcAlignmentAssignment,
   QcSnapshotAssignment,
+  WorkflowEntryPreDispatchInput,
+  WorkflowEntryPreDispatchResult,
   WorktreeTrack,
 } from "./worktree.js";
 export {
@@ -225,6 +227,7 @@ export {
   assertControlVsFeaturePath,
   assertMainWorktreeResidency,
   assertQcAlignment,
+  workflowEntryPreDispatchCheck,
   isDistinctCheckout,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
