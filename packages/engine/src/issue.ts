@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import { join } from "node:path";
-import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination.js";
+import { readSessionEnvelope, sessionFilePath, type CoordinationSession } from "./coordination-envelope.js";
 import { canonicalizeNearestExisting, resolveWorkflowDir } from "./path.js";
 import { MIGRATIONS, openStore, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import {
